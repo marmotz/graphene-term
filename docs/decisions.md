@@ -55,6 +55,15 @@ text renderer unaware of the cursor. Non-block shapes are drawn as rects over th
 - When the application enabled mouse reporting, left and middle clicks are reserved
   for it; `Shift` forces a local selection.
 - Keystrokes sent to the shell and pastes clear the selection; app shortcuts keep it.
+- Program output clears the selection only when the selected text really changes. `Term`
+  clears it on erase sequences even when the same text is redrawn (prompt redraws,
+  status lines), and keeps it when a cell is overwritten by a different character.
+  Graphene keeps a shadow `SelectionSnapshot` (selection + cleaned text) taken on
+  release: on each `Wakeup` it restores the selection if `Term` dropped it, then
+  compares the selected text with the snapshot and clears both when it differs. Cost:
+  one `selection_to_string` per wakeup while a selection exists. Known limit: content
+  scrolled and erased in the same PTY batch leaves stale coordinates; the text then
+  differs and the selection is cleared, the safe outcome.
 
 ## IME disabled
 

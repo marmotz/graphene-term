@@ -105,6 +105,43 @@ pub fn selected_text<T>(term: &Term<T>) -> Option<String> {
     term.selection_to_string().map(|text| clean_copied_text(&text))
 }
 
+/// Shadow copy of a finished selection and its cleaned text.
+///
+/// `Term` clears its selection on erase sequences (`ED`, `EL`, `RIS`) even when the same
+/// text is redrawn right after, and keeps it when a cell is overwritten by a different
+/// character. The snapshot restores the first case and clears the second: the selection
+/// lives as long as its text is unchanged.
+#[derive(Debug, Clone)]
+pub struct SelectionSnapshot {
+    selection: Selection,
+    text: String,
+}
+
+impl SelectionSnapshot {
+    /// Snapshot of the current non-empty selection of `term`, `None` without one.
+    pub fn capture<T>(term: &Term<T>) -> Option<Self> {
+        let selection = term.selection.clone().filter(|s| !s.is_empty())?;
+        let text = selected_text(term)?;
+        Some(Self { selection, text })
+    }
+
+    /// Checks the selection of `term` after new PTY output. Returns `false`, with the
+    /// selection of `term` cleared, when the selected text changed: the snapshot must then
+    /// be dropped.
+    pub fn validate<T>(&mut self, term: &mut Term<T>) -> bool {
+        match term.selection.as_ref() {
+            // Carries the rotation applied by `Term` when the output scrolls.
+            Some(selection) => self.selection = selection.clone(),
+            None => term.selection = Some(self.selection.clone()),
+        }
+        if selected_text(term).is_some_and(|text| text == self.text) {
+            return true;
+        }
+        term.selection = None;
+        false
+    }
+}
+
 /// Cleans a selection before it reaches the clipboard: trailing whitespace removed from
 /// every line, common indentation of non-blank lines removed, no trailing newline.
 pub fn clean_copied_text(text: &str) -> String {
@@ -390,5 +427,71 @@ mod tests {
     fn no_selection_has_no_text() {
         let term = term_with(10, 2, b"abc");
         assert_eq!(selected_text(&term), None);
+    }
+
+    /// `term` with "hello" selected on the first line and its snapshot.
+    fn snapshot_of_hello(content: &[u8]) -> (Term<VoidListener>, SelectionSnapshot) {
+        let mut term = term_with(20, 3, content);
+        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
+        term.selection.as_mut().unwrap().update(point(0, 4), Side::Right);
+        let snapshot = SelectionSnapshot::capture(&term).unwrap();
+        (term, snapshot)
+    }
+
+    fn feed(term: &mut Term<VoidListener>, bytes: &[u8]) {
+        let mut parser: Processor = Processor::new();
+        parser.advance(term, bytes);
+    }
+
+    #[test]
+    fn empty_selection_has_no_snapshot() {
+        let mut term = term_with(20, 2, b"hello");
+        assert!(SelectionSnapshot::capture(&term).is_none());
+        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
+        assert!(SelectionSnapshot::capture(&term).is_none());
+    }
+
+    #[test]
+    fn unchanged_output_keeps_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        assert!(snapshot.validate(&mut term));
+        assert_eq!(selected_text(&term).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn same_text_redrawn_after_erase_keeps_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        feed(&mut term, b"\x1b[H\x1b[2K");
+        assert!(term.selection.is_none(), "Term clears the selection on EL");
+        feed(&mut term, b"hello world");
+        assert!(snapshot.validate(&mut term));
+        assert_eq!(selected_text(&term).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn different_text_after_erase_clears_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        feed(&mut term, b"\x1b[H\x1b[2Kbye world");
+        assert!(!snapshot.validate(&mut term));
+        assert!(term.selection.is_none());
+    }
+
+    #[test]
+    fn overwritten_character_clears_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        feed(&mut term, b"\x1b[HJ");
+        assert!(term.selection.is_some(), "Term keeps the selection on overwrite");
+        assert!(!snapshot.validate(&mut term));
+        assert!(term.selection.is_none());
+    }
+
+    #[test]
+    fn scrolled_output_keeps_the_selection_on_its_text() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world\r\nsecond");
+        feed(&mut term, b"\r\nthird\r\nfourth\r\nfifth");
+        assert!(snapshot.validate(&mut term));
+        assert_eq!(selected_text(&term).as_deref(), Some("hello"));
+        // The refreshed snapshot follows the rotated selection.
+        assert!(snapshot.validate(&mut term));
     }
 }

@@ -104,5 +104,9 @@ runs changes.
   50 ms (`ControlFlow::WaitUntil`) and the selection end follows the edge row. Disabled
   on the alternate screen, which has no history.
 - Middle press pastes the primary selection through `input::paste_bytes`.
+- Text change: the release stores a `selection::SelectionSnapshot` in the `Session`.
+  On each `TermEvent::Wakeup`, `SelectionSnapshot::validate` restores the selection if
+  `Term` erased it, then clears it (and drops the snapshot) when its cleaned text
+  differs from the snapshot. Every place that clears the selection drops the snapshot.
 - Left and middle clicks are ignored when the application enabled mouse reporting,
   unless `Shift` is held (`selection::mouse_reserved`).

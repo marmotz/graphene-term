@@ -21,7 +21,7 @@ use crate::input::{self, Action};
 use crate::layout::GridLayout;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
-use crate::selection::{self, ClickTracker};
+use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
@@ -69,6 +69,8 @@ struct Session {
     click_tracker: ClickTracker,
     /// When the next auto-scroll step is due during a drag past the grid edges.
     auto_scroll_deadline: Option<Instant>,
+    /// Finished selection kept while its text is unchanged.
+    selection_snapshot: Option<SelectionSnapshot>,
 }
 
 impl Session {
@@ -130,10 +132,22 @@ impl Session {
         }
     }
 
-    fn clear_selection(&self) {
+    fn clear_selection(&mut self) {
+        self.selection_snapshot = None;
         let mut term = self.terminal.term.lock();
         if term.selection.take().is_some() {
             self.window.request_redraw();
+        }
+    }
+
+    /// After new PTY output: restores a selection `Term` erased while its text was
+    /// redrawn unchanged, and clears it when the selected text really changed.
+    fn validate_selection(&mut self) {
+        let Some(snapshot) = self.selection_snapshot.as_mut() else {
+            return;
+        };
+        if !snapshot.validate(&mut self.terminal.term.lock()) {
+            self.selection_snapshot = None;
         }
     }
 
@@ -166,6 +180,8 @@ impl Session {
         }
         let (point, side) = self.mouse_point(term.grid().display_offset());
         let clicks = self.click_tracker.click(point, Instant::now());
+        // The selection changes until the release: no text to keep meanwhile.
+        self.selection_snapshot = None;
         selection::start_selection(&mut term, point, side, clicks, self.modifiers);
         self.left_pressed = true;
         self.window.request_redraw();
@@ -175,7 +191,12 @@ impl Session {
         if !std::mem::take(&mut self.left_pressed) {
             return;
         }
-        let text = selection::finish_selection(&mut self.terminal.term.lock());
+        let text = {
+            let mut term = self.terminal.term.lock();
+            let text = selection::finish_selection(&mut term);
+            self.selection_snapshot = SelectionSnapshot::capture(&term);
+            text
+        };
         self.window.request_redraw();
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             self.set_primary(text);
@@ -283,7 +304,11 @@ impl Session {
 
     fn handle_terminal_event(&mut self, event: TermEvent, event_loop: &ActiveEventLoop) {
         match event {
-            TermEvent::Wakeup | TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
+            TermEvent::Wakeup => {
+                self.validate_selection();
+                self.window.request_redraw()
+            }
+            TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
                 self.window.request_redraw()
             }
             TermEvent::Title(title) => self.window.set_title(&title),
@@ -363,6 +388,7 @@ impl App {
             left_pressed: false,
             click_tracker: ClickTracker::default(),
             auto_scroll_deadline: None,
+            selection_snapshot: None,
         })
     }
 

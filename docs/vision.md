@@ -30,7 +30,7 @@ Selected as the project's "modern" pillars:
 | Status  | Item                                                                                 |
 |---------|--------------------------------------------------------------------------------------|
 | Done    | Working terminal: PTY, VT emulation, truecolor, scrollback, resize, paste, font zoom |
-| Next    | Selection and copy                                                                   |
+| Done    | Selection and copy                                                                   |
 | Planned | Mouse reporting to applications                                                      |
 | Planned | Command blocks                                                                       |
 | Planned | Rich input editor                                                                    |
