@@ -43,7 +43,6 @@ impl GridLayout {
 
     /// Viewport cell under the physical pixel (`x`, `y`), clamped to the grid, with the half
     /// of the cell the pixel falls in. The inverse of [`Self::cell_origin`].
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn point_at(&self, x: f32, y: f32) -> (usize, usize, Side) {
         let column_pos = (x - self.padding) / self.cell.width;
         let line_pos = (y - self.padding) / self.cell.height;

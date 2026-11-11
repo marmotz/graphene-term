@@ -1,13 +1,17 @@
 //! Window and event handling.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::term::TermMode;
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::term::{self, TermMode};
+use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::dpi::PhysicalPosition;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
@@ -17,6 +21,7 @@ use crate::input::{self, Action};
 use crate::layout::GridLayout;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
+use crate::selection::{self, ClickTracker};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
@@ -57,6 +62,11 @@ struct Session {
     font_size: f32,
     /// Fractional lines accumulated from touchpad scrolling.
     scroll_accumulator: f64,
+    /// Last known cursor position, in physical pixels.
+    mouse_position: PhysicalPosition<f64>,
+    /// A selection drag is in progress.
+    left_pressed: bool,
+    click_tracker: ClickTracker,
 }
 
 impl Session {
@@ -97,15 +107,115 @@ impl Session {
         let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) else {
             return;
         };
-        let bytes = input::paste_bytes(&text, self.mode());
+        self.clear_selection();
+        self.send_paste(&text);
+    }
+
+    fn send_paste(&self, text: &str) {
+        let bytes = input::paste_bytes(text, self.mode());
         self.scroll_display(Scroll::Bottom);
         self.terminal.write(bytes);
     }
 
+    /// Writes the cleaned selection to the clipboard. Without selection, the shortcut is
+    /// still swallowed so it never sends `^C`.
+    fn copy(&mut self) {
+        let Some(text) = selection::selected_text(&self.terminal.term.lock()) else {
+            return;
+        };
+        if let Some(Err(error)) = self.clipboard.as_mut().map(|c| c.set_text(text)) {
+            log::warn!("copy failed: {error}");
+        }
+    }
+
+    fn clear_selection(&self) {
+        let mut term = self.terminal.term.lock();
+        if term.selection.take().is_some() {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Grid point and cell side under the mouse cursor.
+    fn mouse_point(&self, display_offset: usize) -> (Point, Side) {
+        let (column, line, side) = self
+            .layout
+            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
+        let point = term::viewport_to_point(display_offset, Point::new(line, Column(column)));
+        (point, side)
+    }
+
+    fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        match (button, state) {
+            (MouseButton::Left, ElementState::Pressed) => self.left_press(),
+            (MouseButton::Left, ElementState::Released) => self.left_release(),
+            (MouseButton::Middle, ElementState::Pressed)
+                if !selection::mouse_reserved(self.mode(), self.modifiers) =>
+            {
+                self.paste_primary()
+            }
+            _ => {}
+        }
+    }
+
+    fn left_press(&mut self) {
+        let mut term = self.terminal.term.lock();
+        if selection::mouse_reserved(*term.mode(), self.modifiers) {
+            return;
+        }
+        let (point, side) = self.mouse_point(term.grid().display_offset());
+        let clicks = self.click_tracker.click(point, Instant::now());
+        selection::start_selection(&mut term, point, side, clicks, self.modifiers);
+        self.left_pressed = true;
+        self.window.request_redraw();
+    }
+
+    fn left_release(&mut self) {
+        if !std::mem::take(&mut self.left_pressed) {
+            return;
+        }
+        let text = selection::finish_selection(&mut self.terminal.term.lock());
+        self.window.request_redraw();
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.set_primary(text);
+        }
+    }
+
+    fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        self.mouse_position = position;
+        if !self.left_pressed {
+            return;
+        }
+        let mut term = self.terminal.term.lock();
+        let (point, side) = self.mouse_point(term.grid().display_offset());
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+            self.window.request_redraw();
+        }
+    }
+
+    fn set_primary(&mut self, text: String) {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return;
+        };
+        // Some Wayland compositors do not support the primary selection.
+        if let Err(error) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text) {
+            log::debug!("primary selection unavailable: {error}");
+        }
+    }
+
+    fn paste_primary(&mut self) {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return;
+        };
+        match clipboard.get().clipboard(LinuxClipboardKind::Primary).text() {
+            Ok(text) => self.send_paste(&text),
+            Err(error) => log::debug!("primary selection unavailable: {error}"),
+        }
+    }
+
     fn run_action(&mut self, action: Action, default_font_size: f32) {
         match action {
-            // Selection is not implemented yet; swallow the shortcut so it never sends ^C.
-            Action::Copy => log::debug!("copy: no selection support yet"),
+            Action::Copy => self.copy(),
             Action::Paste => self.paste(),
             Action::ScrollPageUp => self.scroll_display(Scroll::PageUp),
             Action::ScrollPageDown => self.scroll_display(Scroll::PageDown),
@@ -222,6 +332,9 @@ impl App {
             modifiers: ModifiersState::empty(),
             font_size: self.settings.font_size,
             scroll_accumulator: 0.0,
+            mouse_position: PhysicalPosition::default(),
+            left_pressed: false,
+            click_tracker: ClickTracker::default(),
         })
     }
 
@@ -287,11 +400,14 @@ impl ApplicationHandler<UserEvent> for App {
                     session.modifiers,
                     mode,
                 ) {
+                    session.clear_selection();
                     session.scroll_display(Scroll::Bottom);
                     session.terminal.write(bytes);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
+            WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
+            WindowEvent::MouseInput { state, button, .. } => session.mouse_input(state, button),
             WindowEvent::RedrawRequested => {
                 let frame = {
                     let term = session.terminal.term.lock();

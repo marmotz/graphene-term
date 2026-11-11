@@ -1,9 +1,11 @@
-//! Pure helpers for mouse selection: click counting, selection kind and copied text cleanup.
+//! Mouse selection logic: click counting, selection kind, capture rule, selection updates
+//! on the `Term` and copied text cleanup. No window or clipboard access.
 
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::index::Point;
-use alacritty_terminal::selection::SelectionType;
+use alacritty_terminal::index::{Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::{Term, TermMode};
 use winit::keyboard::ModifiersState;
 
 /// Characters ending a word on double-click.
@@ -47,6 +49,43 @@ pub fn selection_type(clicks: u8, mods: ModifiersState) -> SelectionType {
         _ if mods.control_key() => SelectionType::Block,
         _ => SelectionType::Simple,
     }
+}
+
+/// Whether left and middle clicks are reserved for the application: it enabled mouse
+/// reporting and `Shift` is not held to force a local selection.
+pub fn mouse_reserved(mode: TermMode, mods: ModifiersState) -> bool {
+    mode.intersects(TermMode::MOUSE_MODE) && !mods.shift_key()
+}
+
+/// Left press on `point`: with `Shift` held, extends the existing selection; otherwise
+/// starts a new one whose kind depends on the click count. A single click starts an empty
+/// selection, which renders nothing.
+pub fn start_selection<T>(
+    term: &mut Term<T>,
+    point: Point,
+    side: Side,
+    clicks: u8,
+    mods: ModifiersState,
+) {
+    match term.selection.as_mut() {
+        Some(selection) if mods.shift_key() => selection.update(point, side),
+        _ => term.selection = Some(Selection::new(selection_type(clicks, mods), point, side)),
+    }
+}
+
+/// Left release: an empty selection (click without drag) is cleared and `None` returned;
+/// otherwise returns the cleaned selected text.
+pub fn finish_selection<T>(term: &mut Term<T>) -> Option<String> {
+    if term.selection.as_ref().is_none_or(Selection::is_empty) {
+        term.selection = None;
+        return None;
+    }
+    selected_text(term)
+}
+
+/// Cleaned text of the current selection, `None` without selection.
+pub fn selected_text<T>(term: &Term<T>) -> Option<String> {
+    term.selection_to_string().map(|text| clean_copied_text(&text))
 }
 
 /// Cleans a selection before it reaches the clipboard: trailing whitespace removed from
@@ -223,5 +262,87 @@ mod tests {
             term.selection_to_string().as_deref(),
             Some("https://example.com:8080/a?b=c")
         );
+    }
+
+    fn term_with(columns: usize, lines: usize, content: &[u8]) -> Term<VoidListener> {
+        let mut term = Term::new(Config::default(), &TermSize::new(columns, lines), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, content);
+        term
+    }
+
+    #[test]
+    fn clicks_are_reserved_only_in_mouse_mode_without_shift() {
+        let none = ModifiersState::empty();
+        assert!(!mouse_reserved(TermMode::empty(), none));
+        assert!(mouse_reserved(TermMode::MOUSE_REPORT_CLICK, none));
+        assert!(mouse_reserved(TermMode::MOUSE_DRAG, ModifiersState::CONTROL));
+        assert!(mouse_reserved(TermMode::MOUSE_MOTION, none));
+        assert!(!mouse_reserved(TermMode::MOUSE_REPORT_CLICK, ModifiersState::SHIFT));
+        assert!(!mouse_reserved(TermMode::BRACKETED_PASTE, none));
+    }
+
+    #[test]
+    fn single_click_without_drag_clears_the_selection() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(&mut term, point(0, 3), Side::Left, 1, ModifiersState::empty());
+        assert!(term.selection.is_some());
+        assert_eq!(finish_selection(&mut term), None);
+        assert!(term.selection.is_none());
+    }
+
+    #[test]
+    fn drag_selects_cells() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
+        term.selection.as_mut().unwrap().update(point(0, 4), Side::Right);
+        assert_eq!(finish_selection(&mut term).as_deref(), Some("hello"));
+        assert!(term.selection.is_some());
+    }
+
+    #[test]
+    fn double_click_selects_a_word() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(&mut term, point(0, 8), Side::Left, 2, ModifiersState::empty());
+        assert_eq!(finish_selection(&mut term).as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn shift_click_extends_the_existing_selection() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
+        term.selection.as_mut().unwrap().update(point(0, 1), Side::Right);
+        start_selection(&mut term, point(0, 7), Side::Right, 1, ModifiersState::SHIFT);
+        assert_eq!(selected_text(&term).as_deref(), Some("hello wo"));
+    }
+
+    #[test]
+    fn shift_click_without_selection_starts_one() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(&mut term, point(0, 2), Side::Left, 1, ModifiersState::SHIFT);
+        let selection = term.selection.as_ref().unwrap();
+        assert_eq!(selection.ty, SelectionType::Simple);
+    }
+
+    #[test]
+    fn wrapped_line_is_copied_as_one_line() {
+        let mut term = term_with(10, 3, b"abcdefghijklmno");
+        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
+        term.selection.as_mut().unwrap().update(point(1, 4), Side::Right);
+        assert_eq!(finish_selection(&mut term).as_deref(), Some("abcdefghijklmno"));
+    }
+
+    #[test]
+    fn line_selection_is_copied_without_trailing_newline() {
+        let mut term = term_with(10, 3, b"  abcdefghijklmno\r\nnext");
+        start_selection(&mut term, point(1, 2), Side::Left, 3, ModifiersState::empty());
+        assert_eq!(term.selection_to_string().as_deref(), Some("  abcdefghijklmno\n"));
+        assert_eq!(finish_selection(&mut term).as_deref(), Some("abcdefghijklmno"));
+    }
+
+    #[test]
+    fn no_selection_has_no_text() {
+        let term = term_with(10, 2, b"abc");
+        assert_eq!(selected_text(&term), None);
     }
 }

@@ -21,6 +21,7 @@ src/
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
   palette.rs       theme, 256-color table, color resolution
   layout.rs        pixels <-> grid geometry
+  selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
   renderer/
     mod.rs         wgpu device/surface, frame orchestration
     scene.rs       Frame -> rects + text runs (pure, no GPU)
@@ -29,7 +30,7 @@ src/
     text.rs        glyphon text grid with per-row caching
 ```
 
-Pure modules (`palette`, `input`, `layout`, `frame`, `renderer/scene`) hold the logic
+Pure modules (`palette`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
 and are unit tested. GPU and window code stay thin.
 
 ## Threads
@@ -87,3 +88,16 @@ runs changes.
 - Any input scrolls the view back to the bottom.
 - Mouse wheel: scrollback on the primary screen, arrow keys on the alternate screen
   when the application enabled alternate scroll.
+
+### Mouse selection
+
+- `layout::point_at` converts the cursor pixel to a viewport cell and side, then
+  `term::viewport_to_point` to a grid point (the view may be scrolled).
+- Left press: `ClickTracker` counts clicks (400 ms, same cell) and `selection::
+  start_selection` creates a `Simple` (or `Block` with `Ctrl`), `Semantic` or `Lines`
+  selection in `Term::selection`, or extends it with `Shift`.
+- `CursorMoved` while pressed updates the selection. Left release clears an empty
+  selection (simple click), otherwise writes the cleaned text to the primary selection.
+- Middle press pastes the primary selection through `input::paste_bytes`.
+- Left and middle clicks are ignored when the application enabled mouse reporting,
+  unless `Shift` is held (`selection::mouse_reserved`).
