@@ -1,0 +1,16 @@
+[package]
+name = "graphene"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alacritty_terminal = "0.26.0"
+anyhow = "1.0.104"
+arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
+bytemuck = { version = "1.25.2", features = ["derive"] }
+env_logger = "0.11.11"
+glyphon = "0.12.0"
+log = "0.4.35"
+pollster = "1.0.1"
+wgpu = "30.0.1"
+winit = "0.30.13"

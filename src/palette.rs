@@ -1,0 +1,230 @@
+//! Color theme and resolution of terminal colors into concrete RGB values.
+
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+
+const fn rgb(hex: u32) -> Rgb {
+    Rgb {
+        r: ((hex >> 16) & 0xff) as u8,
+        g: ((hex >> 8) & 0xff) as u8,
+        b: (hex & 0xff) as u8,
+    }
+}
+
+/// Factor applied to a color to produce its dimmed variant.
+const DIM_FACTOR: f32 = 0.66;
+
+/// A complete color theme.
+#[derive(Debug, Clone)]
+pub struct Palette {
+    /// The 256 indexed colors (16 ANSI + 6x6x6 cube + 24 grays).
+    pub indexed: [Rgb; 256],
+    pub foreground: Rgb,
+    pub background: Rgb,
+    pub cursor: Rgb,
+    /// Color of the text drawn on top of a block cursor.
+    pub cursor_text: Rgb,
+}
+
+impl Default for Palette {
+    /// The "graphene night" theme.
+    fn default() -> Self {
+        let ansi = [
+            rgb(0x1c1f26), // black
+            rgb(0xf0717b), // red
+            rgb(0x9ed072), // green
+            rgb(0xe7c664), // yellow
+            rgb(0x6cb6ff), // blue
+            rgb(0xc792ea), // magenta
+            rgb(0x5fd7d7), // cyan
+            rgb(0xc8ccd4), // white
+            rgb(0x5c6370), // bright black
+            rgb(0xff8b92), // bright red
+            rgb(0xb5e890), // bright green
+            rgb(0xffd982), // bright yellow
+            rgb(0x8ecaff), // bright blue
+            rgb(0xdcb0ff), // bright magenta
+            rgb(0x82eaea), // bright cyan
+            rgb(0xf2f4f8), // bright white
+        ];
+        Self {
+            indexed: build_indexed(ansi),
+            foreground: rgb(0xd7dae0),
+            background: rgb(0x14161b),
+            cursor: rgb(0x82aaff),
+            cursor_text: rgb(0x14161b),
+        }
+    }
+}
+
+/// Builds the 256-color table from the 16 base ANSI colors.
+pub fn build_indexed(ansi: [Rgb; 16]) -> [Rgb; 256] {
+    let mut table = [Rgb { r: 0, g: 0, b: 0 }; 256];
+    table[..16].copy_from_slice(&ansi);
+
+    // 6x6x6 color cube.
+    let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+    for r in 0..6u8 {
+        for g in 0..6u8 {
+            for b in 0..6u8 {
+                let index = 16 + 36 * r as usize + 6 * g as usize + b as usize;
+                table[index] = Rgb {
+                    r: level(r),
+                    g: level(g),
+                    b: level(b),
+                };
+            }
+        }
+    }
+
+    // Grayscale ramp.
+    for i in 0..24u8 {
+        let v = 8 + i * 10;
+        table[232 + i as usize] = Rgb { r: v, g: v, b: v };
+    }
+
+    table
+}
+
+fn dim(color: Rgb) -> Rgb {
+    let f = |c: u8| (c as f32 * DIM_FACTOR).round() as u8;
+    Rgb {
+        r: f(color.r),
+        g: f(color.g),
+        b: f(color.b),
+    }
+}
+
+impl Palette {
+    /// Resolves a terminal color, honoring runtime overrides set via OSC sequences.
+    pub fn resolve(&self, color: Color, overrides: &Colors) -> Rgb {
+        match color {
+            Color::Spec(rgb) => rgb,
+            Color::Indexed(index) => {
+                overrides[index as usize].unwrap_or(self.indexed[index as usize])
+            }
+            Color::Named(named) => overrides[named].unwrap_or_else(|| self.named(named)),
+        }
+    }
+
+    /// Default value of a named color.
+    pub fn named(&self, named: NamedColor) -> Rgb {
+        let index = named as usize;
+        if index < 16 {
+            return self.indexed[index];
+        }
+        match named {
+            NamedColor::Foreground | NamedColor::BrightForeground => self.foreground,
+            NamedColor::Background => self.background,
+            NamedColor::Cursor => self.cursor,
+            NamedColor::DimForeground => dim(self.foreground),
+            NamedColor::DimBlack => dim(self.indexed[0]),
+            NamedColor::DimRed => dim(self.indexed[1]),
+            NamedColor::DimGreen => dim(self.indexed[2]),
+            NamedColor::DimYellow => dim(self.indexed[3]),
+            NamedColor::DimBlue => dim(self.indexed[4]),
+            NamedColor::DimMagenta => dim(self.indexed[5]),
+            NamedColor::DimCyan => dim(self.indexed[6]),
+            NamedColor::DimWhite => dim(self.indexed[7]),
+            _ => self.foreground,
+        }
+    }
+
+    /// Default color for a raw color index as used by OSC 4/10/11/12 queries.
+    pub fn by_index(&self, index: usize) -> Rgb {
+        match index {
+            0..=255 => self.indexed[index],
+            i if i == NamedColor::Background as usize => self.background,
+            i if i == NamedColor::Cursor as usize => self.cursor,
+            _ => self.foreground,
+        }
+    }
+
+    /// Computes the final (foreground, background) pair for a cell.
+    pub fn cell_colors(&self, fg: Color, bg: Color, flags: Flags, overrides: &Colors) -> (Rgb, Rgb) {
+        let mut fg_rgb = self.resolve(fg, overrides);
+        let mut bg_rgb = self.resolve(bg, overrides);
+
+        if flags.contains(Flags::DIM) && !flags.contains(Flags::BOLD) {
+            fg_rgb = dim(fg_rgb);
+        }
+        if flags.contains(Flags::INVERSE) {
+            std::mem::swap(&mut fg_rgb, &mut bg_rgb);
+        }
+        if flags.contains(Flags::HIDDEN) {
+            fg_rgb = bg_rgb;
+        }
+
+        (fg_rgb, bg_rgb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexed_table_contains_cube_and_grays() {
+        let p = Palette::default();
+        assert_eq!(p.indexed[16], Rgb { r: 0, g: 0, b: 0 });
+        assert_eq!(p.indexed[231], Rgb { r: 255, g: 255, b: 255 });
+        assert_eq!(p.indexed[196], Rgb { r: 255, g: 0, b: 0 });
+        assert_eq!(p.indexed[232], Rgb { r: 8, g: 8, b: 8 });
+        assert_eq!(p.indexed[255], Rgb { r: 238, g: 238, b: 238 });
+    }
+
+    #[test]
+    fn resolve_spec_and_named() {
+        let p = Palette::default();
+        let o = Colors::default();
+        let spec = Rgb { r: 1, g: 2, b: 3 };
+        assert_eq!(p.resolve(Color::Spec(spec), &o), spec);
+        assert_eq!(p.resolve(Color::Named(NamedColor::Red), &o), p.indexed[1]);
+        assert_eq!(p.resolve(Color::Named(NamedColor::Foreground), &o), p.foreground);
+        assert_eq!(p.resolve(Color::Named(NamedColor::Background), &o), p.background);
+    }
+
+    #[test]
+    fn resolve_honors_overrides() {
+        let p = Palette::default();
+        let mut o = Colors::default();
+        let custom = Rgb { r: 9, g: 9, b: 9 };
+        o[NamedColor::Foreground] = Some(custom);
+        o[42] = Some(custom);
+        assert_eq!(p.resolve(Color::Named(NamedColor::Foreground), &o), custom);
+        assert_eq!(p.resolve(Color::Indexed(42), &o), custom);
+    }
+
+    #[test]
+    fn by_index_covers_special_colors() {
+        let p = Palette::default();
+        assert_eq!(p.by_index(3), p.indexed[3]);
+        assert_eq!(p.by_index(NamedColor::Foreground as usize), p.foreground);
+        assert_eq!(p.by_index(NamedColor::Background as usize), p.background);
+        assert_eq!(p.by_index(NamedColor::Cursor as usize), p.cursor);
+    }
+
+    #[test]
+    fn inverse_swaps_and_hidden_masks() {
+        let p = Palette::default();
+        let o = Colors::default();
+        let fg = Color::Named(NamedColor::Foreground);
+        let bg = Color::Named(NamedColor::Background);
+
+        let (f, b) = p.cell_colors(fg, bg, Flags::INVERSE, &o);
+        assert_eq!((f, b), (p.background, p.foreground));
+
+        let (f, b) = p.cell_colors(fg, bg, Flags::HIDDEN, &o);
+        assert_eq!(f, b);
+    }
+
+    #[test]
+    fn dim_darkens_foreground() {
+        let p = Palette::default();
+        let o = Colors::default();
+        let white = Color::Spec(Rgb { r: 200, g: 100, b: 0 });
+        let (f, _) = p.cell_colors(white, Color::Named(NamedColor::Background), Flags::DIM, &o);
+        assert_eq!(f, Rgb { r: 132, g: 66, b: 0 });
+    }
+}
