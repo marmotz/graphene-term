@@ -54,7 +54,6 @@ impl GridLayout {
 
     /// Number of lines between the pixel row `y` and the grid: negative above, positive
     /// below, 0 inside.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn vertical_overflow(&self, y: f32) -> i32 {
         let top = self.padding;
         let bottom = top + self.lines as f32 * self.cell.height;

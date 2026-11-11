@@ -98,6 +98,11 @@ runs changes.
   selection in `Term::selection`, or extends it with `Shift`.
 - `CursorMoved` while pressed updates the selection. Left release clears an empty
   selection (simple click), otherwise writes the cleaned text to the primary selection.
+- Auto-scroll: in `about_to_wait`, while dragging with the cursor above or below the
+  grid (`layout::vertical_overflow`), the display scrolls by `selection::
+  auto_scroll_delta` lines (1 plus 1 per cell height of overflow, capped at 10) every
+  50 ms (`ControlFlow::WaitUntil`) and the selection end follows the edge row. Disabled
+  on the alternate screen, which has no history.
 - Middle press pastes the primary selection through `input::paste_bytes`.
 - Left and middle clicks are ignored when the application enabled mouse reporting,
   unless `Shift` is held (`selection::mouse_reserved`).

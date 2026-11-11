@@ -57,6 +57,23 @@ pub fn mouse_reserved(mode: TermMode, mods: ModifiersState) -> bool {
     mode.intersects(TermMode::MOUSE_MODE) && !mods.shift_key()
 }
 
+/// Maximum number of lines scrolled per auto-scroll step.
+pub const AUTO_SCROLL_MAX_LINES: i32 = 10;
+
+/// Delay between two auto-scroll steps while dragging past the grid edges.
+pub const AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Lines to scroll the display by during a selection drag, as a `Scroll::Delta` count
+/// (positive scrolls up into history). `overflow` is `GridLayout::vertical_overflow` of the
+/// cursor: 1 line just past the edge, plus 1 per cell height further, capped at
+/// `AUTO_SCROLL_MAX_LINES`. The alternate screen has no history: always 0 there.
+pub fn auto_scroll_delta(overflow: i32, mode: TermMode) -> i32 {
+    if mode.contains(TermMode::ALT_SCREEN) {
+        return 0;
+    }
+    -overflow.clamp(-AUTO_SCROLL_MAX_LINES, AUTO_SCROLL_MAX_LINES)
+}
+
 /// Left press on `point`: with `Shift` held, extends the existing selection; otherwise
 /// starts a new one whose kind depends on the click count. A single click starts an empty
 /// selection, which renders nothing.
@@ -132,6 +149,35 @@ mod tests {
 
     fn point(line: i32, column: usize) -> Point {
         Point::new(Line(line), Column(column))
+    }
+
+    #[test]
+    fn auto_scroll_is_idle_inside_the_grid() {
+        assert_eq!(auto_scroll_delta(0, TermMode::empty()), 0);
+    }
+
+    #[test]
+    fn auto_scroll_goes_up_into_history_above_the_grid() {
+        assert_eq!(auto_scroll_delta(-1, TermMode::empty()), 1);
+        assert_eq!(auto_scroll_delta(-3, TermMode::empty()), 3);
+    }
+
+    #[test]
+    fn auto_scroll_goes_down_below_the_grid() {
+        assert_eq!(auto_scroll_delta(1, TermMode::empty()), -1);
+        assert_eq!(auto_scroll_delta(4, TermMode::empty()), -4);
+    }
+
+    #[test]
+    fn auto_scroll_is_capped() {
+        assert_eq!(auto_scroll_delta(-50, TermMode::empty()), AUTO_SCROLL_MAX_LINES);
+        assert_eq!(auto_scroll_delta(50, TermMode::empty()), -AUTO_SCROLL_MAX_LINES);
+    }
+
+    #[test]
+    fn auto_scroll_is_disabled_on_alternate_screen() {
+        assert_eq!(auto_scroll_delta(-3, TermMode::ALT_SCREEN), 0);
+        assert_eq!(auto_scroll_delta(3, TermMode::ALT_SCREEN), 0);
     }
 
     #[test]

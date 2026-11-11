@@ -12,7 +12,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
@@ -67,6 +67,8 @@ struct Session {
     /// A selection drag is in progress.
     left_pressed: bool,
     click_tracker: ClickTracker,
+    /// When the next auto-scroll step is due during a drag past the grid edges.
+    auto_scroll_deadline: Option<Instant>,
 }
 
 impl Session {
@@ -182,15 +184,40 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
-        if !self.left_pressed {
-            return;
+        if self.left_pressed {
+            self.update_selection(&mut self.terminal.term.lock());
         }
-        let mut term = self.terminal.term.lock();
+    }
+
+    /// Moves the selection end to the cell under the mouse cursor.
+    fn update_selection(&self, term: &mut term::Term<EventProxy>) {
         let (point, side) = self.mouse_point(term.grid().display_offset());
         if let Some(selection) = term.selection.as_mut() {
             selection.update(point, side);
             self.window.request_redraw();
         }
+    }
+
+    /// Auto-scroll while dragging a selection past the top or bottom edge: once per
+    /// `AUTO_SCROLL_INTERVAL`, scrolls the display and moves the selection end onto the
+    /// edge row. Returns when the next step is due, `None` when auto-scroll is idle.
+    fn auto_scroll(&mut self, now: Instant) -> Option<Instant> {
+        let mut term = self.terminal.term.lock();
+        let overflow = self.layout.vertical_overflow(self.mouse_position.y as f32);
+        let delta = selection::auto_scroll_delta(overflow, *term.mode());
+        if !self.left_pressed || delta == 0 || term.selection.is_none() {
+            self.auto_scroll_deadline = None;
+            return None;
+        }
+        match self.auto_scroll_deadline {
+            Some(deadline) if now < deadline => {}
+            _ => {
+                term.scroll_display(Scroll::Delta(delta));
+                self.update_selection(&mut term);
+                self.auto_scroll_deadline = Some(now + selection::AUTO_SCROLL_INTERVAL);
+            }
+        }
+        self.auto_scroll_deadline
     }
 
     fn set_primary(&mut self, text: String) {
@@ -335,6 +362,7 @@ impl App {
             mouse_position: PhysicalPosition::default(),
             left_pressed: false,
             click_tracker: ClickTracker::default(),
+            auto_scroll_deadline: None,
         })
     }
 
@@ -353,6 +381,11 @@ impl ApplicationHandler<UserEvent> for App {
             Ok(session) => self.session = Some(session),
             Err(error) => self.fail(event_loop, error),
         }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let deadline = self.session.as_mut().and_then(|s| s.auto_scroll(Instant::now()));
+        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
