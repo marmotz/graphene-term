@@ -4,6 +4,7 @@ mod input;
 mod layout;
 mod palette;
 mod renderer;
+mod selection;
 mod terminal;
 
 fn main() -> anyhow::Result<()> {
