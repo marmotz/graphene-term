@@ -12,6 +12,8 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
+use crate::selection::SEMANTIC_ESCAPE_CHARS;
+
 /// Events sent from the PTY thread to the UI thread.
 #[derive(Debug)]
 pub enum UserEvent {
@@ -59,6 +61,7 @@ impl Terminal {
 
         let config = Config {
             scrolling_history: SCROLLBACK_LINES,
+            semantic_escape_chars: SEMANTIC_ESCAPE_CHARS.to_owned(),
             ..Default::default()
         };
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);

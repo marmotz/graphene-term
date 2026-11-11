@@ -19,6 +19,13 @@ Environment variables:
 
 | Keys                          | Action                                          |
 |-------------------------------|-------------------------------------------------|
+| Left drag                     | Select text (copied to the primary selection)   |
+| Double / triple click         | Select a word / a whole line                    |
+| Ctrl+left drag                | Block (rectangular) selection                   |
+| Shift+left click              | Extend the selection                            |
+| Shift+mouse                   | Select even when the app captures the mouse     |
+| Ctrl+Shift+C                  | Copy the selection to the clipboard             |
+| Middle click                  | Paste the primary selection                     |
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)      |
 | Shift+PageUp / Shift+PageDown | Scroll the history                              |
 | Shift+Home / Shift+End        | Top / bottom of the history                     |

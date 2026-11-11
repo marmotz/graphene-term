@@ -4,6 +4,8 @@
 //! renderer then works on this plain data.
 
 use alacritty_terminal::event::EventListener;
+use alacritty_terminal::index::Point;
+use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
@@ -51,6 +53,7 @@ impl Frame {
         let columns = term.columns();
         let lines = term.screen_lines();
         let display_offset = content.display_offset as i32;
+        let selection = content.selection;
 
         let background = palette.resolve(
             alacritty_terminal::vte::ansi::Color::Named(
@@ -78,7 +81,10 @@ impl Frame {
             }
             let cell = indexed.cell;
             let flags = cell.flags;
-            let (fg, bg) = palette.cell_colors(cell.fg, cell.bg, flags, overrides);
+            let (mut fg, mut bg) = palette.cell_colors(cell.fg, cell.bg, flags, overrides);
+            if selection.is_some_and(|range| is_selected(&range, indexed.point, flags)) {
+                std::mem::swap(&mut fg, &mut bg);
+            }
             let spacer = flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
             rows[line as usize][column] = FrameCell {
                 c: if spacer || cell.c == '\t' { ' ' } else { cell.c },
@@ -136,6 +142,17 @@ impl Frame {
             background,
         }
     }
+}
+
+/// Whether the cell at `point` is highlighted by `range`. Both halves of a wide
+/// character are highlighted as soon as either half is selected.
+fn is_selected(range: &SelectionRange, point: Point, flags: Flags) -> bool {
+    range.contains(point)
+        || (flags.contains(Flags::WIDE_CHAR)
+            && range.contains(Point::new(point.line, point.column + 1)))
+        || (flags.contains(Flags::WIDE_CHAR_SPACER)
+            && point.column.0 > 0
+            && range.contains(Point::new(point.line, point.column - 1)))
 }
 
 #[cfg(test)]
@@ -205,6 +222,63 @@ mod tests {
         let frame = Frame::capture(&term_with(b"\x1b[?25l"), &p, true);
         assert_eq!(frame.cursor, None);
         assert_eq!(frame.rows[0][0].bg, p.background);
+    }
+
+    fn select(term: &mut Term<VoidListener>, start: (i32, usize), end: (i32, usize)) {
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let start = Point::new(Line(start.0), Column(start.1));
+        let end = Point::new(Line(end.0), Column(end.1));
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+        term.selection = Some(selection);
+    }
+
+    #[test]
+    fn selected_cells_swap_colors() {
+        let p = Palette::default();
+        let mut term = term_with(b"hello\r\n");
+        select(&mut term, (0, 1), (0, 2));
+        let frame = Frame::capture(&term, &p, true);
+        for column in [1, 2] {
+            assert_eq!(frame.rows[0][column].fg, p.background);
+            assert_eq!(frame.rows[0][column].bg, p.foreground);
+        }
+        for column in [0, 3] {
+            assert_eq!(frame.rows[0][column].fg, p.foreground);
+            assert_eq!(frame.rows[0][column].bg, p.background);
+        }
+    }
+
+    #[test]
+    fn selected_wide_char_is_fully_highlighted() {
+        let p = Palette::default();
+        let mut term = term_with("x日\r\n".as_bytes());
+        select(&mut term, (0, 1), (0, 1));
+        let frame = Frame::capture(&term, &p, true);
+        assert!(frame.rows[0][2].spacer);
+        for column in [1, 2] {
+            assert_eq!(frame.rows[0][column].bg, p.foreground);
+        }
+        assert_eq!(frame.rows[0][0].bg, p.background);
+
+        // Selecting only the spacer highlights the whole character too.
+        select(&mut term, (0, 2), (0, 2));
+        let frame = Frame::capture(&term, &p, true);
+        for column in [1, 2] {
+            assert_eq!(frame.rows[0][column].bg, p.foreground);
+        }
+    }
+
+    #[test]
+    fn block_cursor_wins_over_selection() {
+        let p = Palette::default();
+        let mut term = term_with(b"ab");
+        select(&mut term, (0, 0), (0, 4));
+        let frame = Frame::capture(&term, &p, true);
+        assert_eq!(frame.rows[0][2].bg, p.cursor);
+        assert_eq!(frame.rows[0][2].fg, p.cursor_text);
+        assert_eq!(frame.rows[0][1].bg, p.foreground);
     }
 
     #[test]
