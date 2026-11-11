@@ -111,11 +111,12 @@ impl Session {
         let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) else {
             return;
         };
-        self.clear_selection();
         self.send_paste(&text);
     }
 
-    fn send_paste(&self, text: &str) {
+    /// Sends a paste to the shell. Like a keystroke, it clears the selection.
+    fn send_paste(&mut self, text: &str) {
+        self.clear_selection();
         let bytes = input::paste_bytes(text, self.mode());
         self.scroll_display(Scroll::Bottom);
         self.terminal.write(bytes);

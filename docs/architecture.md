@@ -103,7 +103,8 @@ runs changes.
   auto_scroll_delta` lines (1 plus 1 per cell height of overflow, capped at 10) every
   50 ms (`ControlFlow::WaitUntil`) and the selection end follows the edge row. Disabled
   on the alternate screen, which has no history.
-- Middle press pastes the primary selection through `input::paste_bytes`.
+- Middle press pastes the primary selection through `input::paste_bytes` and, like
+  every paste, clears the selection.
 - Text change: the release stores a `selection::SelectionSnapshot` in the `Session`.
   On each `TermEvent::Wakeup`, `SelectionSnapshot::validate` restores the selection if
   `Term` erased it, then clears it (and drops the snapshot) when its cleaned text
