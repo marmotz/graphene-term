@@ -1,6 +1,7 @@
 // Embeds the build version as `GRAPHENE_VERSION`: `<pkg>-dev.<UTC YYYYMMDDHHMMSS>` by
 // default, `<pkg>` when built with `GRAPHENE_CHANNEL=stable`. The timestamp comes from
-// `SOURCE_DATE_EPOCH` when set, else the current time.
+// `SOURCE_DATE_EPOCH` when set, else the current time. The channel is embedded as
+// `GRAPHENE_BUILD_CHANNEL` (`dev` or `stable`).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,4 +30,9 @@ fn main() {
     let pkg_version = std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION");
     let version = build_version(&pkg_version, channel, epoch);
     println!("cargo:rustc-env=GRAPHENE_VERSION={version}");
+    let channel = match channel {
+        BuildChannel::Dev => "dev",
+        BuildChannel::Stable => "stable",
+    };
+    println!("cargo:rustc-env=GRAPHENE_BUILD_CHANNEL={channel}");
 }

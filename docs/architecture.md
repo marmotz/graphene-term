@@ -9,6 +9,8 @@
 | Text shaping and rendering        | `glyphon` (on `cosmic-text` 0.19)                        | 0.12    |
 | PTY, VT parsing, grid, scrollback | `alacritty_terminal`                                     | 0.26    |
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
+| Config file                       | `toml` + `serde`                                         | 1       |
+| Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 
 ## Modules
 
@@ -23,6 +25,9 @@ src/
   palette.rs       theme, 256-color table, color resolution
   layout.rs        pixels <-> grid geometry
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
+  update/
+    mod.rs         GitHub release check, release selection, notice and scheduling decisions
+    state.rs       update.json state file (last check, latest release, ignored tag)
   renderer/
     mod.rs         wgpu device/surface, frame orchestration
     scene.rs       Frame -> rects + text runs (pure, no GPU)
@@ -32,7 +37,7 @@ src/
 ```
 
 Pure modules (`config`, `palette`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
-and are unit tested. GPU and window code stay thin.
+and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
 
