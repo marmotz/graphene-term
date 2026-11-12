@@ -21,6 +21,7 @@ src/
   config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
   frame.rs         snapshot of the visible grid with resolved colors
+  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
   palette.rs       theme, 256-color table, color resolution
   layout.rs        pixels <-> grid geometry

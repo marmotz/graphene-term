@@ -3,6 +3,7 @@ mod app;
 mod build_version;
 mod config;
 mod frame;
+mod i18n;
 mod input;
 mod layout;
 mod palette;
