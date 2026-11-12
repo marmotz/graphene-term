@@ -2,6 +2,11 @@
 name = "graphene"
 version = "0.1.0"
 edition = "2024"
+description = "A modern, GPU-accelerated terminal emulator for Linux"
+authors = ["Marmotz <contact@marmotz.dev>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/marmotz/graphene-term"
+readme = "README.md"
 
 [dependencies]
 alacritty_terminal = "0.26.0"
@@ -14,3 +19,30 @@ log = "0.4.35"
 pollster = "1.0.1"
 wgpu = "30.0.1"
 winit = "0.30.13"
+
+[package.metadata.deb]
+name = "graphene-term"
+maintainer = "Marmotz <contact@marmotz.dev>"
+section = "x11"
+priority = "optional"
+depends = "libc6, libgcc-s1"
+extended-description = "Graphene Term is a GPU-accelerated terminal emulator for Linux, written in Rust. The binary is called graphene."
+assets = [
+    ["target/release/graphene", "usr/bin/", "755"],
+    ["packaging/graphene.desktop", "usr/share/applications/", "644"],
+    ["packaging/graphene.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["README.md", "usr/share/doc/graphene-term/", "644"],
+    ["LICENSE-MIT", "usr/share/doc/graphene-term/", "644"],
+    ["LICENSE-APACHE", "usr/share/doc/graphene-term/", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "graphene-term"
+assets = [
+    { source = "target/release/graphene", dest = "/usr/bin/graphene", mode = "755" },
+    { source = "packaging/graphene.desktop", dest = "/usr/share/applications/graphene.desktop", mode = "644" },
+    { source = "packaging/graphene.svg", dest = "/usr/share/icons/hicolor/scalable/apps/graphene.svg", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/graphene-term/README.md", mode = "644", doc = true },
+    { source = "LICENSE-MIT", dest = "/usr/share/licenses/graphene-term/LICENSE-MIT", mode = "644" },
+    { source = "LICENSE-APACHE", dest = "/usr/share/licenses/graphene-term/LICENSE-APACHE", mode = "644" },
+]
