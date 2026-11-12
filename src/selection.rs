@@ -102,7 +102,8 @@ pub fn finish_selection<T>(term: &mut Term<T>) -> Option<String> {
 
 /// Cleaned text of the current selection, `None` without selection.
 pub fn selected_text<T>(term: &Term<T>) -> Option<String> {
-    term.selection_to_string().map(|text| clean_copied_text(&text))
+    term.selection_to_string()
+        .map(|text| clean_copied_text(&text))
 }
 
 /// Shadow copy of a finished selection and its cleaned text.
@@ -207,8 +208,14 @@ mod tests {
 
     #[test]
     fn auto_scroll_is_capped() {
-        assert_eq!(auto_scroll_delta(-50, TermMode::empty()), AUTO_SCROLL_MAX_LINES);
-        assert_eq!(auto_scroll_delta(50, TermMode::empty()), -AUTO_SCROLL_MAX_LINES);
+        assert_eq!(
+            auto_scroll_delta(-50, TermMode::empty()),
+            AUTO_SCROLL_MAX_LINES
+        );
+        assert_eq!(
+            auto_scroll_delta(50, TermMode::empty()),
+            -AUTO_SCROLL_MAX_LINES
+        );
     }
 
     #[test]
@@ -348,7 +355,11 @@ mod tests {
     }
 
     fn term_with(columns: usize, lines: usize, content: &[u8]) -> Term<VoidListener> {
-        let mut term = Term::new(Config::default(), &TermSize::new(columns, lines), VoidListener);
+        let mut term = Term::new(
+            Config::default(),
+            &TermSize::new(columns, lines),
+            VoidListener,
+        );
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, content);
         term
@@ -359,16 +370,28 @@ mod tests {
         let none = ModifiersState::empty();
         assert!(!mouse_reserved(TermMode::empty(), none));
         assert!(mouse_reserved(TermMode::MOUSE_REPORT_CLICK, none));
-        assert!(mouse_reserved(TermMode::MOUSE_DRAG, ModifiersState::CONTROL));
+        assert!(mouse_reserved(
+            TermMode::MOUSE_DRAG,
+            ModifiersState::CONTROL
+        ));
         assert!(mouse_reserved(TermMode::MOUSE_MOTION, none));
-        assert!(!mouse_reserved(TermMode::MOUSE_REPORT_CLICK, ModifiersState::SHIFT));
+        assert!(!mouse_reserved(
+            TermMode::MOUSE_REPORT_CLICK,
+            ModifiersState::SHIFT
+        ));
         assert!(!mouse_reserved(TermMode::BRACKETED_PASTE, none));
     }
 
     #[test]
     fn single_click_without_drag_clears_the_selection() {
         let mut term = term_with(20, 2, b"hello world");
-        start_selection(&mut term, point(0, 3), Side::Left, 1, ModifiersState::empty());
+        start_selection(
+            &mut term,
+            point(0, 3),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
         assert!(term.selection.is_some());
         assert_eq!(finish_selection(&mut term), None);
         assert!(term.selection.is_none());
@@ -377,8 +400,17 @@ mod tests {
     #[test]
     fn drag_selects_cells() {
         let mut term = term_with(20, 2, b"hello world");
-        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
-        term.selection.as_mut().unwrap().update(point(0, 4), Side::Right);
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(0, 4), Side::Right);
         assert_eq!(finish_selection(&mut term).as_deref(), Some("hello"));
         assert!(term.selection.is_some());
     }
@@ -386,16 +418,37 @@ mod tests {
     #[test]
     fn double_click_selects_a_word() {
         let mut term = term_with(20, 2, b"hello world");
-        start_selection(&mut term, point(0, 8), Side::Left, 2, ModifiersState::empty());
+        start_selection(
+            &mut term,
+            point(0, 8),
+            Side::Left,
+            2,
+            ModifiersState::empty(),
+        );
         assert_eq!(finish_selection(&mut term).as_deref(), Some("world"));
     }
 
     #[test]
     fn shift_click_extends_the_existing_selection() {
         let mut term = term_with(20, 2, b"hello world");
-        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
-        term.selection.as_mut().unwrap().update(point(0, 1), Side::Right);
-        start_selection(&mut term, point(0, 7), Side::Right, 1, ModifiersState::SHIFT);
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(0, 1), Side::Right);
+        start_selection(
+            &mut term,
+            point(0, 7),
+            Side::Right,
+            1,
+            ModifiersState::SHIFT,
+        );
         assert_eq!(selected_text(&term).as_deref(), Some("hello wo"));
     }
 
@@ -410,17 +463,41 @@ mod tests {
     #[test]
     fn wrapped_line_is_copied_as_one_line() {
         let mut term = term_with(10, 3, b"abcdefghijklmno");
-        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
-        term.selection.as_mut().unwrap().update(point(1, 4), Side::Right);
-        assert_eq!(finish_selection(&mut term).as_deref(), Some("abcdefghijklmno"));
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(1, 4), Side::Right);
+        assert_eq!(
+            finish_selection(&mut term).as_deref(),
+            Some("abcdefghijklmno")
+        );
     }
 
     #[test]
     fn line_selection_is_copied_without_trailing_newline() {
         let mut term = term_with(10, 3, b"  abcdefghijklmno\r\nnext");
-        start_selection(&mut term, point(1, 2), Side::Left, 3, ModifiersState::empty());
-        assert_eq!(term.selection_to_string().as_deref(), Some("  abcdefghijklmno\n"));
-        assert_eq!(finish_selection(&mut term).as_deref(), Some("abcdefghijklmno"));
+        start_selection(
+            &mut term,
+            point(1, 2),
+            Side::Left,
+            3,
+            ModifiersState::empty(),
+        );
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("  abcdefghijklmno\n")
+        );
+        assert_eq!(
+            finish_selection(&mut term).as_deref(),
+            Some("abcdefghijklmno")
+        );
     }
 
     #[test]
@@ -432,8 +509,17 @@ mod tests {
     /// `term` with "hello" selected on the first line and its snapshot.
     fn snapshot_of_hello(content: &[u8]) -> (Term<VoidListener>, SelectionSnapshot) {
         let mut term = term_with(20, 3, content);
-        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
-        term.selection.as_mut().unwrap().update(point(0, 4), Side::Right);
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(0, 4), Side::Right);
         let snapshot = SelectionSnapshot::capture(&term).unwrap();
         (term, snapshot)
     }
@@ -447,7 +533,13 @@ mod tests {
     fn empty_selection_has_no_snapshot() {
         let mut term = term_with(20, 2, b"hello");
         assert!(SelectionSnapshot::capture(&term).is_none());
-        start_selection(&mut term, point(0, 0), Side::Left, 1, ModifiersState::empty());
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
         assert!(SelectionSnapshot::capture(&term).is_none());
     }
 
@@ -480,7 +572,10 @@ mod tests {
     fn overwritten_character_clears_the_selection() {
         let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
         feed(&mut term, b"\x1b[HJ");
-        assert!(term.selection.is_some(), "Term keeps the selection on overwrite");
+        assert!(
+            term.selection.is_some(),
+            "Term keeps the selection on overwrite"
+        );
         assert!(!snapshot.validate(&mut term));
         assert!(term.selection.is_none());
     }

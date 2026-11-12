@@ -6,8 +6,8 @@
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::index::Point;
 use alacritty_terminal::selection::SelectionRange;
-use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Term;
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use crate::palette::Palette;
@@ -85,9 +85,14 @@ impl Frame {
             if selection.is_some_and(|range| is_selected(&range, indexed.point, flags)) {
                 std::mem::swap(&mut fg, &mut bg);
             }
-            let spacer = flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
+            let spacer =
+                flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
             rows[line as usize][column] = FrameCell {
-                c: if spacer || cell.c == '\t' { ' ' } else { cell.c },
+                c: if spacer || cell.c == '\t' {
+                    ' '
+                } else {
+                    cell.c
+                },
                 fg,
                 bg,
                 bold: flags.contains(Flags::BOLD),
@@ -171,7 +176,11 @@ mod tests {
     }
 
     fn row_text(frame: &Frame, line: usize) -> String {
-        frame.rows[line].iter().filter(|c| !c.spacer).map(|c| c.c).collect()
+        frame.rows[line]
+            .iter()
+            .filter(|c| !c.spacer)
+            .map(|c| c.c)
+            .collect()
     }
 
     #[test]

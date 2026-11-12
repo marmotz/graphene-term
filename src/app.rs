@@ -41,7 +41,9 @@ pub struct Settings {
 impl Settings {
     pub fn from_env() -> Self {
         Self {
-            font_family: std::env::var("GRAPHENE_FONT").ok().filter(|f| !f.is_empty()),
+            font_family: std::env::var("GRAPHENE_FONT")
+                .ok()
+                .filter(|f| !f.is_empty()),
             font_size: std::env::var("GRAPHENE_FONT_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -77,7 +79,12 @@ impl Session {
     fn compute_layout(&self) -> GridLayout {
         let size = self.window.inner_size();
         let scale = self.window.scale_factor() as f32;
-        GridLayout::new(size.width, size.height, self.renderer.cell_size(), PADDING * scale)
+        GridLayout::new(
+            size.width,
+            size.height,
+            self.renderer.cell_size(),
+            PADDING * scale,
+        )
     }
 
     /// Recomputes the grid and resizes the PTY when the cell count changed.
@@ -247,7 +254,11 @@ impl Session {
             return;
         };
         // Some Wayland compositors do not support the primary selection.
-        if let Err(error) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text) {
+        if let Err(error) = clipboard
+            .set()
+            .clipboard(LinuxClipboardKind::Primary)
+            .text(text)
+        {
             log::debug!("primary selection unavailable: {error}");
         }
     }
@@ -256,7 +267,11 @@ impl Session {
         let Some(clipboard) = self.clipboard.as_mut() else {
             return;
         };
-        match clipboard.get().clipboard(LinuxClipboardKind::Primary).text() {
+        match clipboard
+            .get()
+            .clipboard(LinuxClipboardKind::Primary)
+            .text()
+        {
             Ok(text) => self.send_paste(&text),
             Err(error) => log::debug!("primary selection unavailable: {error}"),
         }
@@ -297,7 +312,8 @@ impl Session {
                 (false, true) => b"\x1bOB",
                 (false, false) => b"\x1b[B",
             };
-            self.terminal.write(arrow.repeat(whole.unsigned_abs() as usize));
+            self.terminal
+                .write(arrow.repeat(whole.unsigned_abs() as usize));
         } else {
             self.scroll_display(Scroll::Delta(whole));
         }
@@ -334,7 +350,8 @@ impl Session {
                 self.terminal.write(format(color).into_bytes());
             }
             TermEvent::TextAreaSizeRequest(format) => {
-                self.terminal.write(format(self.layout.window_size()).into_bytes());
+                self.terminal
+                    .write(format(self.layout.window_size()).into_bytes());
             }
             TermEvent::Bell => self
                 .window
@@ -367,7 +384,12 @@ impl App {
         ))?;
 
         let size = window.inner_size();
-        let layout = GridLayout::new(size.width, size.height, renderer.cell_size(), PADDING * scale);
+        let layout = GridLayout::new(
+            size.width,
+            size.height,
+            renderer.cell_size(),
+            PADDING * scale,
+        );
         let terminal = Terminal::spawn(EventProxy::new(self.proxy.clone()), layout.window_size())?;
 
         let clipboard = arboard::Clipboard::new()
@@ -411,7 +433,10 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let deadline = self.session.as_mut().and_then(|s| s.auto_scroll(Instant::now()));
+        let deadline = self
+            .session
+            .as_mut()
+            .and_then(|s| s.auto_scroll(Instant::now()));
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
@@ -441,9 +466,11 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Focused(focused) => {
                 session.focused = focused;
                 if session.mode().contains(TermMode::FOCUS_IN_OUT) {
-                    session
-                        .terminal
-                        .write(if focused { &b"\x1b[I"[..] } else { &b"\x1b[O"[..] });
+                    session.terminal.write(if focused {
+                        &b"\x1b[I"[..]
+                    } else {
+                        &b"\x1b[O"[..]
+                    });
                 }
                 session.window.request_redraw();
             }
