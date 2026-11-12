@@ -1,0 +1,61 @@
+## Graphene Term configuration.
+##
+## Every setting below is commented out and shows its default value: uncomment a line
+## to change it. A missing setting takes its default value; an invalid value or an
+## unknown key is reported and ignored.
+
+## Interface language: "auto" (follows LANG), "en", "fr".
+# language = "auto"
+
+# [font]
+## Font family name. Empty: the system monospace font.
+# family = ""
+## Size in points, from 6 to 72.
+# size = 14.0
+
+# [window]
+## Initial window size, in logical pixels.
+# width = 960
+# height = 600
+## Minimum space around the grid, in logical pixels.
+# padding = 8
+
+# [scrollback]
+## Number of lines kept in the history, up to 100000.
+# lines = 10000
+
+# [cursor]
+## "block", "beam" or "underline".
+# shape = "block"
+# blinking = false
+
+# [selection]
+## Characters ending a word on double-click.
+# word_separators = ",│`|\"' ()[]{}<>\t"
+
+# [tabs]
+## Tab bar position: "top", "bottom", "left", "right".
+# position = "top"
+
+# [theme]
+## Single theme. Built-in themes: graphene-night, graphene-day, solarized-dark,
+## solarized-light, gruvbox-dark, gruvbox-light, catppuccin-mocha, catppuccin-latte.
+## A file themes/<name>.toml next to this one is used first, so it can override a
+## built-in theme; a color it does not set comes from graphene-night.
+# name = "graphene-night"
+## Set both `light` and `dark` to follow the system appearance:
+## light = "graphene-day"
+## dark = "graphene-night"
+
+# [keybindings]
+## "Keys" = "action". The action "none" disables a default shortcut, so the key goes
+## to the shell. Examples:
+## "Ctrl+Shift+C" = "copy"
+## "Shift+PageUp" = "none"
+
+# [updates]
+## Check GitHub for a newer release and show a banner. false: no network call at all.
+# check = true
+## Time between two checks: "auto", "6h", "12h", "24h", "2d", "3d", "1w".
+## auto: 6h for dev builds, 24h for stable builds.
+# interval = "auto"

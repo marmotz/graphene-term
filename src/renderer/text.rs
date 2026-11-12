@@ -8,7 +8,7 @@ use glyphon::{
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, Wrap,
 };
 
-use super::scene::TextRun;
+use super::scene::{OverlayText, TextRun};
 use crate::layout::{CellSize, GridLayout};
 
 /// Shaped buffers of one visible row, one per text run.
@@ -27,6 +27,12 @@ pub struct TextGrid {
     atlas: TextAtlas,
     renderer: TextRenderer,
     rows: Vec<RowBuffers>,
+    /// Draws the overlay text after the rectangles that cover the grid.
+    overlay_renderer: TextRenderer,
+    /// Shaped overlay buffers; only the first `overlay_len` are in use.
+    overlay: Vec<Buffer>,
+    overlay_len: usize,
+    overlay_hash: u64,
     /// Font family name; `None` uses the system monospace font.
     family: Option<String>,
     metrics: Metrics,
@@ -60,6 +66,8 @@ impl TextGrid {
         let mut atlas = TextAtlas::new(device, queue, &cache, format);
         let renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let overlay_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let (metrics, cell) = Self::measure(&mut font_system, &family, font_size);
         Self {
             font_system,
@@ -68,6 +76,10 @@ impl TextGrid {
             atlas,
             renderer,
             rows: Vec::new(),
+            overlay_renderer,
+            overlay: Vec::new(),
+            overlay_len: 0,
+            overlay_hash: 0,
             family,
             metrics,
             cell,
@@ -115,6 +127,8 @@ impl TextGrid {
         self.metrics = metrics;
         self.cell = cell;
         self.rows.clear();
+        self.overlay.clear();
+        self.overlay_len = 0;
     }
 
     pub fn prepare(
@@ -124,6 +138,7 @@ impl TextGrid {
         screen: (u32, u32),
         layout: &GridLayout,
         rows: &[Vec<TextRun>],
+        overlay: &[OverlayText],
     ) -> anyhow::Result<()> {
         self.viewport.update(
             queue,
@@ -195,11 +210,70 @@ impl TextGrid {
             areas,
             &mut self.swash_cache,
         )?;
+
+        self.shape_overlay(overlay);
+        let areas = self.overlay[..self.overlay_len]
+            .iter()
+            .zip(overlay)
+            .map(|(buffer, item)| TextArea {
+                buffer,
+                left: item.x,
+                top: item.y,
+                scale: 1.0,
+                bounds,
+                default_color: Color::rgb(255, 255, 255),
+                custom_glyphs: &[],
+            });
+        self.overlay_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            areas,
+            &mut self.swash_cache,
+        )?;
         Ok(())
     }
 
+    /// Reshapes the overlay buffers when the overlay text changed.
+    fn shape_overlay(&mut self, overlay: &[OverlayText]) {
+        let mut hasher = DefaultHasher::new();
+        for item in overlay {
+            item.text.hash(&mut hasher);
+            (item.color.r, item.color.g, item.color.b).hash(&mut hasher);
+        }
+        let hash = hasher.finish();
+        if hash == self.overlay_hash && self.overlay_len == overlay.len() {
+            return;
+        }
+        self.overlay_hash = hash;
+        self.overlay_len = overlay.len();
+        while self.overlay.len() < overlay.len() {
+            let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
+            buffer.set_wrap(Wrap::None);
+            self.overlay.push(buffer);
+        }
+        let base = Attrs::new().family(family(&self.family));
+        for (buffer, item) in self.overlay.iter_mut().zip(overlay) {
+            let attrs = base
+                .clone()
+                .color(Color::rgb(item.color.r, item.color.g, item.color.b));
+            buffer.set_text(&item.text, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut self.font_system, false);
+        }
+    }
+
+    /// Draws the grid text.
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) -> anyhow::Result<()> {
         self.renderer.render(&self.atlas, &self.viewport, pass)?;
+        Ok(())
+    }
+
+    /// Draws the overlay text.
+    pub fn render_overlay(&self, pass: &mut wgpu::RenderPass<'_>) -> anyhow::Result<()> {
+        self.overlay_renderer
+            .render(&self.atlas, &self.viewport, pass)?;
         Ok(())
     }
 

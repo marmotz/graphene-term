@@ -4,19 +4,11 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
-const fn rgb(hex: u32) -> Rgb {
-    Rgb {
-        r: ((hex >> 16) & 0xff) as u8,
-        g: ((hex >> 8) & 0xff) as u8,
-        b: (hex & 0xff) as u8,
-    }
-}
-
 /// Factor applied to a color to produce its dimmed variant.
 const DIM_FACTOR: f32 = 0.66;
 
-/// A complete color theme.
-#[derive(Debug, Clone)]
+/// A complete color theme, read from a theme file by [`crate::theme`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct Palette {
     /// The 256 indexed colors (16 ANSI + 6x6x6 cube + 24 grays).
     pub indexed: [Rgb; 256],
@@ -25,35 +17,71 @@ pub struct Palette {
     pub cursor: Rgb,
     /// Color of the text drawn on top of a block cursor.
     pub cursor_text: Rgb,
+    /// Background of selected cells.
+    pub selection_background: Rgb,
+    /// Foreground of selected cells; `None` keeps each cell's own foreground.
+    pub selection_foreground: Option<Rgb>,
+    pub ui: UiColors,
+}
+
+/// Colors of the interface drawn around the grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "the tab and command palette colors are drawn by the tabs tasks"
+)]
+pub struct UiColors {
+    pub tab_bar_background: Rgb,
+    pub tab_active_background: Rgb,
+    pub tab_active_text: Rgb,
+    pub tab_inactive_text: Rgb,
+    pub pane_border: Rgb,
+    pub palette_background: Rgb,
+    pub palette_text: Rgb,
+    /// Highlight of the characters matching the search in the command palette.
+    pub palette_match: Rgb,
+    pub banner_background: Rgb,
+    pub banner_text: Rgb,
+}
+
+impl UiColors {
+    /// Every color set to `color`.
+    pub fn uniform(color: Rgb) -> Self {
+        Self {
+            tab_bar_background: color,
+            tab_active_background: color,
+            tab_active_text: color,
+            tab_inactive_text: color,
+            pane_border: color,
+            palette_background: color,
+            palette_text: color,
+            palette_match: color,
+            banner_background: color,
+            banner_text: color,
+        }
+    }
 }
 
 impl Default for Palette {
     /// The "graphene night" theme.
     fn default() -> Self {
-        let ansi = [
-            rgb(0x1c1f26), // black
-            rgb(0xf0717b), // red
-            rgb(0x9ed072), // green
-            rgb(0xe7c664), // yellow
-            rgb(0x6cb6ff), // blue
-            rgb(0xc792ea), // magenta
-            rgb(0x5fd7d7), // cyan
-            rgb(0xc8ccd4), // white
-            rgb(0x5c6370), // bright black
-            rgb(0xff8b92), // bright red
-            rgb(0xb5e890), // bright green
-            rgb(0xffd982), // bright yellow
-            rgb(0x8ecaff), // bright blue
-            rgb(0xdcb0ff), // bright magenta
-            rgb(0x82eaea), // bright cyan
-            rgb(0xf2f4f8), // bright white
-        ];
+        crate::theme::default_palette().clone()
+    }
+}
+
+impl Palette {
+    /// An all-black palette, the base on which the built-in `graphene-night` is parsed.
+    pub fn blank() -> Self {
+        let black = Rgb { r: 0, g: 0, b: 0 };
         Self {
-            indexed: build_indexed(ansi),
-            foreground: rgb(0xd7dae0),
-            background: rgb(0x14161b),
-            cursor: rgb(0x82aaff),
-            cursor_text: rgb(0x14161b),
+            indexed: build_indexed([black; 16]),
+            foreground: black,
+            background: black,
+            cursor: black,
+            cursor_text: black,
+            selection_background: black,
+            selection_foreground: None,
+            ui: UiColors::uniform(black),
         }
     }
 }

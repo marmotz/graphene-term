@@ -16,41 +16,21 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-use crate::frame::Frame;
+use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
+use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::frame::{Frame, FrameBanner};
+use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::layout::GridLayout;
+use crate::opener;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
+use crate::theme;
+use crate::update::checker::Checker;
 
 const DEFAULT_TITLE: &str = "Graphene Term";
-const DEFAULT_FONT_SIZE: f32 = 14.0;
-const MIN_FONT_SIZE: f32 = 6.0;
-const MAX_FONT_SIZE: f32 = 72.0;
-/// Padding around the grid, in logical pixels.
-const PADDING: f32 = 8.0;
-
-/// User-facing settings read from the environment.
-#[derive(Debug, Clone)]
-pub struct Settings {
-    pub font_family: Option<String>,
-    pub font_size: f32,
-}
-
-impl Settings {
-    pub fn from_env() -> Self {
-        Self {
-            font_family: std::env::var("GRAPHENE_FONT")
-                .ok()
-                .filter(|f| !f.is_empty()),
-            font_size: std::env::var("GRAPHENE_FONT_SIZE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_FONT_SIZE),
-        }
-    }
-}
 
 struct Session {
     window: Arc<Window>,
@@ -62,6 +42,8 @@ struct Session {
     focused: bool,
     modifiers: ModifiersState,
     font_size: f32,
+    /// Minimum padding around the grid, in logical pixels.
+    padding: f32,
     /// Fractional lines accumulated from touchpad scrolling.
     scroll_accumulator: f64,
     /// Last known cursor position, in physical pixels.
@@ -73,9 +55,52 @@ struct Session {
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection kept while its text is unchanged.
     selection_snapshot: Option<SelectionSnapshot>,
+    /// Configuration error banner; `None` once dismissed or without error.
+    config_banner: Option<Banner>,
+    /// Update banner: the newer release reported by the check thread.
+    update: UpdateBanner,
+    /// Tag the user just chose to ignore, forwarded to the update check thread.
+    ignored_tag: Option<String>,
+    lang: Lang,
 }
 
 impl Session {
+    /// Banner shown at the top of the window: the configuration errors first, then the
+    /// update notice.
+    fn shown_banner(&self) -> Option<Shown> {
+        Shown::pick(self.config_banner.as_ref(), &self.update, self.lang)
+    }
+
+    /// Places `shown` in pixels.
+    fn banner_layout(&self, shown: &Shown) -> BannerLayout {
+        let width = self.window.inner_size().width as f32;
+        BannerLayout::new(shown.banner(), self.renderer.cell_size(), width)
+    }
+
+    /// Handles a left press on the banner, before any selection. Returns whether the
+    /// banner took it.
+    fn banner_press(&mut self) -> bool {
+        let Some(shown) = self.shown_banner() else {
+            return false;
+        };
+        let (x, y) = (self.mouse_position.x as f32, self.mouse_position.y as f32);
+        let Some(hit) = self.banner_layout(&shown).hit(x, y) else {
+            return false;
+        };
+        match (shown, hit) {
+            // The configuration error banner has no action: any click dismisses it.
+            (Shown::Config(_), _) => self.config_banner = None,
+            (Shown::Update(_), BannerHit::Action(index)) => match self.update.press(index) {
+                Some(UpdateEffect::Open(url)) => opener::open(&url),
+                Some(UpdateEffect::Ignore(tag)) => self.ignored_tag = Some(tag),
+                None => {}
+            },
+            (Shown::Update(_), BannerHit::Body) => {}
+        }
+        self.window.request_redraw();
+        true
+    }
+
     fn compute_layout(&self) -> GridLayout {
         let size = self.window.inner_size();
         let scale = self.window.scale_factor() as f32;
@@ -83,7 +108,7 @@ impl Session {
             size.width,
             size.height,
             self.renderer.cell_size(),
-            PADDING * scale,
+            self.padding * scale,
         )
     }
 
@@ -182,6 +207,9 @@ impl Session {
     }
 
     fn left_press(&mut self) {
+        if self.banner_press() {
+            return;
+        }
         let mut term = self.terminal.term.lock();
         if selection::mouse_reserved(*term.mode(), self.modifiers) {
             return;
@@ -363,24 +391,32 @@ impl Session {
 
 pub struct App {
     proxy: EventLoopProxy<UserEvent>,
-    settings: Settings,
+    config: Config,
+    /// Palette of the configured theme.
+    palette: Palette,
     session: Option<Session>,
+    update_checker: Checker,
     error: Option<anyhow::Error>,
+    /// Banner reporting the errors of the configuration and theme files.
+    config_banner: Option<Banner>,
 }
 
 impl App {
     fn create_session(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Session> {
         let attributes = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
-            .with_inner_size(LogicalSize::new(960.0, 600.0));
+            .with_inner_size(LogicalSize::new(
+                self.config.window.width,
+                self.config.window.height,
+            ));
         let window = Arc::new(event_loop.create_window(attributes)?);
 
         let scale = window.scale_factor() as f32;
         let renderer = pollster::block_on(Renderer::new(
             window.clone(),
             event_loop.owned_display_handle(),
-            self.settings.font_family.clone(),
-            self.settings.font_size * scale,
+            self.config.font.family.clone(),
+            self.config.font.size * scale,
         ))?;
 
         let size = window.inner_size();
@@ -388,9 +424,13 @@ impl App {
             size.width,
             size.height,
             renderer.cell_size(),
-            PADDING * scale,
+            self.config.window.padding * scale,
         );
-        let terminal = Terminal::spawn(EventProxy::new(self.proxy.clone()), layout.window_size())?;
+        let terminal = Terminal::spawn(
+            EventProxy::new(self.proxy.clone()),
+            layout.window_size(),
+            self.config.term_config(),
+        )?;
 
         let clipboard = arboard::Clipboard::new()
             .map_err(|e| log::warn!("clipboard unavailable: {e}"))
@@ -401,17 +441,22 @@ impl App {
             renderer,
             terminal,
             layout,
-            palette: Palette::default(),
+            palette: self.palette.clone(),
             clipboard,
             focused: true,
             modifiers: ModifiersState::empty(),
-            font_size: self.settings.font_size,
+            font_size: self.config.font.size,
+            padding: self.config.window.padding,
             scroll_accumulator: 0.0,
             mouse_position: PhysicalPosition::default(),
             left_pressed: false,
             click_tracker: ClickTracker::default(),
             auto_scroll_deadline: None,
             selection_snapshot: None,
+            config_banner: self.config_banner.clone(),
+            update: UpdateBanner::default(),
+            ignored_tag: None,
+            lang: Lang::detect(),
         })
     }
 
@@ -428,8 +473,9 @@ impl ApplicationHandler<UserEvent> for App {
         }
         match self.create_session(event_loop) {
             Ok(session) => self.session = Some(session),
-            Err(error) => self.fail(event_loop, error),
+            Err(error) => return self.fail(event_loop, error),
         }
+        self.update_checker.apply(&self.config.updates);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -441,14 +487,20 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        let UserEvent::Terminal(event) = event;
-        if let Some(session) = self.session.as_mut() {
-            session.handle_terminal_event(event, event_loop);
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match event {
+            UserEvent::Terminal(event) => session.handle_terminal_event(event, event_loop),
+            UserEvent::Update(release) => {
+                session.update.set(release);
+                session.window.request_redraw();
+            }
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let default_font_size = self.settings.font_size;
+        let default_font_size = self.config.font.size;
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -494,12 +546,22 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
-            WindowEvent::MouseInput { state, button, .. } => session.mouse_input(state, button),
+            WindowEvent::MouseInput { state, button, .. } => {
+                session.mouse_input(state, button);
+                if let Some(tag) = session.ignored_tag.take() {
+                    self.update_checker.ignore(&tag);
+                }
+            }
             WindowEvent::RedrawRequested => {
-                let frame = {
+                let mut frame = {
                     let term = session.terminal.term.lock();
                     Frame::capture(&term, &session.palette, session.focused)
                 };
+                frame.banner = session.shown_banner().map(|shown| FrameBanner {
+                    layout: session.banner_layout(&shown),
+                    background: session.palette.ui.banner_background,
+                    text: session.palette.ui.banner_text,
+                });
                 if let Err(error) = session.renderer.render(&frame, &session.layout) {
                     log::error!("render failed: {error:#}");
                 }
@@ -509,13 +571,33 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+/// Loads the configuration file and its theme. Errors are logged and reported by the
+/// returned banner.
+fn load_config() -> (Config, Palette, Option<Banner>) {
+    let (config, mut errors) = config::load();
+    let (palette, theme_errors) = theme::load(&config.theme.name, config::config_dir().as_deref());
+    errors.extend(theme_errors);
+    for error in &errors {
+        log::warn!("{error}");
+    }
+    (config, palette, Banner::config_errors(&errors))
+}
+
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    let update_proxy = event_loop.create_proxy();
+    let (config, palette, config_banner) = load_config();
     let mut app = App {
+        update_checker: Checker::new(move |release| {
+            // The event loop may already be closed during shutdown.
+            let _ = update_proxy.send_event(UserEvent::Update(release));
+        }),
         proxy: event_loop.create_proxy(),
-        settings: Settings::from_env(),
+        config,
+        palette,
         session: None,
         error: None,
+        config_banner,
     };
     event_loop.run_app(&mut app)?;
     match app.error {

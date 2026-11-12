@@ -36,8 +36,9 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # A fresh timestamp: a restored target/ cache must not carry an older one.
       - name: Release build
-        run: cargo build --release --locked
+        run: SOURCE_DATE_EPOCH=$(date +%s) cargo build --release --locked
 
       # Reused by the Release workflow once the pull request is merged.
       - uses: actions/upload-artifact@v7

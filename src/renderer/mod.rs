@@ -111,8 +111,14 @@ impl Renderer {
         let total = rects.len() as u32;
         self.rects
             .prepare(&self.device, &self.queue, screen, &rects);
-        self.text
-            .prepare(&self.device, &self.queue, screen, layout, &scene.rows)?;
+        self.text.prepare(
+            &self.device,
+            &self.queue,
+            screen,
+            layout,
+            &scene.rows,
+            &scene.overlay,
+        )?;
 
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -160,6 +166,7 @@ impl Renderer {
             self.rects.render(&mut pass, 0..under_count);
             self.text.render(&mut pass)?;
             self.rects.render(&mut pass, under_count..total);
+            self.text.render_overlay(&mut pass)?;
         }
 
         self.queue.submit(Some(encoder.finish()));

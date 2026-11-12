@@ -62,9 +62,10 @@ jobs:
         if: steps.ci-binary.outputs.run-id == ''
         run: cargo test --locked
 
+      # A fresh timestamp: a restored target/ cache must not carry an older one.
       - name: Release build
         if: steps.ci-binary.outputs.run-id == ''
-        run: cargo build --release --locked
+        run: SOURCE_DATE_EPOCH=$(date +%s) cargo build --release --locked
 
       - name: Cache packaging tools
         id: tools-cache
@@ -91,7 +92,7 @@ jobs:
 
       - name: Package
         id: package
-        run: scripts/package.sh "$GITHUB_RUN_NUMBER" | tail -n1 >> "$GITHUB_OUTPUT"
+        run: scripts/package.sh | tail -n1 >> "$GITHUB_OUTPUT"
 
       - name: Publish pre-release
         env:

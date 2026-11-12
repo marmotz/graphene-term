@@ -8,12 +8,6 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Term, TermMode};
 use winit::keyboard::ModifiersState;
 
-/// Characters ending a word on double-click.
-///
-/// Alacritty's default list without `:`, so that a URL (`https://...`) or `host:port`
-/// stays one word.
-pub const SEMANTIC_ESCAPE_CHARS: &str = ",│`|\"' ()[]{}<>\t";
-
 /// Maximum delay between two clicks of the same series.
 const MULTI_CLICK_DELAY: Duration = Duration::from_millis(400);
 
@@ -178,11 +172,12 @@ fn common_prefix<'a>(a: &'a str, b: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SEMANTIC_ESCAPE_CHARS;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::index::{Column, Line, Side};
     use alacritty_terminal::selection::Selection;
     use alacritty_terminal::term::test::TermSize;
-    use alacritty_terminal::term::{self, Config, Term};
+    use alacritty_terminal::term::{Config, Term};
     use alacritty_terminal::vte::ansi::Processor;
 
     fn point(line: i32, column: usize) -> Point {
@@ -322,14 +317,6 @@ mod tests {
         assert_eq!(
             clean_copied_text(text),
             "\u{e0b0} main \u{f418} cafe\u{301}"
-        );
-    }
-
-    #[test]
-    fn escape_chars_are_alacritty_defaults_without_colon() {
-        assert_eq!(
-            SEMANTIC_ESCAPE_CHARS,
-            term::SEMANTIC_ESCAPE_CHARS.replace(':', "")
         );
     }
 

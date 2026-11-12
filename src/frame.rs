@@ -10,6 +10,7 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
+use crate::banner::BannerLayout;
 use crate::palette::Palette;
 
 /// A single cell ready to be drawn.
@@ -35,12 +36,21 @@ pub struct FrameCursor {
     pub color: Rgb,
 }
 
+/// Banner drawn at the top of the window, over the grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameBanner {
+    pub layout: BannerLayout,
+    pub background: Rgb,
+    pub text: Rgb,
+}
+
 #[derive(Debug, Clone)]
 pub struct Frame {
     /// Visible rows, top to bottom.
     pub rows: Vec<Vec<FrameCell>>,
     pub cursor: Option<FrameCursor>,
     pub background: Rgb,
+    pub banner: Option<FrameBanner>,
 }
 
 impl Frame {
@@ -83,7 +93,8 @@ impl Frame {
             let flags = cell.flags;
             let (mut fg, mut bg) = palette.cell_colors(cell.fg, cell.bg, flags, overrides);
             if selection.is_some_and(|range| is_selected(&range, indexed.point, flags)) {
-                std::mem::swap(&mut fg, &mut bg);
+                bg = palette.selection_background;
+                fg = palette.selection_foreground.unwrap_or(fg);
             }
             let spacer =
                 flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
@@ -145,6 +156,7 @@ impl Frame {
             rows,
             cursor,
             background,
+            banner: None,
         }
     }
 }
@@ -244,19 +256,37 @@ mod tests {
     }
 
     #[test]
-    fn selected_cells_swap_colors() {
+    fn selected_cells_use_the_selection_background() {
         let p = Palette::default();
-        let mut term = term_with(b"hello\r\n");
+        assert_eq!(p.selection_foreground, None);
+        let mut term = term_with(b"\x1b[31mhe\x1b[0mllo\r\n");
         select(&mut term, (0, 1), (0, 2));
         let frame = Frame::capture(&term, &p, true);
+        // Each cell keeps its own foreground.
+        assert_eq!(frame.rows[0][1].fg, p.indexed[1]);
+        assert_eq!(frame.rows[0][2].fg, p.foreground);
         for column in [1, 2] {
-            assert_eq!(frame.rows[0][column].fg, p.background);
-            assert_eq!(frame.rows[0][column].bg, p.foreground);
+            assert_eq!(frame.rows[0][column].bg, p.selection_background);
         }
         for column in [0, 3] {
-            assert_eq!(frame.rows[0][column].fg, p.foreground);
             assert_eq!(frame.rows[0][column].bg, p.background);
         }
+    }
+
+    #[test]
+    fn selection_foreground_overrides_the_cell_foreground() {
+        let mut p = Palette::default();
+        let white = alacritty_terminal::vte::ansi::Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        };
+        p.selection_foreground = Some(white);
+        let mut term = term_with(b"\x1b[31mhello\r\n");
+        select(&mut term, (0, 1), (0, 2));
+        let frame = Frame::capture(&term, &p, true);
+        assert_eq!(frame.rows[0][1].fg, white);
+        assert_eq!(frame.rows[0][0].fg, p.indexed[1]);
     }
 
     #[test]
@@ -267,7 +297,7 @@ mod tests {
         let frame = Frame::capture(&term, &p, true);
         assert!(frame.rows[0][2].spacer);
         for column in [1, 2] {
-            assert_eq!(frame.rows[0][column].bg, p.foreground);
+            assert_eq!(frame.rows[0][column].bg, p.selection_background);
         }
         assert_eq!(frame.rows[0][0].bg, p.background);
 
@@ -275,7 +305,7 @@ mod tests {
         select(&mut term, (0, 2), (0, 2));
         let frame = Frame::capture(&term, &p, true);
         for column in [1, 2] {
-            assert_eq!(frame.rows[0][column].bg, p.foreground);
+            assert_eq!(frame.rows[0][column].bg, p.selection_background);
         }
     }
 
@@ -287,7 +317,7 @@ mod tests {
         let frame = Frame::capture(&term, &p, true);
         assert_eq!(frame.rows[0][2].bg, p.cursor);
         assert_eq!(frame.rows[0][2].fg, p.cursor_text);
-        assert_eq!(frame.rows[0][1].bg, p.foreground);
+        assert_eq!(frame.rows[0][1].bg, p.selection_background);
     }
 
     #[test]
