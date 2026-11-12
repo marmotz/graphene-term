@@ -10,6 +10,8 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,7 +26,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Find the CI binary of the merged pull request
+        id: ci-binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "run-id=$(scripts/find-ci-binary.sh "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+
+      - name: Download the CI binary
+        if: steps.ci-binary.outputs.run-id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: graphene-release
+          path: target/release
+          run-id: ${{ steps.ci-binary.outputs.run-id }}
+          github-token: ${{ github.token }}
+
+      # Artifacts do not keep file permissions.
+      - name: Make the CI binary executable
+        if: steps.ci-binary.outputs.run-id != ''
+        run: chmod +x target/release/graphene
+
+      # Fallback when no CI binary can be reused: build from source.
       - uses: actions/cache@v6
+        if: steps.ci-binary.outputs.run-id == ''
         with:
           path: |
             ~/.cargo/registry
@@ -33,6 +57,14 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      - name: Test
+        if: steps.ci-binary.outputs.run-id == ''
+        run: cargo test --locked
+
+      - name: Release build
+        if: steps.ci-binary.outputs.run-id == ''
+        run: cargo build --release --locked
 
       - name: Cache packaging tools
         id: tools-cache
@@ -56,12 +88,6 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
           echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
-
-      - name: Test
-        run: cargo test --locked
-
-      - name: Release build
-        run: cargo build --release --locked
 
       - name: Package
         id: package
