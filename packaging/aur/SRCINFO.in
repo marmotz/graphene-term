@@ -1,0 +1,21 @@
+pkgbase = graphene-term-bin
+	pkgdesc = A modern, GPU-accelerated terminal emulator for Linux
+	pkgver = @PKGVER@
+	pkgrel = 1
+	url = https://github.com/marmotz/graphene-term
+	arch = x86_64
+	license = MIT OR Apache-2.0
+	depends = gcc-libs
+	depends = glibc
+	optdepends = vulkan-icd-loader: Vulkan rendering backend
+	optdepends = libxkbcommon: keyboard handling
+	optdepends = wayland: Wayland support
+	optdepends = libx11: X11 support
+	provides = graphene-term
+	conflicts = graphene-term
+	options = !debug
+	options = !strip
+	source = @ARCHIVE@::https://github.com/marmotz/graphene-term/releases/download/@TAG@/@ARCHIVE@
+	sha256sums = @SHA256@
+
+pkgname = graphene-term-bin

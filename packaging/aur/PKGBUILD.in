@@ -1,0 +1,28 @@
+# Maintainer: Marmotz <contact@marmotz.dev>
+pkgname=graphene-term-bin
+pkgver=@PKGVER@
+pkgrel=1
+pkgdesc='A modern, GPU-accelerated terminal emulator for Linux'
+arch=('x86_64')
+url='https://github.com/marmotz/graphene-term'
+license=('MIT OR Apache-2.0')
+depends=('gcc-libs' 'glibc')
+optdepends=('vulkan-icd-loader: Vulkan rendering backend'
+            'libxkbcommon: keyboard handling'
+            'wayland: Wayland support'
+            'libx11: X11 support')
+provides=('graphene-term')
+conflicts=('graphene-term')
+options=('!debug' '!strip')
+source=("@ARCHIVE@::https://github.com/marmotz/graphene-term/releases/download/@TAG@/@ARCHIVE@")
+sha256sums=('@SHA256@')
+
+package() {
+  cd "@DIRNAME@"
+  install -Dm755 graphene "$pkgdir/usr/bin/graphene"
+  install -Dm644 graphene.desktop "$pkgdir/usr/share/applications/graphene.desktop"
+  install -Dm644 graphene.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/graphene.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

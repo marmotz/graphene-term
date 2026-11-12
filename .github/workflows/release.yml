@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_DEB_VERSION: 3.8.0
+  CARGO_GENERATE_RPM_VERSION: 0.21.1
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache packaging tools
+        id: tools-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deb
+            ~/.cargo/bin/cargo-generate-rpm
+          key: ${{ runner.os }}-packaging-tools-${{ env.CARGO_DEB_VERSION }}-${{ env.CARGO_GENERATE_RPM_VERSION }}
+
+      - name: Install packaging tools
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked "cargo-deb@${CARGO_DEB_VERSION}" \
+            "cargo-generate-rpm@${CARGO_GENERATE_RPM_VERSION}"
+
+      - name: Install appimagetool
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Release build
+        run: cargo build --release --locked
+
+      - name: Package
+        id: package
+        run: scripts/package.sh "$GITHUB_RUN_NUMBER" | tail -n1 >> "$GITHUB_OUTPUT"
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.package.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.AppImage dist/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --prerelease
+
+#      - name: Publish to AUR
+#        if: env.AUR_SSH_PRIVATE_KEY != ''
+#        env:
+#          TAG: ${{ steps.package.outputs.tag }}
+#        run: |
+#          mkdir -p ~/.ssh
+#          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+#          chmod 600 ~/.ssh/aur
+#          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+#          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
+#          git clone ssh://aur@aur.archlinux.org/graphene-term-bin.git "$RUNNER_TEMP/aur"
+#          cp dist/aur/PKGBUILD dist/aur/.SRCINFO "$RUNNER_TEMP/aur/"
+#          cd "$RUNNER_TEMP/aur"
+#          git config user.name "Marmotz"
+#          git config user.email "contact@marmotz.dev"
+#          git add PKGBUILD .SRCINFO
+#          git commit -m "Update to ${TAG}"
+#          git push origin HEAD:master
