@@ -1,0 +1,2662 @@
+//! User configuration: `config.toml` in the config directory, read key by key so that one
+//! invalid value or unknown key never discards the rest of the file.
+
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::fmt;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+
+use alacritty_terminal::term::Config as TermConfig;
+use alacritty_terminal::vte::ansi::{CursorShape as TermCursorShape, CursorStyle};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use toml::Spanned;
+use toml::de::{DeTable, DeValue, ValueDeserializer};
+
+/// The fully commented default configuration, written on first launch.
+pub const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
+
+/// Name of the configuration file inside the config directory.
+pub const CONFIG_FILE: &str = "config.toml";
+
+/// Characters ending a word on double-click.
+///
+/// Alacritty's default list without `:`, so that a URL (`https://...`) or `host:port`
+/// stays one word.
+pub const SEMANTIC_ESCAPE_CHARS: &str = ",│`|\"' ()[]{}<>\t";
+
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+pub const MIN_FONT_SIZE: f32 = 6.0;
+pub const MAX_FONT_SIZE: f32 = 72.0;
+/// Upper bound of `scrollback.lines`.
+pub const MAX_SCROLLBACK_LINES: usize = 100_000;
+
+/// `$XDG_CONFIG_HOME/graphene`, else `$HOME/.config/graphene`.
+pub fn config_dir() -> Option<PathBuf> {
+    config_dir_from(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn config_dir_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    // The XDG spec ignores an empty or relative `XDG_CONFIG_HOME`.
+    let xdg = xdg_config_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute());
+    let base = xdg.or_else(|| {
+        home.filter(|home| !home.is_empty())
+            .map(|home| PathBuf::from(home).join(".config"))
+    })?;
+    Some(base.join("graphene"))
+}
+
+/// Loads `config.toml` from the config directory. A missing file is created from
+/// [`DEFAULT_CONFIG`] (a write failure is only logged) and yields the default.
+pub fn load() -> (Config, Vec<ConfigError>) {
+    match config_dir() {
+        Some(dir) => load_from(&dir),
+        None => {
+            log::warn!("neither XDG_CONFIG_HOME nor HOME is set: using the default configuration");
+            (Config::default(), Vec::new())
+        }
+    }
+}
+
+fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
+    let file = dir.join(CONFIG_FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => Config::parse(&text, &Config::default(), &file),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(error) =
+                std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, DEFAULT_CONFIG))
+            {
+                log::warn!("cannot write {}: {error}", file.display());
+            }
+            (Config::default(), Vec::new())
+        }
+        Err(error) => (
+            Config::default(),
+            vec![ConfigError {
+                file,
+                line: None,
+                message: format!("cannot read the file: {error}"),
+            }],
+        ),
+    }
+}
+
+/// An error found in a configuration file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigError {
+    pub file: PathBuf,
+    /// 1-based line of the faulty key or value, when known.
+    pub line: Option<usize>,
+    pub message: String,
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = self.file.file_name().map_or_else(
+            || self.file.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        match self.line {
+            Some(line) => write!(f, "{name}:{line}: {}", self.message),
+            None => write!(f, "{name}: {}", self.message),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    /// Follows `LANG`.
+    #[default]
+    Auto,
+    En,
+    Fr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Beam,
+    Underline,
+}
+
+impl From<CursorShape> for TermCursorShape {
+    fn from(shape: CursorShape) -> Self {
+        match shape {
+            CursorShape::Block => Self::Block,
+            CursorShape::Beam => Self::Beam,
+            CursorShape::Underline => Self::Underline,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabPosition {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontConfig {
+    /// `None` uses the system monospace font.
+    pub family: Option<String>,
+    pub size: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowConfig {
+    /// Initial size, in logical pixels.
+    pub width: u32,
+    pub height: u32,
+    /// Minimum padding around the grid, in logical pixels.
+    pub padding: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CursorConfig {
+    pub shape: CursorShape,
+    pub blinking: bool,
+}
+
+/// `updates.interval`: time between two update checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UpdateInterval {
+    /// 6 hours for a dev build, 24 hours for a stable one.
+    #[default]
+    Auto,
+    Hours6,
+    Hours12,
+    Hours24,
+    Days2,
+    Days3,
+    Week1,
+}
+
+impl UpdateInterval {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, UpdateInterval); 7] = [
+        ("auto", UpdateInterval::Auto),
+        ("6h", UpdateInterval::Hours6),
+        ("12h", UpdateInterval::Hours12),
+        ("24h", UpdateInterval::Hours24),
+        ("2d", UpdateInterval::Days2),
+        ("3d", UpdateInterval::Days3),
+        ("1w", UpdateInterval::Week1),
+    ];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::VALUES
+            .iter()
+            .find(|(name, _)| *name == value)
+            .map(|&(_, interval)| interval)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdatesConfig {
+    /// `false`: no network call at all.
+    pub check: bool,
+    pub interval: UpdateInterval,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThemeConfig {
+    pub name: String,
+    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
+    pub light: Option<String>,
+    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
+    pub dark: Option<String>,
+}
+
+/// The user configuration. `Default` holds the built-in values, so a missing or empty
+/// file behaves like no configuration at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Config {
+    #[allow(dead_code, reason = "applied by the language task")]
+    pub language: Language,
+    pub font: FontConfig,
+    pub window: WindowConfig,
+    pub scrollback_lines: usize,
+    pub cursor: CursorConfig,
+    pub word_separators: String,
+    #[allow(dead_code, reason = "applied by the tab bar position task")]
+    pub tab_position: TabPosition,
+    pub theme: ThemeConfig,
+    /// Raw `"keys" = "action"` pairs, interpreted by the keybindings task.
+    #[allow(dead_code, reason = "applied by the keybindings task")]
+    pub keybindings: BTreeMap<String, String>,
+    #[allow(dead_code, reason = "applied by the update check thread task")]
+    pub updates: UpdatesConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            language: Language::Auto,
+            font: FontConfig {
+                family: None,
+                size: DEFAULT_FONT_SIZE,
+            },
+            window: WindowConfig {
+                width: 960,
+                height: 600,
+                padding: 8.0,
+            },
+            scrollback_lines: 10_000,
+            cursor: CursorConfig {
+                shape: CursorShape::Block,
+                blinking: false,
+            },
+            word_separators: SEMANTIC_ESCAPE_CHARS.to_owned(),
+            tab_position: TabPosition::Top,
+            theme: ThemeConfig {
+                name: "graphene-night".to_owned(),
+                light: None,
+                dark: None,
+            },
+            keybindings: BTreeMap::new(),
+            updates: UpdatesConfig {
+                check: true,
+                interval: UpdateInterval::Auto,
+            },
+        }
+    }
+}
+
+/// Result of validating a value read from the file.
+enum Checked<T> {
+    Valid(T),
+    /// Out of range: brought back into range, with an error.
+    Clamped(T, String),
+    /// Rejected: the previous value stays, with an error.
+    Invalid(String),
+}
+
+impl Config {
+    /// Parses a configuration file. A missing key takes its default value, an invalid
+    /// value keeps the one of `previous`, an unknown key is ignored; each problem is
+    /// reported as an error. A TOML syntax error returns `previous` unchanged.
+    pub fn parse(text: &str, previous: &Config, file: &Path) -> (Config, Vec<ConfigError>) {
+        let mut reader = Reader {
+            text,
+            file,
+            errors: Vec::new(),
+        };
+        let root = match DeTable::parse(text) {
+            Ok(root) => root.into_inner(),
+            Err(error) => {
+                reader.error(error.span(), error.message().trim_end().to_owned());
+                return (previous.clone(), reader.errors);
+            }
+        };
+
+        let mut config = Config::default();
+        for (key, value) in root.iter() {
+            let name = key.get_ref().as_ref();
+            match name {
+                "language" => reader.set(
+                    value,
+                    name,
+                    &mut config.language,
+                    &previous.language,
+                    Checked::Valid,
+                ),
+                "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
+                | "keybindings" | "updates" => {
+                    let DeValue::Table(table) = value.get_ref() else {
+                        reader.error(Some(value.span()), format!("`{name}` must be a table"));
+                        continue;
+                    };
+                    for (sub_key, sub_value) in table.iter() {
+                        reader.read_section_key(name, sub_key, sub_value, &mut config, previous);
+                    }
+                }
+                _ => reader.error(Some(key.span()), format!("unknown key `{name}`")),
+            }
+        }
+        // Keys are visited in alphabetical order: report errors in file order.
+        reader.errors.sort_by_key(|error| error.line);
+        (config, reader.errors)
+    }
+
+    /// The part of the configuration handled by `alacritty_terminal`.
+    pub fn term_config(&self) -> TermConfig {
+        TermConfig {
+            scrolling_history: self.scrollback_lines,
+            semantic_escape_chars: self.word_separators.clone(),
+            default_cursor_style: CursorStyle {
+                shape: self.cursor.shape.into(),
+                blinking: self.cursor.blinking,
+            },
+            ..Default::default()
+        }
+    }
+}
+
+struct Reader<'a> {
+    text: &'a str,
+    file: &'a Path,
+    errors: Vec<ConfigError>,
+}
+
+impl Reader<'_> {
+    fn error(&mut self, span: Option<Range<usize>>, message: String) {
+        let line = span.map(|span| {
+            let end = span.start.min(self.text.len());
+            self.text.as_bytes()[..end]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count()
+                + 1
+        });
+        self.errors.push(ConfigError {
+            file: self.file.to_path_buf(),
+            line,
+            message,
+        });
+    }
+
+    /// Deserializes `value` as `T`, validates it, then stores it in `target`; on error
+    /// `target` gets `previous`.
+    fn set<T: DeserializeOwned, U: Clone>(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        path: &str,
+        target: &mut U,
+        previous: &U,
+        check: impl FnOnce(T) -> Checked<U>,
+    ) {
+        let checked = match T::deserialize(ValueDeserializer::from(value.clone())) {
+            Ok(raw) => check(raw),
+            Err(error) => Checked::Invalid(error.message().trim_end().to_owned()),
+        };
+        match checked {
+            Checked::Valid(v) => *target = v,
+            Checked::Clamped(v, message) => {
+                self.error(Some(value.span()), format!("`{path}`: {message}"));
+                *target = v;
+            }
+            Checked::Invalid(message) => {
+                self.error(
+                    Some(value.span()),
+                    format!("invalid value for `{path}`: {message}"),
+                );
+                *target = previous.clone();
+            }
+        }
+    }
+
+    fn read_section_key(
+        &mut self,
+        section: &str,
+        key: &Spanned<std::borrow::Cow<'_, str>>,
+        value: &Spanned<DeValue<'_>>,
+        config: &mut Config,
+        previous: &Config,
+    ) {
+        let name = key.get_ref().as_ref();
+        let path = format!("{section}.{name}");
+        let path = path.as_str();
+        match (section, name) {
+            ("font", "family") => self.set(value, path, &mut config.font.family, &previous.font.family, |family: String| {
+                Checked::Valid(Some(family).filter(|f| !f.is_empty()))
+            }),
+            ("font", "size") => self.set(value, path, &mut config.font.size, &previous.font.size, |size: f32| {
+                if !size.is_finite() {
+                    Checked::Invalid("not a number".to_owned())
+                } else if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&size) {
+                    Checked::Valid(size)
+                } else {
+                    let clamped = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+                    Checked::Clamped(clamped, format!("{size} is out of {MIN_FONT_SIZE}..={MAX_FONT_SIZE}, using {clamped}"))
+                }
+            }),
+            ("window", "width") => self.set(value, path, &mut config.window.width, &previous.window.width, positive_size),
+            ("window", "height") => self.set(value, path, &mut config.window.height, &previous.window.height, positive_size),
+            ("window", "padding") => self.set(value, path, &mut config.window.padding, &previous.window.padding, |padding: f32| {
+                if padding.is_finite() && padding >= 0.0 {
+                    Checked::Valid(padding)
+                } else {
+                    Checked::Invalid("must be a non-negative number".to_owned())
+                }
+            }),
+            ("scrollback", "lines") => self.set(value, path, &mut config.scrollback_lines, &previous.scrollback_lines, |lines: usize| {
+                if lines <= MAX_SCROLLBACK_LINES {
+                    Checked::Valid(lines)
+                } else {
+                    Checked::Clamped(MAX_SCROLLBACK_LINES, format!("{lines} is above the maximum, using {MAX_SCROLLBACK_LINES}"))
+                }
+            }),
+            ("cursor", "shape") => self.set(value, path, &mut config.cursor.shape, &previous.cursor.shape, Checked::Valid),
+            ("cursor", "blinking") => self.set(value, path, &mut config.cursor.blinking, &previous.cursor.blinking, Checked::Valid),
+            ("selection", "word_separators") => self.set(value, path, &mut config.word_separators, &previous.word_separators, Checked::Valid),
+            ("tabs", "position") => self.set(value, path, &mut config.tab_position, &previous.tab_position, Checked::Valid),
+            ("theme", "name") => self.set(value, path, &mut config.theme.name, &previous.theme.name, non_empty),
+            ("theme", "light") => self.set(value, path, &mut config.theme.light, &previous.theme.light, |name: String| non_empty(name).map(Some)),
+            ("theme", "dark") => self.set(value, path, &mut config.theme.dark, &previous.theme.dark, |name: String| non_empty(name).map(Some)),
+            ("updates", "check") => self.set(value, path, &mut config.updates.check, &previous.updates.check, Checked::Valid),
+            ("updates", "interval") => self.set(value, path, &mut config.updates.interval, &previous.updates.interval, |interval: String| {
+                match UpdateInterval::parse(&interval) {
+                    Some(interval) => Checked::Valid(interval),
+                    None => {
+                        let names: Vec<_> = UpdateInterval::VALUES.iter().map(|(name, _)| format!("\"{name}\"")).collect();
+                        Checked::Clamped(UpdateInterval::Auto, format!("invalid value \"{interval}\", expected one of {}; using \"auto\"", names.join(", ")))
+                    }
+                }
+            }),
+            ("keybindings", keys) => {
+                let previous_action = previous.keybindings.get(keys).cloned();
+                let mut action = previous_action.clone();
+                self.set(value, path, &mut action, &previous_action, |action: String| Checked::Valid(Some(action)));
+                if let Some(action) = action {
+                    config.keybindings.insert(keys.to_owned(), action);
+                }
+            }
+            _ => self.error(Some(key.span()), format!("unknown key `{path}`")),
+        }
+    }
+}
+
+impl<T> Checked<T> {
+    fn map<U>(self, f: impl FnOnce(T) -> U) -> Checked<U> {
+        match self {
+            Checked::Valid(v) => Checked::Valid(f(v)),
+            Checked::Clamped(v, message) => Checked::Clamped(f(v), message),
+            Checked::Invalid(message) => Checked::Invalid(message),
+        }
+    }
+}
+
+fn positive_size(size: u32) -> Checked<u32> {
+    if size > 0 {
+        Checked::Valid(size)
+    } else {
+        Checked::Invalid("must be greater than 0".to_owned())
+    }
+}
+
+fn non_empty(name: String) -> Checked<String> {
+    if name.is_empty() {
+        Checked::Invalid("must not be empty".to_owned())
+    } else {
+        Checked::Valid(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::term;
+
+    fn file() -> PathBuf {
+        PathBuf::from("/home/user/.config/graphene/config.toml")
+    }
+
+    fn parse(text: &str) -> (Config, Vec<ConfigError>) {
+        Config::parse(text, &Config::default(), &file())
+    }
+
+    /// `config.default.toml` with every commented setting enabled: lines starting with
+    /// `# ` are settings, lines starting with `##` are documentation.
+    fn uncommented_default() -> String {
+        DEFAULT_CONFIG
+            .lines()
+            .map(|line| line.strip_prefix("# ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn escape_chars_are_alacritty_defaults_without_colon() {
+        assert_eq!(
+            SEMANTIC_ESCAPE_CHARS,
+            term::SEMANTIC_ESCAPE_CHARS.replace(':', "")
+        );
+    }
+
+    #[test]
+    fn config_dir_prefers_xdg_config_home() {
+        assert_eq!(
+            config_dir_from(Some("/xdg".into()), Some("/home/u".into())),
+            Some(PathBuf::from("/xdg/graphene"))
+        );
+    }
+
+    #[test]
+    fn config_dir_falls_back_to_home() {
+        let expected = Some(PathBuf::from("/home/u/.config/graphene"));
+        assert_eq!(config_dir_from(None, Some("/home/u".into())), expected);
+        assert_eq!(
+            config_dir_from(Some("".into()), Some("/home/u".into())),
+            expected
+        );
+        assert_eq!(
+            config_dir_from(Some("relative".into()), Some("/home/u".into())),
+            expected
+        );
+        assert_eq!(config_dir_from(None, None), None);
+        assert_eq!(config_dir_from(None, Some("".into())), None);
+    }
+
+    #[test]
+    fn empty_file_is_the_default() {
+        assert_eq!(parse(""), (Config::default(), Vec::new()));
+    }
+
+    #[test]
+    fn commented_default_file_is_the_default() {
+        assert_eq!(parse(DEFAULT_CONFIG), (Config::default(), Vec::new()));
+    }
+
+    #[test]
+    fn uncommented_default_file_is_the_default() {
+        let text = uncommented_default();
+        assert!(
+            text.contains("\n[font]\n"),
+            "settings must be commented with `# `"
+        );
+        assert_eq!(parse(&text), (Config::default(), Vec::new()));
+    }
+
+    #[test]
+    fn every_key_is_read() {
+        let text = r#"
+language = "fr"
+
+[font]
+family = "JetBrains Mono"
+size = 11.5
+
+[window]
+width = 1200
+height = 800
+padding = 4
+
+[scrollback]
+lines = 5000
+
+[cursor]
+shape = "beam"
+blinking = true
+
+[selection]
+word_separators = " ,"
+
+[tabs]
+position = "left"
+
+[theme]
+name = "gruvbox-dark"
+light = "graphene-day"
+dark = "graphene-night"
+
+[keybindings]
+"Ctrl+Shift+C" = "copy"
+"Shift+PageUp" = "none"
+
+[updates]
+check = false
+interval = "2d"
+"#;
+        let (config, errors) = parse(text);
+        assert_eq!(errors, Vec::new());
+        assert_eq!(
+            config,
+            Config {
+                language: Language::Fr,
+                font: FontConfig {
+                    family: Some("JetBrains Mono".to_owned()),
+                    size: 11.5,
+                },
+                window: WindowConfig {
+                    width: 1200,
+                    height: 800,
+                    padding: 4.0,
+                },
+                scrollback_lines: 5000,
+                cursor: CursorConfig {
+                    shape: CursorShape::Beam,
+                    blinking: true,
+                },
+                word_separators: " ,".to_owned(),
+                tab_position: TabPosition::Left,
+                theme: ThemeConfig {
+                    name: "gruvbox-dark".to_owned(),
+                    light: Some("graphene-day".to_owned()),
+                    dark: Some("graphene-night".to_owned()),
+                },
+                keybindings: BTreeMap::from([
+                    ("Ctrl+Shift+C".to_owned(), "copy".to_owned()),
+                    ("Shift+PageUp".to_owned(), "none".to_owned()),
+                ]),
+                updates: UpdatesConfig {
+                    check: false,
+                    interval: UpdateInterval::Days2,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn empty_font_family_is_the_system_font() {
+        let (config, errors) = parse("[font]\nfamily = \"\"\n");
+        assert!(errors.is_empty());
+        assert_eq!(config.font.family, None);
+    }
+
+    #[test]
+    fn missing_key_takes_the_default_not_the_previous_value() {
+        let mut previous = Config::default();
+        previous.font.size = 20.0;
+        let (config, errors) = Config::parse("[window]\npadding = 2\n", &previous, &file());
+        assert!(errors.is_empty());
+        assert_eq!(config.font.size, DEFAULT_FONT_SIZE);
+        assert_eq!(config.window.padding, 2.0);
+    }
+
+    #[test]
+    fn unknown_keys_are_reported_with_their_line() {
+        let (config, errors) = parse("colour = 1\n\n[font]\nsise = 12\nsize = 12\n[nope]\n");
+        assert_eq!(config.font.size, 12.0);
+        let lines: Vec<_> = errors
+            .iter()
+            .map(|e| (e.line, e.message.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                (Some(1), "unknown key `colour`"),
+                (Some(4), "unknown key `font.sise`"),
+                (Some(6), "unknown key `nope`"),
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_value_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.cursor.shape = CursorShape::Underline;
+        previous.window.width = 700;
+        let text = "[window]\nwidth = -3\nheight = 500\n\n[cursor]\nshape = \"triangle\"\n";
+        let (config, errors) = Config::parse(text, &previous, &file());
+        assert_eq!(config.window.width, 700);
+        assert_eq!(config.window.height, 500);
+        assert_eq!(config.cursor.shape, CursorShape::Underline);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].line, Some(2));
+        assert!(
+            errors[0]
+                .message
+                .starts_with("invalid value for `window.width`")
+        );
+        assert_eq!(errors[1].line, Some(6));
+        assert!(
+            errors[1]
+                .message
+                .starts_with("invalid value for `cursor.shape`")
+        );
+        assert_eq!(errors[1].file, file());
+    }
+
+    #[test]
+    fn wrong_type_is_an_invalid_value() {
+        let (config, errors) =
+            parse("[cursor]\nblinking = \"yes\"\n[selection]\nword_separators = 3\n");
+        assert_eq!(config, Config::default());
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn section_that_is_not_a_table_is_an_error() {
+        let (config, errors) = parse("font = 12\n");
+        assert_eq!(config, Config::default());
+        assert_eq!(errors[0].line, Some(1));
+        assert_eq!(errors[0].message, "`font` must be a table");
+    }
+
+    #[test]
+    fn syntax_error_keeps_the_whole_previous_config() {
+        let mut previous = Config::default();
+        previous.font.size = 18.0;
+        let (config, errors) = Config::parse("[font]\nsize = 12\nfamily = \n", &previous, &file());
+        assert_eq!(config, previous);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, Some(3));
+    }
+
+    #[test]
+    fn font_size_is_clamped() {
+        let (config, errors) = parse("[font]\nsize = 200\n");
+        assert_eq!(config.font.size, MAX_FONT_SIZE);
+        assert_eq!(errors.len(), 1);
+        let (config, _) = parse("[font]\nsize = 1\n");
+        assert_eq!(config.font.size, MIN_FONT_SIZE);
+    }
+
+    #[test]
+    fn scrollback_is_capped() {
+        let (config, errors) = parse("[scrollback]\nlines = 1000000\n");
+        assert_eq!(config.scrollback_lines, MAX_SCROLLBACK_LINES);
+        assert_eq!(errors.len(), 1);
+        let (config, errors) = parse("[scrollback]\nlines = 0\n");
+        assert_eq!(config.scrollback_lines, 0);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn sizes_must_not_be_negative() {
+        let (config, errors) = parse("[window]\npadding = -1\nheight = 0\n");
+        assert_eq!(config.window, Config::default().window);
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn invalid_keybinding_keeps_the_previous_action() {
+        let mut previous = Config::default();
+        previous
+            .keybindings
+            .insert("Ctrl+Q".to_owned(), "quit".to_owned());
+        let text = "[keybindings]\n\"Ctrl+Q\" = 1\n\"Ctrl+W\" = true\n";
+        let (config, errors) = Config::parse(text, &previous, &file());
+        assert_eq!(config.keybindings, previous.keybindings);
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn error_display_shows_file_name_and_line() {
+        let (_, errors) = parse("\n[font]\nsise = 1\n");
+        assert_eq!(
+            errors[0].to_string(),
+            "config.toml:3: unknown key `font.sise`"
+        );
+    }
+
+    #[test]
+    fn term_config_carries_the_terminal_settings() {
+        let (config, _) = parse(
+            "[scrollback]\nlines = 42\n[cursor]\nshape = \"underline\"\nblinking = true\n[selection]\nword_separators = \" \"\n",
+        );
+        let term = config.term_config();
+        assert_eq!(term.scrolling_history, 42);
+        assert_eq!(term.semantic_escape_chars, " ");
+        assert_eq!(term.default_cursor_style.shape, TermCursorShape::Underline);
+        assert!(term.default_cursor_style.blinking);
+    }
+
+    #[test]
+    fn missing_file_is_created_from_the_default() {
+        let dir = std::env::temp_dir().join(format!("graphene-config-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join("graphene");
+
+        assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
+        let written = std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap();
+        assert_eq!(written, DEFAULT_CONFIG);
+
+        std::fs::write(nested.join(CONFIG_FILE), "[font]\nsize = 9\n").unwrap();
+        assert_eq!(load_from(&nested).0.font.size, 9.0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_update_interval_is_accepted() {
+        for (name, interval) in UpdateInterval::VALUES {
+            let (config, errors) = parse(&format!("[updates]\ninterval = \"{name}\"\n"));
+            assert!(errors.is_empty(), "{name}: {errors:?}");
+            assert_eq!(config.updates.interval, interval);
+        }
+    }
+
+    #[test]
+    fn invalid_update_interval_falls_back_to_auto() {
+        let mut previous = Config::default();
+        previous.updates.interval = UpdateInterval::Week1;
+        let (config, errors) = Config::parse("[updates]\ninterval = \"5h\"\n", &previous, &file());
+        assert_eq!(config.updates.interval, UpdateInterval::Auto);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, Some(2));
+        assert!(
+            errors[0]
+                .message
+                .starts_with("`updates.interval`: invalid value \"5h\""),
+            "{}",
+            errors[0].message
+        );
+    }
+}
+//! Window and event handling.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use alacritty_terminal::event::Event as TermEvent;
+use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::term::{self, TermMode};
+use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
+use winit::dpi::PhysicalPosition;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::keyboard::ModifiersState;
+use winit::window::{Window, WindowId};
+
+use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
+use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::frame::{Frame, FrameBanner};
+use crate::i18n::Lang;
+use crate::input::{self, Action};
+use crate::layout::GridLayout;
+use crate::mouse;
+use crate::opener;
+use crate::palette::Palette;
+use crate::perf;
+use crate::renderer::Renderer;
+use crate::selection::{self, ClickTracker, SelectionSnapshot};
+use crate::terminal::{EventProxy, Terminal, UserEvent};
+use crate::theme;
+use crate::update::checker::Checker;
+
+const DEFAULT_TITLE: &str = "Graphene Term";
+
+struct Session {
+    window: Arc<Window>,
+    renderer: Renderer,
+    terminal: Terminal,
+    layout: GridLayout,
+    palette: Palette,
+    clipboard: Option<arboard::Clipboard>,
+    focused: bool,
+    modifiers: ModifiersState,
+    font_size: f32,
+    /// Minimum padding around the grid, in logical pixels.
+    padding: f32,
+    /// Fractional lines accumulated from touchpad scrolling.
+    scroll_accumulator: f64,
+    /// Last known cursor position, in physical pixels.
+    mouse_position: PhysicalPosition<f64>,
+    /// A selection drag is in progress.
+    left_pressed: bool,
+    click_tracker: ClickTracker,
+    /// Gesture owned by the application (mouse reporting).
+    app_mouse: mouse::Reporter,
+    /// Pointer shape last applied to the window; `None` before the first update.
+    pointer: Option<winit::window::CursorIcon>,
+    /// When the next auto-scroll step is due during a drag past the grid edges.
+    auto_scroll_deadline: Option<Instant>,
+    /// Finished selection kept while its text is unchanged.
+    selection_snapshot: Option<SelectionSnapshot>,
+    /// Configuration error banner; `None` once dismissed or without error.
+    config_banner: Option<Banner>,
+    /// Update banner: the newer release reported by the check thread.
+    update: UpdateBanner,
+    /// Tag the user just chose to ignore, forwarded to the update check thread.
+    ignored_tag: Option<String>,
+    lang: Lang,
+    /// Logs the first frame drawn after the shell's first output (`graphene::perf`).
+    first_frame: perf::FirstFrame,
+}
+
+impl Session {
+    /// Banner shown at the top of the window: the configuration errors first, then the
+    /// update notice.
+    fn shown_banner(&self) -> Option<Shown> {
+        Shown::pick(self.config_banner.as_ref(), &self.update, self.lang)
+    }
+
+    /// Places `shown` in pixels.
+    fn banner_layout(&self, shown: &Shown) -> BannerLayout {
+        let width = self.window.inner_size().width as f32;
+        BannerLayout::new(shown.banner(), self.renderer.cell_size(), width)
+    }
+
+    /// Handles a left press on the banner, before any selection. Returns whether the
+    /// banner took it.
+    fn banner_press(&mut self) -> bool {
+        let Some(shown) = self.shown_banner() else {
+            return false;
+        };
+        let (x, y) = (self.mouse_position.x as f32, self.mouse_position.y as f32);
+        let Some(hit) = self.banner_layout(&shown).hit(x, y) else {
+            return false;
+        };
+        match (shown, hit) {
+            // The configuration error banner has no action: any click dismisses it.
+            (Shown::Config(_), _) => self.config_banner = None,
+            (Shown::Update(_), BannerHit::Action(index)) => match self.update.press(index) {
+                Some(UpdateEffect::Open(url)) => opener::open(&url),
+                Some(UpdateEffect::Ignore(tag)) => self.ignored_tag = Some(tag),
+                None => {}
+            },
+            (Shown::Update(_), BannerHit::Body) => {}
+        }
+        self.window.request_redraw();
+        true
+    }
+
+    fn compute_layout(&self) -> GridLayout {
+        let size = self.window.inner_size();
+        let scale = self.window.scale_factor() as f32;
+        GridLayout::new(
+            size.width,
+            size.height,
+            self.renderer.cell_size(),
+            self.padding * scale,
+        )
+    }
+
+    /// Recomputes the grid and resizes the PTY when the cell count changed.
+    fn relayout(&mut self) {
+        let layout = self.compute_layout();
+        let changed = (layout.columns, layout.lines) != (self.layout.columns, self.layout.lines);
+        self.layout = layout;
+        if changed {
+            self.terminal.resize(layout.window_size());
+        }
+        self.window.request_redraw();
+    }
+
+    fn apply_font_size(&mut self, font_size: f32) {
+        self.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        let scale = self.window.scale_factor() as f32;
+        self.renderer.set_font_size(self.font_size * scale);
+        self.relayout();
+    }
+
+    fn mode(&self) -> TermMode {
+        *self.terminal.term.lock().mode()
+    }
+
+    /// Arrow while the application captures the mouse, I-beam otherwise; the window is
+    /// only updated when the shape changes.
+    fn update_pointer(&mut self) {
+        let icon = mouse::pointer_icon(self.mode());
+        if self.pointer != Some(icon) {
+            self.window.set_cursor(icon);
+            self.pointer = Some(icon);
+        }
+    }
+
+    fn scroll_display(&self, scroll: Scroll) {
+        self.terminal.term.lock().scroll_display(scroll);
+        self.window.request_redraw();
+    }
+
+    fn paste(&mut self) {
+        let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) else {
+            return;
+        };
+        self.send_paste(&text);
+    }
+
+    /// Sends a paste to the shell. Like a keystroke, it clears the selection.
+    fn send_paste(&mut self, text: &str) {
+        self.clear_selection();
+        let bytes = input::paste_bytes(text, self.mode());
+        self.scroll_display(Scroll::Bottom);
+        self.terminal.write(bytes);
+    }
+
+    /// Writes the cleaned selection to the clipboard. Without selection, the shortcut is
+    /// still swallowed so it never sends `^C`.
+    fn copy(&mut self) {
+        let Some(text) = selection::selected_text(&self.terminal.term.lock()) else {
+            return;
+        };
+        if let Some(Err(error)) = self.clipboard.as_mut().map(|c| c.set_text(text)) {
+            log::warn!("copy failed: {error}");
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_snapshot = None;
+        let mut term = self.terminal.term.lock();
+        if term.selection.take().is_some() {
+            self.window.request_redraw();
+        }
+    }
+
+    /// After new PTY output: restores a selection `Term` erased while its text was
+    /// redrawn unchanged, and clears it when the selected text really changed.
+    fn validate_selection(&mut self) {
+        let Some(snapshot) = self.selection_snapshot.as_mut() else {
+            return;
+        };
+        if !snapshot.validate(&mut self.terminal.term.lock()) {
+            self.selection_snapshot = None;
+        }
+    }
+
+    /// Grid point and cell side under the mouse cursor.
+    fn mouse_point(&self, display_offset: usize) -> (Point, Side) {
+        let (column, line, side) = self
+            .layout
+            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
+        let point = term::viewport_to_point(display_offset, Point::new(line, Column(column)));
+        (point, side)
+    }
+
+    /// Viewport cell (column, line) under the mouse cursor, clamped to the grid.
+    fn mouse_cell(&self) -> (usize, usize) {
+        let (column, line, _) = self
+            .layout
+            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
+        (column, line)
+    }
+
+    fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        let Some(button) = mouse::button_from(button) else {
+            return;
+        };
+        match state {
+            ElementState::Pressed => self.mouse_press(button),
+            ElementState::Released => self.mouse_release(button),
+        }
+    }
+
+    fn mouse_press(&mut self, button: mouse::Button) {
+        if button == mouse::Button::Left && self.banner_press() {
+            return;
+        }
+        let mode = self.mode();
+        if selection::mouse_reserved(mode, self.modifiers) {
+            // The gesture belongs to the application; a click clears the selection.
+            self.clear_selection();
+            let cell = self.mouse_cell();
+            if let Some(bytes) = self.app_mouse.press(button, cell, self.modifiers, mode) {
+                self.terminal.write(bytes);
+            }
+            return;
+        }
+        match button {
+            mouse::Button::Left => self.left_press(),
+            mouse::Button::Middle => self.paste_primary(),
+            mouse::Button::Right => {}
+        }
+    }
+
+    fn mouse_release(&mut self, button: mouse::Button) {
+        if self.app_mouse.owns(button) {
+            let cell = self.mouse_cell();
+            let mode = self.mode();
+            if let Some(bytes) = self.app_mouse.release(button, cell, self.modifiers, mode) {
+                self.terminal.write(bytes);
+            }
+        } else if button == mouse::Button::Left {
+            self.left_release();
+        }
+    }
+
+    fn left_press(&mut self) {
+        let mut term = self.terminal.term.lock();
+        let (point, side) = self.mouse_point(term.grid().display_offset());
+        let clicks = self.click_tracker.click(point, Instant::now());
+        // The selection changes until the release: no text to keep meanwhile.
+        self.selection_snapshot = None;
+        selection::start_selection(&mut term, point, side, clicks, self.modifiers);
+        self.left_pressed = true;
+        self.window.request_redraw();
+    }
+
+    fn left_release(&mut self) {
+        if !std::mem::take(&mut self.left_pressed) {
+            return;
+        }
+        let text = {
+            let mut term = self.terminal.term.lock();
+            let text = selection::finish_selection(&mut term);
+            self.selection_snapshot = SelectionSnapshot::capture(&term);
+            text
+        };
+        self.window.request_redraw();
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.set_primary(text);
+        }
+    }
+
+    fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        self.mouse_position = position;
+        if self.left_pressed && !self.app_mouse.active() {
+            self.update_selection(&mut self.terminal.term.lock());
+            return;
+        }
+        let cell = self.mouse_cell();
+        let mode = self.mode();
+        if let Some(bytes) = self.app_mouse.motion(cell, self.modifiers, mode) {
+            self.terminal.write(bytes);
+        }
+    }
+
+    /// Moves the selection end to the cell under the mouse cursor.
+    fn update_selection(&self, term: &mut term::Term<EventProxy>) {
+        let (point, side) = self.mouse_point(term.grid().display_offset());
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+            self.window.request_redraw();
+        }
+    }
+
+    /// Auto-scroll while dragging a selection past the top or bottom edge: once per
+    /// `AUTO_SCROLL_INTERVAL`, scrolls the display and moves the selection end onto the
+    /// edge row. Returns when the next step is due, `None` when auto-scroll is idle.
+    fn auto_scroll(&mut self, now: Instant) -> Option<Instant> {
+        let mut term = self.terminal.term.lock();
+        let overflow = self.layout.vertical_overflow(self.mouse_position.y as f32);
+        let delta = selection::auto_scroll_delta(overflow, *term.mode());
+        if !self.left_pressed || delta == 0 || term.selection.is_none() {
+            self.auto_scroll_deadline = None;
+            return None;
+        }
+        match self.auto_scroll_deadline {
+            Some(deadline) if now < deadline => {}
+            _ => {
+                term.scroll_display(Scroll::Delta(delta));
+                self.update_selection(&mut term);
+                self.auto_scroll_deadline = Some(now + selection::AUTO_SCROLL_INTERVAL);
+            }
+        }
+        self.auto_scroll_deadline
+    }
+
+    fn set_primary(&mut self, text: String) {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return;
+        };
+        // Some Wayland compositors do not support the primary selection.
+        if let Err(error) = clipboard
+            .set()
+            .clipboard(LinuxClipboardKind::Primary)
+            .text(text)
+        {
+            log::debug!("primary selection unavailable: {error}");
+        }
+    }
+
+    fn paste_primary(&mut self) {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return;
+        };
+        match clipboard
+            .get()
+            .clipboard(LinuxClipboardKind::Primary)
+            .text()
+        {
+            Ok(text) => self.send_paste(&text),
+            Err(error) => log::debug!("primary selection unavailable: {error}"),
+        }
+    }
+
+    fn run_action(&mut self, action: Action, default_font_size: f32) {
+        match action {
+            Action::Copy => self.copy(),
+            Action::Paste => self.paste(),
+            Action::ScrollPageUp => self.scroll_display(Scroll::PageUp),
+            Action::ScrollPageDown => self.scroll_display(Scroll::PageDown),
+            Action::ScrollToTop => self.scroll_display(Scroll::Top),
+            Action::ScrollToBottom => self.scroll_display(Scroll::Bottom),
+            Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
+            Action::FontSizeDecrease => self.apply_font_size(self.font_size - 1.0),
+            Action::FontSizeReset => self.apply_font_size(default_font_size),
+        }
+    }
+
+    fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        let lines = match delta {
+            MouseScrollDelta::LineDelta(_, y) => y as f64 * 3.0,
+            MouseScrollDelta::PixelDelta(pos) => pos.y / self.layout.cell.height as f64,
+        };
+        self.scroll_accumulator += lines;
+        let whole = self.scroll_accumulator.trunc() as i32;
+        if whole == 0 {
+            return;
+        }
+        self.scroll_accumulator -= whole as f64;
+
+        let mode = self.mode();
+        let (column, line) = self.mouse_cell();
+        match mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
+            Some(bytes) => self.terminal.write(bytes),
+            None => self.scroll_display(Scroll::Delta(whole)),
+        }
+    }
+
+    fn handle_terminal_event(&mut self, event: TermEvent, event_loop: &ActiveEventLoop) {
+        match event {
+            TermEvent::Wakeup => {
+                if self.first_frame.output() {
+                    perf::mark("first PTY output");
+                }
+                self.validate_selection();
+                self.update_pointer();
+                self.window.request_redraw()
+            }
+            TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
+                self.window.request_redraw()
+            }
+            TermEvent::Title(title) => self.window.set_title(&title),
+            TermEvent::ResetTitle => self.window.set_title(DEFAULT_TITLE),
+            TermEvent::PtyWrite(text) => self.terminal.write(text.into_bytes()),
+            TermEvent::ClipboardStore(_, text) => {
+                if let Some(clipboard) = self.clipboard.as_mut() {
+                    let _ = clipboard.set_text(text);
+                }
+            }
+            TermEvent::ClipboardLoad(_, format) => {
+                let text = self
+                    .clipboard
+                    .as_mut()
+                    .and_then(|c| c.get_text().ok())
+                    .unwrap_or_default();
+                self.terminal.write(format(&text).into_bytes());
+            }
+            TermEvent::ColorRequest(index, format) => {
+                let color = self.terminal.term.lock().colors()[index]
+                    .unwrap_or_else(|| self.palette.by_index(index));
+                self.terminal.write(format(color).into_bytes());
+            }
+            TermEvent::TextAreaSizeRequest(format) => {
+                self.terminal
+                    .write(format(self.layout.window_size()).into_bytes());
+            }
+            TermEvent::Bell => self
+                .window
+                .request_user_attention(Some(winit::window::UserAttentionType::Informational)),
+            TermEvent::Exit | TermEvent::ChildExit(_) => event_loop.exit(),
+        }
+    }
+}
+
+pub struct App {
+    proxy: EventLoopProxy<UserEvent>,
+    config: Config,
+    /// Palette of the configured theme.
+    palette: Palette,
+    session: Option<Session>,
+    update_checker: Checker,
+    error: Option<anyhow::Error>,
+    /// Banner reporting the errors of the configuration and theme files.
+    config_banner: Option<Banner>,
+}
+
+impl App {
+    fn create_session(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Session> {
+        let attributes = Window::default_attributes()
+            .with_title(DEFAULT_TITLE)
+            .with_inner_size(LogicalSize::new(
+                self.config.window.width,
+                self.config.window.height,
+            ));
+        let window = Arc::new(event_loop.create_window(attributes)?);
+        perf::mark("window created");
+
+        let scale = window.scale_factor() as f32;
+        let renderer = pollster::block_on(Renderer::new(
+            window.clone(),
+            event_loop.owned_display_handle(),
+            self.config.font.family.clone(),
+            self.config.font.size * scale,
+        ))?;
+
+        let size = window.inner_size();
+        let layout = GridLayout::new(
+            size.width,
+            size.height,
+            renderer.cell_size(),
+            self.config.window.padding * scale,
+        );
+        let terminal = Terminal::spawn(
+            EventProxy::new(self.proxy.clone()),
+            layout.window_size(),
+            self.config.term_config(),
+        )?;
+        perf::mark("shell spawned");
+
+        let clipboard = arboard::Clipboard::new()
+            .map_err(|e| log::warn!("clipboard unavailable: {e}"))
+            .ok();
+
+        Ok(Session {
+            window,
+            renderer,
+            terminal,
+            layout,
+            palette: self.palette.clone(),
+            clipboard,
+            focused: true,
+            modifiers: ModifiersState::empty(),
+            font_size: self.config.font.size,
+            padding: self.config.window.padding,
+            scroll_accumulator: 0.0,
+            mouse_position: PhysicalPosition::default(),
+            left_pressed: false,
+            click_tracker: ClickTracker::default(),
+            app_mouse: mouse::Reporter::default(),
+            pointer: None,
+            auto_scroll_deadline: None,
+            selection_snapshot: None,
+            config_banner: self.config_banner.clone(),
+            update: UpdateBanner::default(),
+            ignored_tag: None,
+            lang: Lang::detect(),
+            first_frame: perf::FirstFrame::default(),
+        })
+    }
+
+    fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
+        self.error = Some(error);
+        event_loop.exit();
+    }
+}
+
+impl ApplicationHandler<UserEvent> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.is_some() {
+            return;
+        }
+        match self.create_session(event_loop) {
+            Ok(mut session) => {
+                session.update_pointer();
+                self.session = Some(session);
+            }
+            Err(error) => return self.fail(event_loop, error),
+        }
+        self.update_checker.apply(&self.config.updates);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let deadline = self
+            .session
+            .as_mut()
+            .and_then(|s| s.auto_scroll(Instant::now()));
+        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match event {
+            UserEvent::Terminal(event) => session.handle_terminal_event(event, event_loop),
+            UserEvent::Update(release) => {
+                session.update.set(release);
+                session.window.request_redraw();
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        let default_font_size = self.config.font.size;
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                session.renderer.resize(size.width, size.height);
+                session.relayout();
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let font_size = session.font_size;
+                session.apply_font_size(font_size);
+            }
+            WindowEvent::Focused(focused) => {
+                session.focused = focused;
+                if let Some(bytes) = mouse::focus_report(focused, session.mode()) {
+                    session.terminal.write(bytes);
+                }
+                session.window.request_redraw();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => session.modifiers = modifiers.state(),
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if let Some(action) = input::action_for(&event.logical_key, session.modifiers) {
+                    session.run_action(action, default_font_size);
+                    return;
+                }
+                let mode = session.mode();
+                if let Some(bytes) = input::key_to_bytes(
+                    &event.logical_key,
+                    event.text.as_deref(),
+                    session.modifiers,
+                    mode,
+                ) {
+                    session.clear_selection();
+                    session.scroll_display(Scroll::Bottom);
+                    session.terminal.write(bytes);
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
+            WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
+            WindowEvent::MouseInput { state, button, .. } => {
+                session.mouse_input(state, button);
+                if let Some(tag) = session.ignored_tag.take() {
+                    self.update_checker.ignore(&tag);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let mut frame = {
+                    let term = session.terminal.term.lock();
+                    Frame::capture(&term, &session.palette, session.focused)
+                };
+                frame.banner = session.shown_banner().map(|shown| FrameBanner {
+                    layout: session.banner_layout(&shown),
+                    background: session.palette.ui.banner_background,
+                    text: session.palette.ui.banner_text,
+                });
+                match session.renderer.render(&frame, &session.layout) {
+                    Ok(true) if session.first_frame.frame_drawn() => {
+                        perf::mark("first frame drawn after PTY output");
+                    }
+                    Ok(_) => {}
+                    Err(error) => log::error!("render failed: {error:#}"),
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Loads the configuration file and its theme. Errors are logged and reported by the
+/// returned banner.
+fn load_config() -> (Config, Palette, Option<Banner>) {
+    let (config, mut errors) = config::load();
+    let (palette, theme_errors) = theme::load(&config.theme.name, config::config_dir().as_deref());
+    errors.extend(theme_errors);
+    for error in &errors {
+        log::warn!("{error}");
+    }
+    (config, palette, Banner::config_errors(&errors))
+}
+
+pub fn run() -> anyhow::Result<()> {
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    let update_proxy = event_loop.create_proxy();
+    let (config, palette, config_banner) = load_config();
+    let mut app = App {
+        update_checker: Checker::new(move |release| {
+            // The event loop may already be closed during shutdown.
+            let _ = update_proxy.send_event(UserEvent::Update(release));
+        }),
+        proxy: event_loop.create_proxy(),
+        config,
+        palette,
+        session: None,
+        error: None,
+        config_banner,
+    };
+    event_loop.run_app(&mut app)?;
+    match app.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+//! Mouse selection logic: click counting, selection kind, capture rule, selection updates
+//! on the `Term` and copied text cleanup. No window or clipboard access.
+
+use std::time::{Duration, Instant};
+
+use alacritty_terminal::index::{Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::{Term, TermMode};
+use winit::keyboard::ModifiersState;
+
+/// Maximum delay between two clicks of the same series.
+const MULTI_CLICK_DELAY: Duration = Duration::from_millis(400);
+
+/// Counts consecutive clicks on the same cell (single, double, triple click).
+#[derive(Debug, Default)]
+pub struct ClickTracker {
+    last: Option<(Point, Instant)>,
+    count: u8,
+}
+
+impl ClickTracker {
+    /// Registers a click on `point` at `now` and returns its rank in the series: 1, 2 or 3.
+    /// A click on another cell, after the delay, or after a triple click starts over at 1.
+    pub fn click(&mut self, point: Point, now: Instant) -> u8 {
+        let continues = self.last.is_some_and(|(last_point, last_time)| {
+            last_point == point && now.saturating_duration_since(last_time) <= MULTI_CLICK_DELAY
+        });
+        self.count = if continues && self.count < 3 {
+            self.count + 1
+        } else {
+            1
+        };
+        self.last = Some((point, now));
+        self.count
+    }
+}
+
+/// Selection kind for a click series: 1 = character (block with `Ctrl`), 2 = word, 3 = line.
+pub fn selection_type(clicks: u8, mods: ModifiersState) -> SelectionType {
+    match clicks {
+        2 => SelectionType::Semantic,
+        3 => SelectionType::Lines,
+        _ if mods.control_key() => SelectionType::Block,
+        _ => SelectionType::Simple,
+    }
+}
+
+/// Whether left and middle clicks are reserved for the application: it enabled mouse
+/// reporting and `Shift` is not held to force a local selection.
+pub fn mouse_reserved(mode: TermMode, mods: ModifiersState) -> bool {
+    mode.intersects(TermMode::MOUSE_MODE) && !mods.shift_key()
+}
+
+/// Maximum number of lines scrolled per auto-scroll step.
+pub const AUTO_SCROLL_MAX_LINES: i32 = 10;
+
+/// Delay between two auto-scroll steps while dragging past the grid edges.
+pub const AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Lines to scroll the display by during a selection drag, as a `Scroll::Delta` count
+/// (positive scrolls up into history). `overflow` is `GridLayout::vertical_overflow` of the
+/// cursor: 1 line just past the edge, plus 1 per cell height further, capped at
+/// `AUTO_SCROLL_MAX_LINES`. The alternate screen has no history: always 0 there.
+pub fn auto_scroll_delta(overflow: i32, mode: TermMode) -> i32 {
+    if mode.contains(TermMode::ALT_SCREEN) {
+        return 0;
+    }
+    -overflow.clamp(-AUTO_SCROLL_MAX_LINES, AUTO_SCROLL_MAX_LINES)
+}
+
+/// Left press on `point`: with `Shift` held, extends the existing selection; otherwise
+/// starts a new one whose kind depends on the click count. A single click starts an empty
+/// selection, which renders nothing.
+pub fn start_selection<T>(
+    term: &mut Term<T>,
+    point: Point,
+    side: Side,
+    clicks: u8,
+    mods: ModifiersState,
+) {
+    match term.selection.as_mut() {
+        Some(selection) if mods.shift_key() => selection.update(point, side),
+        _ => term.selection = Some(Selection::new(selection_type(clicks, mods), point, side)),
+    }
+}
+
+/// Left release: an empty selection (click without drag) is cleared and `None` returned;
+/// otherwise returns the cleaned selected text.
+pub fn finish_selection<T>(term: &mut Term<T>) -> Option<String> {
+    if term.selection.as_ref().is_none_or(Selection::is_empty) {
+        term.selection = None;
+        return None;
+    }
+    selected_text(term)
+}
+
+/// Cleaned text of the current selection, `None` without selection.
+pub fn selected_text<T>(term: &Term<T>) -> Option<String> {
+    term.selection_to_string()
+        .map(|text| clean_copied_text(&text))
+}
+
+/// Shadow copy of a finished selection and its cleaned text.
+///
+/// `Term` clears its selection on erase sequences (`ED`, `EL`, `RIS`) even when the same
+/// text is redrawn right after, and keeps it when a cell is overwritten by a different
+/// character. The snapshot restores the first case and clears the second: the selection
+/// lives as long as its text is unchanged.
+#[derive(Debug, Clone)]
+pub struct SelectionSnapshot {
+    selection: Selection,
+    text: String,
+}
+
+impl SelectionSnapshot {
+    /// Snapshot of the current non-empty selection of `term`, `None` without one.
+    pub fn capture<T>(term: &Term<T>) -> Option<Self> {
+        let selection = term.selection.clone().filter(|s| !s.is_empty())?;
+        let text = selected_text(term)?;
+        Some(Self { selection, text })
+    }
+
+    /// Checks the selection of `term` after new PTY output. Returns `false`, with the
+    /// selection of `term` cleared, when the selected text changed: the snapshot must then
+    /// be dropped.
+    pub fn validate<T>(&mut self, term: &mut Term<T>) -> bool {
+        match term.selection.as_ref() {
+            // Carries the rotation applied by `Term` when the output scrolls.
+            Some(selection) => self.selection = selection.clone(),
+            None => term.selection = Some(self.selection.clone()),
+        }
+        if selected_text(term).is_some_and(|text| text == self.text) {
+            return true;
+        }
+        term.selection = None;
+        false
+    }
+}
+
+/// Cleans a selection before it reaches the clipboard: trailing whitespace removed from
+/// every line, common indentation of non-blank lines removed, no trailing newline.
+pub fn clean_copied_text(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').map(str::trim_end).collect();
+
+    let indent_of = |line: &str| line.len() - line.trim_start().len();
+    let common = lines
+        .iter()
+        .filter(|line| !line.is_empty())
+        .map(|line| &line[..indent_of(line)])
+        .reduce(|acc, indent| common_prefix(acc, indent))
+        .unwrap_or("");
+
+    let mut cleaned = lines
+        .iter()
+        .map(|line| line.strip_prefix(common).unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    cleaned.truncate(cleaned.trim_end_matches('\n').len());
+    cleaned
+}
+
+/// Longest common prefix of two strings, compared character by character.
+fn common_prefix<'a>(a: &'a str, b: &str) -> &'a str {
+    let len = a
+        .char_indices()
+        .zip(b.chars())
+        .find(|((_, ca), cb)| ca != cb)
+        .map_or(a.len().min(b.len()), |((i, _), _)| i);
+    &a[..len]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SEMANTIC_ESCAPE_CHARS;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::index::{Column, Line, Side};
+    use alacritty_terminal::selection::Selection;
+    use alacritty_terminal::term::test::TermSize;
+    use alacritty_terminal::term::{Config, Term};
+    use alacritty_terminal::vte::ansi::Processor;
+
+    fn point(line: i32, column: usize) -> Point {
+        Point::new(Line(line), Column(column))
+    }
+
+    #[test]
+    fn auto_scroll_is_idle_inside_the_grid() {
+        assert_eq!(auto_scroll_delta(0, TermMode::empty()), 0);
+    }
+
+    #[test]
+    fn auto_scroll_goes_up_into_history_above_the_grid() {
+        assert_eq!(auto_scroll_delta(-1, TermMode::empty()), 1);
+        assert_eq!(auto_scroll_delta(-3, TermMode::empty()), 3);
+    }
+
+    #[test]
+    fn auto_scroll_goes_down_below_the_grid() {
+        assert_eq!(auto_scroll_delta(1, TermMode::empty()), -1);
+        assert_eq!(auto_scroll_delta(4, TermMode::empty()), -4);
+    }
+
+    #[test]
+    fn auto_scroll_is_capped() {
+        assert_eq!(
+            auto_scroll_delta(-50, TermMode::empty()),
+            AUTO_SCROLL_MAX_LINES
+        );
+        assert_eq!(
+            auto_scroll_delta(50, TermMode::empty()),
+            -AUTO_SCROLL_MAX_LINES
+        );
+    }
+
+    #[test]
+    fn auto_scroll_is_disabled_on_alternate_screen() {
+        assert_eq!(auto_scroll_delta(-3, TermMode::ALT_SCREEN), 0);
+        assert_eq!(auto_scroll_delta(3, TermMode::ALT_SCREEN), 0);
+    }
+
+    #[test]
+    fn counts_consecutive_clicks_on_same_cell() {
+        let mut tracker = ClickTracker::default();
+        let t0 = Instant::now();
+        assert_eq!(tracker.click(point(0, 0), t0), 1);
+        assert_eq!(
+            tracker.click(point(0, 0), t0 + Duration::from_millis(200)),
+            2
+        );
+        assert_eq!(
+            tracker.click(point(0, 0), t0 + Duration::from_millis(400)),
+            3
+        );
+    }
+
+    #[test]
+    fn fourth_click_starts_over() {
+        let mut tracker = ClickTracker::default();
+        let t0 = Instant::now();
+        for _ in 0..3 {
+            tracker.click(point(0, 0), t0);
+        }
+        assert_eq!(tracker.click(point(0, 0), t0), 1);
+        assert_eq!(tracker.click(point(0, 0), t0), 2);
+    }
+
+    #[test]
+    fn slow_click_starts_over() {
+        let mut tracker = ClickTracker::default();
+        let t0 = Instant::now();
+        tracker.click(point(0, 0), t0);
+        assert_eq!(
+            tracker.click(point(0, 0), t0 + Duration::from_millis(401)),
+            1
+        );
+    }
+
+    #[test]
+    fn click_on_other_cell_starts_over() {
+        let mut tracker = ClickTracker::default();
+        let t0 = Instant::now();
+        tracker.click(point(0, 0), t0);
+        assert_eq!(tracker.click(point(0, 1), t0), 1);
+        assert_eq!(tracker.click(point(1, 1), t0), 1);
+    }
+
+    #[test]
+    fn selection_type_per_click_count() {
+        let none = ModifiersState::empty();
+        assert_eq!(selection_type(1, none), SelectionType::Simple);
+        assert_eq!(
+            selection_type(1, ModifiersState::CONTROL),
+            SelectionType::Block
+        );
+        assert_eq!(selection_type(2, none), SelectionType::Semantic);
+        assert_eq!(
+            selection_type(2, ModifiersState::CONTROL),
+            SelectionType::Semantic
+        );
+        assert_eq!(selection_type(3, none), SelectionType::Lines);
+    }
+
+    #[test]
+    fn removes_trailing_spaces() {
+        assert_eq!(clean_copied_text("foo   \nbar\t \n"), "foo\nbar");
+    }
+
+    #[test]
+    fn removes_every_trailing_newline() {
+        assert_eq!(clean_copied_text("ls -la\n\n\n"), "ls -la");
+        assert_eq!(clean_copied_text("\n"), "");
+    }
+
+    #[test]
+    fn dedents_common_indentation() {
+        assert_eq!(
+            clean_copied_text("    fn a() {\n        b();\n    }"),
+            "fn a() {\n    b();\n}"
+        );
+    }
+
+    #[test]
+    fn dedent_ignores_blank_lines() {
+        assert_eq!(clean_copied_text("    a\n\n  \n    b"), "a\n\n\nb");
+    }
+
+    #[test]
+    fn dedent_compares_tabs_and_spaces_literally() {
+        assert_eq!(clean_copied_text("\t  a\n\t b"), " a\nb");
+        assert_eq!(clean_copied_text("\ta\n    b"), "\ta\n    b");
+    }
+
+    #[test]
+    fn keeps_powerline_glyphs_and_combining_chars() {
+        let text = " \u{e0b0} main \u{f418} cafe\u{301}  \n";
+        assert_eq!(
+            clean_copied_text(text),
+            "\u{e0b0} main \u{f418} cafe\u{301}"
+        );
+    }
+
+    #[test]
+    fn url_is_selected_as_one_word() {
+        let config = Config {
+            semantic_escape_chars: SEMANTIC_ESCAPE_CHARS.to_owned(),
+            ..Default::default()
+        };
+        let mut term = Term::new(config, &TermSize::new(60, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"see https://example.com:8080/a?b=c ok");
+
+        term.selection = Some(Selection::new(
+            SelectionType::Semantic,
+            point(0, 12),
+            Side::Left,
+        ));
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("https://example.com:8080/a?b=c")
+        );
+    }
+
+    fn term_with(columns: usize, lines: usize, content: &[u8]) -> Term<VoidListener> {
+        let mut term = Term::new(
+            Config::default(),
+            &TermSize::new(columns, lines),
+            VoidListener,
+        );
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, content);
+        term
+    }
+
+    #[test]
+    fn clicks_are_reserved_only_in_mouse_mode_without_shift() {
+        let none = ModifiersState::empty();
+        assert!(!mouse_reserved(TermMode::empty(), none));
+        assert!(mouse_reserved(TermMode::MOUSE_REPORT_CLICK, none));
+        assert!(mouse_reserved(
+            TermMode::MOUSE_DRAG,
+            ModifiersState::CONTROL
+        ));
+        assert!(mouse_reserved(TermMode::MOUSE_MOTION, none));
+        assert!(!mouse_reserved(
+            TermMode::MOUSE_REPORT_CLICK,
+            ModifiersState::SHIFT
+        ));
+        assert!(!mouse_reserved(TermMode::BRACKETED_PASTE, none));
+    }
+
+    #[test]
+    fn single_click_without_drag_clears_the_selection() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(
+            &mut term,
+            point(0, 3),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        assert!(term.selection.is_some());
+        assert_eq!(finish_selection(&mut term), None);
+        assert!(term.selection.is_none());
+    }
+
+    #[test]
+    fn drag_selects_cells() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(0, 4), Side::Right);
+        assert_eq!(finish_selection(&mut term).as_deref(), Some("hello"));
+        assert!(term.selection.is_some());
+    }
+
+    #[test]
+    fn double_click_selects_a_word() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(
+            &mut term,
+            point(0, 8),
+            Side::Left,
+            2,
+            ModifiersState::empty(),
+        );
+        assert_eq!(finish_selection(&mut term).as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn shift_click_extends_the_existing_selection() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(0, 1), Side::Right);
+        start_selection(
+            &mut term,
+            point(0, 7),
+            Side::Right,
+            1,
+            ModifiersState::SHIFT,
+        );
+        assert_eq!(selected_text(&term).as_deref(), Some("hello wo"));
+    }
+
+    #[test]
+    fn shift_click_without_selection_starts_one() {
+        let mut term = term_with(20, 2, b"hello world");
+        start_selection(&mut term, point(0, 2), Side::Left, 1, ModifiersState::SHIFT);
+        let selection = term.selection.as_ref().unwrap();
+        assert_eq!(selection.ty, SelectionType::Simple);
+    }
+
+    #[test]
+    fn wrapped_line_is_copied_as_one_line() {
+        let mut term = term_with(10, 3, b"abcdefghijklmno");
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(1, 4), Side::Right);
+        assert_eq!(
+            finish_selection(&mut term).as_deref(),
+            Some("abcdefghijklmno")
+        );
+    }
+
+    #[test]
+    fn line_selection_is_copied_without_trailing_newline() {
+        let mut term = term_with(10, 3, b"  abcdefghijklmno\r\nnext");
+        start_selection(
+            &mut term,
+            point(1, 2),
+            Side::Left,
+            3,
+            ModifiersState::empty(),
+        );
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("  abcdefghijklmno\n")
+        );
+        assert_eq!(
+            finish_selection(&mut term).as_deref(),
+            Some("abcdefghijklmno")
+        );
+    }
+
+    #[test]
+    fn no_selection_has_no_text() {
+        let term = term_with(10, 2, b"abc");
+        assert_eq!(selected_text(&term), None);
+    }
+
+    /// `term` with "hello" selected on the first line and its snapshot.
+    fn snapshot_of_hello(content: &[u8]) -> (Term<VoidListener>, SelectionSnapshot) {
+        let mut term = term_with(20, 3, content);
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(point(0, 4), Side::Right);
+        let snapshot = SelectionSnapshot::capture(&term).unwrap();
+        (term, snapshot)
+    }
+
+    fn feed(term: &mut Term<VoidListener>, bytes: &[u8]) {
+        let mut parser: Processor = Processor::new();
+        parser.advance(term, bytes);
+    }
+
+    #[test]
+    fn empty_selection_has_no_snapshot() {
+        let mut term = term_with(20, 2, b"hello");
+        assert!(SelectionSnapshot::capture(&term).is_none());
+        start_selection(
+            &mut term,
+            point(0, 0),
+            Side::Left,
+            1,
+            ModifiersState::empty(),
+        );
+        assert!(SelectionSnapshot::capture(&term).is_none());
+    }
+
+    #[test]
+    fn unchanged_output_keeps_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        assert!(snapshot.validate(&mut term));
+        assert_eq!(selected_text(&term).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn same_text_redrawn_after_erase_keeps_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        feed(&mut term, b"\x1b[H\x1b[2K");
+        assert!(term.selection.is_none(), "Term clears the selection on EL");
+        feed(&mut term, b"hello world");
+        assert!(snapshot.validate(&mut term));
+        assert_eq!(selected_text(&term).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn different_text_after_erase_clears_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        feed(&mut term, b"\x1b[H\x1b[2Kbye world");
+        assert!(!snapshot.validate(&mut term));
+        assert!(term.selection.is_none());
+    }
+
+    #[test]
+    fn overwritten_character_clears_the_selection() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world");
+        feed(&mut term, b"\x1b[HJ");
+        assert!(
+            term.selection.is_some(),
+            "Term keeps the selection on overwrite"
+        );
+        assert!(!snapshot.validate(&mut term));
+        assert!(term.selection.is_none());
+    }
+
+    #[test]
+    fn scrolled_output_keeps_the_selection_on_its_text() {
+        let (mut term, mut snapshot) = snapshot_of_hello(b"hello world\r\nsecond");
+        feed(&mut term, b"\r\nthird\r\nfourth\r\nfifth");
+        assert!(snapshot.validate(&mut term));
+        assert_eq!(selected_text(&term).as_deref(), Some("hello"));
+        // The refreshed snapshot follows the rotated selection.
+        assert!(snapshot.validate(&mut term));
+    }
+}
+//! Color themes: TOML files read key by key into a [`Palette`], built-in themes embedded
+//! in the binary, and resolution of a theme name.
+//!
+//! A theme file has a `[colors]` table (with `[colors.normal]` and `[colors.bright]` for
+//! the 16 ANSI colors) and a `[ui]` table. A missing or invalid color keeps the value of
+//! the base palette (`graphene-night`), so a partial user theme still works.
+
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use alacritty_terminal::vte::ansi::Rgb;
+use toml::Spanned;
+use toml::de::{DeTable, DeValue};
+
+use crate::config::{CONFIG_FILE, ConfigError};
+use crate::palette::{Palette, UiColors, build_indexed};
+
+/// Theme used when the configured one cannot be found.
+pub const DEFAULT_THEME: &str = "graphene-night";
+
+/// Subdirectory of the config directory holding user themes.
+pub const THEMES_DIR: &str = "themes";
+
+/// Built-in themes, by name.
+pub const BUILT_IN: &[(&str, &str)] = &[
+    (
+        "graphene-night",
+        include_str!("../themes/graphene-night.toml"),
+    ),
+    ("graphene-day", include_str!("../themes/graphene-day.toml")),
+    (
+        "solarized-dark",
+        include_str!("../themes/solarized-dark.toml"),
+    ),
+    (
+        "solarized-light",
+        include_str!("../themes/solarized-light.toml"),
+    ),
+    ("gruvbox-dark", include_str!("../themes/gruvbox-dark.toml")),
+    (
+        "gruvbox-light",
+        include_str!("../themes/gruvbox-light.toml"),
+    ),
+    (
+        "catppuccin-mocha",
+        include_str!("../themes/catppuccin-mocha.toml"),
+    ),
+    (
+        "catppuccin-latte",
+        include_str!("../themes/catppuccin-latte.toml"),
+    ),
+];
+
+const ANSI_NAMES: [&str; 8] = [
+    "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+];
+
+/// The `graphene-night` palette, parsed once.
+pub fn default_palette() -> &'static Palette {
+    static DEFAULT: OnceLock<Palette> = OnceLock::new();
+    DEFAULT.get_or_init(|| {
+        let text = built_in(DEFAULT_THEME).expect("graphene-night is built in");
+        let (palette, errors) = parse(text, &Palette::blank(), Path::new("graphene-night.toml"));
+        debug_assert!(errors.is_empty(), "graphene-night has errors: {errors:?}");
+        palette
+    })
+}
+
+/// Source of a built-in theme.
+pub fn built_in(name: &str) -> Option<&'static str> {
+    BUILT_IN
+        .iter()
+        .find(|(built_in, _)| *built_in == name)
+        .map(|(_, text)| *text)
+}
+
+/// Resolves a theme name: `<config_dir>/themes/<name>.toml` first, then the built-in
+/// themes. An unknown name yields an error and `graphene-night`.
+pub fn load(name: &str, config_dir: Option<&Path>) -> (Palette, Vec<ConfigError>) {
+    let base = default_palette();
+    // A name with a path separator would read outside the themes directory.
+    let plain = !name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.');
+
+    if let (true, Some(dir)) = (plain, config_dir) {
+        let file = dir.join(THEMES_DIR).join(format!("{name}.toml"));
+        match std::fs::read_to_string(&file) {
+            Ok(text) => return parse(&text, base, &file),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return (
+                    base.clone(),
+                    vec![ConfigError {
+                        file,
+                        line: None,
+                        message: format!("cannot read the theme: {error}"),
+                    }],
+                );
+            }
+        }
+    }
+
+    if let Some(text) = built_in(name).filter(|_| plain) {
+        return parse(text, base, Path::new(&format!("{name}.toml")));
+    }
+
+    let file = config_dir.map_or_else(|| PathBuf::from(CONFIG_FILE), |dir| dir.join(CONFIG_FILE));
+    (
+        base.clone(),
+        vec![ConfigError {
+            file,
+            line: None,
+            message: format!("unknown theme `{name}`, using `{DEFAULT_THEME}`"),
+        }],
+    )
+}
+
+/// Parses a theme file on top of `base`: every color found replaces the one of `base`,
+/// a missing or invalid one keeps it. A TOML syntax error returns `base` unchanged.
+pub fn parse(text: &str, base: &Palette, file: &Path) -> (Palette, Vec<ConfigError>) {
+    let mut reader = Reader {
+        text,
+        file,
+        errors: Vec::new(),
+    };
+    let root = match DeTable::parse(text) {
+        Ok(root) => root.into_inner(),
+        Err(error) => {
+            reader.error(error.span(), error.message().trim_end().to_owned());
+            return (base.clone(), reader.errors);
+        }
+    };
+
+    let mut palette = base.clone();
+    let mut ansi: [Rgb; 16] = palette.indexed[..16].try_into().expect("16 ANSI colors");
+    for (key, value) in root.iter() {
+        let name = key.get_ref().as_ref();
+        let Some(table) = reader.table(name, value) else {
+            continue;
+        };
+        match name {
+            "colors" => {
+                for (key, value) in table.iter() {
+                    let name = key.get_ref().as_ref();
+                    match name {
+                        "normal" | "bright" => {
+                            let path = format!("colors.{name}");
+                            let Some(table) = reader.table(&path, value) else {
+                                continue;
+                            };
+                            let offset = if name == "bright" { 8 } else { 0 };
+                            for (key, value) in table.iter() {
+                                let color = key.get_ref().as_ref();
+                                let path = format!("{path}.{color}");
+                                match ANSI_NAMES.iter().position(|ansi| *ansi == color) {
+                                    Some(i) => reader.color(value, &path, &mut ansi[offset + i]),
+                                    None => reader.unknown(key, &path),
+                                }
+                            }
+                        }
+                        "selection_foreground" => {
+                            reader.optional_color(value, &mut palette.selection_foreground);
+                        }
+                        _ => {
+                            let path = format!("colors.{name}");
+                            match colors_slot(&mut palette, name) {
+                                Some(slot) => reader.color(value, &path, slot),
+                                None => reader.unknown(key, &path),
+                            }
+                        }
+                    }
+                }
+            }
+            "ui" => {
+                for (key, value) in table.iter() {
+                    let name = key.get_ref().as_ref();
+                    let path = format!("ui.{name}");
+                    match ui_slot(&mut palette.ui, name) {
+                        Some(slot) => reader.color(value, &path, slot),
+                        None => reader.unknown(key, &path),
+                    }
+                }
+            }
+            _ => reader.unknown(key, name),
+        }
+    }
+    palette.indexed = build_indexed(ansi);
+    // Keys are visited in alphabetical order: report errors in file order.
+    reader.errors.sort_by_key(|error| error.line);
+    (palette, reader.errors)
+}
+
+fn colors_slot<'a>(palette: &'a mut Palette, name: &str) -> Option<&'a mut Rgb> {
+    Some(match name {
+        "foreground" => &mut palette.foreground,
+        "background" => &mut palette.background,
+        "cursor" => &mut palette.cursor,
+        "cursor_text" => &mut palette.cursor_text,
+        "selection_background" => &mut palette.selection_background,
+        _ => return None,
+    })
+}
+
+fn ui_slot<'a>(ui: &'a mut UiColors, name: &str) -> Option<&'a mut Rgb> {
+    Some(match name {
+        "tab_bar_background" => &mut ui.tab_bar_background,
+        "tab_active_background" => &mut ui.tab_active_background,
+        "tab_active_text" => &mut ui.tab_active_text,
+        "tab_inactive_text" => &mut ui.tab_inactive_text,
+        "pane_border" => &mut ui.pane_border,
+        "palette_background" => &mut ui.palette_background,
+        "palette_text" => &mut ui.palette_text,
+        "palette_match" => &mut ui.palette_match,
+        "banner_background" => &mut ui.banner_background,
+        "banner_text" => &mut ui.banner_text,
+        _ => return None,
+    })
+}
+
+/// Parses `#rrggbb`.
+pub fn parse_color(text: &str) -> Option<Rgb> {
+    let hex = text.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let value = u32::from_str_radix(hex, 16).ok()?;
+    Some(Rgb {
+        r: (value >> 16) as u8,
+        g: (value >> 8) as u8,
+        b: value as u8,
+    })
+}
+
+struct Reader<'a> {
+    text: &'a str,
+    file: &'a Path,
+    errors: Vec<ConfigError>,
+}
+
+impl<'a> Reader<'a> {
+    fn error(&mut self, span: Option<Range<usize>>, message: String) {
+        let line = span.map(|span| {
+            let end = span.start.min(self.text.len());
+            self.text.as_bytes()[..end]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count()
+                + 1
+        });
+        self.errors.push(ConfigError {
+            file: self.file.to_path_buf(),
+            line,
+            message,
+        });
+    }
+
+    fn unknown(&mut self, key: &Spanned<std::borrow::Cow<'_, str>>, path: &str) {
+        self.error(Some(key.span()), format!("unknown key `{path}`"));
+    }
+
+    fn table<'v, 'de>(
+        &mut self,
+        path: &str,
+        value: &'v Spanned<DeValue<'de>>,
+    ) -> Option<&'v DeTable<'de>> {
+        match value.get_ref() {
+            DeValue::Table(table) => Some(table),
+            _ => {
+                self.error(Some(value.span()), format!("`{path}` must be a table"));
+                None
+            }
+        }
+    }
+
+    fn string<'v>(&mut self, value: &'v Spanned<DeValue<'_>>, path: &str) -> Option<&'v str> {
+        match value.get_ref() {
+            DeValue::String(text) => Some(text.as_ref()),
+            _ => {
+                self.error(
+                    Some(value.span()),
+                    format!("invalid value for `{path}`: expected a \"#rrggbb\" string"),
+                );
+                None
+            }
+        }
+    }
+
+    /// Stores a `#rrggbb` color in `target`; on error `target` is left unchanged.
+    fn color(&mut self, value: &Spanned<DeValue<'_>>, path: &str, target: &mut Rgb) {
+        let Some(text) = self.string(value, path) else {
+            return;
+        };
+        match parse_color(text) {
+            Some(color) => *target = color,
+            None => self.error(
+                Some(value.span()),
+                format!("invalid value for `{path}`: `{text}` is not a \"#rrggbb\" color"),
+            ),
+        }
+    }
+
+    /// Like [`Self::color`], an empty string meaning `None`.
+    fn optional_color(&mut self, value: &Spanned<DeValue<'_>>, target: &mut Option<Rgb>) {
+        let path = "colors.selection_foreground";
+        if let Some("") = self.string_quiet(value) {
+            *target = None;
+            return;
+        }
+        let mut color = target.unwrap_or(Rgb { r: 0, g: 0, b: 0 });
+        let errors = self.errors.len();
+        self.color(value, path, &mut color);
+        if self.errors.len() == errors {
+            *target = Some(color);
+        }
+    }
+
+    fn string_quiet<'v>(&self, value: &'v Spanned<DeValue<'_>>) -> Option<&'v str> {
+        match value.get_ref() {
+            DeValue::String(text) => Some(text.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgb(hex: u32) -> Rgb {
+        Rgb {
+            r: (hex >> 16) as u8,
+            g: (hex >> 8) as u8,
+            b: hex as u8,
+        }
+    }
+
+    fn parse_on_default(text: &str) -> (Palette, Vec<ConfigError>) {
+        parse(text, default_palette(), Path::new("test.toml"))
+    }
+
+    #[test]
+    fn every_built_in_theme_parses_without_error() {
+        for (name, text) in BUILT_IN {
+            let (_, errors) = parse(text, &Palette::blank(), Path::new(name));
+            assert_eq!(errors, Vec::new(), "theme {name}");
+        }
+    }
+
+    #[test]
+    fn every_built_in_theme_sets_every_color() {
+        // Parsed on two different bases, a complete theme gives the same palette.
+        let white = {
+            let mut p = Palette::blank();
+            let white = rgb(0xffffff);
+            p.indexed = build_indexed([white; 16]);
+            p.foreground = white;
+            p.background = white;
+            p.cursor = white;
+            p.cursor_text = white;
+            p.selection_background = white;
+            p.selection_foreground = Some(white);
+            p.ui = UiColors::uniform(white);
+            p
+        };
+        for (name, text) in BUILT_IN {
+            let (on_blank, _) = parse(text, &Palette::blank(), Path::new(name));
+            let (on_white, _) = parse(text, &white, Path::new(name));
+            assert_eq!(on_blank, on_white, "theme {name}");
+        }
+    }
+
+    #[test]
+    fn third_party_themes_carry_their_licence() {
+        for (name, text) in BUILT_IN {
+            if !name.starts_with("graphene-") {
+                assert!(text.contains("Copyright (c)"), "theme {name}");
+                assert!(
+                    text.contains("Permission is hereby granted"),
+                    "theme {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn graphene_night_matches_the_original_palette() {
+        let p = default_palette();
+        let ansi = [
+            0x1c1f26, 0xf0717b, 0x9ed072, 0xe7c664, 0x6cb6ff, 0xc792ea, 0x5fd7d7, 0xc8ccd4,
+            0x5c6370, 0xff8b92, 0xb5e890, 0xffd982, 0x8ecaff, 0xdcb0ff, 0x82eaea, 0xf2f4f8,
+        ]
+        .map(rgb);
+        assert_eq!(p.indexed, build_indexed(ansi));
+        assert_eq!(p.foreground, rgb(0xd7dae0));
+        assert_eq!(p.background, rgb(0x14161b));
+        assert_eq!(p.cursor, rgb(0x82aaff));
+        assert_eq!(p.cursor_text, rgb(0x14161b));
+        assert_eq!(p.selection_background, rgb(0x3a4252));
+        assert_eq!(p.selection_foreground, None);
+    }
+
+    #[test]
+    fn partial_theme_falls_back_to_graphene_night() {
+        let (p, errors) = parse_on_default(
+            r##"
+[colors]
+background = "#000000"
+selection_foreground = "#ffffff"
+
+[colors.bright]
+red = "#ff0000"
+
+[ui]
+banner_background = "#123456"
+"##,
+        );
+        assert_eq!(errors, Vec::new());
+        let night = default_palette();
+        assert_eq!(p.background, rgb(0x000000));
+        assert_eq!(p.foreground, night.foreground);
+        assert_eq!(p.selection_foreground, Some(rgb(0xffffff)));
+        assert_eq!(p.indexed[9], rgb(0xff0000));
+        assert_eq!(p.indexed[1], night.indexed[1]);
+        assert_eq!(p.indexed[16..], night.indexed[16..]);
+        assert_eq!(p.ui.banner_background, rgb(0x123456));
+        assert_eq!(p.ui.banner_text, night.ui.banner_text);
+    }
+
+    #[test]
+    fn invalid_colors_and_unknown_keys_are_reported_with_their_line() {
+        let (p, errors) = parse_on_default(
+            r##"[colors]
+foreground = "red"
+background = 12
+cursor = "#82aaff"
+glow = "#ffffff"
+selection_foreground = "#12"
+
+[colors.normal]
+orange = "#ff8800"
+
+[ui]
+banner = "#000000"
+
+[extra]
+"##,
+        );
+        let night = default_palette();
+        assert_eq!(p.foreground, night.foreground);
+        assert_eq!(p.background, night.background);
+        assert_eq!(p.selection_foreground, None);
+        let lines: Vec<_> = errors.iter().map(|e| (e.line, e.message.clone())).collect();
+        assert_eq!(
+            lines,
+            vec![
+                (
+                    Some(2),
+                    "invalid value for `colors.foreground`: `red` is not a \"#rrggbb\" color"
+                        .to_owned()
+                ),
+                (
+                    Some(3),
+                    "invalid value for `colors.background`: expected a \"#rrggbb\" string"
+                        .to_owned()
+                ),
+                (Some(5), "unknown key `colors.glow`".to_owned()),
+                (
+                    Some(6),
+                    "invalid value for `colors.selection_foreground`: `#12` is not a \"#rrggbb\" color"
+                        .to_owned()
+                ),
+                (Some(9), "unknown key `colors.normal.orange`".to_owned()),
+                (Some(12), "unknown key `ui.banner`".to_owned()),
+                (Some(14), "unknown key `extra`".to_owned()),
+            ]
+        );
+        assert!(errors.iter().all(|e| e.file == Path::new("test.toml")));
+    }
+
+    #[test]
+    fn section_that_is_not_a_table_is_reported() {
+        let (_, errors) = parse_on_default("colors = 1\n[ui]\n");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "`colors` must be a table");
+    }
+
+    #[test]
+    fn syntax_error_keeps_the_base_palette() {
+        let (p, errors) = parse_on_default("[colors\nforeground = \"#000000\"\n");
+        assert_eq!(&p, default_palette());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, Some(1));
+    }
+
+    #[test]
+    fn empty_selection_foreground_clears_it() {
+        let mut base = default_palette().clone();
+        base.selection_foreground = Some(rgb(0x010203));
+        let (p, errors) = parse(
+            "[colors]\nselection_foreground = \"\"\n",
+            &base,
+            Path::new("t"),
+        );
+        assert_eq!(errors, Vec::new());
+        assert_eq!(p.selection_foreground, None);
+    }
+
+    #[test]
+    fn parse_color_accepts_only_hash_rrggbb() {
+        assert_eq!(parse_color("#a1B2c3"), Some(rgb(0xa1b2c3)));
+        for text in ["a1b2c3", "#a1b2c", "#a1b2c3d", "#gggggg", "", "#"] {
+            assert_eq!(parse_color(text), None, "{text}");
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-theme-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(THEMES_DIR)).unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_finds_built_in_themes() {
+        let (p, errors) = load("gruvbox-dark", None);
+        assert_eq!(errors, Vec::new());
+        assert_eq!(p.background, rgb(0x282828));
+    }
+
+    #[test]
+    fn user_theme_overrides_built_in() {
+        let dir = temp_dir("override");
+        std::fs::write(
+            dir.join(THEMES_DIR).join("gruvbox-dark.toml"),
+            "[colors]\nbackground = \"#010203\"\n",
+        )
+        .unwrap();
+        let (p, errors) = load("gruvbox-dark", Some(&dir));
+        assert_eq!(errors, Vec::new());
+        assert_eq!(p.background, rgb(0x010203));
+        // The rest comes from graphene-night, not from the built-in gruvbox.
+        assert_eq!(p.foreground, default_palette().foreground);
+
+        let (p, _) = load("graphene-day", Some(&dir));
+        assert_eq!(p.background, rgb(0xf6f7f9));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn user_theme_errors_point_at_its_file() {
+        let dir = temp_dir("errors");
+        let file = dir.join(THEMES_DIR).join("mine.toml");
+        std::fs::write(&file, "[colors]\nforeground = \"nope\"\n").unwrap();
+        let (_, errors) = load("mine", Some(&dir));
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, file);
+        assert_eq!(errors[0].line, Some(2));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unknown_theme_falls_back_with_an_error() {
+        let dir = temp_dir("unknown");
+        for name in ["no-such-theme", "../config", ".hidden", ""] {
+            let (p, errors) = load(name, Some(&dir));
+            assert_eq!(&p, default_palette(), "{name}");
+            assert_eq!(errors.len(), 1, "{name}");
+            assert_eq!(errors[0].file, dir.join(CONFIG_FILE));
+            assert_eq!(
+                errors[0].message,
+                format!("unknown theme `{name}`, using `graphene-night`")
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

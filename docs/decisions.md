@@ -5,6 +5,10 @@
 Chosen over Tauri/Electron + xterm.js and GTK4/VTE: lowest latency and memory, full
 control over the look. Cost: UI elements (tabs, palette, blocks) must be drawn by hand.
 
+The window renderer creates its wgpu instance with the Vulkan backend alone first and
+falls back to all backends when Vulkan has no compatible adapter: probing every backend
+cost ~100 ms at startup (see `backlog/features/performance/technical.md`).
+
 ## `alacritty_terminal` for emulation
 
 A correct VT emulator is a large amount of work (escape sequences, alternate screen,
@@ -13,12 +17,18 @@ the PTY and its I/O thread, and is battle-tested. We only depend on its public A
 Graphene-specific features (blocks, input editor) will
 be layered on top.
 
-## glyphon for text
+## Own glyph pipeline on `cosmic-text` (glyphon dropped)
 
-Integrates directly with wgpu, handles shaping, font fallback and a glyph atlas through
-`cosmic-text`. Shaping is `Shaping::Advanced` so that fallback fonts work.
+glyphon was used first: it handles shaping, font fallback and a glyph atlas through
+`cosmic-text`. But it shapes text runs, and a terminal frame where a full screen changed
+(btop) cost 60 to 90 ms of reshaping and `prepare`. A grid needs no shaping: one cell,
+one glyph. Graphene now keeps `cosmic-text` for font loading, fallback and
+rasterization, caches one rasterized glyph per `(char, bold, italic)` and draws one
+instanced quad per glyph (see [architecture.md](architecture.md#glyphs)). Single
+characters are still shaped with `Shaping::Advanced` so that fallback fonts work.
+Consequence: programming-font ligatures are never drawn.
 
-## Exact cell width, runs anchored per column
+## Exact cell width, glyphs anchored per cell
 
 `cosmic-text` 0.19 `Buffer::set_monospace_width` does not force glyph advances to the
 cell width (it divides a pixel advance by an em width, so the rounding is ineffective).
@@ -27,7 +37,7 @@ Combined with a rounded cell width, text drifted to the right of its background.
 Fix:
 
 - the cell width is the exact advance of `M`, not rounded;
-- each run is positioned at its own column (see [architecture.md](architecture.md#text-runs)).
+- each glyph is positioned at its own cell origin (see [architecture.md](architecture.md#glyphs)).
 
 ## Block cursor baked into cells
 

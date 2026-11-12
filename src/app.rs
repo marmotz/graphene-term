@@ -25,7 +25,8 @@ use crate::layout::GridLayout;
 use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
-use crate::renderer::Renderer;
+use crate::perf;
+use crate::renderer::{Glyphs, Renderer};
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 use crate::theme;
@@ -67,6 +68,8 @@ struct Session {
     /// Tag the user just chose to ignore, forwarded to the update check thread.
     ignored_tag: Option<String>,
     lang: Lang,
+    /// Logs the first frame drawn after the shell's first output (`graphene::perf`).
+    first_frame: perf::FirstFrame,
 }
 
 impl Session {
@@ -395,6 +398,9 @@ impl Session {
     fn handle_terminal_event(&mut self, event: TermEvent, event_loop: &ActiveEventLoop) {
         match event {
             TermEvent::Wakeup => {
+                if self.first_frame.output() {
+                    perf::mark("first PTY output");
+                }
                 self.validate_selection();
                 self.update_pointer();
                 self.window.request_redraw()
@@ -456,20 +462,22 @@ impl App {
                 self.config.window.height,
             ));
         let window = Arc::new(event_loop.create_window(attributes)?);
+        perf::mark("window created");
 
+        // Shell first, GPU second: the PTY reader thread parses the shell output while
+        // the renderer is being created, so the first frame shows it complete.
         let scale = window.scale_factor() as f32;
-        let renderer = pollster::block_on(Renderer::new(
-            window.clone(),
-            event_loop.owned_display_handle(),
+        let glyphs = Glyphs::new(
             self.config.font.family.clone(),
             self.config.font.size * scale,
-        ))?;
+        );
+        perf::mark("glyphs ready");
 
         let size = window.inner_size();
         let layout = GridLayout::new(
             size.width,
             size.height,
-            renderer.cell_size(),
+            glyphs.cell_size(),
             self.config.window.padding * scale,
         );
         let terminal = Terminal::spawn(
@@ -477,6 +485,13 @@ impl App {
             layout.window_size(),
             self.config.term_config(),
         )?;
+        perf::mark("shell spawned");
+
+        let renderer = pollster::block_on(Renderer::new(
+            window.clone(),
+            event_loop.owned_display_handle(),
+            glyphs,
+        ))?;
 
         let clipboard = arboard::Clipboard::new()
             .map_err(|e| log::warn!("clipboard unavailable: {e}"))
@@ -505,6 +520,7 @@ impl App {
             update: UpdateBanner::default(),
             ignored_tag: None,
             lang: Lang::detect(),
+            first_frame: perf::FirstFrame::default(),
         })
     }
 
@@ -609,8 +625,12 @@ impl ApplicationHandler<UserEvent> for App {
                     background: session.palette.ui.banner_background,
                     text: session.palette.ui.banner_text,
                 });
-                if let Err(error) = session.renderer.render(&frame, &session.layout) {
-                    log::error!("render failed: {error:#}");
+                match session.renderer.render(&frame, &session.layout) {
+                    Ok(true) if session.first_frame.frame_drawn() => {
+                        perf::mark("first frame drawn after PTY output");
+                    }
+                    Ok(_) => {}
+                    Err(error) => log::error!("render failed: {error:#}"),
                 }
             }
             _ => {}

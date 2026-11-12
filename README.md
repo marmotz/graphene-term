@@ -32,6 +32,18 @@ newer release), and "×" hides it until the next launch.
 
 The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
+## Performance
+
+```bash
+cargo bench                                          # rendering benchmarks
+RUST_LOG=graphene::perf=debug cargo run --release    # startup timing logs
+```
+
+`cargo bench` measures parsing, frame building and GPU preparation on recorded terminal
+output (see [docs/development.md](docs/development.md#benchmarks)). The `graphene::perf`
+logs print the time of each startup step and of the first frame drawn after the shell's
+first output.
+
 ## Shortcuts
 
 | Keys                          | Action                                          |

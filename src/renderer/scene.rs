@@ -1,63 +1,35 @@
 //! Conversion of a [`Frame`] into GPU-ready primitives (pure, no GPU access).
 
-use std::hash::{Hash, Hasher};
-
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
+use super::glyphs::GlyphKey;
 use super::rects::RectInstance;
 use crate::frame::Frame;
 use crate::layout::GridLayout;
 
-/// A run of consecutive characters sharing the same style, anchored at a grid column.
-///
-/// Non-ASCII characters always get their own run: they may come from a fallback
-/// font whose advance differs from the cell width, and isolating them keeps the
-/// following text aligned on the grid.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TextRun {
-    pub column: usize,
-    pub text: String,
-    pub color: Rgb,
-    pub bold: bool,
-    pub italic: bool,
-}
-
-impl Hash for TextRun {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.column.hash(state);
-        self.text.hash(state);
-        (
-            self.color.r,
-            self.color.g,
-            self.color.b,
-            self.bold,
-            self.italic,
-        )
-            .hash(state);
-    }
-}
-
-/// Text drawn above everything else, at a pixel position (banner).
-#[derive(Debug, Clone, PartialEq)]
-pub struct OverlayText {
-    pub x: f32,
-    pub y: f32,
-    pub text: String,
-    pub color: Rgb,
+/// A glyph to draw: the character of one cell (or of the banner), anchored at the
+/// top-left corner of its cell. Spaces never produce one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlyphInstance {
+    /// Cell origin, in pixels. The glyph placement offsets are added by the renderer.
+    pub origin: [f32; 2],
+    pub key: GlyphKey,
+    /// Linear RGBA color (ignored by color glyphs such as emoji).
+    pub color: [f32; 4],
 }
 
 #[derive(Debug, Clone)]
 pub struct Scene {
     /// Clear color (linear or sRGB depending on the target).
     pub clear: [f32; 4],
-    /// Rectangles drawn below the text.
+    /// Rectangles drawn below the glyphs.
     pub under: Vec<RectInstance>,
-    /// Rectangles drawn above the text.
+    /// Rectangles drawn above the glyphs.
     pub over: Vec<RectInstance>,
-    /// Styled text runs per visible row.
-    pub rows: Vec<Vec<TextRun>>,
-    /// Text drawn after the `over` rectangles.
-    pub overlay: Vec<OverlayText>,
+    /// Glyphs of the grid cells.
+    pub glyphs: Vec<GlyphInstance>,
+    /// Glyphs drawn after the `over` rectangles (banner text).
+    pub overlay: Vec<GlyphInstance>,
 }
 
 fn srgb_to_linear(c: u8) -> f32 {
@@ -93,7 +65,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     let thickness = (cell.height / 16.0).round().max(1.0);
     let mut under = Vec::new();
     let mut over = Vec::new();
-    let mut rows = Vec::with_capacity(frame.rows.len());
+    let mut glyphs = Vec::new();
 
     for (line, cells) in frame.rows.iter().enumerate() {
         // Backgrounds: merge consecutive cells with the same non-default color.
@@ -134,34 +106,23 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             }
         }
 
-        // Text runs.
-        let mut runs: Vec<TextRun> = Vec::new();
-        let mut previous_ascii = false;
-        for (column, c) in cells.iter().enumerate().filter(|(_, c)| !c.spacer) {
-            let ascii = c.c.is_ascii();
-            match runs.last_mut() {
-                Some(run)
-                    if ascii
-                        && previous_ascii
-                        && run.color == c.fg
-                        && run.bold == c.bold
-                        && run.italic == c.italic =>
-                {
-                    run.text.push(c.c);
-                }
-                _ => runs.push(TextRun {
-                    column,
-                    text: c.c.to_string(),
-                    color: c.fg,
+        // Glyphs: one per drawn cell. A wide character is drawn once, from its first
+        // cell; its spacer draws nothing.
+        for (column, c) in cells.iter().enumerate() {
+            if c.spacer || c.c == ' ' {
+                continue;
+            }
+            let (x, y) = layout.cell_origin(column, line);
+            glyphs.push(GlyphInstance {
+                origin: [x, y],
+                key: GlyphKey {
+                    c: c.c,
                     bold: c.bold,
                     italic: c.italic,
-                }),
-            }
-            previous_ascii = ascii;
+                },
+                color: gpu_color(c.fg, srgb_target),
+            });
         }
-        // Blank runs draw nothing.
-        runs.retain(|run| !run.text.chars().all(|c| c == ' '));
-        rows.push(runs);
     }
 
     if let Some(cursor) = frame.cursor {
@@ -194,7 +155,8 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         }
     }
 
-    // The banner covers the grid: its rect comes last and its text goes in the overlay.
+    // The banner covers the grid: its rect comes last and its glyphs go in the overlay,
+    // one character per cell width from the text position.
     let mut overlay = Vec::new();
     if let Some(banner) = &frame.banner {
         let rect = banner.layout.rect;
@@ -203,19 +165,26 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             size: [rect.width, rect.height],
             color: gpu_color(banner.background, srgb_target),
         });
-        overlay.extend(banner.layout.texts.iter().map(|placed| OverlayText {
-            x: placed.x,
-            y: placed.y,
-            text: placed.text.clone(),
-            color: banner.text,
-        }));
+        let color = gpu_color(banner.text, srgb_target);
+        for placed in &banner.layout.texts {
+            let characters = placed.text.chars().enumerate().filter(|(_, c)| *c != ' ');
+            overlay.extend(characters.map(|(index, c)| GlyphInstance {
+                origin: [placed.x + index as f32 * cell.width, placed.y],
+                key: GlyphKey {
+                    c,
+                    bold: false,
+                    italic: false,
+                },
+                color,
+            }));
+        }
     }
 
     Scene {
         clear: gpu_color(frame.background, srgb_target),
         under,
         over,
-        rows,
+        glyphs,
         overlay,
     }
 }
@@ -287,41 +256,55 @@ mod tests {
         assert_eq!(scene.under[0].size, [20.0, 20.0]);
     }
 
-    fn runs(scene: &Scene) -> Vec<(usize, &str)> {
-        scene.rows[0]
-            .iter()
-            .map(|r| (r.column, r.text.as_str()))
-            .collect()
+    /// (origin, character) of each glyph of `glyphs`.
+    fn placed(glyphs: &[GlyphInstance]) -> Vec<([f32; 2], char)> {
+        glyphs.iter().map(|g| (g.origin, g.key.c)).collect()
     }
 
     #[test]
-    fn runs_group_by_style_and_isolate_non_ascii() {
-        let mut row = vec![
-            cell('a'),
-            cell('b'),
-            cell('日'),
-            cell(' '),
-            cell('c'),
-            cell('d'),
-            cell('e'),
-        ];
-        row[3].spacer = true;
-        row[5].fg = RED;
-        row[6].fg = RED;
+    fn glyphs_are_anchored_at_their_cell_origin_with_style() {
+        let mut row = vec![cell('a'), cell('b')];
+        row[1].fg = RED;
+        row[1].bold = true;
+        row[1].italic = true;
+        let scene = build(&frame(vec![vec![cell('x')], row]), &layout(), false);
+        assert_eq!(
+            placed(&scene.glyphs),
+            vec![([0.0, 0.0], 'x'), ([0.0, 20.0], 'a'), ([10.0, 20.0], 'b')]
+        );
+        let b = scene.glyphs[2];
+        assert_eq!(
+            b.key,
+            GlyphKey {
+                c: 'b',
+                bold: true,
+                italic: true
+            }
+        );
+        assert_eq!(b.color, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn spaces_draw_no_glyph() {
+        let mut row = vec![cell('a'), cell(' '), cell(' '), cell('b')];
+        row[1].fg = RED;
+        row[2].bg = RED;
         let scene = build(&frame(vec![row]), &layout(), false);
         assert_eq!(
-            runs(&scene),
-            vec![(0, "ab"), (2, "日"), (4, "c"), (5, "de")]
+            placed(&scene.glyphs),
+            vec![([0.0, 0.0], 'a'), ([30.0, 0.0], 'b')]
         );
     }
 
     #[test]
-    fn blank_runs_are_dropped() {
-        let mut row = vec![cell('a'), cell(' '), cell(' '), cell('b')];
-        row[1].fg = RED;
-        row[2].fg = RED;
+    fn wide_char_is_drawn_once_and_keeps_the_next_cell_aligned() {
+        let mut row = vec![cell('日'), cell(' '), cell('c')];
+        row[1].spacer = true;
         let scene = build(&frame(vec![row]), &layout(), false);
-        assert_eq!(runs(&scene), vec![(0, "a"), (3, "b")]);
+        assert_eq!(
+            placed(&scene.glyphs),
+            vec![([0.0, 0.0], '日'), ([20.0, 0.0], 'c')]
+        );
     }
 
     #[test]
@@ -371,12 +354,40 @@ mod tests {
         assert_eq!(last.position, [0.0, 0.0]);
         assert_eq!(last.size, [100.0, 30.0]);
         assert_eq!(last.color, [1.0, 0.0, 0.0, 1.0]);
-        let texts: Vec<(&str, Rgb)> = scene
-            .overlay
-            .iter()
-            .map(|t| (t.text.as_str(), t.color))
+        // Overlay glyphs follow the banner text, one cell width apart, spaces skipped.
+        let texts = &f.banner.as_ref().unwrap().layout.texts;
+        let (oops, x) = (&texts[0], &texts[1]);
+        let expected: Vec<([f32; 2], char)> = "oops"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| ([oops.x + i as f32 * 10.0, oops.y], c))
+            .chain([([x.x, x.y], 'x')])
             .collect();
-        assert_eq!(texts, vec![("oops", FG), ("x", FG)]);
+        assert_eq!(placed(&scene.overlay), expected);
+        assert!(scene.overlay.iter().all(|g| g.color == [1.0; 4]));
+        // The grid glyph stays in the grid list, drawn before the `over` rects.
+        assert_eq!(placed(&scene.glyphs), vec![([0.0, 0.0], 'a')]);
+    }
+
+    #[test]
+    fn banner_spaces_draw_no_glyph() {
+        let banner = Banner {
+            text: "a b".into(),
+            actions: vec![],
+        };
+        let mut f = frame(vec![vec![cell(' ')]]);
+        f.banner = Some(FrameBanner {
+            layout: BannerLayout::new(&banner, layout().cell, 100.0),
+            background: RED,
+            text: FG,
+        });
+        let scene = build(&f, &layout(), false);
+        let text = &f.banner.as_ref().unwrap().layout.texts[0];
+        assert_eq!(
+            placed(&scene.overlay),
+            vec![([text.x, text.y], 'a'), ([text.x + 20.0, text.y], 'b')]
+        );
+        assert!(scene.glyphs.is_empty());
     }
 
     #[test]

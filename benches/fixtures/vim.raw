@@ -1,0 +1,29 @@
+[?1049h[22;0;0t[>4;2m[?1h=[?2004h[?1004h[1;32r[?12h[?12l[22;2t[22;1t[27m[23m[29m[m[H[2J[?25l[32;1H"src/app.rs" 667L, 25290B[2;1H▽[6n[2;1H  [3;1HPzz\[0%m[6n[3;1H           [1;1H[>c]10;?]11;?[14t[16t[1;1H[38;5;130m  1 [m[35m//! Window and event handling.[m
+[38;5;130m  2 [m[2;5H[K[3;1H[38;5;130m  3 use[m [35mstd[m[35m::[m[35msync[m[35m::[mArc;[3;24H[K[4;1H[38;5;130m  4 use[m [35mstd[m[35m::[m[35mtime[m[35m::[mInstant;
+[38;5;130m  5 
+  6 use[m [35malacritty_terminal[m[35m::[m[35mevent[m[35m::[mEvent [38;5;130mas[m TermEvent;
+[38;5;130m  7 use[m [35malacritty_terminal[m[35m::[m[35mgrid[m[35m::[mScroll;
+[38;5;130m  8 use[m [35malacritty_terminal[m[35m::[m[35mindex[m[35m::[m{Column, Point, Side};
+[38;5;130m  9 use[m [35malacritty_terminal[m[35m::[m[35mterm[m[35m::[m{[31mself[m, TermMode};
+[38;5;130m 10 use[m [35marboard[m[35m::[m{GetExtLinux, LinuxClipboardKind, SetExtLinux};
+[38;5;130m 11 use[m [35mwinit[m[35m::[m[35mapplication[m[35m::[mApplicationHandler;
+[38;5;130m 12 use[m [35mwinit[m[35m::[m[35mdpi[m[35m::[mLogicalSize;
+[38;5;130m 13 use[m [35mwinit[m[35m::[m[35mdpi[m[35m::[mPhysicalPosition;
+[38;5;130m 14 use[m [35mwinit[m[35m::[m[35mevent[m[35m::[m{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+[38;5;130m 15 use[m [35mwinit[m[35m::[m[35mevent_loop[m[35m::[m{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+[38;5;130m 16 use[m [35mwinit[m[35m::[m[35mkeyboard[m[35m::[mModifiersState;
+[38;5;130m 17 use[m [35mwinit[m[35m::[m[35mwindow[m[35m::[m{Window, WindowId};
+[38;5;130m 18 
+ 19 use[m [35mcrate[m[35m::[m[35mbanner[m[35m::[m{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
+[38;5;130m 20 use[m [35mcrate[m[35m::[m[35mconfig[m[35m::[m{[31mself[m, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
+[38;5;130m 21 use[m [35mcrate[m[35m::[m[35mframe[m[35m::[m{Frame, FrameBanner};
+[38;5;130m 22 use[m [35mcrate[m[35m::[m[35mi18n[m[35m::[mLang;
+[38;5;130m 23 use[m [35mcrate[m[35m::[m[35minput[m[35m::[m{[31mself[m, Action};
+[38;5;130m 24 use[m [35mcrate[m[35m::[m[35mlayout[m[35m::[mGridLayout;
+[38;5;130m 25 use[m [35mcrate[m[35m::[mmouse;
+[38;5;130m 26 use[m [35mcrate[m[35m::[mopener;
+[38;5;130m 27 use[m [35mcrate[m[35m::[m[35mpalette[m[35m::[mPalette;
+[38;5;130m 28 use[m [35mcrate[m[35m::[mperf;
+[38;5;130m 29 use[m [35mcrate[m[35m::[m[35mrenderer[m[35m::[mRenderer;
+[38;5;130m 30 use[m [35mcrate[m[35m::[m[35mselection[m[35m::[m{[31mself[m, ClickTracker, SelectionSnapshot};
+[38;5;130m 31 use[m [35mcrate[m[35m::[m[35mterminal[m[35m::[m{EventProxy, Terminal, UserEvent};[32;103H1,1[10CHaut[?25h[1;5H[?4m
