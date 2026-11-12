@@ -76,7 +76,12 @@ alignment), wide characters, box drawing, colors, cursor in vim.
 The CI of each pull request uploads its release binary as the `graphene-release`
 artifact (kept 30 days). Every push to `develop` (so every merged pull request) then
 runs `.github/workflows/release.yml`, which publishes a GitHub pre-release tagged
-`v<crate version>-dev.<run number>`.
+`v<version>`, where `<version>` is what the binary prints with `graphene --version`.
+
+The version is computed at build time by `build.rs`: `<crate version>-dev.<UTC
+YYYYMMDDHHMMSS>` by default, `<crate version>` when built with `GRAPHENE_CHANNEL=stable`.
+The timestamp comes from `SOURCE_DATE_EPOCH` when set (the CI release builds set it to
+the current time), else the current time.
 
 The release does not rebuild: `scripts/find-ci-binary.sh` finds the successful CI run
 of the merged pull request and the binary is downloaded from it. This only happens
@@ -87,8 +92,8 @@ expired artifact, ...) the workflow falls back to testing and building from sour
 Assets:
 
 - `graphene-<tag>-x86_64-unknown-linux-gnu.tar.gz`: binary, desktop entry, icon, licenses
-- `graphene-term_<version>~dev.<n>_amd64.deb`
-- `graphene-term-<version>-0.dev.<n>.x86_64.rpm`
+- `graphene-term_<version>_amd64.deb` (package version `<crate version>~dev.<timestamp>`)
+- `graphene-term-<crate version>-0.dev.<timestamp>.x86_64.rpm`
 - `graphene-<tag>-x86_64.AppImage`
 - `SHA256SUMS`
 
@@ -101,7 +106,7 @@ locally: `cargo install --locked cargo-deb cargo-generate-rpm`, put `appimagetoo
 
 ```bash
 cargo build --release --locked
-scripts/package.sh 1
+scripts/package.sh
 ```
 
 ### AUR
