@@ -16,8 +16,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
+use crate::banner::{Banner, BannerLayout};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
-use crate::frame::Frame;
+use crate::frame::{Frame, FrameBanner};
 use crate::input::{self, Action};
 use crate::layout::GridLayout;
 use crate::palette::Palette;
@@ -53,12 +54,33 @@ struct Session {
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection kept while its text is unchanged.
     selection_snapshot: Option<SelectionSnapshot>,
+    /// Configuration error banner; `None` once dismissed or without error.
+    config_banner: Option<Banner>,
     /// Newer release reported by the update check thread.
     #[allow(dead_code, reason = "drawn by the update banner task")]
     update: Option<Release>,
 }
 
 impl Session {
+    /// Banner shown at the top of the window, placed in pixels.
+    fn banner_layout(&self) -> Option<BannerLayout> {
+        let banner = self.config_banner.as_ref()?;
+        let width = self.window.inner_size().width as f32;
+        Some(BannerLayout::new(banner, self.renderer.cell_size(), width))
+    }
+
+    /// Handles a left press on the banner. Returns whether the banner took it.
+    fn banner_press(&mut self) -> bool {
+        let (x, y) = (self.mouse_position.x as f32, self.mouse_position.y as f32);
+        if self.banner_layout().and_then(|l| l.hit(x, y)).is_none() {
+            return false;
+        }
+        // The configuration error banner has no action: any click dismisses it.
+        self.config_banner = None;
+        self.window.request_redraw();
+        true
+    }
+
     fn compute_layout(&self) -> GridLayout {
         let size = self.window.inner_size();
         let scale = self.window.scale_factor() as f32;
@@ -165,6 +187,9 @@ impl Session {
     }
 
     fn left_press(&mut self) {
+        if self.banner_press() {
+            return;
+        }
         let mut term = self.terminal.term.lock();
         if selection::mouse_reserved(*term.mode(), self.modifiers) {
             return;
@@ -352,6 +377,8 @@ pub struct App {
     session: Option<Session>,
     update_checker: Checker,
     error: Option<anyhow::Error>,
+    /// Banner reporting the errors of the configuration and theme files.
+    config_banner: Option<Banner>,
 }
 
 impl App {
@@ -406,6 +433,7 @@ impl App {
             click_tracker: ClickTracker::default(),
             auto_scroll_deadline: None,
             selection_snapshot: None,
+            config_banner: self.config_banner.clone(),
             update: None,
         })
     }
@@ -498,10 +526,15 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
             WindowEvent::MouseInput { state, button, .. } => session.mouse_input(state, button),
             WindowEvent::RedrawRequested => {
-                let frame = {
+                let mut frame = {
                     let term = session.terminal.term.lock();
                     Frame::capture(&term, &session.palette, session.focused)
                 };
+                frame.banner = session.banner_layout().map(|layout| FrameBanner {
+                    layout,
+                    background: session.palette.ui.banner_background,
+                    text: session.palette.ui.banner_text,
+                });
                 if let Err(error) = session.renderer.render(&frame, &session.layout) {
                     log::error!("render failed: {error:#}");
                 }
@@ -511,21 +544,22 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
-/// Loads the configuration file and its theme. Errors are only logged for now.
-fn load_config() -> (Config, Palette) {
+/// Loads the configuration file and its theme. Errors are logged and reported by the
+/// returned banner.
+fn load_config() -> (Config, Palette, Option<Banner>) {
     let (config, mut errors) = config::load();
     let (palette, theme_errors) = theme::load(&config.theme.name, config::config_dir().as_deref());
     errors.extend(theme_errors);
     for error in &errors {
         log::warn!("{error}");
     }
-    (config, palette)
+    (config, palette, Banner::config_errors(&errors))
 }
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
-    let (config, palette) = load_config();
+    let (config, palette, config_banner) = load_config();
     let mut app = App {
         update_checker: Checker::new(move |release| {
             // The event loop may already be closed during shutdown.
@@ -536,6 +570,7 @@ pub fn run() -> anyhow::Result<()> {
         palette,
         session: None,
         error: None,
+        config_banner,
     };
     event_loop.run_app(&mut app)?;
     match app.error {

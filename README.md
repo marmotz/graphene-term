@@ -19,6 +19,9 @@ Themes are set with `name` in the `[theme]` section. Eight are built in (see
 [themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,
 with the same format, and only needs the colors it changes.
 
+Errors in these files are logged and shown in a banner at the top of the window (click
+to hide it); the faulty settings keep their default value.
+
 Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
 builds, every 24 hours for stable builds) and caches the result in
 `~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only

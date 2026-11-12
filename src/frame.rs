@@ -10,6 +10,7 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
+use crate::banner::BannerLayout;
 use crate::palette::Palette;
 
 /// A single cell ready to be drawn.
@@ -35,12 +36,21 @@ pub struct FrameCursor {
     pub color: Rgb,
 }
 
+/// Banner drawn at the top of the window, over the grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameBanner {
+    pub layout: BannerLayout,
+    pub background: Rgb,
+    pub text: Rgb,
+}
+
 #[derive(Debug, Clone)]
 pub struct Frame {
     /// Visible rows, top to bottom.
     pub rows: Vec<Vec<FrameCell>>,
     pub cursor: Option<FrameCursor>,
     pub background: Rgb,
+    pub banner: Option<FrameBanner>,
 }
 
 impl Frame {
@@ -146,6 +156,7 @@ impl Frame {
             rows,
             cursor,
             background,
+            banner: None,
         }
     }
 }

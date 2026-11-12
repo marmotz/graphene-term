@@ -27,7 +27,7 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 
 ## Configuration file and themes  ·  [overview](features/config-themes/overview.md)
 
-_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 2/9 tasks done
+_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 3/9 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -36,7 +36,7 @@ _tâches créées, voir [technical.md](features/config-themes/technical.md)_ —
 | [x]  | [#15](https://github.com/marmotz/graphene-term/issues/15) | Config: themes, built-in themes and selection color | #14 |
 | [ ]  | [#16](https://github.com/marmotz/graphene-term/issues/16) | Config: configurable keybindings | #14 |
 | [ ]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking | #14 |
-| [ ]  | [#18](https://github.com/marmotz/graphene-term/issues/18) | Config: error banner | #14, #15 |
+| [x]  | [#18](https://github.com/marmotz/graphene-term/issues/18) | Config: error banner | #14, #15 |
 | [ ]  | [#19](https://github.com/marmotz/graphene-term/issues/19) | Config: hot reload of the configuration and themes | #14, #15, #16 |
 | [ ]  | [#20](https://github.com/marmotz/graphene-term/issues/20) | Config: follow the system light/dark appearance | #15, #19 |
 | [ ]  | [#21](https://github.com/marmotz/graphene-term/issues/21) | Config: language, tab bar position and UI colors | #13, #15, #19, #35, #40, #42 |

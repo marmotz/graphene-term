@@ -28,7 +28,7 @@ pub struct Palette {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(
     dead_code,
-    reason = "drawn by the tabs, command palette and banner tasks"
+    reason = "the tab and command palette colors are drawn by the tabs tasks"
 )]
 pub struct UiColors {
     pub tab_bar_background: Rgb,

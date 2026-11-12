@@ -18,6 +18,7 @@
 src/
   main.rs          entry point, logger setup
   app.rs           winit ApplicationHandler, Session (one window + one shell)
+  banner.rs        top banner: content, pixel layout, click hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
   frame.rs         snapshot of the visible grid with resolved colors
@@ -36,11 +37,11 @@ src/
     scene.rs       Frame -> rects + text runs (pure, no GPU)
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
-    text.rs        glyphon text grid with per-row caching
+    text.rs        glyphon text grid with per-row caching, overlay text
 themes/            built-in themes, embedded with include_str!
 ```
 
-Pure modules (`config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
+Pure modules (`banner`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
@@ -82,9 +83,21 @@ RedrawRequested:
     - `under` rects: cell backgrounds, consecutive same-color cells merged, default
       background skipped (it is the clear color);
     - `over` rects: underline, strikeout, non-block cursor;
-    - text runs per row, each anchored at a grid column.
-3. `Renderer::render` draws in one pass: clear, `under` rects, text, `over` rects.
-   Colors are linearized when the surface format is sRGB.
+    - text runs per row, each anchored at a grid column;
+    - overlay text at pixel positions (banner).
+3. `Renderer::render` draws in one pass: clear, `under` rects, text, `over` rects,
+   overlay text. Colors are linearized when the surface format is sRGB.
+
+### Banner
+
+`Frame.banner` holds a `BannerLayout` (from `banner.rs`) and its theme colors
+(`ui.banner_background`, `ui.banner_text`). It covers the top of the window, over the
+grid (the grid does not move): its rect is the last `over` rect and its text goes to a
+second glyphon renderer drawn after it. The layout gives the pixel rect of each action,
+and `Session::left_press` hit-tests the banner before starting a selection.
+
+The configuration error banner shows the first error of `config.toml` and the theme
+file ("(+N more)" when there are several); every error is also logged. A click hides it.
 
 ### Text runs
 

@@ -1,4 +1,5 @@
 mod app;
+mod banner;
 #[cfg(test)]
 mod build_version;
 mod config;
