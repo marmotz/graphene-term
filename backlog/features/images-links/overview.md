@@ -64,3 +64,5 @@ shells and full-screen programs.
 - Depends on [command-blocks](../command-blocks/overview.md): the image sequences are
   read through the own PTY loop that feature builds, and the internal `graphene-block`
   hyperlinks it puts on prompt and command cells are never shown or opened as links.
+- Shares the link opening helper with
+  [update-notification](../update-notification/overview.md).

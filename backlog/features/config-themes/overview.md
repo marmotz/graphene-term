@@ -72,3 +72,5 @@ configuration at all.
   palette do.
 - Completes [selection-copy](../selection-copy/overview.md) (word separators,
   selection color).
+- Required by [update-notification](../update-notification/overview.md): its
+  `[updates]` settings and its banner build on this feature.
