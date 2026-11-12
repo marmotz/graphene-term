@@ -62,6 +62,8 @@ pub enum Status {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockInfo {
     pub status: Status,
+    /// The output rows are hidden from the view.
+    pub folded: bool,
 }
 
 /// Role of a grid row.
@@ -155,6 +157,42 @@ impl ShellState {
         self.blocks.iter().map(|(id, info)| (*id, info))
     }
 
+    /// Whether any block is folded.
+    pub fn any_folded(&self) -> bool {
+        self.blocks.values().any(|info| info.folded)
+    }
+
+    /// Whether block `id` is folded.
+    pub fn is_folded(&self, id: BlockId) -> bool {
+        self.blocks.get(&id).is_some_and(|info| info.folded)
+    }
+
+    pub fn set_folded(&mut self, id: BlockId, folded: bool) {
+        if let Some(info) = self.blocks.get_mut(&id) {
+            info.folded = folded;
+        }
+    }
+
+    /// Folds block `id` when it is unfolded, unfolds it otherwise.
+    pub fn toggle_fold(&mut self, id: BlockId) {
+        self.set_folded(id, !self.is_folded(id));
+    }
+
+    /// Folds every finished block when any of them is unfolded, otherwise unfolds them
+    /// all.
+    pub fn toggle_fold_all(&mut self) {
+        let finished: Vec<BlockId> = self
+            .blocks
+            .keys()
+            .copied()
+            .filter(|id| self.is_finished(*id))
+            .collect();
+        let fold = finished.iter().any(|id| !self.is_folded(*id));
+        for id in finished {
+            self.set_folded(id, fold);
+        }
+    }
+
     /// Applies a mark at the current cursor position. Ignored on the alternate screen.
     pub fn apply<L: EventListener>(&mut self, term: &mut Term<L>, mark: Mark) {
         if term.mode().contains(TermMode::ALT_SCREEN) {
@@ -189,6 +227,13 @@ impl ShellState {
                         None => Status::Unknown,
                     });
                     self.phase = Phase::Idle;
+                    // Auto-fold: an output taller than the window.
+                    if let Some(id) = self.current
+                        && finished_output_rows(term, id)
+                            .is_some_and(|rows| rows > term.screen_lines())
+                    {
+                        self.set_folded(id, true);
+                    }
                 }
             }
             Mark::Hyperlink => self.after_bytes(term),
@@ -257,6 +302,7 @@ impl ShellState {
             id,
             BlockInfo {
                 status: Status::Unknown,
+                folded: false,
             },
         );
         while self.blocks.len() > MAX_BLOCKS {
@@ -334,6 +380,51 @@ fn tagged_from_cursor<L>(term: &Term<L>, id: BlockId) -> bool {
             .iter()
             .any(|cell| cell_tag(cell).is_some_and(|(block, _)| block == id))
     })
+}
+
+/// Output rows of block `id`, just ended with the cursor right after its output: the
+/// rows between its last command row and the cursor, plus the cursor row when the
+/// output left text on it. `None` when the block has no row above the cursor (evicted).
+fn finished_output_rows<L>(term: &Term<L>, id: BlockId) -> Option<usize> {
+    let grid = term.grid();
+    let cursor = grid.cursor.point;
+    let head = (grid.topmost_line().0..=cursor.line.0)
+        .rev()
+        .find_map(|line| row_tag(&grid[Line(line)]).map(|(block, _)| (line, block)))?;
+    if head.1 != id {
+        return None;
+    }
+    let between = (cursor.line.0 - head.0 - 1).max(0) as usize;
+    let on_cursor_row = cursor.line.0 > head.0 && cursor.column.0 > 0;
+    Some(between + on_cursor_row as usize)
+}
+
+/// Role of a row from its own cells: `Prompt` / `Input` for a row with a tagged cell,
+/// `None` for an untagged row, whose role depends on the rows above it (see [`index`]).
+pub fn head_role<L>(term: &Term<L>, line: Line) -> Option<RowRole> {
+    row_tag(&term.grid()[line]).map(|(id, kind)| match kind {
+        TagKind::Input => RowRole::Input(id),
+        TagKind::Prompt | TagKind::RightPrompt => RowRole::Prompt(id),
+    })
+}
+
+/// Whether row `line` holds a command cell of block `id`.
+pub fn has_input<L>(term: &Term<L>, line: Line, id: BlockId) -> bool {
+    term.grid()[line][..]
+        .iter()
+        .any(|cell| cell_tag(cell) == Some((id, TagKind::Input)))
+}
+
+/// Whether block `id`, with a prompt or command row at `line`, has output rows above
+/// the cursor: the row after its last prompt or command row has no tag.
+pub fn has_output<L>(term: &Term<L>, id: BlockId, line: Line) -> bool {
+    let grid = term.grid();
+    let cursor = grid.cursor.point.line;
+    let mut line = line;
+    while line < cursor && head_role(term, line).and_then(RowRole::block) == Some(id) {
+        line += 1;
+    }
+    line < cursor && head_role(term, line).is_none()
 }
 
 /// Roles of the rows in `lines`, a range of valid grid lines (history lines are
@@ -895,6 +986,87 @@ mod tests {
 
         h.feed(&format!("{A}$ "));
         assert!(!h.shell.is_finished(BlockId(2)));
+    }
+
+    #[test]
+    fn output_taller_than_the_window_is_folded_at_its_end() {
+        let mut h = Harness::new(20, 4);
+        // Exactly the window height: kept unfolded.
+        h.command("$ ", "seq 4", "1\r\n2\r\n3\r\n4\r\n", 0);
+        assert!(!h.shell.is_folded(ID0));
+        // One row more: folded.
+        h.command("$ ", "seq 5", "1\r\n2\r\n3\r\n4\r\n5\r\n", 0);
+        assert!(h.shell.is_folded(ID1));
+        // A last row without a newline counts too.
+        h.command("$ ", "x", "1\r\n2\r\n3\r\n4\r\n5", 1);
+        assert!(h.shell.is_folded(BlockId(2)));
+        h.command("$ ", "y", "1\r\n2\r\n3\r\n4", 0);
+        assert!(!h.shell.is_folded(BlockId(3)));
+    }
+
+    #[test]
+    fn a_block_still_running_is_not_auto_folded() {
+        let mut h = Harness::new(20, 2);
+        h.feed(&format!("{A}$ {B}yes\r\n{C}y\r\ny\r\ny\r\ny\r\n"));
+        assert!(!h.shell.is_folded(ID0));
+    }
+
+    #[test]
+    fn toggle_fold_flips_one_block() {
+        let mut h = Harness::new(20, 8);
+        h.command("$ ", "ls", "a\r\n", 0);
+        assert!(!h.shell.any_folded());
+        h.shell.toggle_fold(ID0);
+        assert!(h.shell.is_folded(ID0));
+        assert!(h.shell.any_folded());
+        h.shell.toggle_fold(ID0);
+        assert!(!h.shell.is_folded(ID0));
+        // Unknown block: nothing to fold.
+        h.shell.toggle_fold(BlockId(42));
+        assert!(!h.shell.any_folded());
+    }
+
+    #[test]
+    fn toggle_fold_all_folds_finished_blocks_until_all_are_folded() {
+        let mut h = Harness::new(20, 8);
+        h.command("$ ", "a", "1\r\n", 0);
+        h.command("$ ", "b", "2\r\n", 0);
+        h.feed(&format!("{A}$ "));
+        h.shell.set_folded(ID0, true);
+
+        // One unfolded: everything finished gets folded, not the prompt in progress.
+        h.shell.toggle_fold_all();
+        assert!(h.shell.is_folded(ID0) && h.shell.is_folded(ID1));
+        assert!(!h.shell.is_folded(BlockId(2)));
+
+        // All folded: everything unfolded.
+        h.shell.toggle_fold_all();
+        assert!(!h.shell.any_folded());
+    }
+
+    #[test]
+    fn head_roles_and_command_and_output_rows() {
+        let mut h = Harness::new(20, 8);
+        h.feed(&format!(
+            "{A}user\r\n$ {B}echo \\\r\n> x\r\n{C}x\r\n{}",
+            d(0)
+        ));
+        h.command("$ ", "cd", "", 0);
+        h.feed(&format!("{A}$ "));
+
+        assert_eq!(head_role(&h.term, Line(0)), Some(RowRole::Prompt(ID0)));
+        assert_eq!(head_role(&h.term, Line(1)), Some(RowRole::Prompt(ID0)));
+        assert_eq!(head_role(&h.term, Line(2)), Some(RowRole::Input(ID0)));
+        assert_eq!(head_role(&h.term, Line(3)), None);
+
+        assert!(!has_input(&h.term, Line(0), ID0));
+        assert!(has_input(&h.term, Line(1), ID0));
+        assert!(has_input(&h.term, Line(2), ID0));
+        assert!(!has_input(&h.term, Line(1), ID1));
+
+        assert!(has_output(&h.term, ID0, Line(1)));
+        // `cd` printed nothing: the next row is the new prompt.
+        assert!(!has_output(&h.term, ID1, Line(4)));
     }
 
     #[test]

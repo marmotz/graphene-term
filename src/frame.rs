@@ -5,7 +5,7 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
@@ -13,7 +13,8 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::banner::BannerLayout;
-use crate::blocks::{RowRole, ShellState, Status};
+use crate::blocks::{self, BlockId, RowRole, ShellState, Status};
+use crate::i18n::Lang;
 use crate::palette::Palette;
 use crate::view::ViewRow;
 
@@ -48,6 +49,13 @@ pub struct FrameBanner {
     pub text: Rgb,
 }
 
+/// Fold state shown by a block's chevron.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fold {
+    Folded,
+    Unfolded,
+}
+
 /// Command block marks of one row, drawn in the gutter and across the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RowDecoration {
@@ -55,6 +63,20 @@ pub struct RowDecoration {
     pub bar: Option<Status>,
     /// The row is the first one of its block: a line is drawn at its top.
     pub separator: bool,
+    /// Fold chevron, on the first command row of a finished block with output.
+    pub chevron: Option<Fold>,
+    /// Output rows hidden below this row, the last command row of a folded block.
+    pub summary: Option<usize>,
+}
+
+/// Column where the hidden-rows summary of a row starts: two columns after its last
+/// non-blank cell, 0 on a blank row. `blank` tells, cell by cell, whether it is blank.
+pub fn summary_column(blank: impl DoubleEndedIterator<Item = bool> + ExactSizeIterator) -> usize {
+    let mut blank = blank;
+    let len = blank.len();
+    blank
+        .rposition(|is_blank| !is_blank)
+        .map_or(0, |last| (last + 2).min(len))
 }
 
 /// Colors of the block marks, resolved from the palette.
@@ -98,6 +120,8 @@ pub struct Frame {
     pub cursor: Option<FrameCursor>,
     pub background: Rgb,
     pub banner: Option<FrameBanner>,
+    /// Language of the fold summaries.
+    pub lang: Lang,
 }
 
 impl Frame {
@@ -118,11 +142,17 @@ impl Frame {
         let grid = term.grid();
 
         let background = palette.resolve(Color::Named(NamedColor::Background), overrides);
+        let foreground = palette.resolve(Color::Named(NamedColor::Foreground), overrides);
         let mut rows = Vec::with_capacity(lines);
         for view_row in view {
-            let grid_row = &grid[view_row.line];
+            let Some(line) = view_row.line else {
+                // Padding row below the content.
+                rows.push(vec![FrameCell::blank(foreground, background); columns]);
+                continue;
+            };
+            let grid_row = &grid[line];
             let row = (0..columns).map(|column| {
-                let point = Point::new(view_row.line, Column(column));
+                let point = Point::new(line, Column(column));
                 let cell = &grid_row[Column(column)];
                 let flags = cell.flags;
                 let (mut fg, mut bg) = palette.cell_colors(cell.fg, cell.bg, flags, overrides);
@@ -152,7 +182,9 @@ impl Frame {
 
         let cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), overrides);
         let cursor_point = content.cursor.point;
-        let cursor_line = view.iter().position(|row| row.line == cursor_point.line);
+        let cursor_line = view
+            .iter()
+            .position(|row| row.line == Some(cursor_point.line));
         let cursor_column = cursor_point.column.0;
         let mut shape = content.cursor.shape;
         if !focused && shape != CursorShape::Hidden {
@@ -187,33 +219,91 @@ impl Frame {
             cursor,
             background,
             banner: None,
+            lang: Lang::default(),
+        }
+    }
+}
+
+impl FrameCell {
+    fn blank(fg: Rgb, bg: Rgb) -> Self {
+        Self {
+            c: ' ',
+            fg,
+            bg,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            spacer: false,
         }
     }
 }
 
 /// Block marks of the rows of `view`. Rows below the cursor are not drawn by the shell
 /// yet, so they get none even though the index counts them in the last block.
-fn decorations<T>(term: &Term<T>, view: &[ViewRow], shell: &ShellState) -> Vec<RowDecoration> {
+pub fn decorations<T>(term: &Term<T>, view: &[ViewRow], shell: &ShellState) -> Vec<RowDecoration> {
     let cursor_line = term.grid().cursor.point.line;
-    // Block of the row above the first view row, to know whether that row starts its
-    // block.
+    // Row above the first view row, to know whether that row starts its block or its
+    // command.
     let mut previous = view
         .first()
-        .filter(|row| row.role.block().is_some() && row.line > term.grid().topmost_line())
-        .and_then(|row| crate::blocks::index(term, row.line - 1..row.line)[0].block());
+        .filter(|row| row.role.block().is_some())
+        .and_then(|row| row.line)
+        .filter(|line| *line > term.grid().topmost_line())
+        .map(|line| (Some(line - 1), blocks::index(term, line - 1..line)[0]));
     view.iter()
         .map(|row| {
-            let block = row.role.block().filter(|_| row.line <= cursor_line);
+            let Some(line) = row.line else {
+                previous = None;
+                return RowDecoration::default();
+            };
+            let block = row.role.block().filter(|_| line <= cursor_line);
+            let previous_block = previous.and_then(|(_, role)| role.block());
             let separator = matches!(row.role, RowRole::Prompt(_) | RowRole::Input(_))
                 && block.is_some()
-                && previous != block;
-            previous = row.role.block();
+                && previous_block != block;
+            let chevron = block
+                .filter(|id| shell.is_finished(*id))
+                .filter(|id| first_command_row(term, line, *id, previous))
+                .filter(|id| blocks::has_output(term, *id, line))
+                .map(|id| {
+                    if shell.is_folded(id) {
+                        Fold::Folded
+                    } else {
+                        Fold::Unfolded
+                    }
+                });
+            previous = Some((Some(line), row.role));
             RowDecoration {
                 bar: block.map(|id| shell.block(id).map_or(Status::Unknown, |b| b.status)),
                 separator,
+                chevron,
+                summary: (block.is_some() && row.hidden > 0).then_some(row.hidden),
             }
         })
         .collect()
+}
+
+/// Whether `line` holds the first command cell of block `id`: it has one, and the row
+/// above it (`previous`, a prompt or command row of the same block when there is one)
+/// has none.
+fn first_command_row<T>(
+    term: &Term<T>,
+    line: Line,
+    id: BlockId,
+    previous: Option<(Option<Line>, RowRole)>,
+) -> bool {
+    if !matches!(blocks::head_role(term, line), Some(role) if role.block() == Some(id))
+        || !blocks::has_input(term, line, id)
+    {
+        return false;
+    }
+    match previous {
+        Some((Some(above), RowRole::Prompt(block) | RowRole::Input(block))) if block == id => {
+            !blocks::has_input(term, above, id)
+        }
+        _ => true,
+    }
 }
 
 /// Whether the cell at `point` is highlighted by `range`. Both halves of a wide
@@ -446,12 +536,21 @@ mod tests {
              \x1b]133;A\x07$ \x1b]133;B\x07false\r\n\x1b]133;C\x07\x1b]133;D;1\x07\
              \x1b]133;A\x07$ \x1b]133;B\x07",
         );
-        let row = |bar, separator| RowDecoration { bar, separator };
+        let row = |bar, separator| RowDecoration {
+            bar,
+            separator,
+            ..RowDecoration::default()
+        };
         assert_eq!(
             frame.decorations,
             vec![
-                row(Some(Status::Success), true),
+                // A finished block with output: an unfolded chevron on its command row.
+                RowDecoration {
+                    chevron: Some(Fold::Unfolded),
+                    ..row(Some(Status::Success), true)
+                },
                 row(Some(Status::Success), false),
+                // No output: no chevron.
                 row(Some(Status::Failure(1)), true),
                 // The last prompt: no command ran yet. Below the cursor: nothing.
                 row(Some(Status::Unknown), true),
@@ -472,13 +571,122 @@ mod tests {
         let frame = capture_blocks(
             &mut term,
             "\x1b]133;A\x07$ \x1b]133;B\x07seq\r\n\x1b]133;C\x07\
-             1\r\n2\r\n3\r\n4\r\n5\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
+             1\r\n2\r\n3\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
         );
-        // Rows "4", "5" are the output of the first block, cut at the top of the view.
-        assert_eq!(row_text(&frame, 0), "4         ");
+        // Rows "2", "3" are the output of the first block, cut at the top of the view
+        // (three rows: not taller than the window, so not folded).
+        assert_eq!(row_text(&frame, 0), "2         ");
         assert!(!frame.decorations[0].separator);
         assert_eq!(frame.decorations[0].bar, Some(Status::Success));
         assert!(frame.decorations[2].separator);
+    }
+
+    /// Feeds `bytes` to `term` and `shell` through the shell integration path.
+    fn feed_blocks(term: &mut Term<VoidListener>, shell: &mut ShellState, bytes: &str) {
+        pty::process(
+            &mut Scanner::new(),
+            &mut Processor::new(),
+            shell,
+            term,
+            bytes.as_bytes(),
+        );
+    }
+
+    fn capture_shell(term: &Term<VoidListener>, shell: &ShellState) -> Frame {
+        let rows = view::rows(term, shell, term.grid().display_offset());
+        Frame::capture(term, &rows, shell, &Palette::default(), true)
+    }
+
+    #[test]
+    fn chevron_on_the_first_command_row_and_summary_on_the_last() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 8), VoidListener);
+        let mut shell = ShellState::new();
+        // Two-row prompt, two-row command, three output rows, then a new prompt.
+        feed_blocks(
+            &mut term,
+            &mut shell,
+            "\x1b]133;A\x07~/dev\r\n$ \x1b]133;B\x07echo \\\r\n  x\r\n\x1b]133;C\x07\
+             1\r\n2\r\n3\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
+        );
+        let frame = capture_shell(&term, &shell);
+        let chevrons: Vec<_> = frame.decorations.iter().map(|d| d.chevron).collect();
+        assert_eq!(
+            chevrons,
+            [
+                None,
+                Some(Fold::Unfolded),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            ]
+        );
+        assert!(frame.decorations.iter().all(|d| d.summary.is_none()));
+
+        shell.set_folded(BlockId(0), true);
+        let frame = capture_shell(&term, &shell);
+        assert_eq!(row_text(&frame, 3), "$         ");
+        let decorations: Vec<_> = frame
+            .decorations
+            .iter()
+            .map(|d| (d.chevron, d.summary))
+            .collect();
+        assert_eq!(
+            decorations[..4],
+            [
+                (None, None),
+                (Some(Fold::Folded), None),
+                (None, Some(3)),
+                (None, None)
+            ]
+        );
+    }
+
+    #[test]
+    fn running_block_has_no_chevron() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 4), VoidListener);
+        let mut shell = ShellState::new();
+        feed_blocks(
+            &mut term,
+            &mut shell,
+            "\x1b]133;A\x07$ \x1b]133;B\x07yes\r\n\x1b]133;C\x07y\r\ny\r\n",
+        );
+        let frame = capture_shell(&term, &shell);
+        assert!(frame.decorations.iter().all(|d| d.chevron.is_none()));
+    }
+
+    #[test]
+    fn auto_folded_block_shows_its_summary() {
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 3), VoidListener);
+        let mut shell = ShellState::new();
+        feed_blocks(
+            &mut term,
+            &mut shell,
+            "\x1b]133;A\x07$ \x1b]133;B\x07seq 4\r\n\x1b]133;C\x07\
+             1\r\n2\r\n3\r\n4\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
+        );
+        assert!(shell.is_folded(BlockId(0)));
+        let frame = capture_shell(&term, &shell);
+        // Two visible rows, padded with blank rows.
+        assert_eq!(row_text(&frame, 0), "$ seq 4             ");
+        assert_eq!(row_text(&frame, 1), "$                   ");
+        assert_eq!(row_text(&frame, 2), " ".repeat(20));
+        assert_eq!(frame.decorations[0].summary, Some(4));
+        assert_eq!(frame.decorations[0].chevron, Some(Fold::Folded));
+        assert_eq!(frame.decorations[2], RowDecoration::default());
+        // The cursor is on the second visible row.
+        assert_eq!(frame.rows[1][2].bg, Palette::default().cursor);
+    }
+
+    #[test]
+    fn summary_column_follows_the_last_non_blank_cell() {
+        let blank = |text: &str| text.chars().map(|c| c == ' ').collect::<Vec<_>>();
+        assert_eq!(summary_column(blank("$ ls      ").into_iter()), 5);
+        assert_eq!(summary_column(blank("          ").into_iter()), 0);
+        // Clamped to the row width.
+        assert_eq!(summary_column(blank("         x").into_iter()), 10);
     }
 
     #[test]

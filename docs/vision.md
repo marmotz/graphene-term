@@ -32,7 +32,7 @@ Selected as the project's "modern" pillars:
 | Done    | Working terminal: PTY, VT emulation, truecolor, scrollback, resize, paste, font zoom |
 | Done    | Selection and copy                                                                   |
 | Planned | Mouse reporting to applications                                                      |
-| Planned | Command blocks                                                                       |
+| Done    | Command blocks                                                                       |
 | Planned | Rich input editor                                                                    |
 | Planned | Tabs, splits, command palette                                                        |
 | Planned | Images and clickable links                                                           |

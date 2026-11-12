@@ -4,8 +4,22 @@ use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use super::glyphs::GlyphKey;
 use super::rects::RectInstance;
-use crate::frame::Frame;
+use crate::frame::{self, Fold, Frame};
+use crate::i18n::{self, Msg};
 use crate::layout::GridLayout;
+
+/// Gutter chevron of a folded block.
+pub const CHEVRON_FOLDED: char = '\u{25B8}';
+/// Gutter chevron of an unfolded block.
+pub const CHEVRON_UNFOLDED: char = '\u{25BE}';
+
+fn plain(c: char) -> GlyphKey {
+    GlyphKey {
+        c,
+        bold: false,
+        italic: false,
+    }
+}
 
 /// A glyph to draw: the character of one cell (or of the banner), anchored at the
 /// top-left corner of its cell. Spaces never produce one.
@@ -105,6 +119,34 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                 size: [grid_width, 1.0],
                 color: gpu_color(frame.block_colors.dim, srgb_target),
             });
+        }
+        // Fold chevron in the gutter, in the status color; hidden-rows summary in dim
+        // text after the row's content, cut at the grid edge.
+        if let Some(fold) = decoration.chevron {
+            let status = decoration.bar.unwrap_or(crate::blocks::Status::Unknown);
+            glyphs.push(GlyphInstance {
+                origin: [grid_x - layout.gutter, y],
+                key: plain(match fold {
+                    Fold::Folded => CHEVRON_FOLDED,
+                    Fold::Unfolded => CHEVRON_UNFOLDED,
+                }),
+                color: gpu_color(frame.block_colors.status(status), srgb_target),
+            });
+        }
+        if let Some(hidden) = decoration.summary {
+            let label = i18n::text(frame.lang, &Msg::LinesHidden(hidden));
+            let start = frame::summary_column(cells.iter().map(|c| c.c == ' ' && !c.spacer));
+            let color = gpu_color(frame.block_colors.dim, srgb_target);
+            for (column, c) in (start..cells.len()).zip(label.chars()) {
+                if c != ' ' {
+                    let (x, y) = layout.cell_origin(column, line);
+                    glyphs.push(GlyphInstance {
+                        origin: [x, y],
+                        key: plain(c),
+                        color,
+                    });
+                }
+            }
         }
 
         // Decorations.
@@ -215,7 +257,7 @@ mod tests {
     use super::*;
     use crate::banner::{Banner, BannerLayout};
     use crate::blocks::Status;
-    use crate::frame::{BlockColors, FrameBanner, FrameCell, FrameCursor, RowDecoration};
+    use crate::frame::{BlockColors, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration};
     use crate::layout::CellSize;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -285,6 +327,7 @@ mod tests {
             cursor: None,
             background: BG,
             banner: None,
+            lang: crate::i18n::Lang::En,
         }
     }
 
@@ -501,5 +544,84 @@ mod tests {
         assert!((c[0] - 0.2158).abs() < 0.001);
         assert_eq!(c[1], 1.0);
         assert_eq!(c[2], 0.0);
+    }
+
+    fn placed_refs(glyphs: &[&GlyphInstance]) -> Vec<([f32; 2], char)> {
+        glyphs.iter().map(|g| (g.origin, g.key.c)).collect()
+    }
+
+    #[test]
+    fn chevron_in_the_gutter_and_summary_after_the_row_content() {
+        let mut frame = frame(vec![
+            vec![
+                cell('$'),
+                cell(' '),
+                cell('l'),
+                cell('s'),
+                cell(' '),
+                cell(' '),
+            ],
+            vec![cell('$'); 6],
+        ]);
+        frame.decorations[0] = RowDecoration {
+            bar: Some(Status::Failure(2)),
+            separator: true,
+            chevron: Some(Fold::Folded),
+            summary: Some(12),
+        };
+        frame.decorations[1].chevron = Some(Fold::Unfolded);
+        let scene = build(&frame, &gutter_layout(), false);
+        let red = gpu_color(RED, false);
+        let grey = gpu_color(GREY, false);
+
+        let chevron = scene
+            .glyphs
+            .iter()
+            .find(|g| g.key.c == CHEVRON_FOLDED)
+            .unwrap();
+        assert_eq!(chevron.origin, [0.0, 0.0]);
+        assert_eq!(chevron.color, red);
+        // No status bar on row 1: the chevron takes the dim color.
+        let unfolded = scene
+            .glyphs
+            .iter()
+            .find(|g| g.key.c == CHEVRON_UNFOLDED)
+            .unwrap();
+        assert_eq!(unfolded.origin, [0.0, 20.0]);
+        assert_eq!(unfolded.color, grey);
+
+        // "12 lines hidden" from column 5 (two after "ls"), cut at the grid edge (6
+        // columns): only "1" fits.
+        let summary: Vec<_> = scene
+            .glyphs
+            .iter()
+            .filter(|g| g.color == grey && g.origin[1] == 0.0)
+            .collect();
+        assert_eq!(placed_refs(&summary), [([10.0 + 5.0 * 10.0, 0.0], '1')]);
+    }
+
+    #[test]
+    fn summary_is_translated() {
+        let mut row = vec![cell(' '); 31];
+        row[0] = cell('$');
+        let mut frame = frame(vec![row]);
+        frame.decorations[0].summary = Some(1);
+        frame.lang = crate::i18n::Lang::Fr;
+        let layout = GridLayout::new(
+            400,
+            100,
+            CellSize {
+                width: 10.0,
+                height: 20.0,
+            },
+            0.0,
+        );
+        let scene = build(&frame, &layout, false);
+        let grey = gpu_color(GREY, false);
+        let summary: Vec<_> = scene.glyphs.iter().filter(|g| g.color == grey).collect();
+        let text: String = summary.iter().map(|g| g.key.c).collect();
+        // Spaces draw no glyph.
+        assert_eq!(text, "1lignemasquée");
+        assert_eq!(summary[0].origin, [10.0 + 2.0 * 10.0, 0.0]);
     }
 }

@@ -44,10 +44,23 @@ never taken for the command start.
 
 ## Gutter always reserved
 
-The command block marks (status bar, later the fold chevron) are drawn in a gutter one
+The command block marks (status bar, fold chevron) are drawn in a gutter one
 cell wide, left of the grid. It is reserved from the start, even when the shell sends
 no marks, so the first block never changes the column count: no reflow mid-session.
 The cost is one column fewer for every user.
+
+## Folding as a row filter over `display_offset`
+
+Folding a block hides its output rows from the view; the grid is untouched. Graphene
+keeps alacritty's `display_offset` as the scroll position instead of its own:
+alacritty already keeps the view stable when output arrives while scrolled up, and
+`Shift+Home/End` keep working as is. The view is built from the bottom line of
+alacritty's viewport, collecting rows upward and skipping the hidden ones, so a fold
+costs nothing when there is none (the plain viewport). Scrolls given in visible rows
+are converted into grid lines (`view::grid_delta`). The cost: the folded rows are still
+in the history and count against the scrollback size, and the view has to be padded
+with blank rows when folds hide more rows than the history can replace. The cursor row
+is never hidden, so the shell's next prompt always shows.
 
 ## Own glyph pipeline on `cosmic-text` (glyphon dropped)
 

@@ -439,6 +439,7 @@ mod tests {
             cursor: None,
             background: BLACK,
             banner: None,
+            lang: crate::i18n::Lang::En,
         };
         renderer.render(&frame, &layout).unwrap();
         let pixels = renderer.read_pixels();

@@ -4,7 +4,7 @@ use std::sync::{Arc, PoisonError};
 use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::term::{self, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
@@ -20,8 +20,8 @@ use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, Update
 use crate::block_actions::{self, Direction, Part};
 use crate::blocks;
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
-use crate::frame::{Frame, FrameBanner};
-use crate::i18n::Lang;
+use crate::frame::{self, Frame, FrameBanner};
+use crate::i18n::{self, Lang, Msg};
 use crate::input::{self, Action};
 use crate::layout::{GridLayout, Hit};
 use crate::mouse;
@@ -160,6 +160,39 @@ impl Session {
         self.window.request_redraw();
     }
 
+    /// Scrolls by `rows` visible rows (positive into the history), folded rows skipped.
+    fn scroll_view(&self, rows: i32) {
+        let mut term = self.terminal.term.lock();
+        scroll_view(&mut term, &self.terminal.shell, rows);
+        self.window.request_redraw();
+    }
+
+    /// Changes the folds with `change`, then redraws.
+    fn change_folds(
+        &mut self,
+        change: impl FnOnce(&term::Term<EventProxy>, &mut blocks::ShellState),
+    ) {
+        {
+            let term = self.terminal.term.lock();
+            let mut shell = self
+                .terminal
+                .shell
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            change(&term, &mut shell);
+        }
+        self.window.request_redraw();
+    }
+
+    /// Folds or unfolds the target block.
+    fn toggle_fold(&mut self) {
+        self.change_folds(|term, shell| {
+            if let Some(id) = block_actions::target(term, shell) {
+                shell.toggle_fold(id);
+            }
+        });
+    }
+
     fn paste(&mut self) {
         let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) else {
             return;
@@ -224,11 +257,19 @@ impl Session {
             let Some(bounds) = id.and_then(|id| block_actions::select(&mut term, id)) else {
                 return;
             };
-            let delta = view::reveal(
-                term.grid().display_offset(),
-                term.screen_lines(),
-                bounds.first_row,
-            );
+            let delta = {
+                let shell = self
+                    .terminal
+                    .shell
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                view::reveal(
+                    &term,
+                    &shell,
+                    term.grid().display_offset(),
+                    bounds.first_row,
+                )
+            };
             if delta != 0 {
                 term.scroll_display(Scroll::Delta(delta));
             }
@@ -238,23 +279,35 @@ impl Session {
         self.block_selected(text);
     }
 
-    /// Left press in the gutter on viewport row `line`: selects the block of the row,
-    /// ignored outside blocks.
+    /// Left press in the gutter on viewport row `line`: toggles the fold on a chevron
+    /// row, selects the block of any other block row, ignored outside blocks.
     fn gutter_press(&mut self, line: usize) {
         let text = {
             let mut term = self.terminal.term.lock();
-            let rows = {
-                let shell = self
+            let (id, chevron) = {
+                let mut shell = self
                     .terminal
                     .shell
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                view::rows(&term, &shell, term.grid().display_offset())
+                let rows = view::rows(&term, &shell, term.grid().display_offset());
+                let line = line.min(rows.len().saturating_sub(1));
+                let Some(id) = rows.get(line).and_then(|row| row.role.block()) else {
+                    return;
+                };
+                let chevron = frame::decorations(&term, &rows[line..=line], &shell)[0]
+                    .chevron
+                    .is_some();
+                if chevron {
+                    shell.toggle_fold(id);
+                }
+                (id, chevron)
             };
-            let id = rows.get(line.min(rows.len().saturating_sub(1)));
-            let Some(id) = id.and_then(|row| row.role.block()) else {
+            if chevron {
+                drop(term);
+                self.window.request_redraw();
                 return;
-            };
+            }
             if block_actions::select(&mut term, id).is_none() {
                 return;
             }
@@ -369,7 +422,46 @@ impl Session {
         }
     }
 
+    /// Left press on the hidden-rows summary of a folded block: unfolds it. Returns
+    /// whether the press was on a summary.
+    fn summary_press(&mut self) -> bool {
+        let (column, line) = self.mouse_cell();
+        let unfolded = {
+            let term = self.terminal.term.lock();
+            let mut shell = self
+                .terminal
+                .shell
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let rows = view::rows(&term, &shell, term.grid().display_offset());
+            let hit = rows
+                .get(line)
+                .filter(|row| row.hidden > 0)
+                .and_then(|row| Some((row.line?, row.role.block()?, row.hidden)))
+                .filter(|(grid_line, _, hidden)| {
+                    let label = i18n::text(self.lang, &Msg::LinesHidden(*hidden));
+                    let row = &term.grid()[*grid_line][..];
+                    let start = frame::summary_column(row.iter().map(|cell| {
+                        matches!(cell.c, ' ' | '\t')
+                            && !cell.flags.contains(term::cell::Flags::WIDE_CHAR_SPACER)
+                    }));
+                    (start..start + label.chars().count()).contains(&column)
+                });
+            if let Some((_, id, _)) = hit {
+                shell.set_folded(id, false);
+            }
+            hit.is_some()
+        };
+        if unfolded {
+            self.window.request_redraw();
+        }
+        unfolded
+    }
+
     fn left_press(&mut self) {
+        if self.summary_press() {
+            return;
+        }
         let mut term = self.terminal.term.lock();
         let (point, side) = self.mouse_point(&term);
         let clicks = self.click_tracker.click(point, Instant::now());
@@ -432,7 +524,7 @@ impl Session {
         match self.auto_scroll_deadline {
             Some(deadline) if now < deadline => {}
             _ => {
-                term.scroll_display(Scroll::Delta(delta));
+                scroll_view(&mut term, &self.terminal.shell, delta);
                 self.update_selection(&mut term);
                 self.auto_scroll_deadline = Some(now + selection::AUTO_SCROLL_INTERVAL);
             }
@@ -472,8 +564,8 @@ impl Session {
         match action {
             Action::Copy => self.copy(),
             Action::Paste => self.paste(),
-            Action::ScrollPageUp => self.scroll_display(Scroll::PageUp),
-            Action::ScrollPageDown => self.scroll_display(Scroll::PageDown),
+            Action::ScrollPageUp => self.scroll_view(self.layout.lines as i32),
+            Action::ScrollPageDown => self.scroll_view(-(self.layout.lines as i32)),
             Action::ScrollToTop => self.scroll_display(Scroll::Top),
             Action::ScrollToBottom => self.scroll_display(Scroll::Bottom),
             Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
@@ -483,6 +575,8 @@ impl Session {
             Action::NextBlock => self.navigate_block(Direction::Next),
             Action::CopyCommand => self.copy_block_part(Part::Command),
             Action::CopyOutput => self.copy_block_part(Part::Output),
+            Action::ToggleFold => self.toggle_fold(),
+            Action::ToggleFoldAll => self.change_folds(|_, shell| shell.toggle_fold_all()),
         }
     }
 
@@ -502,7 +596,7 @@ impl Session {
         let (column, line) = self.mouse_cell();
         match mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
             Some(bytes) => self.terminal.write(bytes),
-            None => self.scroll_display(Scroll::Delta(whole)),
+            None => self.scroll_view(whole),
         }
     }
 
@@ -737,6 +831,7 @@ impl ApplicationHandler<UserEvent> for App {
                     let rows = view::rows(&term, &shell, term.grid().display_offset());
                     Frame::capture(&term, &rows, &shell, &session.palette, session.focused)
                 };
+                frame.lang = session.lang;
                 frame.banner = session.shown_banner().map(|shown| FrameBanner {
                     layout: session.banner_layout(&shown),
                     background: session.palette.ui.banner_background,
@@ -752,6 +847,22 @@ impl ApplicationHandler<UserEvent> for App {
             }
             _ => {}
         }
+    }
+}
+
+/// Scrolls `term` by `rows` visible rows (positive into the history), the rows hidden by
+/// folds skipped. `term` is the locked terminal of `shell`.
+fn scroll_view(
+    term: &mut term::Term<EventProxy>,
+    shell: &std::sync::Mutex<blocks::ShellState>,
+    rows: i32,
+) {
+    let delta = {
+        let shell = shell.lock().unwrap_or_else(PoisonError::into_inner);
+        view::grid_delta(term, &shell, term.grid().display_offset(), rows)
+    };
+    if delta != 0 {
+        term.scroll_display(Scroll::Delta(delta));
     }
 }
 

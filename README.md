@@ -36,7 +36,11 @@ The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
 When `$SHELL` is zsh, bash or fish, Graphene loads a small integration script into the
 shell it starts, so the shell marks where each prompt, command and output starts (OSC
-133). Your dotfiles are not modified, and they are loaded as usual:
+133). Each command and its output then form a block: a colored bar in the left margin
+shows its status (green: success, red: failure, yellow: running), and a block can be
+selected, copied and folded (see [Shortcuts](#shortcuts)). An output taller than the
+window is folded when the command ends. Your dotfiles are not modified, and they are
+loaded as usual:
 
 - zsh: started with `ZDOTDIR` set to the integration folder, whose `.zshenv` restores
   `ZDOTDIR` and sources yours;
@@ -77,6 +81,10 @@ first output.
 | Ctrl+Shift+PageUp / PageDown  | Select the previous / next command block        |
 | Ctrl+Shift+Alt+C              | Copy the command of the selected or last block  |
 | Ctrl+Shift+Alt+O              | Copy the output of the selected or last block   |
+| Click on a block chevron      | Fold / unfold the output of the block           |
+| Click on "n lines hidden"     | Unfold the block                                |
+| Ctrl+Shift+F                  | Fold / unfold the selected or last block        |
+| Ctrl+Shift+Alt+F              | Fold all finished blocks / unfold them all      |
 | Middle click                  | Paste the primary selection                     |
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)      |
 | Shift+PageUp / Shift+PageDown | Scroll the history                              |

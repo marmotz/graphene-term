@@ -13,7 +13,7 @@ _terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
-_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 6/7 tasks done
+_terminé — voir [technical.md](features/command-blocks/technical.md)_ — 7/7 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -23,7 +23,7 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 | [x]  | [#9](https://github.com/marmotz/graphene-term/issues/9) | Command blocks: shell state, cell tags and row index | #6, #7 |
 | [x]  | [#10](https://github.com/marmotz/graphene-term/issues/10) | Command blocks: gutter, view rows and block decorations | #9 |
 | [x]  | [#11](https://github.com/marmotz/graphene-term/issues/11) | Command blocks: block selection, navigation and copy actions | #10 |
-| [ ]  | [#12](https://github.com/marmotz/graphene-term/issues/12) | Command blocks: folding, chevron, summary and auto-fold | #11 |
+| [x]  | [#12](https://github.com/marmotz/graphene-term/issues/12) | Command blocks: folding, chevron, summary and auto-fold | #11 |
 
 ## Configuration file and themes  ·  [overview](features/config-themes/overview.md)
 

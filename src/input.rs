@@ -19,6 +19,8 @@ pub enum Action {
     NextBlock,
     CopyCommand,
     CopyOutput,
+    ToggleFold,
+    ToggleFoldAll,
 }
 
 /// Returns the application action bound to a key combination, if any.
@@ -29,11 +31,13 @@ pub fn action_for(key: &Key, mods: ModifiersState) -> Option<Action> {
         Key::Character(c) if ctrl_shift_alt => match c.to_lowercase().as_str() {
             "c" => Some(Action::CopyCommand),
             "o" => Some(Action::CopyOutput),
+            "f" => Some(Action::ToggleFoldAll),
             _ => None,
         },
         Key::Character(c) if ctrl_shift => match c.to_lowercase().as_str() {
             "c" => Some(Action::Copy),
             "v" => Some(Action::Paste),
+            "f" => Some(Action::ToggleFold),
             _ => None,
         },
         Key::Character(c) if mods.control_key() && !mods.alt_key() => match c.as_str() {
@@ -315,6 +319,11 @@ mod tests {
         assert_eq!(action_for(&ch("C"), csa), Some(Action::CopyCommand));
         assert_eq!(action_for(&ch("c"), csa), Some(Action::CopyCommand));
         assert_eq!(action_for(&ch("O"), csa), Some(Action::CopyOutput));
+        assert_eq!(action_for(&ch("F"), cs), Some(Action::ToggleFold));
+        assert_eq!(action_for(&ch("f"), cs), Some(Action::ToggleFold));
+        assert_eq!(action_for(&ch("F"), csa), Some(Action::ToggleFoldAll));
+        // Ctrl+F alone stays with the shell.
+        assert_eq!(action_for(&ch("f"), ModifiersState::CONTROL), None);
         // Plain Ctrl+Shift+C/V unchanged.
         assert_eq!(action_for(&ch("C"), cs), Some(Action::Copy));
         assert_eq!(action_for(&ch("V"), cs), Some(Action::Paste));

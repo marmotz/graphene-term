@@ -217,7 +217,10 @@ Read path:
   - **chevron**: `▸` / `▾` as a gutter text run, in the status color;
   - **summary**: `"<n> lines hidden"` as a dim text run two columns after the last
     non-blank cell of its row, cut at the grid edge.
-- `TextRun` gains an optional pixel `x` for gutter runs. Status colors:
+- `TextRun` gains an optional pixel `x` for gutter runs. As implemented: `TextRun` was
+  removed by the glyph pipeline rewrite (#69), whose `GlyphInstance` is already placed
+  in pixels, so the chevron is a glyph at the gutter origin and the summary one glyph
+  per cell; nothing was added to the renderer. Status colors:
   - `Success`: ANSI green;
   - `Failure`: ANSI red;
   - `Running`: ANSI yellow;
