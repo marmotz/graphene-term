@@ -38,16 +38,18 @@ src/
   renderer/
     mod.rs         wgpu device/surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + text runs (pure, no GPU)
+    glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic) -> atlas slot
+    atlas.rs       shelf allocator of the mask and color atlas pages (pure, no GPU)
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
-    text.rs        glyphon text grid with per-row caching, overlay text
+    text.rs        glyphon text grid with per-row caching, overlay text (font system from glyphs.rs)
 themes/            built-in themes, embedded with include_str!
 benches/
-  render.rs        criterion benchmarks: parse, frame, gpu_prepare
+  render.rs        criterion benchmarks: parse, frame, glyphs_cold/warm, gpu_prepare
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
+Pure modules (`banner`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads

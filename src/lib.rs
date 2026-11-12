@@ -39,6 +39,6 @@ pub mod bench {
     pub use crate::frame::Frame;
     pub use crate::layout::{CellSize, GridLayout};
     pub use crate::palette::Palette;
-    pub use crate::renderer::Headless;
     pub use crate::renderer::scene;
+    pub use crate::renderer::{GlyphKey, Glyphs, Headless};
 }

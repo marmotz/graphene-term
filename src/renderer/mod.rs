@@ -1,5 +1,7 @@
 //! GPU renderer: owns the wgpu surface and draws [`Frame`]s.
 
+mod atlas;
+mod glyphs;
 mod rects;
 pub mod scene;
 mod text;
@@ -12,6 +14,7 @@ use winit::window::Window;
 use crate::frame::Frame;
 use crate::layout::{CellSize, GridLayout};
 use crate::perf;
+pub use glyphs::{GlyphKey, Glyphs};
 use rects::RectRenderer;
 use text::TextGrid;
 
@@ -40,7 +43,7 @@ impl Layers {
     ) -> Self {
         Self {
             rects: RectRenderer::new(device, format),
-            text: TextGrid::new(device, queue, format, family, font_size),
+            text: TextGrid::new(device, queue, format, Glyphs::new(family, font_size)),
             srgb: format.is_srgb(),
         }
     }
