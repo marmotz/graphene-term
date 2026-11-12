@@ -85,6 +85,8 @@ into the history):
 |---------------|----------------------------------------------------------------------|
 | `parse`       | the fixture bytes fed into a fresh `Term`                            |
 | `frame`       | `Frame::capture` + `scene::build`                                    |
+| `glyphs_cold` | glyph cache lookup of every drawn cell, cache emptied first (rasterization included) |
+| `glyphs_warm` | the same lookups with the cache already filled                       |
 | `gpu_prepare` | upload, draw and submit on a headless device: `idle` (same frame), `changed` (blank frame then the fixture) |
 
 `gpu_prepare` is skipped with a message when no GPU adapter is available. Run one group

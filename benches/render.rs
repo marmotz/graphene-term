@@ -2,6 +2,9 @@
 //!
 //! - `parse`: bytes into a fresh `Term`;
 //! - `frame`: `Frame::capture` + `scene::build`;
+//! - `glyphs_cold` / `glyphs_warm`: glyph cache lookups for every visible cell, with a
+//!   cache emptied before each pass (rasterization and atlas placement included) or
+//!   already filled;
 //! - `gpu_prepare`: scene upload, draw and submit on a headless GPU device, either with
 //!   an unchanged frame (`idle`) or alternating with a blank frame (`changed`, two
 //!   frames per iteration). Skipped when no GPU adapter is available.
@@ -14,7 +17,7 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use graphene::bench::{CellSize, Frame, GridLayout, Headless, Palette, scene};
+use graphene::bench::{CellSize, Frame, GlyphKey, Glyphs, GridLayout, Headless, Palette, scene};
 
 /// Terminal size of the recordings.
 const COLUMNS: usize = 120;
@@ -118,6 +121,57 @@ fn frame(c: &mut Criterion) {
     group.finish();
 }
 
+/// Looks up the glyph of every drawn cell of `frame`; returns how many have pixels.
+fn resolve_glyphs(glyphs: &mut Glyphs, frame: &Frame) -> usize {
+    frame
+        .rows
+        .iter()
+        .flatten()
+        .filter(|cell| !cell.spacer && cell.c != ' ')
+        .filter_map(|cell| {
+            glyphs.get(GlyphKey {
+                c: cell.c,
+                bold: cell.bold,
+                italic: cell.italic,
+            })
+        })
+        .count()
+}
+
+fn glyphs(c: &mut Criterion) {
+    let palette = Palette::default();
+    let mut glyphs = Glyphs::new(None, FONT_SIZE);
+    let mut cold = c.benchmark_group("glyphs_cold");
+    let frames: Vec<_> = FIXTURES
+        .iter()
+        .map(|fixture| {
+            (
+                fixture.name,
+                Frame::capture(&term_for(fixture), &palette, true),
+            )
+        })
+        .collect();
+    for (name, frame) in &frames {
+        cold.bench_function(*name, |b| {
+            b.iter(|| {
+                glyphs.clear();
+                resolve_glyphs(&mut glyphs, black_box(frame))
+            })
+        });
+    }
+    cold.finish();
+    let mut warm = c.benchmark_group("glyphs_warm");
+    for (name, frame) in &frames {
+        glyphs.clear();
+        resolve_glyphs(&mut glyphs, frame);
+        glyphs.take_uploads();
+        warm.bench_function(*name, |b| {
+            b.iter(|| resolve_glyphs(&mut glyphs, black_box(frame)))
+        });
+    }
+    warm.finish();
+}
+
 fn gpu_prepare(c: &mut Criterion) {
     let probe_cell = CellSize {
         width: 8.4,
@@ -154,5 +208,5 @@ fn gpu_prepare(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, parse, frame, gpu_prepare);
+criterion_group!(benches, parse, frame, glyphs, gpu_prepare);
 criterion_main!(benches);
