@@ -373,12 +373,10 @@ impl Session {
         self.scroll_accumulator -= whole as f64;
 
         let mode = self.mode();
-        if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
-            // Full-screen apps (less, vim...) get arrow keys instead of scrollback.
-            self.terminal
-                .write(mouse::alternate_scroll_bytes(whole, mode));
-        } else {
-            self.scroll_display(Scroll::Delta(whole));
+        let (column, line) = self.mouse_cell();
+        match mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
+            Some(bytes) => self.terminal.write(bytes),
+            None => self.scroll_display(Scroll::Delta(whole)),
         }
     }
 

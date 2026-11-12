@@ -16,7 +16,6 @@ pub enum Button {
 }
 
 /// Mouse event reported to the application.
-#[allow(dead_code, reason = "Wheel is reported by the wheel routing task")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseEvent {
     Press(Button),
@@ -191,6 +190,32 @@ pub fn alternate_scroll_bytes(lines: i32, mode: TermMode) -> Vec<u8> {
         (false, false) => b"\x1b[B",
     };
     arrow.repeat(lines.unsigned_abs() as usize)
+}
+
+/// Bytes sent to the application for `lines` wheel steps (up when positive) at viewport
+/// cell (`column`, `line`), 0-based. `None` when the wheel must scroll the history instead.
+///
+/// In order: mouse mode without `Shift` reports one wheel event per line; the alternate
+/// screen with `ALTERNATE_SCROLL` and no mouse mode gets arrow keys; anything else
+/// (including `Shift` + wheel in mouse mode) scrolls the history.
+pub fn wheel_bytes(
+    lines: i32,
+    column: usize,
+    line: usize,
+    mods: ModifiersState,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
+    if mode.intersects(TermMode::MOUSE_MODE) {
+        if mods.shift_key() {
+            return None;
+        }
+        let step = encode(MouseEvent::Wheel(lines > 0), column, line, mods, mode)?;
+        return Some(step.repeat(lines.unsigned_abs() as usize));
+    }
+    if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+        return Some(alternate_scroll_bytes(lines, mode));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -450,5 +475,60 @@ mod tests {
             Some(b"\x1b[<32;2;1M".to_vec())
         );
         assert!(r.owns(Button::Left));
+    }
+
+    #[test]
+    fn wheel_reported_once_per_line_in_mouse_mode() {
+        let mode = sgr(TermMode::MOUSE_REPORT_CLICK);
+        assert_eq!(
+            wheel_bytes(2, 0, 0, NONE, mode),
+            Some(b"\x1b[<64;1;1M\x1b[<64;1;1M".to_vec())
+        );
+        assert_eq!(
+            wheel_bytes(-1, 4, 2, NONE, mode),
+            Some(b"\x1b[<65;5;3M".to_vec())
+        );
+    }
+
+    #[test]
+    fn wheel_reported_before_alternate_scroll() {
+        let mode =
+            sgr(TermMode::MOUSE_REPORT_CLICK) | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        assert_eq!(
+            wheel_bytes(1, 0, 0, NONE, mode),
+            Some(b"\x1b[<64;1;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn shift_wheel_in_mouse_mode_scrolls_history() {
+        let mode =
+            sgr(TermMode::MOUSE_REPORT_CLICK) | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        assert_eq!(wheel_bytes(1, 0, 0, ModifiersState::SHIFT, mode), None);
+    }
+
+    #[test]
+    fn wheel_arrows_on_alternate_screen_without_mouse_mode() {
+        let mode = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        assert_eq!(
+            wheel_bytes(2, 0, 0, NONE, mode),
+            Some(b"\x1b[A\x1b[A".to_vec())
+        );
+        assert_eq!(
+            wheel_bytes(2, 0, 0, ModifiersState::SHIFT, mode),
+            Some(b"\x1b[A\x1b[A".to_vec())
+        );
+    }
+
+    #[test]
+    fn wheel_scrolls_history_otherwise() {
+        assert_eq!(wheel_bytes(1, 0, 0, NONE, TermMode::empty()), None);
+        assert_eq!(wheel_bytes(1, 0, 0, NONE, TermMode::ALT_SCREEN), None);
+    }
+
+    #[test]
+    fn wheel_out_of_x10_range_scrolls_history() {
+        let mode = TermMode::MOUSE_REPORT_CLICK;
+        assert_eq!(wheel_bytes(1, 300, 0, NONE, mode), None);
     }
 }
