@@ -5,8 +5,6 @@
 //! and never consumes bytes: every byte, marks included, comes back as
 //! [`Chunk::Bytes`] so the `vte` parser still sees the whole stream.
 
-#![allow(dead_code, reason = "wired into the PTY loop by the shell state task")]
-
 /// OSC payload length after which the sequence is abandoned.
 const MAX_OSC_LEN: usize = 4096;
 

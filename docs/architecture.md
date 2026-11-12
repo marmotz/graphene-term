@@ -23,7 +23,9 @@ src/
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
-  pty.rs           PTY thread: poller, write queue, read and parse (`feed`) into Term
+  pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
+  osc133.rs        incremental OSC 133 / OSC 8 scanner over the PTY byte stream (pure)
+  blocks.rs        ShellState (phase, blocks, status), cell tags, row roles, block bounds (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
@@ -53,7 +55,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `blocks`, `osc133`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
@@ -62,7 +64,9 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 UI thread (winit)                         PTY thread (pty::PtyLoop)
 -----------------                         -------------------------
 keyboard / mouse  --pty::Sender(Msg)-->   writes to PTY (WriteQueue)
-                                          reads PTY, pty::feed parses VT into Term
+                                          reads PTY, osc133::Scanner splits it,
+                                          pty::feed parses VT into Term,
+                                          ShellState::apply handles each mark
 request_redraw   <--UserEvent::Terminal-- EventProxy::send_event(Wakeup, Title, ...)
 RedrawRequested:
   lock Term (FairMutex)
@@ -73,6 +77,8 @@ RedrawRequested:
 
 - `Term` is shared as `Arc<FairMutex<Term<EventProxy>>>`. The UI thread only holds the
   lock to read the mode, scroll, resize or capture a frame.
+- `ShellState` (`src/blocks.rs`) is shared as `Arc<Mutex<ShellState>>` in `Terminal`.
+  Lock order, everywhere: `Term` first, then `ShellState`.
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
 - When the shell exits, the event loop exits and the window closes.
@@ -80,9 +86,11 @@ RedrawRequested:
   `EventLoop`: one `polling::Poller` for the PTY, the child exit and the channel;
   `Msg::{Input, Resize, Shutdown}` sent through `pty::Sender` (mpsc + `poller.notify()`);
   a `WriteQueue` resumed on partial writes; `EIO` on read ignored until the child exit
-  event; synchronized updates flushed with `stop_sync` on their timeout. Each read is
-  parsed by `pty::feed`, the single parse step, so the byte stream can be split around
-  it. The `Term` lock is leased before reading and held for at most 64 KiB of parsing.
+  event; synchronized updates flushed with `stop_sync` on their timeout. Each read goes
+  through `pty::process`: `osc133::Scanner` splits it into byte chunks and marks, each
+  byte chunk is parsed by `pty::feed` (the single parse step), and each mark is applied
+  by `ShellState::apply` right after the bytes of its sequence, so the cursor is where
+  the shell put it (a synchronized update holding bytes is flushed first). The `Term` lock is leased before reading and held for at most 64 KiB of parsing.
 - The `update-check` thread (started in `App::resumed` when `updates.check` is true)
   wakes up when a check is due, reloads `update.json`, calls GitHub only when the last
   check is one interval old (otherwise reuses the cached release), saves the state and
@@ -95,6 +103,22 @@ RedrawRequested:
   `opener::open`, "×" hides the banner until a newer release, "Ignore this version"
   hides it and sends `Command::Ignore` to the thread, which writes `ignored` in
   `update.json` (written directly when the thread is not running).
+
+## Command blocks
+
+- `ShellState::apply` turns the OSC 133 marks into blocks: `A` starts a block (on a
+  fresh line when the cursor is not at column 0; a prompt drawn again in place keeps
+  its block), `B` starts the input, `C` the command (`Status::Running`), `D;<code>` ends
+  it (`Success` / `Failure(code)`). A block still running when the next one starts
+  becomes `Unknown`. Marks are ignored on the alternate screen.
+- During the prompt and the input, the cursor template carries a hyperlink
+  `graphene-block://<id>/{prompt,right-prompt,input}` (`blocks::BLOCK_LINK_SCHEME`), so every
+  cell the shell writes is tagged. The tag is applied again when something removed it
+  (a real OSC 8 link closed inside the prompt, a reset) and dropped outside them.
+- `blocks::index(term, lines)` gives each row a `RowRole` (`None`, `Prompt`, `Input`,
+  `Output`) from its first tagged cell; untagged rows continue the block above.
+  `blocks::block_bounds(term, id)` gives the first row, the command cells and the
+  output rows of a block.
 
 ## Rendering pipeline
 

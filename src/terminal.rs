@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::sync::FairMutex;
@@ -11,6 +11,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
+use crate::blocks::ShellState;
 use crate::pty::{self, Msg, PtyLoop};
 use crate::shell_integration;
 
@@ -41,6 +42,9 @@ impl EventListener for EventProxy {
 
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
+    /// Shell integration state. Lock order: `term` first, then `shell`.
+    #[allow(dead_code, reason = "read by the rendering and input tasks")]
+    pub shell: Arc<Mutex<ShellState>>,
     sender: pty::Sender,
 }
 
@@ -67,11 +71,17 @@ impl Terminal {
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
         let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
 
-        let pty_loop = PtyLoop::new(term.clone(), proxy, pty)?;
+        let shell = Arc::new(Mutex::new(ShellState::new()));
+
+        let pty_loop = PtyLoop::new(term.clone(), shell.clone(), proxy, pty)?;
         let sender = pty_loop.sender();
         pty_loop.spawn();
 
-        Ok(Self { term, sender })
+        Ok(Self {
+            term,
+            shell,
+            sender,
+        })
     }
 
     /// Sends bytes to the shell.

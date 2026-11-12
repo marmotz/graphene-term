@@ -8,8 +8,8 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -21,6 +21,9 @@ use alacritty_terminal::tty::{self, EventedPty};
 use alacritty_terminal::vte::ansi::Processor;
 use log::error;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
+
+use crate::blocks::ShellState;
+use crate::osc133::{Chunk, Scanner};
 
 /// Max bytes read from the PTY before forcing the `Term` lock.
 const READ_BUFFER_SIZE: usize = 0x10_0000;
@@ -63,6 +66,34 @@ impl Sender {
 /// split around it.
 pub fn feed<L: EventListener>(processor: &mut Processor, term: &mut Term<L>, bytes: &[u8]) {
     processor.advance(term, bytes);
+}
+
+/// Parses `bytes` into `term` and applies the shell integration marks found in them,
+/// each one right after the bytes of its sequence, so the cursor is where the shell put
+/// the mark.
+pub fn process<L: EventListener>(
+    scanner: &mut Scanner,
+    processor: &mut Processor,
+    shell: &mut ShellState,
+    term: &mut Term<L>,
+    bytes: &[u8],
+) {
+    for chunk in scanner.split(bytes) {
+        match chunk {
+            Chunk::Bytes(bytes) => {
+                feed(processor, term, bytes);
+                shell.after_bytes(term);
+            }
+            Chunk::Mark(mark) => {
+                // A synchronized update holds bytes back: flush them so the cursor is
+                // up to date.
+                if processor.sync_bytes_count() > 0 {
+                    processor.stop_sync(term);
+                }
+                shell.apply(term, mark);
+            }
+        }
+    }
 }
 
 /// Pending writes to the PTY, in order.
@@ -114,6 +145,8 @@ pub struct PtyLoop<T, L: EventListener> {
     rx: Receiver<Msg>,
     tx: mpsc::Sender<Msg>,
     term: Arc<FairMutex<Term<L>>>,
+    /// Locked after `term`, never before.
+    shell: Arc<Mutex<ShellState>>,
     event_proxy: L,
 }
 
@@ -121,6 +154,7 @@ pub struct PtyLoop<T, L: EventListener> {
 struct State {
     writes: WriteQueue,
     processor: Processor,
+    scanner: Scanner,
 }
 
 impl<T, L> PtyLoop<T, L>
@@ -128,7 +162,12 @@ where
     T: EventedPty + OnResize + Send + 'static,
     L: EventListener + Send + 'static,
 {
-    pub fn new(term: Arc<FairMutex<Term<L>>>, event_proxy: L, pty: T) -> io::Result<Self> {
+    pub fn new(
+        term: Arc<FairMutex<Term<L>>>,
+        shell: Arc<Mutex<ShellState>>,
+        event_proxy: L,
+        pty: T,
+    ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         Ok(Self {
             poller: Arc::new(Poller::new()?),
@@ -136,6 +175,7 @@ where
             rx,
             tx,
             term,
+            shell,
             event_proxy,
         })
     }
@@ -155,6 +195,7 @@ where
         let mut state = State {
             writes: WriteQueue::default(),
             processor: Processor::new(),
+            scanner: Scanner::new(),
         };
         let mut buf = vec![0u8; READ_BUFFER_SIZE];
         let mode = PollMode::Level;
@@ -306,7 +347,15 @@ where
                 }),
             };
 
-            feed(&mut state.processor, term, &buf[..unprocessed]);
+            // Lock order: `Term`, then `ShellState`.
+            let mut shell = self.shell.lock().unwrap_or_else(PoisonError::into_inner);
+            process(
+                &mut state.scanner,
+                &mut state.processor,
+                &mut shell,
+                term,
+                &buf[..unprocessed],
+            );
             processed += unprocessed;
             unprocessed = 0;
 
@@ -503,7 +552,8 @@ mod tests {
             &TermSize::new(20, 5),
             Events(tx.clone()),
         )));
-        let pty_loop = PtyLoop::new(term.clone(), Events(tx), pty).unwrap();
+        let shell = Arc::new(Mutex::new(ShellState::new()));
+        let pty_loop = PtyLoop::new(term.clone(), shell, Events(tx), pty).unwrap();
         let sender = pty_loop.sender();
         let handle = pty_loop.spawn();
 

@@ -28,6 +28,20 @@ step `pty::feed` can be split around marks. alacritty's `tty` module still spawn
 shell and owns the PTY file descriptors. Poller keys `0` (read/write) and `1` (child
 event) mirror alacritty's unix `tty`, where they are `pub(crate)`.
 
+## Cell tags through hyperlinks
+
+`Term` exposes no scroll counter: a grid line stored when a mark arrives is wrong after
+the next scroll, history eviction or reflow. Blocks are anchored in the cells instead:
+while the shell draws the prompt and the input, the cursor template carries an OSC 8
+hyperlink with the reserved scheme `graphene-block` (`graphene-block://<id>/prompt`,
+`right-prompt` or `input`), which `write_at_cursor` copies into every written cell.
+Cells keep it on scroll, eviction and reflow, and erased cells lose it, so the rows of a
+block are found again from the grid alone, through the public API. A real OSC 8 link
+opened by the prompt is never overwritten: the tag comes back when it closes. Output
+cells carry no tag; a row with no tag belongs to the block above it. The links feature
+must ignore the `graphene-block` scheme. The right prompt has its own tag kind so it is
+never taken for the command start.
+
 ## Own glyph pipeline on `cosmic-text` (glyphon dropped)
 
 glyphon was used first: it handles shaping, font fallback and a glyph atlas through

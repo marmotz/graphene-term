@@ -3,6 +3,7 @@
 
 mod app;
 mod banner;
+mod blocks;
 #[cfg(test)]
 mod build_version;
 mod config;
