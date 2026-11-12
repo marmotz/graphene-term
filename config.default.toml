@@ -49,3 +49,10 @@
 ## to the shell. Examples:
 ## "Ctrl+Shift+C" = "copy"
 ## "Shift+PageUp" = "none"
+
+# [updates]
+## Check GitHub for a newer release and show a banner. false: no network call at all.
+# check = true
+## Time between two checks: "auto", "6h", "12h", "24h", "2d", "3d", "1w".
+## auto: 6h for dev builds, 24h for stable builds.
+# interval = "auto"

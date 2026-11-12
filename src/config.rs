@@ -170,6 +170,47 @@ pub struct CursorConfig {
     pub blinking: bool,
 }
 
+/// `updates.interval`: time between two update checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UpdateInterval {
+    /// 6 hours for a dev build, 24 hours for a stable one.
+    #[default]
+    Auto,
+    Hours6,
+    Hours12,
+    Hours24,
+    Days2,
+    Days3,
+    Week1,
+}
+
+impl UpdateInterval {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, UpdateInterval); 7] = [
+        ("auto", UpdateInterval::Auto),
+        ("6h", UpdateInterval::Hours6),
+        ("12h", UpdateInterval::Hours12),
+        ("24h", UpdateInterval::Hours24),
+        ("2d", UpdateInterval::Days2),
+        ("3d", UpdateInterval::Days3),
+        ("1w", UpdateInterval::Week1),
+    ];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::VALUES
+            .iter()
+            .find(|(name, _)| *name == value)
+            .map(|&(_, interval)| interval)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdatesConfig {
+    /// `false`: no network call at all.
+    pub check: bool,
+    pub interval: UpdateInterval,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeConfig {
     pub name: String,
@@ -195,6 +236,8 @@ pub struct Config {
     /// Raw `"keys" = "action"` pairs, interpreted by the keybindings task.
     #[allow(dead_code, reason = "applied by the keybindings task")]
     pub keybindings: BTreeMap<String, String>,
+    #[allow(dead_code, reason = "applied by the update check thread task")]
+    pub updates: UpdatesConfig,
 }
 
 impl Default for Config {
@@ -223,6 +266,10 @@ impl Default for Config {
                 dark: None,
             },
             keybindings: BTreeMap::new(),
+            updates: UpdatesConfig {
+                check: true,
+                interval: UpdateInterval::Auto,
+            },
         }
     }
 }
@@ -266,7 +313,7 @@ impl Config {
                     Checked::Valid,
                 ),
                 "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
-                | "keybindings" => {
+                | "keybindings" | "updates" => {
                     let DeValue::Table(table) = value.get_ref() else {
                         reader.error(Some(value.span()), format!("`{name}` must be a table"));
                         continue;
@@ -398,6 +445,16 @@ impl Reader<'_> {
             ("theme", "name") => self.set(value, path, &mut config.theme.name, &previous.theme.name, non_empty),
             ("theme", "light") => self.set(value, path, &mut config.theme.light, &previous.theme.light, |name: String| non_empty(name).map(Some)),
             ("theme", "dark") => self.set(value, path, &mut config.theme.dark, &previous.theme.dark, |name: String| non_empty(name).map(Some)),
+            ("updates", "check") => self.set(value, path, &mut config.updates.check, &previous.updates.check, Checked::Valid),
+            ("updates", "interval") => self.set(value, path, &mut config.updates.interval, &previous.updates.interval, |interval: String| {
+                match UpdateInterval::parse(&interval) {
+                    Some(interval) => Checked::Valid(interval),
+                    None => {
+                        let names: Vec<_> = UpdateInterval::VALUES.iter().map(|(name, _)| format!("\"{name}\"")).collect();
+                        Checked::Clamped(UpdateInterval::Auto, format!("invalid value \"{interval}\", expected one of {}; using \"auto\"", names.join(", ")))
+                    }
+                }
+            }),
             ("keybindings", keys) => {
                 let previous_action = previous.keybindings.get(keys).cloned();
                 let mut action = previous_action.clone();
@@ -547,6 +604,10 @@ dark = "graphene-night"
 [keybindings]
 "Ctrl+Shift+C" = "copy"
 "Shift+PageUp" = "none"
+
+[updates]
+check = false
+interval = "2d"
 "#;
         let (config, errors) = parse(text);
         assert_eq!(errors, Vec::new());
@@ -579,6 +640,10 @@ dark = "graphene-night"
                     ("Ctrl+Shift+C".to_owned(), "copy".to_owned()),
                     ("Shift+PageUp".to_owned(), "none".to_owned()),
                 ]),
+                updates: UpdatesConfig {
+                    check: false,
+                    interval: UpdateInterval::Days2,
+                },
             }
         );
     }
@@ -743,5 +808,31 @@ dark = "graphene-night"
         assert_eq!(load_from(&nested).0.font.size, 9.0);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_update_interval_is_accepted() {
+        for (name, interval) in UpdateInterval::VALUES {
+            let (config, errors) = parse(&format!("[updates]\ninterval = \"{name}\"\n"));
+            assert!(errors.is_empty(), "{name}: {errors:?}");
+            assert_eq!(config.updates.interval, interval);
+        }
+    }
+
+    #[test]
+    fn invalid_update_interval_falls_back_to_auto() {
+        let mut previous = Config::default();
+        previous.updates.interval = UpdateInterval::Week1;
+        let (config, errors) = Config::parse("[updates]\ninterval = \"5h\"\n", &previous, &file());
+        assert_eq!(config.updates.interval, UpdateInterval::Auto);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, Some(2));
+        assert!(
+            errors[0]
+                .message
+                .starts_with("`updates.interval`: invalid value \"5h\""),
+            "{}",
+            errors[0].message
+        );
     }
 }
