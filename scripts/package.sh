@@ -45,9 +45,9 @@ cp "$binary" packaging/graphene.desktop packaging/graphene.svg \
 tar -C "$dist" -czf "$dist/$archive" "$dirname"
 rm -rf "${dist:?}/$dirname"
 
-# Debian
+# Debian (no "~" in the file name: GitHub turns it into "." in release assets)
 cargo deb --no-build --no-strip --deb-version "$deb_version" \
-  --output "$dist/graphene-term_${deb_version}_amd64.deb"
+  --output "$dist/graphene-term_${version}-dev.${build}_amd64.deb"
 
 # RPM
 cargo generate-rpm --set-metadata "release = \"${rpm_release}\"" \
@@ -58,7 +58,9 @@ appdir="$dist/Graphene.AppDir"
 install -Dm755 "$binary" "$appdir/usr/bin/graphene"
 install -Dm644 packaging/graphene.desktop "$appdir/graphene.desktop"
 install -Dm644 packaging/graphene.desktop "$appdir/usr/share/applications/graphene.desktop"
-install -Dm644 packaging/graphene.svg "$appdir/graphene.svg"
+# A top-level PNG named after Icon= is required: appimagetool builds .DirIcon from it.
+install -Dm644 packaging/graphene.png "$appdir/graphene.png"
+install -Dm644 packaging/graphene.png "$appdir/usr/share/icons/hicolor/256x256/apps/graphene.png"
 install -Dm644 packaging/graphene.svg "$appdir/usr/share/icons/hicolor/scalable/apps/graphene.svg"
 ln -s usr/bin/graphene "$appdir/AppRun"
 ARCH=x86_64 VERSION="$tag" "${APPIMAGETOOL:-appimagetool}" --no-appstream \

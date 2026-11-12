@@ -92,6 +92,9 @@ Assets:
 - `graphene-<tag>-x86_64.AppImage`
 - `SHA256SUMS`
 
+The AppImage icon `packaging/graphene.png` is rendered from `graphene.svg`; regenerate it
+after changing the SVG with `rsvg-convert -w 256 -h 256 packaging/graphene.svg -o packaging/graphene.png`.
+
 Packaging lives in `scripts/package.sh` (output in `dist/`) and `packaging/`. To run it
 locally: `cargo install --locked cargo-deb cargo-generate-rpm`, put `appimagetool` on
 `PATH` (or set `APPIMAGETOOL`), then:
