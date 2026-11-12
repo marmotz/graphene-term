@@ -22,6 +22,7 @@ use crate::frame::{Frame, FrameBanner};
 use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::layout::GridLayout;
+use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
@@ -51,6 +52,10 @@ struct Session {
     /// A selection drag is in progress.
     left_pressed: bool,
     click_tracker: ClickTracker,
+    /// Gesture owned by the application (mouse reporting).
+    app_mouse: mouse::Reporter,
+    /// Pointer shape last applied to the window; `None` before the first update.
+    pointer: Option<winit::window::CursorIcon>,
     /// When the next auto-scroll step is due during a drag past the grid edges.
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection kept while its text is unchanged.
@@ -134,6 +139,16 @@ impl Session {
         *self.terminal.term.lock().mode()
     }
 
+    /// Arrow while the application captures the mouse, I-beam otherwise; the window is
+    /// only updated when the shape changes.
+    fn update_pointer(&mut self) {
+        let icon = mouse::pointer_icon(self.mode());
+        if self.pointer != Some(icon) {
+            self.window.set_cursor(icon);
+            self.pointer = Some(icon);
+        }
+    }
+
     fn scroll_display(&self, scroll: Scroll) {
         self.terminal.term.lock().scroll_display(scroll);
         self.window.request_redraw();
@@ -193,27 +208,59 @@ impl Session {
         (point, side)
     }
 
+    /// Viewport cell (column, line) under the mouse cursor, clamped to the grid.
+    fn mouse_cell(&self) -> (usize, usize) {
+        let (column, line, _) = self
+            .layout
+            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
+        (column, line)
+    }
+
     fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        match (button, state) {
-            (MouseButton::Left, ElementState::Pressed) => self.left_press(),
-            (MouseButton::Left, ElementState::Released) => self.left_release(),
-            (MouseButton::Middle, ElementState::Pressed)
-                if !selection::mouse_reserved(self.mode(), self.modifiers) =>
-            {
-                self.paste_primary()
+        let Some(button) = mouse::button_from(button) else {
+            return;
+        };
+        match state {
+            ElementState::Pressed => self.mouse_press(button),
+            ElementState::Released => self.mouse_release(button),
+        }
+    }
+
+    fn mouse_press(&mut self, button: mouse::Button) {
+        if button == mouse::Button::Left && self.banner_press() {
+            return;
+        }
+        let mode = self.mode();
+        if selection::mouse_reserved(mode, self.modifiers) {
+            // The gesture belongs to the application; a click clears the selection.
+            self.clear_selection();
+            let cell = self.mouse_cell();
+            if let Some(bytes) = self.app_mouse.press(button, cell, self.modifiers, mode) {
+                self.terminal.write(bytes);
             }
-            _ => {}
+            return;
+        }
+        match button {
+            mouse::Button::Left => self.left_press(),
+            mouse::Button::Middle => self.paste_primary(),
+            mouse::Button::Right => {}
+        }
+    }
+
+    fn mouse_release(&mut self, button: mouse::Button) {
+        if self.app_mouse.owns(button) {
+            let cell = self.mouse_cell();
+            let mode = self.mode();
+            if let Some(bytes) = self.app_mouse.release(button, cell, self.modifiers, mode) {
+                self.terminal.write(bytes);
+            }
+        } else if button == mouse::Button::Left {
+            self.left_release();
         }
     }
 
     fn left_press(&mut self) {
-        if self.banner_press() {
-            return;
-        }
         let mut term = self.terminal.term.lock();
-        if selection::mouse_reserved(*term.mode(), self.modifiers) {
-            return;
-        }
         let (point, side) = self.mouse_point(term.grid().display_offset());
         let clicks = self.click_tracker.click(point, Instant::now());
         // The selection changes until the release: no text to keep meanwhile.
@@ -241,8 +288,14 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
-        if self.left_pressed {
+        if self.left_pressed && !self.app_mouse.active() {
             self.update_selection(&mut self.terminal.term.lock());
+            return;
+        }
+        let cell = self.mouse_cell();
+        let mode = self.mode();
+        if let Some(bytes) = self.app_mouse.motion(cell, self.modifiers, mode) {
+            self.terminal.write(bytes);
         }
     }
 
@@ -332,18 +385,10 @@ impl Session {
         self.scroll_accumulator -= whole as f64;
 
         let mode = self.mode();
-        if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
-            // Full-screen apps (less, vim...) get arrow keys instead of scrollback.
-            let arrow: &[u8] = match (whole > 0, mode.contains(TermMode::APP_CURSOR)) {
-                (true, true) => b"\x1bOA",
-                (true, false) => b"\x1b[A",
-                (false, true) => b"\x1bOB",
-                (false, false) => b"\x1b[B",
-            };
-            self.terminal
-                .write(arrow.repeat(whole.unsigned_abs() as usize));
-        } else {
-            self.scroll_display(Scroll::Delta(whole));
+        let (column, line) = self.mouse_cell();
+        match mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
+            Some(bytes) => self.terminal.write(bytes),
+            None => self.scroll_display(Scroll::Delta(whole)),
         }
     }
 
@@ -351,6 +396,7 @@ impl Session {
         match event {
             TermEvent::Wakeup => {
                 self.validate_selection();
+                self.update_pointer();
                 self.window.request_redraw()
             }
             TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
@@ -451,6 +497,8 @@ impl App {
             mouse_position: PhysicalPosition::default(),
             left_pressed: false,
             click_tracker: ClickTracker::default(),
+            app_mouse: mouse::Reporter::default(),
+            pointer: None,
             auto_scroll_deadline: None,
             selection_snapshot: None,
             config_banner: self.config_banner.clone(),
@@ -472,7 +520,10 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         match self.create_session(event_loop) {
-            Ok(session) => self.session = Some(session),
+            Ok(mut session) => {
+                session.update_pointer();
+                self.session = Some(session);
+            }
             Err(error) => return self.fail(event_loop, error),
         }
         self.update_checker.apply(&self.config.updates);
@@ -517,12 +568,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Focused(focused) => {
                 session.focused = focused;
-                if session.mode().contains(TermMode::FOCUS_IN_OUT) {
-                    session.terminal.write(if focused {
-                        &b"\x1b[I"[..]
-                    } else {
-                        &b"\x1b[O"[..]
-                    });
+                if let Some(bytes) = mouse::focus_report(focused, session.mode()) {
+                    session.terminal.write(bytes);
                 }
                 session.window.request_redraw();
             }
