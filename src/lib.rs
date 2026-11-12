@@ -12,6 +12,7 @@ mod input;
 mod layout;
 mod mouse;
 mod opener;
+mod osc133;
 mod palette;
 mod perf;
 mod pty;
