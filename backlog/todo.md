@@ -27,12 +27,12 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 
 ## Configuration file and themes  ·  [overview](features/config-themes/overview.md)
 
-_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 0/9 tasks done
+_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 1/9 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [ ]  | [#13](https://github.com/marmotz/graphene-term/issues/13) | Config: centre the grid with the leftover pixels | — |
-| [ ]  | [#14](https://github.com/marmotz/graphene-term/issues/14) | Config: configuration file, model and startup settings | — |
+| [x]  | [#14](https://github.com/marmotz/graphene-term/issues/14) | Config: configuration file, model and startup settings | — |
 | [ ]  | [#15](https://github.com/marmotz/graphene-term/issues/15) | Config: themes, built-in themes and selection color | #14 |
 | [ ]  | [#16](https://github.com/marmotz/graphene-term/issues/16) | Config: configurable keybindings | #14 |
 | [ ]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking | #14 |

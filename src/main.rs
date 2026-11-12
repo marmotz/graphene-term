@@ -1,6 +1,7 @@
 mod app;
 #[cfg(test)]
 mod build_version;
+mod config;
 mod frame;
 mod input;
 mod layout;

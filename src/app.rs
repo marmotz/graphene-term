@@ -16,6 +16,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
+use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::Frame;
 use crate::input::{self, Action};
 use crate::layout::GridLayout;
@@ -25,32 +26,6 @@ use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
-const DEFAULT_FONT_SIZE: f32 = 14.0;
-const MIN_FONT_SIZE: f32 = 6.0;
-const MAX_FONT_SIZE: f32 = 72.0;
-/// Padding around the grid, in logical pixels.
-const PADDING: f32 = 8.0;
-
-/// User-facing settings read from the environment.
-#[derive(Debug, Clone)]
-pub struct Settings {
-    pub font_family: Option<String>,
-    pub font_size: f32,
-}
-
-impl Settings {
-    pub fn from_env() -> Self {
-        Self {
-            font_family: std::env::var("GRAPHENE_FONT")
-                .ok()
-                .filter(|f| !f.is_empty()),
-            font_size: std::env::var("GRAPHENE_FONT_SIZE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_FONT_SIZE),
-        }
-    }
-}
 
 struct Session {
     window: Arc<Window>,
@@ -62,6 +37,8 @@ struct Session {
     focused: bool,
     modifiers: ModifiersState,
     font_size: f32,
+    /// Minimum padding around the grid, in logical pixels.
+    padding: f32,
     /// Fractional lines accumulated from touchpad scrolling.
     scroll_accumulator: f64,
     /// Last known cursor position, in physical pixels.
@@ -83,7 +60,7 @@ impl Session {
             size.width,
             size.height,
             self.renderer.cell_size(),
-            PADDING * scale,
+            self.padding * scale,
         )
     }
 
@@ -363,7 +340,7 @@ impl Session {
 
 pub struct App {
     proxy: EventLoopProxy<UserEvent>,
-    settings: Settings,
+    config: Config,
     session: Option<Session>,
     error: Option<anyhow::Error>,
 }
@@ -372,15 +349,18 @@ impl App {
     fn create_session(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Session> {
         let attributes = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
-            .with_inner_size(LogicalSize::new(960.0, 600.0));
+            .with_inner_size(LogicalSize::new(
+                self.config.window.width,
+                self.config.window.height,
+            ));
         let window = Arc::new(event_loop.create_window(attributes)?);
 
         let scale = window.scale_factor() as f32;
         let renderer = pollster::block_on(Renderer::new(
             window.clone(),
             event_loop.owned_display_handle(),
-            self.settings.font_family.clone(),
-            self.settings.font_size * scale,
+            self.config.font.family.clone(),
+            self.config.font.size * scale,
         ))?;
 
         let size = window.inner_size();
@@ -388,9 +368,13 @@ impl App {
             size.width,
             size.height,
             renderer.cell_size(),
-            PADDING * scale,
+            self.config.window.padding * scale,
         );
-        let terminal = Terminal::spawn(EventProxy::new(self.proxy.clone()), layout.window_size())?;
+        let terminal = Terminal::spawn(
+            EventProxy::new(self.proxy.clone()),
+            layout.window_size(),
+            self.config.term_config(),
+        )?;
 
         let clipboard = arboard::Clipboard::new()
             .map_err(|e| log::warn!("clipboard unavailable: {e}"))
@@ -405,7 +389,8 @@ impl App {
             clipboard,
             focused: true,
             modifiers: ModifiersState::empty(),
-            font_size: self.settings.font_size,
+            font_size: self.config.font.size,
+            padding: self.config.window.padding,
             scroll_accumulator: 0.0,
             mouse_position: PhysicalPosition::default(),
             left_pressed: false,
@@ -448,7 +433,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let default_font_size = self.settings.font_size;
+        let default_font_size = self.config.font.size;
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -509,11 +494,20 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+/// Loads the configuration file. Errors are only logged for now.
+fn load_config() -> Config {
+    let (config, errors) = config::load();
+    for error in &errors {
+        log::warn!("{error}");
+    }
+    config
+}
+
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let mut app = App {
         proxy: event_loop.create_proxy(),
-        settings: Settings::from_env(),
+        config: load_config(),
         session: None,
         error: None,
     };

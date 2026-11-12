@@ -1,0 +1,51 @@
+## Graphene Term configuration.
+##
+## Every setting below is commented out and shows its default value: uncomment a line
+## to change it. A missing setting takes its default value; an invalid value or an
+## unknown key is reported and ignored.
+
+## Interface language: "auto" (follows LANG), "en", "fr".
+# language = "auto"
+
+# [font]
+## Font family name. Empty: the system monospace font.
+# family = ""
+## Size in points, from 6 to 72.
+# size = 14.0
+
+# [window]
+## Initial window size, in logical pixels.
+# width = 960
+# height = 600
+## Minimum space around the grid, in logical pixels.
+# padding = 8
+
+# [scrollback]
+## Number of lines kept in the history, up to 100000.
+# lines = 10000
+
+# [cursor]
+## "block", "beam" or "underline".
+# shape = "block"
+# blinking = false
+
+# [selection]
+## Characters ending a word on double-click.
+# word_separators = ",│`|\"' ()[]{}<>\t"
+
+# [tabs]
+## Tab bar position: "top", "bottom", "left", "right".
+# position = "top"
+
+# [theme]
+## Single theme.
+# name = "graphene-night"
+## Set both `light` and `dark` to follow the system appearance:
+## light = "graphene-day"
+## dark = "graphene-night"
+
+# [keybindings]
+## "Keys" = "action". The action "none" disables a default shortcut, so the key goes
+## to the shell. Examples:
+## "Ctrl+Shift+C" = "copy"
+## "Shift+PageUp" = "none"

@@ -12,8 +12,6 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
-use crate::selection::SEMANTIC_ESCAPE_CHARS;
-
 /// Events sent from the PTY thread to the UI thread.
 #[derive(Debug)]
 pub enum UserEvent {
@@ -37,9 +35,6 @@ impl EventListener for EventProxy {
     }
 }
 
-/// Number of lines kept in the scrollback history.
-const SCROLLBACK_LINES: usize = 10_000;
-
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     notifier: Notifier,
@@ -47,7 +42,7 @@ pub struct Terminal {
 
 impl Terminal {
     /// Spawns the user's shell in a new PTY.
-    pub fn spawn(proxy: EventProxy, size: WindowSize) -> anyhow::Result<Self> {
+    pub fn spawn(proxy: EventProxy, size: WindowSize, config: Config) -> anyhow::Result<Self> {
         let env = HashMap::from([
             ("TERM".to_owned(), "xterm-256color".to_owned()),
             ("COLORTERM".to_owned(), "truecolor".to_owned()),
@@ -59,11 +54,6 @@ impl Terminal {
         };
         let pty = tty::new(&options, size, 0)?;
 
-        let config = Config {
-            scrolling_history: SCROLLBACK_LINES,
-            semantic_escape_chars: SEMANTIC_ESCAPE_CHARS.to_owned(),
-            ..Default::default()
-        };
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
         let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
 

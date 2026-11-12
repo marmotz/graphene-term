@@ -9,11 +9,13 @@ The binary is called `graphene`.
 cargo run --release
 ```
 
-Environment variables:
+## Configuration
 
-- `GRAPHENE_FONT`: font family (default: system monospace)
-- `GRAPHENE_FONT_SIZE`: font size in points (default: 14)
-- `RUST_LOG`: log level (default: `warn`)
+Settings live in `~/.config/graphene/config.toml` (`$XDG_CONFIG_HOME/graphene/` when
+set). The file is created on first launch, fully commented, with the default values:
+uncomment a line to change it. See [config.default.toml](config.default.toml).
+
+The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
 ## Shortcuts
 

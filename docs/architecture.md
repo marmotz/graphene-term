@@ -16,6 +16,7 @@
 src/
   main.rs          entry point, logger setup
   app.rs           winit ApplicationHandler, Session (one window + one shell)
+  config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
   frame.rs         snapshot of the visible grid with resolved colors
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
@@ -30,7 +31,7 @@ src/
     text.rs        glyphon text grid with per-row caching
 ```
 
-Pure modules (`palette`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
+Pure modules (`config`, `palette`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
 and are unit tested. GPU and window code stay thin.
 
 ## Threads
