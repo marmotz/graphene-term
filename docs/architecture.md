@@ -28,6 +28,7 @@ src/
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
     state.rs       update.json state file (last check, latest release, ignored tag)
+    checker.rs     update-check thread, pure tick (check or reuse the cache, next wake-up)
   renderer/
     mod.rs         wgpu device/surface, frame orchestration
     scene.rs       Frame -> rects + text runs (pure, no GPU)
@@ -59,6 +60,13 @@ RedrawRequested:
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
 - When the shell exits, the event loop exits and the window closes.
+- The `update-check` thread (started in `App::resumed` when `updates.check` is true)
+  wakes up when a check is due, reloads `update.json`, calls GitHub only when the last
+  check is one interval old (otherwise reuses the cached release), saves the state and
+  sends `UserEvent::Update(Option<Release>)` when the release to show changes. The
+  session stores it and requests a redraw. `Checker::apply` forwards new `[updates]`
+  settings through an `mpsc` channel (`recv_timeout` is the sleep); `check = false` ends
+  the thread, `true` again restarts it. A failed check is retried after one hour.
 
 ## Rendering pipeline
 

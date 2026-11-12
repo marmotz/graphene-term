@@ -12,10 +12,12 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
-/// Events sent from the PTY thread to the UI thread.
+/// Events sent from the PTY and update check threads to the UI thread.
 #[derive(Debug)]
 pub enum UserEvent {
     Terminal(Event),
+    /// Release to show in the update banner, `None` to hide it.
+    Update(Option<crate::update::Release>),
 }
 
 /// Forwards terminal events to the winit event loop.

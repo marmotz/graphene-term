@@ -2,9 +2,7 @@
 //! decides whether to notify the user. The HTTP call is a thin adapter; the decisions
 //! (`notice`, release selection, scheduling) are pure functions.
 
-// The check thread and the banner (later tasks) are the callers of this module.
-#![allow(dead_code, reason = "called by the update check thread task")]
-
+pub mod checker;
 pub mod state;
 
 use std::time::Duration;

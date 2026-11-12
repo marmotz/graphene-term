@@ -15,6 +15,12 @@ Settings live in `~/.config/graphene/config.toml` (`$XDG_CONFIG_HOME/graphene/` 
 set). The file is created on first launch, fully commented, with the default values:
 uncomment a line to change it. See [config.default.toml](config.default.toml).
 
+Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
+builds, every 24 hours for stable builds) and caches the result in
+`~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only
+network call is a GET to the GitHub releases API; set `check = false` in the `[updates]`
+section to turn it off.
+
 The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
 ## Shortcuts

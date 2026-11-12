@@ -24,6 +24,8 @@ use crate::palette::Palette;
 use crate::renderer::Renderer;
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
+use crate::update::Release;
+use crate::update::checker::Checker;
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
@@ -50,6 +52,9 @@ struct Session {
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection kept while its text is unchanged.
     selection_snapshot: Option<SelectionSnapshot>,
+    /// Newer release reported by the update check thread.
+    #[allow(dead_code, reason = "drawn by the update banner task")]
+    update: Option<Release>,
 }
 
 impl Session {
@@ -342,6 +347,7 @@ pub struct App {
     proxy: EventLoopProxy<UserEvent>,
     config: Config,
     session: Option<Session>,
+    update_checker: Checker,
     error: Option<anyhow::Error>,
 }
 
@@ -397,6 +403,7 @@ impl App {
             click_tracker: ClickTracker::default(),
             auto_scroll_deadline: None,
             selection_snapshot: None,
+            update: None,
         })
     }
 
@@ -413,8 +420,9 @@ impl ApplicationHandler<UserEvent> for App {
         }
         match self.create_session(event_loop) {
             Ok(session) => self.session = Some(session),
-            Err(error) => self.fail(event_loop, error),
+            Err(error) => return self.fail(event_loop, error),
         }
+        self.update_checker.apply(&self.config.updates);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -426,9 +434,15 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        let UserEvent::Terminal(event) = event;
-        if let Some(session) = self.session.as_mut() {
-            session.handle_terminal_event(event, event_loop);
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match event {
+            UserEvent::Terminal(event) => session.handle_terminal_event(event, event_loop),
+            UserEvent::Update(release) => {
+                session.update = release;
+                session.window.request_redraw();
+            }
         }
     }
 
@@ -505,7 +519,12 @@ fn load_config() -> Config {
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    let update_proxy = event_loop.create_proxy();
     let mut app = App {
+        update_checker: Checker::new(move |release| {
+            // The event loop may already be closed during shutdown.
+            let _ = update_proxy.send_event(UserEvent::Update(release));
+        }),
         proxy: event_loop.create_proxy(),
         config: load_config(),
         session: None,
