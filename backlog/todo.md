@@ -13,11 +13,11 @@ _terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
-_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 0/7 tasks done
+_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 1/7 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#6](https://github.com/marmotz/graphene-term/issues/6) | Command blocks: own PTY loop replacing alacritty's EventLoop | — |
+| [x]  | [#6](https://github.com/marmotz/graphene-term/issues/6) | Command blocks: own PTY loop replacing alacritty's EventLoop | — |
 | [ ]  | [#7](https://github.com/marmotz/graphene-term/issues/7) | Command blocks: OSC 133 stream scanner | — |
 | [ ]  | [#8](https://github.com/marmotz/graphene-term/issues/8) | Command blocks: shell integration scripts and automatic injection | — |
 | [ ]  | [#9](https://github.com/marmotz/graphene-term/issues/9) | Command blocks: shell state, cell tags and row index | #6, #7 |

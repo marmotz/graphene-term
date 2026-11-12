@@ -4,13 +4,14 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alacritty_terminal::event::{Event, EventListener, Notify, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
+
+use crate::pty::{self, Msg, PtyLoop};
 
 /// Events sent from the PTY and update check threads to the UI thread.
 #[derive(Debug)]
@@ -39,7 +40,7 @@ impl EventListener for EventProxy {
 
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
-    notifier: Notifier,
+    sender: pty::Sender,
 }
 
 impl Terminal {
@@ -59,28 +60,31 @@ impl Terminal {
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
         let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
 
-        let event_loop = EventLoop::new(term.clone(), proxy, pty, false, false)?;
-        let notifier = Notifier(event_loop.channel());
-        event_loop.spawn();
+        let pty_loop = PtyLoop::new(term.clone(), proxy, pty)?;
+        let sender = pty_loop.sender();
+        pty_loop.spawn();
 
-        Ok(Self { term, notifier })
+        Ok(Self { term, sender })
     }
 
     /// Sends bytes to the shell.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        self.notifier.notify(bytes);
+        let bytes = bytes.into();
+        if !bytes.is_empty() {
+            self.sender.send(Msg::Input(bytes));
+        }
     }
 
     /// Resizes both the terminal grid and the PTY.
     pub fn resize(&self, size: WindowSize) {
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
         self.term.lock().resize(dims);
-        let _ = self.notifier.0.send(Msg::Resize(size));
+        self.sender.send(Msg::Resize(size));
     }
 }
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = self.notifier.0.send(Msg::Shutdown);
+        self.sender.send(Msg::Shutdown);
     }
 }

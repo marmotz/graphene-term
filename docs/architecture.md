@@ -23,6 +23,7 @@ src/
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
+  pty.rs           PTY thread: poller, write queue, read and parse (`feed`) into Term
   frame.rs         snapshot of the visible grid with resolved colors
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
@@ -56,10 +57,10 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 ## Threads
 
 ```
-UI thread (winit)                         PTY thread (alacritty_terminal EventLoop)
------------------                         ----------------------------------------
-keyboard / mouse  --Notifier(Msg)-->      writes to PTY
-                                          reads PTY, parses VT into Term
+UI thread (winit)                         PTY thread (pty::PtyLoop)
+-----------------                         -------------------------
+keyboard / mouse  --pty::Sender(Msg)-->   writes to PTY (WriteQueue)
+                                          reads PTY, pty::feed parses VT into Term
 request_redraw   <--UserEvent::Terminal-- EventProxy::send_event(Wakeup, Title, ...)
 RedrawRequested:
   lock Term (FairMutex)
@@ -73,6 +74,13 @@ RedrawRequested:
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
 - When the shell exits, the event loop exits and the window closes.
+- The PTY thread (`src/pty.rs`) is Graphene's own, with the structure of alacritty's
+  `EventLoop`: one `polling::Poller` for the PTY, the child exit and the channel;
+  `Msg::{Input, Resize, Shutdown}` sent through `pty::Sender` (mpsc + `poller.notify()`);
+  a `WriteQueue` resumed on partial writes; `EIO` on read ignored until the child exit
+  event; synchronized updates flushed with `stop_sync` on their timeout. Each read is
+  parsed by `pty::feed`, the single parse step, so the byte stream can be split around
+  it. The `Term` lock is leased before reading and held for at most 64 KiB of parsing.
 - The `update-check` thread (started in `App::resumed` when `updates.check` is true)
   wakes up when a check is due, reloads `update.json`, calls GitHub only when the last
   check is one interval old (otherwise reuses the cached release), saves the state and

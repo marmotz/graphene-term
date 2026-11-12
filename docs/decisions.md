@@ -13,9 +13,20 @@ cost ~100 ms at startup (see `backlog/features/performance/technical.md`).
 
 A correct VT emulator is a large amount of work (escape sequences, alternate screen,
 scroll regions, wide chars, reflow on resize). `alacritty_terminal` provides it, plus
-the PTY and its I/O thread, and is battle-tested. We only depend on its public API (`Term`, `tty`, `event_loop`).
+the PTY, and is battle-tested. We only depend on its public API (`Term`, `tty`, `vte`).
 Graphene-specific features (blocks, input editor) will
 be layered on top.
+
+## Own PTY loop
+
+alacritty's `event_loop::EventLoop` parses whole read buffers, sometimes several reads
+at once, inside its own thread: the cursor position at a given byte of the stream is
+unknown. Command blocks need it (an OSC 133 mark must be applied where the shell emitted
+it, and `vte` 0.15 drops OSC 133 without a callback). Graphene therefore runs its own
+PTY thread (`src/pty.rs`), a close copy of alacritty's loop on `polling`, whose parse
+step `pty::feed` can be split around marks. alacritty's `tty` module still spawns the
+shell and owns the PTY file descriptors. Poller keys `0` (read/write) and `1` (child
+event) mirror alacritty's unix `tty`, where they are `pub(crate)`.
 
 ## Own glyph pipeline on `cosmic-text` (glyphon dropped)
 
