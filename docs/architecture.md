@@ -26,13 +26,14 @@ src/
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   osc133.rs        incremental OSC 133 / OSC 8 scanner over the PTY byte stream (pure)
   blocks.rs        ShellState (phase, blocks, status), cell tags, row roles, block bounds (pure)
+  view.rs          viewport rows: grid line and block role of each row, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
-  frame.rs         snapshot of the visible grid with resolved colors
+  frame.rs         snapshot of the visible grid with resolved colors and block marks
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
-  layout.rs        pixels <-> grid geometry
+  layout.rs        pixels <-> grid geometry, gutter, hit-testing
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
   update/
@@ -55,7 +56,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `blocks`, `osc133`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `blocks`, `osc133`, `view`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
@@ -119,17 +120,28 @@ RedrawRequested:
   `Output`) from its first tagged cell; untagged rows continue the block above.
   `blocks::block_bounds(term, id)` gives the first row, the command cells and the
   output rows of a block.
+- `view::rows(term, shell, display_offset)` lists the viewport rows: the grid line each
+  one shows and its `RowRole`. Rows have no role on the alternate screen or while no
+  block is known, and then no row index is built. `Frame::capture` and the mouse
+  (`view::point`) both go through these rows.
+- The grid is drawn right of a gutter one cell wide (`GridLayout::gutter`), always
+  reserved. Each block row gets a status bar there (green, red, yellow, or
+  `DimForeground` for `Success`, `Failure`, `Running`, `Unknown`), and the first row of
+  a block a 1 px separator in `DimForeground` across the grid. Rows below the cursor
+  get no mark. `GridLayout::hit` tells a gutter pixel from a grid cell.
 
 ## Rendering pipeline
 
-1. `Frame::capture` walks `term.renderable_content()` and produces one `FrameCell` per
-   visible cell: character, final fg/bg (after DIM, INVERSE, HIDDEN, OSC overrides),
+1. `Frame::capture` reads the grid lines given by `view::rows` (colors overrides,
+   selection and cursor from `term.renderable_content()`) and produces one `FrameCell`
+   per visible cell, plus one `RowDecoration` (status bar, separator) per row: character, final fg/bg (after DIM, INVERSE, HIDDEN, OSC overrides),
    bold/italic/underline/strikeout, wide-char spacer flag.
    The block cursor is baked into the cell colors; other shapes (beam, underline,
    hollow when unfocused) are returned separately.
 2. `scene::build` converts the frame into:
     - `under` rects: cell backgrounds, consecutive same-color cells merged, default
-      background skipped (it is the clear color);
+      background skipped (it is the clear color), then the block status bars (a quarter
+      of a cell wide, in the gutter) and separators;
     - `over` rects: underline, strikeout, non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
       anchored at the cell origin;
@@ -174,8 +186,9 @@ is reset with the glyph cache, and the frame is resolved again.
 
 ### Mouse selection
 
-- `layout::point_at` converts the cursor pixel to a viewport cell and side, then
-  `term::viewport_to_point` to a grid point (the view may be scrolled).
+- `layout::point_at` converts the cursor pixel to a viewport cell and side (the gutter
+  clamps to the first column), then `view::point` to a grid point through the view
+  rows (the view may be scrolled).
 - Left press: `ClickTracker` counts clicks (400 ms, same cell) and `selection::
   start_selection` creates a `Simple` (or `Block` with `Ctrl`), `Semantic` or `Lines`
   selection in `Term::selection`, or extends it with `Shift`.

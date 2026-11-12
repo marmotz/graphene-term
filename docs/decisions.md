@@ -42,6 +42,13 @@ cells carry no tag; a row with no tag belongs to the block above it. The links f
 must ignore the `graphene-block` scheme. The right prompt has its own tag kind so it is
 never taken for the command start.
 
+## Gutter always reserved
+
+The command block marks (status bar, later the fold chevron) are drawn in a gutter one
+cell wide, left of the grid. It is reserved from the start, even when the shell sends
+no marks, so the first block never changes the column count: no reflow mid-session.
+The cost is one column fewer for every user.
+
 ## Own glyph pipeline on `cosmic-text` (glyphon dropped)
 
 glyphon was used first: it handles shaping, font fallback and a glyph atlas through

@@ -66,6 +66,8 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     let mut under = Vec::new();
     let mut over = Vec::new();
     let mut glyphs = Vec::new();
+    let bar_width = (cell.width / 4.0).round().max(1.0);
+    let grid_width = layout.columns as f32 * cell.width;
 
     for (line, cells) in frame.rows.iter().enumerate() {
         // Backgrounds: merge consecutive cells with the same non-default color.
@@ -84,6 +86,25 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                     color: gpu_color(bg, srgb_target),
                 });
             }
+        }
+
+        // Command block marks, over the backgrounds and below the glyphs: the status bar
+        // in the gutter, the separator at the top of the block's first row.
+        let decoration = frame.decorations.get(line).copied().unwrap_or_default();
+        let (grid_x, y) = layout.cell_origin(0, line);
+        if let Some(status) = decoration.bar {
+            under.push(RectInstance {
+                position: [grid_x - layout.gutter, y],
+                size: [bar_width, cell.height],
+                color: gpu_color(frame.block_colors.status(status), srgb_target),
+            });
+        }
+        if decoration.separator {
+            under.push(RectInstance {
+                position: [grid_x, y],
+                size: [grid_width, 1.0],
+                color: gpu_color(frame.block_colors.dim, srgb_target),
+            });
         }
 
         // Decorations.
@@ -193,7 +214,8 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
 mod tests {
     use super::*;
     use crate::banner::{Banner, BannerLayout};
-    use crate::frame::{FrameBanner, FrameCell, FrameCursor};
+    use crate::blocks::Status;
+    use crate::frame::{BlockColors, FrameBanner, FrameCell, FrameCursor, RowDecoration};
     use crate::layout::CellSize;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -217,7 +239,8 @@ mod tests {
         }
     }
 
-    fn layout() -> GridLayout {
+    /// 10 x 20 px cells, no padding, the one-cell gutter left of the grid.
+    fn gutter_layout() -> GridLayout {
         GridLayout::new(
             100,
             100,
@@ -229,8 +252,35 @@ mod tests {
         )
     }
 
+    /// Same cells, with the grid at the origin.
+    fn layout() -> GridLayout {
+        GridLayout {
+            gutter: 0.0,
+            ..gutter_layout()
+        }
+    }
+
+    const GREEN: Rgb = Rgb { r: 0, g: 255, b: 0 };
+    const YELLOW: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 0,
+    };
+    const GREY: Rgb = Rgb {
+        r: 128,
+        g: 128,
+        b: 128,
+    };
+
     fn frame(rows: Vec<Vec<FrameCell>>) -> Frame {
         Frame {
+            decorations: vec![RowDecoration::default(); rows.len()],
+            block_colors: BlockColors {
+                success: GREEN,
+                failure: RED,
+                running: YELLOW,
+                dim: GREY,
+            },
             rows,
             cursor: None,
             background: BG,
@@ -388,6 +438,54 @@ mod tests {
             vec![([text.x, text.y], 'a'), ([text.x + 20.0, text.y], 'b')]
         );
         assert!(scene.glyphs.is_empty());
+    }
+
+    #[test]
+    fn block_rows_get_a_status_bar_in_the_gutter() {
+        let mut f = frame(vec![vec![cell('a')]; 5]);
+        let statuses = [
+            None,
+            Some(Status::Success),
+            Some(Status::Failure(2)),
+            Some(Status::Running),
+            Some(Status::Unknown),
+        ];
+        for (decoration, bar) in f.decorations.iter_mut().zip(statuses) {
+            decoration.bar = bar;
+        }
+        let l = gutter_layout();
+        let scene = build(&f, &l, false);
+        let rgb = |c: Rgb| gpu_color(c, false);
+        // A quarter of a cell wide, full row height, at the gutter's left edge.
+        let bars: Vec<_> = scene
+            .under
+            .iter()
+            .map(|r| (r.position, r.size, r.color))
+            .collect();
+        assert_eq!(
+            bars,
+            vec![
+                ([0.0, 20.0], [3.0, 20.0], rgb(GREEN)),
+                ([0.0, 40.0], [3.0, 20.0], rgb(RED)),
+                ([0.0, 60.0], [3.0, 20.0], rgb(YELLOW)),
+                ([0.0, 80.0], [3.0, 20.0], rgb(GREY)),
+            ]
+        );
+        // The grid itself starts after the gutter.
+        assert_eq!(placed(&scene.glyphs)[0], ([10.0, 0.0], 'a'));
+    }
+
+    #[test]
+    fn first_block_row_gets_a_separator_across_the_grid() {
+        let mut f = frame(vec![vec![cell('a')]; 2]);
+        f.decorations[1].separator = true;
+        let l = gutter_layout();
+        let scene = build(&f, &l, false);
+        assert_eq!(scene.under.len(), 1);
+        let separator = scene.under[0];
+        assert_eq!(separator.position, [10.0, 20.0]);
+        assert_eq!(separator.size, [l.columns as f32 * 10.0, 1.0]);
+        assert_eq!(separator.color, gpu_color(GREY, false));
     }
 
     #[test]

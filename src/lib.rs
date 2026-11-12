@@ -23,6 +23,7 @@ mod shell_integration;
 mod terminal;
 mod theme;
 mod update;
+mod view;
 
 /// Version of this build, computed by `build.rs`.
 pub const VERSION: &str = env!("GRAPHENE_VERSION");
@@ -40,9 +41,11 @@ pub fn start_perf_clock() {
 /// Internals exercised by `benches/render.rs`. Not a stable API.
 #[doc(hidden)]
 pub mod bench {
+    pub use crate::blocks::ShellState;
     pub use crate::frame::Frame;
     pub use crate::layout::{CellSize, GridLayout};
     pub use crate::palette::Palette;
     pub use crate::renderer::scene;
     pub use crate::renderer::{GlyphKey, Glyphs, Headless};
+    pub use crate::view::rows as view_rows;
 }

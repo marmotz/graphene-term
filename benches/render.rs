@@ -1,7 +1,7 @@
 //! Rendering benchmarks on recorded PTY output (see `fixtures/README.md`).
 //!
 //! - `parse`: bytes into a fresh `Term`;
-//! - `frame`: `Frame::capture` + `scene::build`;
+//! - `frame`: view rows + `Frame::capture` + `scene::build`;
 //! - `glyphs_cold` / `glyphs_warm`: glyph cache lookups for every visible cell, with a
 //!   cache emptied before each pass (rasterization and atlas placement included) or
 //!   already filled;
@@ -17,7 +17,9 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use graphene::bench::{CellSize, Frame, GlyphKey, Glyphs, GridLayout, Headless, Palette, scene};
+use graphene::bench::{
+    CellSize, Frame, GlyphKey, Glyphs, GridLayout, Headless, Palette, ShellState, scene, view_rows,
+};
 
 /// Terminal size of the recordings.
 const COLUMNS: usize = 120;
@@ -77,10 +79,18 @@ fn term_for(fixture: &Fixture) -> Term<VoidListener> {
     term
 }
 
+/// Frame of the viewport of `term`, with no shell integration.
+fn capture(term: &Term<VoidListener>, palette: &Palette) -> Frame {
+    let shell = ShellState::new();
+    let rows = view_rows(term, &shell, term.grid().display_offset());
+    Frame::capture(term, &rows, &shell, palette, true)
+}
+
 fn layout(cell: CellSize) -> GridLayout {
     GridLayout {
         cell,
         padding: PADDING,
+        gutter: cell.width,
         columns: COLUMNS,
         lines: LINES,
     }
@@ -113,7 +123,7 @@ fn frame(c: &mut Criterion) {
         let term = term_for(fixture);
         group.bench_function(fixture.name, |b| {
             b.iter(|| {
-                let frame = Frame::capture(black_box(&term), &palette, true);
+                let frame = capture(black_box(&term), &palette);
                 scene::build(&frame, &layout, true)
             })
         });
@@ -144,12 +154,7 @@ fn glyphs(c: &mut Criterion) {
     let mut cold = c.benchmark_group("glyphs_cold");
     let frames: Vec<_> = FIXTURES
         .iter()
-        .map(|fixture| {
-            (
-                fixture.name,
-                Frame::capture(&term_for(fixture), &palette, true),
-            )
-        })
+        .map(|fixture| (fixture.name, capture(&term_for(fixture), &palette)))
         .collect();
     for (name, frame) in &frames {
         cold.bench_function(*name, |b| {
@@ -179,7 +184,7 @@ fn gpu_prepare(c: &mut Criterion) {
     };
     let size = |cell: CellSize| {
         (
-            (COLUMNS as f32 * cell.width + 2.0 * PADDING).ceil() as u32,
+            ((COLUMNS + 1) as f32 * cell.width + 2.0 * PADDING).ceil() as u32,
             (LINES as f32 * cell.height + 2.0 * PADDING).ceil() as u32,
         )
     };
@@ -190,11 +195,11 @@ fn gpu_prepare(c: &mut Criterion) {
     };
     let layout = layout(renderer.cell_size());
     let palette = Palette::default();
-    let blank = Frame::capture(&new_term(), &palette, true);
+    let blank = capture(&new_term(), &palette);
 
     let mut group = c.benchmark_group("gpu_prepare");
     for fixture in FIXTURES {
-        let frame = Frame::capture(&term_for(fixture), &palette, true);
+        let frame = capture(&term_for(fixture), &palette);
         group.bench_function(format!("{}/idle", fixture.name), |b| {
             b.iter(|| renderer.render(black_box(&frame), &layout).unwrap())
         });

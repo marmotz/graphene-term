@@ -43,7 +43,6 @@ impl EventListener for EventProxy {
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     /// Shell integration state. Lock order: `term` first, then `shell`.
-    #[allow(dead_code, reason = "read by the rendering and input tasks")]
     pub shell: Arc<Mutex<ShellState>>,
     sender: pty::Sender,
 }

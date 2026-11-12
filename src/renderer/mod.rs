@@ -384,7 +384,7 @@ mod tests {
     use alacritty_terminal::vte::ansi::Rgb;
 
     use super::*;
-    use crate::frame::FrameCell;
+    use crate::frame::{BlockColors, FrameCell};
 
     const SIZE: u32 = 64;
     const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -429,6 +429,13 @@ mod tests {
         let layout = GridLayout::new(SIZE, SIZE, cell_size, 0.0);
         let frame = Frame {
             rows: vec![vec![cell(' '), cell('M'), cell(' ')]],
+            decorations: Vec::new(),
+            block_colors: BlockColors {
+                success: WHITE,
+                failure: WHITE,
+                running: WHITE,
+                dim: WHITE,
+            },
             cursor: None,
             background: BLACK,
             banner: None,
@@ -441,11 +448,14 @@ mod tests {
             .filter(|&x| (0..SIZE).any(|y| lit(x, y)))
             .collect();
         let (first, last) = (lit_columns[0], *lit_columns.last().unwrap());
-        // Only the 'M' of the second cell is drawn, inside that cell (one pixel of
-        // antialiasing slack on each side).
-        assert!(first as f32 >= cell_size.width - 1.0, "{lit_columns:?}");
+        // Only the 'M' of the second cell is drawn, inside that cell, after the
+        // one-cell gutter (one pixel of antialiasing slack on each side).
         assert!(
-            last as f32 <= 2.0 * cell_size.width + 1.0,
+            first as f32 >= 2.0 * cell_size.width - 1.0,
+            "{lit_columns:?}"
+        );
+        assert!(
+            last as f32 <= 3.0 * cell_size.width + 1.0,
             "{lit_columns:?}"
         );
         assert!((0..SIZE).all(|x| !lit(x, cell_size.height as u32 + 1)));

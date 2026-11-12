@@ -7,11 +7,6 @@
 //! scroll, history eviction and reflow, so the rows of a block are found again from the
 //! grid alone ([`index`], [`block_bounds`]), with no line number to keep up to date.
 
-#![allow(
-    dead_code,
-    reason = "row index, bounds and accessors are read by the rendering and input tasks"
-)]
-
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -93,6 +88,7 @@ impl RowRole {
 
 /// Where a block lies in the grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "read by the block selection and copy actions")]
 pub struct BlockBounds {
     /// First row of the prompt.
     pub first_row: Line,
@@ -366,6 +362,7 @@ pub fn index<L>(term: &Term<L>, lines: Range<Line>) -> Vec<RowRole> {
 }
 
 /// Where block `id` lies in the grid, `None` when none of its rows is left.
+#[allow(dead_code, reason = "read by the block selection and copy actions")]
 pub fn block_bounds<L>(term: &Term<L>, id: BlockId) -> Option<BlockBounds> {
     let grid = term.grid();
     let top = grid.topmost_line();
@@ -419,6 +416,7 @@ pub fn block_bounds<L>(term: &Term<L>, id: BlockId) -> Option<BlockBounds> {
 }
 
 /// The cell after `point`, wrapping to the next row; `point` itself at the grid end.
+#[allow(dead_code, reason = "read by the block selection and copy actions")]
 fn next_cell<L>(term: &Term<L>, point: Point) -> Point {
     if point.column + 1 < term.columns() {
         Point::new(point.line, point.column + 1)

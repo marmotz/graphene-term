@@ -4,14 +4,18 @@
 //! renderer then works on this plain data.
 
 use alacritty_terminal::event::EventListener;
-use alacritty_terminal::index::Point;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::banner::BannerLayout;
+use crate::blocks::{RowRole, ShellState, Status};
 use crate::palette::Palette;
+use crate::view::ViewRow;
 
 /// A single cell ready to be drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,121 +48,172 @@ pub struct FrameBanner {
     pub text: Rgb,
 }
 
+/// Command block marks of one row, drawn in the gutter and across the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RowDecoration {
+    /// Status bar of the block the row belongs to.
+    pub bar: Option<Status>,
+    /// The row is the first one of its block: a line is drawn at its top.
+    pub separator: bool,
+}
+
+/// Colors of the block marks, resolved from the palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockColors {
+    pub success: Rgb,
+    pub failure: Rgb,
+    pub running: Rgb,
+    /// `Unknown` status and separators.
+    pub dim: Rgb,
+}
+
+impl BlockColors {
+    fn resolve(palette: &Palette, overrides: &Colors) -> Self {
+        let named = |color| palette.resolve(Color::Named(color), overrides);
+        Self {
+            success: named(NamedColor::Green),
+            failure: named(NamedColor::Red),
+            running: named(NamedColor::Yellow),
+            dim: named(NamedColor::DimForeground),
+        }
+    }
+
+    pub fn status(&self, status: Status) -> Rgb {
+        match status {
+            Status::Success => self.success,
+            Status::Failure(_) => self.failure,
+            Status::Running => self.running,
+            Status::Unknown => self.dim,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Frame {
     /// Visible rows, top to bottom.
     pub rows: Vec<Vec<FrameCell>>,
+    /// Block marks of each row of `rows`.
+    pub decorations: Vec<RowDecoration>,
+    pub block_colors: BlockColors,
     pub cursor: Option<FrameCursor>,
     pub background: Rgb,
     pub banner: Option<FrameBanner>,
 }
 
 impl Frame {
-    /// Captures the visible part of the terminal.
-    pub fn capture<T: EventListener>(term: &Term<T>, palette: &Palette, focused: bool) -> Self {
-        use alacritty_terminal::grid::Dimensions;
-
+    /// Captures the grid lines shown by `view` (see [`crate::view::rows`]), with the
+    /// block marks of `shell`.
+    pub fn capture<T: EventListener>(
+        term: &Term<T>,
+        view: &[ViewRow],
+        shell: &ShellState,
+        palette: &Palette,
+        focused: bool,
+    ) -> Self {
         let content = term.renderable_content();
         let overrides = content.colors;
         let columns = term.columns();
-        let lines = term.screen_lines();
-        let display_offset = content.display_offset as i32;
+        let lines = view.len();
         let selection = content.selection;
+        let grid = term.grid();
 
-        let background = palette.resolve(
-            alacritty_terminal::vte::ansi::Color::Named(
-                alacritty_terminal::vte::ansi::NamedColor::Background,
-            ),
-            overrides,
-        );
-        let blank = FrameCell {
-            c: ' ',
-            fg: palette.foreground,
-            bg: background,
-            bold: false,
-            italic: false,
-            underline: false,
-            strikeout: false,
-            spacer: false,
-        };
-        let mut rows = vec![vec![blank; columns]; lines];
-
-        for indexed in content.display_iter {
-            let line = indexed.point.line.0 + display_offset;
-            let column = indexed.point.column.0;
-            if line < 0 || line as usize >= lines || column >= columns {
-                continue;
-            }
-            let cell = indexed.cell;
-            let flags = cell.flags;
-            let (mut fg, mut bg) = palette.cell_colors(cell.fg, cell.bg, flags, overrides);
-            if selection.is_some_and(|range| is_selected(&range, indexed.point, flags)) {
-                bg = palette.selection_background;
-                fg = palette.selection_foreground.unwrap_or(fg);
-            }
-            let spacer =
-                flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
-            rows[line as usize][column] = FrameCell {
-                c: if spacer || cell.c == '\t' {
-                    ' '
-                } else {
-                    cell.c
-                },
-                fg,
-                bg,
-                bold: flags.contains(Flags::BOLD),
-                italic: flags.contains(Flags::ITALIC),
-                underline: flags.intersects(Flags::ALL_UNDERLINES),
-                strikeout: flags.contains(Flags::STRIKEOUT),
-                spacer,
-            };
+        let background = palette.resolve(Color::Named(NamedColor::Background), overrides);
+        let mut rows = Vec::with_capacity(lines);
+        for view_row in view {
+            let grid_row = &grid[view_row.line];
+            let row = (0..columns).map(|column| {
+                let point = Point::new(view_row.line, Column(column));
+                let cell = &grid_row[Column(column)];
+                let flags = cell.flags;
+                let (mut fg, mut bg) = palette.cell_colors(cell.fg, cell.bg, flags, overrides);
+                if selection.is_some_and(|range| is_selected(&range, point, flags)) {
+                    bg = palette.selection_background;
+                    fg = palette.selection_foreground.unwrap_or(fg);
+                }
+                let spacer =
+                    flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
+                FrameCell {
+                    c: if spacer || cell.c == '\t' {
+                        ' '
+                    } else {
+                        cell.c
+                    },
+                    fg,
+                    bg,
+                    bold: flags.contains(Flags::BOLD),
+                    italic: flags.contains(Flags::ITALIC),
+                    underline: flags.intersects(Flags::ALL_UNDERLINES),
+                    strikeout: flags.contains(Flags::STRIKEOUT),
+                    spacer,
+                }
+            });
+            rows.push(row.collect::<Vec<_>>());
         }
 
-        let cursor_color = palette.resolve(
-            alacritty_terminal::vte::ansi::Color::Named(
-                alacritty_terminal::vte::ansi::NamedColor::Cursor,
-            ),
-            overrides,
-        );
-        let cursor_line = content.cursor.point.line.0 + display_offset;
-        let cursor_column = content.cursor.point.column.0;
+        let cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), overrides);
+        let cursor_point = content.cursor.point;
+        let cursor_line = view.iter().position(|row| row.line == cursor_point.line);
+        let cursor_column = cursor_point.column.0;
         let mut shape = content.cursor.shape;
         if !focused && shape != CursorShape::Hidden {
             shape = CursorShape::HollowBlock;
         }
 
-        let cursor = if shape == CursorShape::Hidden
-            || cursor_line < 0
-            || cursor_line as usize >= lines
-            || cursor_column >= columns
-        {
-            None
-        } else if shape == CursorShape::Block {
-            // Bake the block cursor into the cell colors.
-            let line = cursor_line as usize;
-            let cell = &mut rows[line][cursor_column];
-            cell.bg = cursor_color;
-            cell.fg = palette.cursor_text;
-            if cursor_column + 1 < columns && rows[line][cursor_column + 1].spacer {
-                rows[line][cursor_column + 1].bg = cursor_color;
+        let cursor = match cursor_line {
+            _ if shape == CursorShape::Hidden || cursor_column >= columns => None,
+            None => None,
+            Some(line) if shape == CursorShape::Block => {
+                // Bake the block cursor into the cell colors.
+                let cell = &mut rows[line][cursor_column];
+                cell.bg = cursor_color;
+                cell.fg = palette.cursor_text;
+                if cursor_column + 1 < columns && rows[line][cursor_column + 1].spacer {
+                    rows[line][cursor_column + 1].bg = cursor_color;
+                }
+                None
             }
-            None
-        } else {
-            Some(FrameCursor {
+            Some(line) => Some(FrameCursor {
                 column: cursor_column,
-                line: cursor_line as usize,
+                line,
                 shape,
                 color: cursor_color,
-            })
+            }),
         };
 
         Self {
             rows,
+            decorations: decorations(term, view, shell),
+            block_colors: BlockColors::resolve(palette, overrides),
             cursor,
             background,
             banner: None,
         }
     }
+}
+
+/// Block marks of the rows of `view`. Rows below the cursor are not drawn by the shell
+/// yet, so they get none even though the index counts them in the last block.
+fn decorations<T>(term: &Term<T>, view: &[ViewRow], shell: &ShellState) -> Vec<RowDecoration> {
+    let cursor_line = term.grid().cursor.point.line;
+    // Block of the row above the first view row, to know whether that row starts its
+    // block.
+    let mut previous = view
+        .first()
+        .filter(|row| row.role.block().is_some() && row.line > term.grid().topmost_line())
+        .and_then(|row| crate::blocks::index(term, row.line - 1..row.line)[0].block());
+    view.iter()
+        .map(|row| {
+            let block = row.role.block().filter(|_| row.line <= cursor_line);
+            let separator = matches!(row.role, RowRole::Prompt(_) | RowRole::Input(_))
+                && block.is_some()
+                && previous != block;
+            previous = row.role.block();
+            RowDecoration {
+                bar: block.map(|id| shell.block(id).map_or(Status::Unknown, |b| b.status)),
+                separator,
+            }
+        })
+        .collect()
 }
 
 /// Whether the cell at `point` is highlighted by `range`. Both halves of a wide
@@ -176,15 +231,41 @@ fn is_selected(range: &SelectionRange, point: Point, flags: Flags) -> bool {
 mod tests {
     use super::*;
     use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::grid::Scroll;
     use alacritty_terminal::term::Config;
     use alacritty_terminal::term::test::TermSize;
     use alacritty_terminal::vte::ansi::Processor;
+
+    use crate::osc133::Scanner;
+    use crate::pty;
+    use crate::view;
 
     fn term_with(bytes: &[u8]) -> Term<VoidListener> {
         let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, bytes);
         term
+    }
+
+    /// Captures the viewport of `term`, with no shell integration.
+    fn capture(term: &Term<VoidListener>, palette: &Palette, focused: bool) -> Frame {
+        let shell = ShellState::new();
+        let rows = view::rows(term, &shell, term.grid().display_offset());
+        Frame::capture(term, &rows, &shell, palette, focused)
+    }
+
+    /// Feeds `bytes` through the shell integration path, then captures the viewport.
+    fn capture_blocks(term: &mut Term<VoidListener>, bytes: &str) -> Frame {
+        let mut shell = ShellState::new();
+        pty::process(
+            &mut Scanner::new(),
+            &mut Processor::new(),
+            &mut shell,
+            term,
+            bytes.as_bytes(),
+        );
+        let rows = view::rows(term, &shell, term.grid().display_offset());
+        Frame::capture(term, &rows, &shell, &Palette::default(), true)
     }
 
     fn row_text(frame: &Frame, line: usize) -> String {
@@ -197,7 +278,7 @@ mod tests {
 
     #[test]
     fn captures_text_and_dimensions() {
-        let frame = Frame::capture(&term_with(b"hello\r\nworld"), &Palette::default(), true);
+        let frame = capture(&term_with(b"hello\r\nworld"), &Palette::default(), true);
         assert_eq!((frame.rows[0].len(), frame.rows.len()), (10, 3));
         assert_eq!(row_text(&frame, 0), "hello     ");
         assert_eq!(row_text(&frame, 1), "world     ");
@@ -206,7 +287,7 @@ mod tests {
     #[test]
     fn applies_sgr_attributes() {
         let p = Palette::default();
-        let frame = Frame::capture(&term_with(b"\x1b[1;31mR\x1b[0m\x1b[4mU"), &p, true);
+        let frame = capture(&term_with(b"\x1b[1;31mR\x1b[0m\x1b[4mU"), &p, true);
         let r = frame.rows[0][0];
         assert!(r.bold);
         assert_eq!(r.fg, p.indexed[1]);
@@ -216,14 +297,14 @@ mod tests {
 
     #[test]
     fn truecolor_background() {
-        let frame = Frame::capture(&term_with(b"\x1b[48;2;1;2;3mX"), &Palette::default(), true);
+        let frame = capture(&term_with(b"\x1b[48;2;1;2;3mX"), &Palette::default(), true);
         assert_eq!(frame.rows[0][0].bg, Rgb { r: 1, g: 2, b: 3 });
     }
 
     #[test]
     fn block_cursor_is_baked_into_cell() {
         let p = Palette::default();
-        let frame = Frame::capture(&term_with(b"ab"), &p, true);
+        let frame = capture(&term_with(b"ab"), &p, true);
         assert_eq!(frame.cursor, None);
         assert_eq!(frame.rows[0][2].bg, p.cursor);
         assert_eq!(frame.rows[0][2].fg, p.cursor_text);
@@ -231,7 +312,7 @@ mod tests {
 
     #[test]
     fn unfocused_cursor_is_hollow() {
-        let frame = Frame::capture(&term_with(b"ab"), &Palette::default(), false);
+        let frame = capture(&term_with(b"ab"), &Palette::default(), false);
         let cursor = frame.cursor.expect("cursor visible");
         assert_eq!((cursor.column, cursor.line), (2, 0));
         assert_eq!(cursor.shape, CursorShape::HollowBlock);
@@ -240,7 +321,7 @@ mod tests {
     #[test]
     fn hidden_cursor_is_not_drawn() {
         let p = Palette::default();
-        let frame = Frame::capture(&term_with(b"\x1b[?25l"), &p, true);
+        let frame = capture(&term_with(b"\x1b[?25l"), &p, true);
         assert_eq!(frame.cursor, None);
         assert_eq!(frame.rows[0][0].bg, p.background);
     }
@@ -261,7 +342,7 @@ mod tests {
         assert_eq!(p.selection_foreground, None);
         let mut term = term_with(b"\x1b[31mhe\x1b[0mllo\r\n");
         select(&mut term, (0, 1), (0, 2));
-        let frame = Frame::capture(&term, &p, true);
+        let frame = capture(&term, &p, true);
         // Each cell keeps its own foreground.
         assert_eq!(frame.rows[0][1].fg, p.indexed[1]);
         assert_eq!(frame.rows[0][2].fg, p.foreground);
@@ -284,7 +365,7 @@ mod tests {
         p.selection_foreground = Some(white);
         let mut term = term_with(b"\x1b[31mhello\r\n");
         select(&mut term, (0, 1), (0, 2));
-        let frame = Frame::capture(&term, &p, true);
+        let frame = capture(&term, &p, true);
         assert_eq!(frame.rows[0][1].fg, white);
         assert_eq!(frame.rows[0][0].fg, p.indexed[1]);
     }
@@ -294,7 +375,7 @@ mod tests {
         let p = Palette::default();
         let mut term = term_with("x日\r\n".as_bytes());
         select(&mut term, (0, 1), (0, 1));
-        let frame = Frame::capture(&term, &p, true);
+        let frame = capture(&term, &p, true);
         assert!(frame.rows[0][2].spacer);
         for column in [1, 2] {
             assert_eq!(frame.rows[0][column].bg, p.selection_background);
@@ -303,7 +384,7 @@ mod tests {
 
         // Selecting only the spacer highlights the whole character too.
         select(&mut term, (0, 2), (0, 2));
-        let frame = Frame::capture(&term, &p, true);
+        let frame = capture(&term, &p, true);
         for column in [1, 2] {
             assert_eq!(frame.rows[0][column].bg, p.selection_background);
         }
@@ -314,7 +395,7 @@ mod tests {
         let p = Palette::default();
         let mut term = term_with(b"ab");
         select(&mut term, (0, 0), (0, 4));
-        let frame = Frame::capture(&term, &p, true);
+        let frame = capture(&term, &p, true);
         assert_eq!(frame.rows[0][2].bg, p.cursor);
         assert_eq!(frame.rows[0][2].fg, p.cursor_text);
         assert_eq!(frame.rows[0][1].bg, p.selection_background);
@@ -322,9 +403,91 @@ mod tests {
 
     #[test]
     fn wide_chars_mark_spacer() {
-        let frame = Frame::capture(&term_with("日x".as_bytes()), &Palette::default(), true);
+        let frame = capture(&term_with("日x".as_bytes()), &Palette::default(), true);
         assert_eq!(frame.rows[0][0].c, '日');
         assert!(frame.rows[0][1].spacer);
         assert_eq!(frame.rows[0][2].c, 'x');
+    }
+
+    #[test]
+    fn scrolled_view_shows_history_rows_and_hides_the_cursor() {
+        let mut term = term_with(b"1\r\n2\r\n3\r\n4\r\n5");
+        term.scroll_display(Scroll::Delta(2));
+        let frame = capture(&term, &Palette::default(), false);
+        let texts: Vec<String> = (0..3).map(|line| row_text(&frame, line)).collect();
+        assert_eq!(texts, ["1         ", "2         ", "3         "]);
+        assert_eq!(frame.cursor, None);
+    }
+
+    #[test]
+    fn selection_follows_scrolled_rows() {
+        let p = Palette::default();
+        let mut term = term_with(b"1\r\n2\r\n3\r\n4\r\n5");
+        select(&mut term, (-1, 0), (-1, 0));
+        term.scroll_display(Scroll::Delta(2));
+        let frame = capture(&term, &p, true);
+        // Grid line -1 ("2") is the second visible row.
+        assert_eq!(frame.rows[1][0].bg, p.selection_background);
+        assert_eq!(frame.rows[0][0].bg, p.background);
+    }
+
+    #[test]
+    fn rows_without_blocks_have_no_decoration() {
+        let frame = capture(&term_with(b"hello\r\nworld"), &Palette::default(), true);
+        assert_eq!(frame.decorations, vec![RowDecoration::default(); 3]);
+    }
+
+    #[test]
+    fn block_rows_are_decorated_up_to_the_cursor() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 6), VoidListener);
+        let frame = capture_blocks(
+            &mut term,
+            "\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07\
+             \x1b]133;A\x07$ \x1b]133;B\x07false\r\n\x1b]133;C\x07\x1b]133;D;1\x07\
+             \x1b]133;A\x07$ \x1b]133;B\x07",
+        );
+        let row = |bar, separator| RowDecoration { bar, separator };
+        assert_eq!(
+            frame.decorations,
+            vec![
+                row(Some(Status::Success), true),
+                row(Some(Status::Success), false),
+                row(Some(Status::Failure(1)), true),
+                // The last prompt: no command ran yet. Below the cursor: nothing.
+                row(Some(Status::Unknown), true),
+                row(None, false),
+                row(None, false),
+            ]
+        );
+        let p = Palette::default();
+        assert_eq!(frame.block_colors.success, p.indexed[2]);
+        assert_eq!(frame.block_colors.failure, p.indexed[1]);
+        assert_eq!(frame.block_colors.running, p.indexed[3]);
+        assert_eq!(frame.block_colors.dim, p.named(NamedColor::DimForeground));
+    }
+
+    #[test]
+    fn block_continuing_above_the_view_gets_no_separator() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let frame = capture_blocks(
+            &mut term,
+            "\x1b]133;A\x07$ \x1b]133;B\x07seq\r\n\x1b]133;C\x07\
+             1\r\n2\r\n3\r\n4\r\n5\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
+        );
+        // Rows "4", "5" are the output of the first block, cut at the top of the view.
+        assert_eq!(row_text(&frame, 0), "4         ");
+        assert!(!frame.decorations[0].separator);
+        assert_eq!(frame.decorations[0].bar, Some(Status::Success));
+        assert!(frame.decorations[2].separator);
+    }
+
+    #[test]
+    fn alternate_screen_is_not_decorated() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let frame = capture_blocks(
+            &mut term,
+            "\x1b]133;A\x07$ \x1b]133;B\x07vim\r\n\x1b]133;C\x07\x1b[?1049hx",
+        );
+        assert_eq!(frame.decorations, vec![RowDecoration::default(); 3]);
     }
 }

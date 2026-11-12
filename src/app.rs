@@ -1,11 +1,11 @@
 //! Window and event handling.
 
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::term::{self, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
@@ -31,6 +31,7 @@ use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
+use crate::view;
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
@@ -202,13 +203,21 @@ impl Session {
         }
     }
 
-    /// Grid point and cell side under the mouse cursor.
-    fn mouse_point(&self, display_offset: usize) -> (Point, Side) {
+    /// Grid point and cell side under the mouse cursor. `term` is the locked
+    /// `self.terminal.term`.
+    fn mouse_point(&self, term: &term::Term<EventProxy>) -> (Point, Side) {
         let (column, line, side) = self
             .layout
             .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
-        let point = term::viewport_to_point(display_offset, Point::new(line, Column(column)));
-        (point, side)
+        let rows = {
+            let shell = self
+                .terminal
+                .shell
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            view::rows(term, &shell, term.grid().display_offset())
+        };
+        (view::point(&rows, line, column), side)
     }
 
     /// Viewport cell (column, line) under the mouse cursor, clamped to the grid.
@@ -264,7 +273,7 @@ impl Session {
 
     fn left_press(&mut self) {
         let mut term = self.terminal.term.lock();
-        let (point, side) = self.mouse_point(term.grid().display_offset());
+        let (point, side) = self.mouse_point(&term);
         let clicks = self.click_tracker.click(point, Instant::now());
         // The selection changes until the release: no text to keep meanwhile.
         self.selection_snapshot = None;
@@ -304,7 +313,7 @@ impl Session {
 
     /// Moves the selection end to the cell under the mouse cursor.
     fn update_selection(&self, term: &mut term::Term<EventProxy>) {
-        let (point, side) = self.mouse_point(term.grid().display_offset());
+        let (point, side) = self.mouse_point(term);
         if let Some(selection) = term.selection.as_mut() {
             selection.update(point, side);
             self.window.request_redraw();
@@ -618,7 +627,13 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 let mut frame = {
                     let term = session.terminal.term.lock();
-                    Frame::capture(&term, &session.palette, session.focused)
+                    let shell = session
+                        .terminal
+                        .shell
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    let rows = view::rows(&term, &shell, term.grid().display_offset());
+                    Frame::capture(&term, &rows, &shell, &session.palette, session.focused)
                 };
                 frame.banner = session.shown_banner().map(|shown| FrameBanner {
                     layout: session.banner_layout(&shown),
