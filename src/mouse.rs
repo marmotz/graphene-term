@@ -3,6 +3,7 @@
 
 use alacritty_terminal::term::TermMode;
 use winit::keyboard::ModifiersState;
+use winit::window::CursorIcon;
 
 /// Highest 1-based coordinate the X10 encoding can carry (`32 + 223 = 255`).
 const X10_MAX_COORDINATE: usize = 223;
@@ -216,6 +217,16 @@ pub fn wheel_bytes(
         return Some(alternate_scroll_bytes(lines, mode));
     }
     None
+}
+
+/// Pointer shape: the arrow while the application captures the mouse, the I-beam
+/// (text selection) otherwise.
+pub fn pointer_icon(mode: TermMode) -> CursorIcon {
+    if mode.intersects(TermMode::MOUSE_MODE) {
+        CursorIcon::Default
+    } else {
+        CursorIcon::Text
+    }
 }
 
 #[cfg(test)]
@@ -530,5 +541,19 @@ mod tests {
     fn wheel_out_of_x10_range_scrolls_history() {
         let mode = TermMode::MOUSE_REPORT_CLICK;
         assert_eq!(wheel_bytes(1, 300, 0, NONE, mode), None);
+    }
+
+    #[test]
+    fn pointer_is_arrow_while_the_application_captures_the_mouse() {
+        assert_eq!(pointer_icon(TermMode::empty()), CursorIcon::Text);
+        assert_eq!(pointer_icon(TermMode::ALT_SCREEN), CursorIcon::Text);
+        for mode in [
+            TermMode::MOUSE_REPORT_CLICK,
+            TermMode::MOUSE_DRAG,
+            TermMode::MOUSE_MOTION,
+            TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE,
+        ] {
+            assert_eq!(pointer_icon(mode), CursorIcon::Default);
+        }
     }
 }

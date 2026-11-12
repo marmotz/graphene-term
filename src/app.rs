@@ -54,6 +54,8 @@ struct Session {
     click_tracker: ClickTracker,
     /// Gesture owned by the application (mouse reporting).
     app_mouse: mouse::Reporter,
+    /// Pointer shape last applied to the window; `None` before the first update.
+    pointer: Option<winit::window::CursorIcon>,
     /// When the next auto-scroll step is due during a drag past the grid edges.
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection kept while its text is unchanged.
@@ -135,6 +137,16 @@ impl Session {
 
     fn mode(&self) -> TermMode {
         *self.terminal.term.lock().mode()
+    }
+
+    /// Arrow while the application captures the mouse, I-beam otherwise; the window is
+    /// only updated when the shape changes.
+    fn update_pointer(&mut self) {
+        let icon = mouse::pointer_icon(self.mode());
+        if self.pointer != Some(icon) {
+            self.window.set_cursor(icon);
+            self.pointer = Some(icon);
+        }
     }
 
     fn scroll_display(&self, scroll: Scroll) {
@@ -384,6 +396,7 @@ impl Session {
         match event {
             TermEvent::Wakeup => {
                 self.validate_selection();
+                self.update_pointer();
                 self.window.request_redraw()
             }
             TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
@@ -485,6 +498,7 @@ impl App {
             left_pressed: false,
             click_tracker: ClickTracker::default(),
             app_mouse: mouse::Reporter::default(),
+            pointer: None,
             auto_scroll_deadline: None,
             selection_snapshot: None,
             config_banner: self.config_banner.clone(),
@@ -506,7 +520,10 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         match self.create_session(event_loop) {
-            Ok(session) => self.session = Some(session),
+            Ok(mut session) => {
+                session.update_pointer();
+                self.session = Some(session);
+            }
             Err(error) => return self.fail(event_loop, error),
         }
         self.update_checker.apply(&self.config.updates);
