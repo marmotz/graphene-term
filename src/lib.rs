@@ -13,6 +13,7 @@ mod layout;
 mod mouse;
 mod opener;
 mod palette;
+mod perf;
 mod renderer;
 mod selection;
 mod terminal;
@@ -25,6 +26,11 @@ pub const VERSION: &str = env!("GRAPHENE_VERSION");
 /// Opens the window and runs the event loop until the shell exits.
 pub fn run() -> anyhow::Result<()> {
     app::run()
+}
+
+/// Starts the startup clock used by the `graphene::perf` logs. Call it first in `main`.
+pub fn start_perf_clock() {
+    perf::start();
 }
 
 /// Internals exercised by `benches/render.rs`. Not a stable API.

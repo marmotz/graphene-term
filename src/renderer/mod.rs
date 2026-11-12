@@ -11,6 +11,7 @@ use winit::window::Window;
 
 use crate::frame::Frame;
 use crate::layout::{CellSize, GridLayout};
+use crate::perf;
 use rects::RectRenderer;
 use text::TextGrid;
 
@@ -125,6 +126,7 @@ impl Renderer {
             Box::new(display),
         ));
         let surface = instance.create_surface(window.clone())?;
+        perf::mark("GPU instance and surface created");
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -132,9 +134,11 @@ impl Renderer {
             })
             .await
             .context("no compatible GPU adapter")?;
+        perf::mark("GPU adapter ready");
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await?;
+        perf::mark("GPU device ready");
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps
@@ -158,6 +162,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let layers = Layers::new(&device, &queue, format, family, font_size);
+        perf::mark("renderer ready");
 
         Ok(Self {
             instance,
@@ -184,7 +189,9 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub fn render(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<()> {
+    /// Draws `frame`. Returns whether it reached the screen (`false` when the surface was
+    /// not ready and a new redraw was requested or will come).
+    pub fn render(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<bool> {
         let screen = (self.config.width, self.config.height);
         let prepared = self
             .layers
@@ -193,18 +200,18 @@ impl Renderer {
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface = self.instance.create_surface(self.window.clone())?;
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Validation => anyhow::bail!("surface validation error"),
         };
@@ -221,7 +228,7 @@ impl Renderer {
         self.window.pre_present_notify();
         self.queue.present(output);
         self.layers.text.trim();
-        Ok(())
+        Ok(true)
     }
 }
 

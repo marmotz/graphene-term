@@ -39,6 +39,36 @@ Two causes, both confirmed by the numbers:
    and only then calls `Terminal::spawn`. The shell (or btop) starts ~350 ms after the
    window, while the GPU work and the shell startup are independent.
 
+### Baseline (`cargo bench` and `graphene::perf` logs, before the new renderer)
+
+Recorded with [#64](https://github.com/marmotz/graphene-term/issues/64)'s tooling:
+AMD Ryzen 5 5600G, NVIDIA RTX 4070 Ti, X11, fixtures at 120x32 (see
+`benches/fixtures/README.md`). Criterion median times:
+
+| Bench                 | btop     | cat     | vim     | history |
+|-----------------------|----------|---------|---------|---------|
+| `parse`               | 285 µs   | 3.03 ms | 30 µs   | -       |
+| `frame`               | 196 µs   | 152 µs  | 155 µs  | 151 µs  |
+| `gpu_prepare/idle`    | 0.49 ms  | 0.33 ms | 0.34 ms | 0.34 ms |
+| `gpu_prepare/changed` | 92.2 ms  | 69.9 ms | 63.7 ms | 70.6 ms |
+
+`changed` draws a blank frame then the fixture: nearly all of it is reshaping the text
+runs of every row. `idle` reuses the shaped rows.
+
+Startup with `RUST_LOG=graphene::perf=debug`, release build, `SHELL=/usr/bin/btop`,
+default window size, three runs (ms since the start of `main`):
+
+| Step                               | Time          |
+|------------------------------------|---------------|
+| window created                     | 15 - 22       |
+| GPU instance and surface created   | 94 - 97       |
+| GPU adapter ready                  | 172 - 180     |
+| GPU device ready                   | 240 - 244     |
+| renderer ready                     | 388 - 419     |
+| shell spawned                      | 393 - 424     |
+| first PTY output                   | 423 - 456     |
+| first frame drawn after PTY output | 424 - 458     |
+
 ## Alternatives considered
 
 - **Keep glyphon, cache one shaped buffer per character**: rejected (product decision).

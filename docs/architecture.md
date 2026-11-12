@@ -18,6 +18,7 @@
 src/
   main.rs          binary entry point: --version, logger setup, calls lib::run
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
+  perf.rs          startup timing logs (`graphene::perf` target)
   app.rs           winit ApplicationHandler, Session (one window + one shell)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation

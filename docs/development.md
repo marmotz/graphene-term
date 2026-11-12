@@ -42,6 +42,10 @@ equals `Config::default()`, so keep the file in sync with the code.
 |------------|---------|--------------------------|
 | `RUST_LOG` | `warn`  | Log level (`env_logger`) |
 
+`RUST_LOG=graphene::perf=debug` logs the time of each startup step since the start of
+`main` (window, GPU instance and surface, adapter, device, renderer ready, shell spawned)
+and of the first frame drawn after the first PTY output.
+
 The theme ("graphene night") is defined in `src/palette.rs`.
 
 ## Shortcuts
@@ -66,6 +70,7 @@ Unit tests live next to the code (`#[cfg(test)]` modules):
 | `layout`          | grid size from pixels, padding, minimum size                |
 | `frame`           | capture from a real `Term` fed with escape sequences        |
 | `renderer::scene` | background merging, text runs, decorations, sRGB conversion |
+| `perf`            | timing line format, first output / first frame tracking     |
 
 `frame` tests build a `Term<VoidListener>` and feed bytes through
 `vte::ansi::Processor`, so they exercise the real emulator without a PTY or GPU.

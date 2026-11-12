@@ -1,4 +1,5 @@
 fn main() -> anyhow::Result<()> {
+    graphene::start_perf_clock();
     if std::env::args().skip(1).any(|arg| arg == "--version") {
         println!("graphene {}", graphene::VERSION);
         return Ok(());
