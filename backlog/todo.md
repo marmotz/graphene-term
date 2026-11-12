@@ -4,12 +4,12 @@
 
 ## CI tests  ·  [overview](features/ci-tests/overview.md)
 
-_tâches créées — voir [technical.md](features/ci-tests/technical.md)_ — 1/2 tasks done
+_terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#50](https://github.com/marmotz/graphene-term/issues/50) | CI: format the code base with rustfmt | — |
-| [ ]  | [#51](https://github.com/marmotz/graphene-term/issues/51) | CI: GitHub Actions workflow for pull requests | #50 |
+| [x]  | [#51](https://github.com/marmotz/graphene-term/issues/51) | CI: GitHub Actions workflow for pull requests | #50 |
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
