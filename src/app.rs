@@ -22,6 +22,7 @@ use crate::frame::{Frame, FrameBanner};
 use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::layout::GridLayout;
+use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
@@ -334,14 +335,8 @@ impl Session {
         let mode = self.mode();
         if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
             // Full-screen apps (less, vim...) get arrow keys instead of scrollback.
-            let arrow: &[u8] = match (whole > 0, mode.contains(TermMode::APP_CURSOR)) {
-                (true, true) => b"\x1bOA",
-                (true, false) => b"\x1b[A",
-                (false, true) => b"\x1bOB",
-                (false, false) => b"\x1b[B",
-            };
             self.terminal
-                .write(arrow.repeat(whole.unsigned_abs() as usize));
+                .write(mouse::alternate_scroll_bytes(whole, mode));
         } else {
             self.scroll_display(Scroll::Delta(whole));
         }
@@ -517,12 +512,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Focused(focused) => {
                 session.focused = focused;
-                if session.mode().contains(TermMode::FOCUS_IN_OUT) {
-                    session.terminal.write(if focused {
-                        &b"\x1b[I"[..]
-                    } else {
-                        &b"\x1b[O"[..]
-                    });
+                if let Some(bytes) = mouse::focus_report(focused, session.mode()) {
+                    session.terminal.write(bytes);
                 }
                 session.window.request_redraw();
             }
