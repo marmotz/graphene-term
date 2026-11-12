@@ -24,6 +24,7 @@ src/
   config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read and parse (`feed`) into Term
+  shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
@@ -46,6 +47,7 @@ src/
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
 themes/            built-in themes, embedded with include_str!
+shell-integration/ zsh, bash and fish scripts emitting OSC 133 marks, embedded with include_str!
 benches/
   render.rs        criterion benchmarks: parse, frame, glyphs_cold/warm, gpu_prepare
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script

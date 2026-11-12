@@ -32,6 +32,25 @@ newer release), and "×" hides it until the next launch.
 
 The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
+## Shell integration
+
+When `$SHELL` is zsh, bash or fish, Graphene loads a small integration script into the
+shell it starts, so the shell marks where each prompt, command and output starts (OSC
+133). Your dotfiles are not modified, and they are loaded as usual:
+
+- zsh: started with `ZDOTDIR` set to the integration folder, whose `.zshenv` restores
+  `ZDOTDIR` and sources yours;
+- bash: started with `--posix` and `ENV` set to the integration script, which turns
+  POSIX mode off and sources your startup files like a regular interactive bash;
+- fish: the integration folder is added to `XDG_DATA_DIRS`; fish 4.0 and later already
+  emit the marks, the script only adds the missing ones.
+
+The scripts are written to `$XDG_RUNTIME_DIR/graphene/shell-integration/` (a private
+folder of the system temporary directory when that variable is unset). Other shells,
+and shells started by hand inside Graphene, are left as they are. Set
+`GRAPHENE_SHELL_INTEGRATION=0` in Graphene's environment to start the shell without
+integration.
+
 ## Performance
 
 ```bash

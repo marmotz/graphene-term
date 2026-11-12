@@ -12,6 +12,7 @@ use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
 use crate::pty::{self, Msg, PtyLoop};
+use crate::shell_integration;
 
 /// Events sent from the PTY and update check threads to the UI thread.
 #[derive(Debug)]
@@ -46,12 +47,18 @@ pub struct Terminal {
 impl Terminal {
     /// Spawns the user's shell in a new PTY.
     pub fn spawn(proxy: EventProxy, size: WindowSize, config: Config) -> anyhow::Result<Self> {
-        let env = HashMap::from([
+        let mut env = HashMap::from([
             ("TERM".to_owned(), "xterm-256color".to_owned()),
             ("COLORTERM".to_owned(), "truecolor".to_owned()),
             ("TERM_PROGRAM".to_owned(), "graphene".to_owned()),
         ]);
+        // zsh, bash and fish get the shell integration; other shells start as before.
+        let shell = shell_integration::prepare().map(|injection| {
+            env.extend(injection.env);
+            tty::Shell::new(injection.program, injection.args)
+        });
         let options = tty::Options {
+            shell,
             env,
             ..Default::default()
         };

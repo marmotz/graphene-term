@@ -18,6 +18,7 @@ mod perf;
 mod pty;
 mod renderer;
 mod selection;
+mod shell_integration;
 mod terminal;
 mod theme;
 mod update;
