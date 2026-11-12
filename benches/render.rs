@@ -184,7 +184,7 @@ fn gpu_prepare(c: &mut Criterion) {
         )
     };
     let (width, height) = size(probe_cell);
-    let Some(mut renderer) = Headless::new(width, height, FONT_SIZE) else {
+    let Some(mut renderer) = Headless::new(width, height, Glyphs::new(None, FONT_SIZE)) else {
         eprintln!("gpu_prepare: no GPU adapter available, skipped");
         return;
     };

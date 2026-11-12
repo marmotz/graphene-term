@@ -43,7 +43,8 @@ equals `Config::default()`, so keep the file in sync with the code.
 | `RUST_LOG` | `warn`  | Log level (`env_logger`) |
 
 `RUST_LOG=graphene::perf=debug` logs the time of each startup step since the start of
-`main` (window, GPU instance and surface, adapter, device, renderer ready, shell spawned)
+`main` (window, glyphs ready, shell spawned, GPU instance and surface, adapter, device,
+renderer ready)
 and of the first frame drawn after the first PTY output.
 
 The theme ("graphene night") is defined in `src/palette.rs`.

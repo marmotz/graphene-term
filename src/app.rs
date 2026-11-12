@@ -26,7 +26,7 @@ use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
 use crate::perf;
-use crate::renderer::Renderer;
+use crate::renderer::{Glyphs, Renderer};
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 use crate::theme;
@@ -464,19 +464,20 @@ impl App {
         let window = Arc::new(event_loop.create_window(attributes)?);
         perf::mark("window created");
 
+        // Shell first, GPU second: the PTY reader thread parses the shell output while
+        // the renderer is being created, so the first frame shows it complete.
         let scale = window.scale_factor() as f32;
-        let renderer = pollster::block_on(Renderer::new(
-            window.clone(),
-            event_loop.owned_display_handle(),
+        let glyphs = Glyphs::new(
             self.config.font.family.clone(),
             self.config.font.size * scale,
-        ))?;
+        );
+        perf::mark("glyphs ready");
 
         let size = window.inner_size();
         let layout = GridLayout::new(
             size.width,
             size.height,
-            renderer.cell_size(),
+            glyphs.cell_size(),
             self.config.window.padding * scale,
         );
         let terminal = Terminal::spawn(
@@ -485,6 +486,12 @@ impl App {
             self.config.term_config(),
         )?;
         perf::mark("shell spawned");
+
+        let renderer = pollster::block_on(Renderer::new(
+            window.clone(),
+            event_loop.owned_display_handle(),
+            glyphs,
+        ))?;
 
         let clipboard = arboard::Clipboard::new()
             .map_err(|e| log::warn!("clipboard unavailable: {e}"))

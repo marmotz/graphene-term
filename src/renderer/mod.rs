@@ -120,11 +120,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Does the GPU work for `window`. `glyphs` is created beforehand (CPU only), so
+    /// the cell size is known and the shell spawned before this slow step.
     pub async fn new(
         window: Arc<Window>,
         display: winit::event_loop::OwnedDisplayHandle,
-        family: Option<String>,
-        font_size: f32,
+        glyphs: Glyphs,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
@@ -166,7 +167,7 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        let layers = Layers::new(&device, format, Glyphs::new(family, font_size));
+        let layers = Layers::new(&device, format, glyphs);
         perf::mark("renderer ready");
 
         Ok(Self {
@@ -249,9 +250,9 @@ pub struct Headless {
 }
 
 impl Headless {
-    /// Creates a `width` x `height` target on the default adapter. `None` when no GPU
-    /// adapter is available.
-    pub fn new(width: u32, height: u32, font_size: f32) -> Option<Self> {
+    /// Creates a `width` x `height` target on the default adapter, drawing with
+    /// `glyphs`. `None` when no GPU adapter is available.
+    pub fn new(width: u32, height: u32, glyphs: Glyphs) -> Option<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -274,7 +275,7 @@ impl Headless {
             view_formats: &[],
         });
         let target = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let layers = Layers::new(&device, format, Glyphs::new(None, font_size));
+        let layers = Layers::new(&device, format, glyphs);
         Some(Self {
             device,
             queue,
@@ -374,8 +375,20 @@ mod tests {
     }
 
     #[test]
+    fn renderer_draws_with_the_glyphs_it_is_given() {
+        let glyphs = Glyphs::new(None, 30.0);
+        let expected = glyphs.cell_size();
+        let Some(renderer) = Headless::new(SIZE, SIZE, glyphs) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        assert_eq!(renderer.cell_size(), expected);
+        assert_ne!(expected, Glyphs::new(None, 14.0).cell_size());
+    }
+
+    #[test]
     fn grid_glyph_pixels_reach_the_target_inside_their_cell() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, 14.0) else {
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };

@@ -92,6 +92,25 @@ default window size, three runs (ms since the start of `main`):
 | first PTY output                   | 423 - 456     |
 | first frame drawn after PTY output | 424 - 458     |
 
+Shell spawned before the GPU ([#67](https://github.com/marmotz/graphene-term/issues/67)),
+same setup, five runs:
+
+| Step                               | Time          |
+|------------------------------------|---------------|
+| window created                     | 16 - 62       |
+| glyphs ready                       | 73 - 113      |
+| shell spawned                      | 75 - 115      |
+| GPU instance and surface created   | 158 - 186     |
+| GPU adapter ready                  | 241 - 251     |
+| GPU device ready                   | 308 - 316     |
+| renderer ready                     | 377 - 441     |
+| first PTY output                   | 422 - 507     |
+| first frame drawn after PTY output | 448 - 534     |
+
+The shell starts about 310 ms earlier, so btop runs while the GPU is set up. The first
+frame is still bound by `renderer ready`; "first PTY output" is when the UI thread
+handles the wake-up, after the renderer is ready, not when btop wrote.
+
 ## Alternatives considered
 
 - **Keep glyphon, cache one shaped buffer per character**: rejected (product decision).
