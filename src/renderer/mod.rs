@@ -108,6 +108,31 @@ impl Layers {
     }
 }
 
+/// Backends tried in order for the window. Vulkan alone skips probing the other
+/// backends (~100 ms less at startup on the measured machine); all backends are the
+/// fallback when Vulkan is missing or has no adapter compatible with the surface.
+const BACKEND_ATTEMPTS: [wgpu::Backends; 2] = [wgpu::Backends::VULKAN, wgpu::Backends::all()];
+
+/// Runs `attempt` for each of `backends` in order and returns the first success, or
+/// the last error when every attempt fails.
+async fn first_success<T, F, Fut>(backends: &[wgpu::Backends], mut attempt: F) -> anyhow::Result<T>
+where
+    F: FnMut(wgpu::Backends) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut last_error = anyhow::anyhow!("no GPU backend to try");
+    for &b in backends {
+        match attempt(b).await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                log::info!("GPU backends {b:?} unusable: {error:#}");
+                last_error = error;
+            }
+        }
+    }
+    Err(last_error)
+}
+
 pub struct Renderer {
     instance: wgpu::Instance,
     device: wgpu::Device,
@@ -128,18 +153,26 @@ impl Renderer {
         glyphs: Glyphs,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
-            Box::new(display),
-        ));
-        let surface = instance.create_surface(window.clone())?;
-        perf::mark("GPU instance and surface created");
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await
-            .context("no compatible GPU adapter")?;
+        let (instance, surface, adapter) = first_success(&BACKEND_ATTEMPTS, |backends| {
+            let window = window.clone();
+            let display = display.clone();
+            async move {
+                let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
+                desc.backends = backends;
+                let instance = wgpu::Instance::new(desc);
+                let surface = instance.create_surface(window)?;
+                perf::mark("GPU instance and surface created");
+                let adapter = instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        compatible_surface: Some(&surface),
+                        ..Default::default()
+                    })
+                    .await
+                    .with_context(|| format!("no compatible GPU adapter ({backends:?})"))?;
+                Ok((instance, surface, adapter))
+            }
+        })
+        .await?;
         perf::mark("GPU adapter ready");
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
@@ -418,5 +451,53 @@ mod tests {
         assert!((0..SIZE).all(|x| !lit(x, cell_size.height as u32 + 1)));
         // Full coverage somewhere: the mask is tinted with the cell color.
         assert!(pixels.chunks(4).any(|px| px[0] == 255));
+    }
+
+    #[test]
+    fn vulkan_is_tried_first_then_all_backends() {
+        assert_eq!(
+            BACKEND_ATTEMPTS,
+            [wgpu::Backends::VULKAN, wgpu::Backends::all()]
+        );
+    }
+
+    #[test]
+    fn first_success_stops_at_the_first_working_backends() {
+        let mut tried = Vec::new();
+        let result = pollster::block_on(first_success(&BACKEND_ATTEMPTS, |b| {
+            tried.push(b);
+            async move { Ok(b) }
+        }));
+        assert_eq!(result.unwrap(), wgpu::Backends::VULKAN);
+        assert_eq!(tried, [wgpu::Backends::VULKAN]);
+    }
+
+    #[test]
+    fn first_success_falls_back_when_vulkan_fails() {
+        let mut tried = Vec::new();
+        let result = pollster::block_on(first_success(&BACKEND_ATTEMPTS, |b| {
+            tried.push(b);
+            async move {
+                if b == wgpu::Backends::VULKAN {
+                    anyhow::bail!("no Vulkan adapter")
+                }
+                Ok(b)
+            }
+        }));
+        assert_eq!(result.unwrap(), wgpu::Backends::all());
+        assert_eq!(tried, BACKEND_ATTEMPTS);
+    }
+
+    #[test]
+    fn first_success_returns_the_last_error_when_all_fail() {
+        let result: anyhow::Result<()> =
+            pollster::block_on(first_success(&BACKEND_ATTEMPTS, |b| async move {
+                anyhow::bail!("failed with {b:?}")
+            }));
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains(&format!("{:?}", wgpu::Backends::all())),
+            "{message}"
+        );
     }
 }

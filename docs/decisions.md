@@ -5,6 +5,10 @@
 Chosen over Tauri/Electron + xterm.js and GTK4/VTE: lowest latency and memory, full
 control over the look. Cost: UI elements (tabs, palette, blocks) must be drawn by hand.
 
+The window renderer creates its wgpu instance with the Vulkan backend alone first and
+falls back to all backends when Vulkan has no compatible adapter: probing every backend
+cost ~100 ms at startup (see `backlog/features/performance/technical.md`).
+
 ## `alacritty_terminal` for emulation
 
 A correct VT emulator is a large amount of work (escape sequences, alternate screen,

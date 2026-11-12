@@ -111,6 +111,23 @@ The shell starts about 310 ms earlier, so btop runs while the GPU is set up. The
 frame is still bound by `renderer ready`; "first PTY output" is when the UI thread
 handles the wake-up, after the renderer is ready, not when btop wrote.
 
+Vulkan tried first ([#68](https://github.com/marmotz/graphene-term/issues/68)), same
+setup, ten interleaved runs of each build (all backends vs Vulkan first):
+
+| Step                               | All backends  | Vulkan first  |
+|------------------------------------|---------------|---------------|
+| shell spawned                      | 77 - 123      | 97 - 115      |
+| GPU instance and surface created   | 149 - 193     | 139 - 167     |
+| GPU adapter ready                  | 230 - 264     | 146 - 183     |
+| GPU device ready                   | 307 - 338     | 212 - 287     |
+| renderer ready                     | 408 - 451     | 299 - 397     |
+| first frame drawn after PTY output | 506 - 535     | 399 - 495     |
+
+Instance + surface goes from ~70 ms to ~40 ms and `request_adapter` from ~70 ms to
+~8 ms: `renderer ready` and the first frame come ~100 ms earlier (median 427 to
+320 ms). Kept. Without Vulkan (`VK_ICD_FILENAMES` pointing nowhere), the first attempt
+fails at surface creation and the second one runs with all backends, as before.
+
 ## Alternatives considered
 
 - **Keep glyphon, cache one shaped buffer per character**: rejected (product decision).
