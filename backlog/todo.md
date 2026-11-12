@@ -110,11 +110,11 @@ _tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md
 
 ## Update notification  ·  [overview](features/update-notification/overview.md)
 
-_tâches créées, voir [technical.md](features/update-notification/technical.md)_ — 3/4 tasks done
+_terminé, voir [technical.md](features/update-notification/technical.md)_ — 4/4 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#56](https://github.com/marmotz/graphene-term/issues/56) | Updates: build timestamp version and tag derived from the binary | — |
 | [x]  | [#57](https://github.com/marmotz/graphene-term/issues/57) | Updates: settings, state file and GitHub release check | #56, #14 |
 | [x]  | [#58](https://github.com/marmotz/graphene-term/issues/58) | Updates: background check thread and update event | #57 |
-| [ ]  | [#59](https://github.com/marmotz/graphene-term/issues/59) | Updates: banner with open, ignore and close actions | #58, #18, #35 |
+| [x]  | [#59](https://github.com/marmotz/graphene-term/issues/59) | Updates: banner with open, ignore and close actions | #58, #18, #35 |

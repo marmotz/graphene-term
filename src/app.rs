@@ -16,17 +16,18 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-use crate::banner::{Banner, BannerLayout};
+use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{Frame, FrameBanner};
+use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::layout::GridLayout;
+use crate::opener;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 use crate::theme;
-use crate::update::Release;
 use crate::update::checker::Checker;
 
 const DEFAULT_TITLE: &str = "Graphene Term";
@@ -56,27 +57,46 @@ struct Session {
     selection_snapshot: Option<SelectionSnapshot>,
     /// Configuration error banner; `None` once dismissed or without error.
     config_banner: Option<Banner>,
-    /// Newer release reported by the update check thread.
-    #[allow(dead_code, reason = "drawn by the update banner task")]
-    update: Option<Release>,
+    /// Update banner: the newer release reported by the check thread.
+    update: UpdateBanner,
+    /// Tag the user just chose to ignore, forwarded to the update check thread.
+    ignored_tag: Option<String>,
+    lang: Lang,
 }
 
 impl Session {
-    /// Banner shown at the top of the window, placed in pixels.
-    fn banner_layout(&self) -> Option<BannerLayout> {
-        let banner = self.config_banner.as_ref()?;
-        let width = self.window.inner_size().width as f32;
-        Some(BannerLayout::new(banner, self.renderer.cell_size(), width))
+    /// Banner shown at the top of the window: the configuration errors first, then the
+    /// update notice.
+    fn shown_banner(&self) -> Option<Shown> {
+        Shown::pick(self.config_banner.as_ref(), &self.update, self.lang)
     }
 
-    /// Handles a left press on the banner. Returns whether the banner took it.
+    /// Places `shown` in pixels.
+    fn banner_layout(&self, shown: &Shown) -> BannerLayout {
+        let width = self.window.inner_size().width as f32;
+        BannerLayout::new(shown.banner(), self.renderer.cell_size(), width)
+    }
+
+    /// Handles a left press on the banner, before any selection. Returns whether the
+    /// banner took it.
     fn banner_press(&mut self) -> bool {
-        let (x, y) = (self.mouse_position.x as f32, self.mouse_position.y as f32);
-        if self.banner_layout().and_then(|l| l.hit(x, y)).is_none() {
+        let Some(shown) = self.shown_banner() else {
             return false;
+        };
+        let (x, y) = (self.mouse_position.x as f32, self.mouse_position.y as f32);
+        let Some(hit) = self.banner_layout(&shown).hit(x, y) else {
+            return false;
+        };
+        match (shown, hit) {
+            // The configuration error banner has no action: any click dismisses it.
+            (Shown::Config(_), _) => self.config_banner = None,
+            (Shown::Update(_), BannerHit::Action(index)) => match self.update.press(index) {
+                Some(UpdateEffect::Open(url)) => opener::open(&url),
+                Some(UpdateEffect::Ignore(tag)) => self.ignored_tag = Some(tag),
+                None => {}
+            },
+            (Shown::Update(_), BannerHit::Body) => {}
         }
-        // The configuration error banner has no action: any click dismisses it.
-        self.config_banner = None;
         self.window.request_redraw();
         true
     }
@@ -434,7 +454,9 @@ impl App {
             auto_scroll_deadline: None,
             selection_snapshot: None,
             config_banner: self.config_banner.clone(),
-            update: None,
+            update: UpdateBanner::default(),
+            ignored_tag: None,
+            lang: Lang::detect(),
         })
     }
 
@@ -471,7 +493,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Terminal(event) => session.handle_terminal_event(event, event_loop),
             UserEvent::Update(release) => {
-                session.update = release;
+                session.update.set(release);
                 session.window.request_redraw();
             }
         }
@@ -524,14 +546,19 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
-            WindowEvent::MouseInput { state, button, .. } => session.mouse_input(state, button),
+            WindowEvent::MouseInput { state, button, .. } => {
+                session.mouse_input(state, button);
+                if let Some(tag) = session.ignored_tag.take() {
+                    self.update_checker.ignore(&tag);
+                }
+            }
             WindowEvent::RedrawRequested => {
                 let mut frame = {
                     let term = session.terminal.term.lock();
                     Frame::capture(&term, &session.palette, session.focused)
                 };
-                frame.banner = session.banner_layout().map(|layout| FrameBanner {
-                    layout,
+                frame.banner = session.shown_banner().map(|shown| FrameBanner {
+                    layout: session.banner_layout(&shown),
                     background: session.palette.ui.banner_background,
                     text: session.palette.ui.banner_text,
                 });

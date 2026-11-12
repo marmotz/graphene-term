@@ -7,6 +7,7 @@ mod frame;
 mod i18n;
 mod input;
 mod layout;
+mod opener;
 mod palette;
 mod renderer;
 mod selection;

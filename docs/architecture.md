@@ -18,7 +18,7 @@
 src/
   main.rs          entry point, logger setup
   app.rs           winit ApplicationHandler, Session (one window + one shell)
-  banner.rs        top banner: content, pixel layout, click hit-testing
+  banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
   frame.rs         snapshot of the visible grid with resolved colors
@@ -27,6 +27,7 @@ src/
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry
+  opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
@@ -71,6 +72,11 @@ RedrawRequested:
   session stores it and requests a redraw. `Checker::apply` forwards new `[updates]`
   settings through an `mpsc` channel (`recv_timeout` is the sleep); `check = false` ends
   the thread, `true` again restarts it. A failed check is retried after one hour.
+- The update banner shows once the configuration error banner is gone. Its click
+  targets are hit-tested in `left_press` before any selection: "Open release" runs
+  `opener::open`, "×" hides the banner until a newer release, "Ignore this version"
+  hides it and sends `Command::Ignore` to the thread, which writes `ignored` in
+  `update.json` (written directly when the thread is not running).
 
 ## Rendering pipeline
 

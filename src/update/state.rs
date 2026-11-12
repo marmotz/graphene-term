@@ -78,6 +78,13 @@ impl State {
     }
 }
 
+/// Records `tag` as the ignored version in the state `file`, keeping the other fields.
+pub fn ignore(file: &Path, tag: &str) -> io::Result<()> {
+    let mut state = State::load(file);
+    state.ignored = Some(tag.to_owned());
+    state.save(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +173,47 @@ mod tests {
         assert_eq!(State::load(&file), State::default());
         std::fs::write(&file, "{ \"last_check\": \"yesterday\" }").unwrap();
         assert_eq!(State::load(&file), State::default());
+    }
+
+    #[test]
+    fn ignore_keeps_the_other_fields() {
+        let dir = TempDir::new("ignore");
+        let file = dir.0.join("graphene").join(STATE_FILE);
+        let latest = Some(Release {
+            tag: "v0.2.0".to_owned(),
+            url: "https://github.com/marmotz/graphene-term/releases/tag/v0.2.0".to_owned(),
+        });
+        State {
+            last_check: 1_794_501_169,
+            latest: latest.clone(),
+            ignored: Some("v0.1.1".to_owned()),
+        }
+        .save(&file)
+        .unwrap();
+
+        ignore(&file, "v0.2.0").unwrap();
+        assert_eq!(
+            State::load(&file),
+            State {
+                last_check: 1_794_501_169,
+                latest,
+                ignored: Some("v0.2.0".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn ignore_creates_a_missing_file() {
+        let dir = TempDir::new("ignore-missing");
+        let file = dir.0.join("graphene").join(STATE_FILE);
+        ignore(&file, "v0.2.0").unwrap();
+        assert_eq!(
+            State::load(&file),
+            State {
+                ignored: Some("v0.2.0".to_owned()),
+                ..State::default()
+            }
+        );
     }
 
     #[test]

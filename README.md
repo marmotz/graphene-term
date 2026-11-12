@@ -26,7 +26,9 @@ Graphene checks GitHub for a newer release in the background (by default every 6
 builds, every 24 hours for stable builds) and caches the result in
 `~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only
 network call is a GET to the GitHub releases API; set `check = false` in the `[updates]`
-section to turn it off.
+section to turn it off. A newer release shows a banner at the top of the window: "Open
+release" opens its GitHub page, "Ignore this version" hides it for good (until an even
+newer release), and "×" hides it until the next launch.
 
 The `RUST_LOG` environment variable sets the log level (default: `warn`).
 

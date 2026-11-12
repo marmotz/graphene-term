@@ -116,6 +116,11 @@ pub enum Msg {
     ProgramsRunning(Vec<String>),
     Close,
     Cancel,
+    // Update banner.
+    /// A newer release, by its tag.
+    UpdateAvailable(String),
+    OpenRelease,
+    IgnoreVersion,
 }
 
 /// Text of `msg` in `lang`.
@@ -184,6 +189,9 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         }
         Msg::Close => "Close",
         Msg::Cancel => "Cancel",
+        Msg::UpdateAvailable(tag) => return format!("Graphene {tag} is available").into(),
+        Msg::OpenRelease => "Open release",
+        Msg::IgnoreVersion => "Ignore this version",
     };
     Cow::Borrowed(text)
 }
@@ -246,6 +254,9 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         }
         Msg::Close => "Fermer",
         Msg::Cancel => "Annuler",
+        Msg::UpdateAvailable(tag) => return format!("Graphene {tag} est disponible").into(),
+        Msg::OpenRelease => "Voir la version",
+        Msg::IgnoreVersion => "Ignorer cette version",
     };
     Cow::Borrowed(text)
 }
@@ -297,9 +308,12 @@ mod tests {
             Msg::ProgramsRunning(_) => 27,
             Msg::Close => 28,
             Msg::Cancel => 29,
+            Msg::UpdateAvailable(_) => 30,
+            Msg::OpenRelease => 31,
+            Msg::IgnoreVersion => 32,
         }
     }
-    const VARIANT_COUNT: usize = 30;
+    const VARIANT_COUNT: usize = 33;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -339,6 +353,9 @@ mod tests {
             Msg::ProgramsRunning(vec!["vim".into(), "cargo".into()]),
             Msg::Close,
             Msg::Cancel,
+            Msg::UpdateAvailable("v0.2.0".into()),
+            Msg::OpenRelease,
+            Msg::IgnoreVersion,
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
@@ -395,6 +412,10 @@ mod tests {
                 &Msg::ProgramsRunning(vec!["vim".into(), "cargo".into()])
             ),
             "2 programs are still running: vim, cargo"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::UpdateAvailable("v0.2.0".into())),
+            "Graphene v0.2.0 est disponible"
         );
     }
 

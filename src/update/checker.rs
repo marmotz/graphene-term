@@ -2,7 +2,7 @@
 //! refreshes the shared state file, and reports the release to show to the UI thread.
 //! The loop body is the pure [`tick`] function; the thread itself is a thin loop around it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -56,6 +56,8 @@ pub fn tick(
 pub enum Command {
     /// New `[updates]` settings (config hot reload).
     Settings(UpdatesConfig),
+    /// The user ignored this release tag: record it, then re-evaluate the notice.
+    Ignore(String),
 }
 
 /// Owns the `update-check` thread: starts it when `check` is on, ends it when it is off.
@@ -90,6 +92,25 @@ impl Checker {
             return;
         }
         self.sender = spawn(settings.clone(), self.notify.clone());
+    }
+
+    /// Records `tag` as ignored in the state file. The running thread writes it and
+    /// re-evaluates its notice; without a thread, the file is written directly.
+    pub fn ignore(&self, tag: &str) {
+        if let Some(sender) = &self.sender
+            && sender.send(Command::Ignore(tag.to_owned())).is_ok()
+        {
+            return;
+        }
+        if let Some(path) = state::path() {
+            write_ignored(&path, tag);
+        }
+    }
+}
+
+fn write_ignored(path: &Path, tag: &str) {
+    if let Err(error) = state::ignore(path, tag) {
+        log::warn!("cannot write {}: {error}", path.display());
     }
 }
 
@@ -133,6 +154,11 @@ fn run(
         let wait = Duration::from_secs(tick.wake_at.saturating_sub(unix_now()));
         match receiver.recv_timeout(wait) {
             Ok(Command::Settings(new)) if new.check => settings = new,
+            Ok(Command::Ignore(tag)) => {
+                if let Some(path) = &path {
+                    write_ignored(path, &tag);
+                }
+            }
             Ok(Command::Settings(_)) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
         }
