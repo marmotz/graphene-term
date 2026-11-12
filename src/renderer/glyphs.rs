@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use cosmic_text::{
     Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
+    fontdb,
 };
 
 use super::atlas::{Atlas, Page, Region};
@@ -50,7 +51,7 @@ pub struct Upload {
 pub struct Glyphs {
     font_system: FontSystem,
     swash_cache: SwashCache,
-    /// Font family name; `None` uses the system monospace font.
+    /// Font family name, see [`resolve_family`]; `None` uses cosmic-text's monospace lookup.
     family: Option<String>,
     metrics: Metrics,
     cell: CellSize,
@@ -69,6 +70,24 @@ fn family(name: &Option<String>) -> Family<'_> {
     }
 }
 
+/// Family to shape with: the configured one, else the system monospace family by name.
+///
+/// Shaping with [`Family::Monospace`] makes cosmic-text load every monospaced font of
+/// the system (each mapped and parsed, ~20 MB with a hundred of them) as soon as a
+/// character is missing from the default font, which happens on the first shaping.
+/// A named family falls back through the script fallback lists instead, loading only
+/// the fonts that actually cover the character. `None` when the system monospace family
+/// is not installed, keeping cosmic-text's own lookup.
+fn resolve_family(db: &fontdb::Database, configured: Option<String>) -> Option<String> {
+    if configured.is_some() {
+        return configured;
+    }
+    let name = db.family_name(&Family::Monospace);
+    db.faces()
+        .any(|face| face.families.iter().any(|(family, _)| family == name))
+        .then(|| name.to_owned())
+}
+
 impl Glyphs {
     pub fn new(family: Option<String>, font_size: f32) -> Self {
         Self::with_atlas_size(family, font_size, ATLAS_SIZE)
@@ -76,6 +95,7 @@ impl Glyphs {
 
     pub(super) fn with_atlas_size(family: Option<String>, font_size: f32, atlas_size: u32) -> Self {
         let mut font_system = FontSystem::new();
+        let family = resolve_family(font_system.db(), family);
         let (metrics, cell) = Self::measure(&mut font_system, &family, font_size);
         Self {
             font_system,
@@ -257,6 +277,34 @@ mod tests {
             bold: false,
             italic: false,
         }
+    }
+
+    #[test]
+    fn configured_family_is_kept() {
+        let db = fontdb::Database::new();
+        assert_eq!(
+            resolve_family(&db, Some("Fira Code".into())),
+            Some("Fira Code".into())
+        );
+    }
+
+    #[test]
+    fn system_monospace_family_is_resolved_to_its_name() {
+        let mut db = FontSystem::new().db().clone();
+        let installed = db
+            .faces()
+            .find_map(|face| face.families.first())
+            .map(|(name, _)| name.clone())
+            .expect("tests need at least one system font");
+        db.set_monospace_family(installed.clone());
+        assert_eq!(resolve_family(&db, None), Some(installed));
+    }
+
+    #[test]
+    fn missing_system_monospace_family_keeps_the_generic_lookup() {
+        let mut db = fontdb::Database::new();
+        db.set_monospace_family("No Such Family");
+        assert_eq!(resolve_family(&db, None), None);
     }
 
     #[test]
