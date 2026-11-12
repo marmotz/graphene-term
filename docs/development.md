@@ -73,9 +73,18 @@ alignment), wide characters, box drawing, colors, cursor in vim.
 
 ## Releases
 
-Every push to `develop` (so every merged pull request) runs
-`.github/workflows/release.yml`: tests, release build, then a GitHub pre-release
-tagged `v<crate version>-dev.<run number>` with these assets:
+The CI of each pull request uploads its release binary as the `graphene-release`
+artifact (kept 30 days). Every push to `develop` (so every merged pull request) then
+runs `.github/workflows/release.yml`, which publishes a GitHub pre-release tagged
+`v<crate version>-dev.<run number>`.
+
+The release does not rebuild: `scripts/find-ci-binary.sh` finds the successful CI run
+of the merged pull request and the binary is downloaded from it. This only happens
+when the merged commit has the same tree as the pull request head (the branch was up
+to date with `develop`, which the `develop` ruleset enforces). Otherwise (direct push,
+expired artifact, ...) the workflow falls back to testing and building from source.
+
+Assets:
 
 - `graphene-<tag>-x86_64-unknown-linux-gnu.tar.gz`: binary, desktop entry, icon, licenses
 - `graphene-term_<version>~dev.<n>_amd64.deb`

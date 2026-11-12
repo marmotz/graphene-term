@@ -38,3 +38,11 @@ jobs:
 
       - name: Release build
         run: cargo build --release --locked
+
+      # Reused by the Release workflow once the pull request is merged.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: graphene-release
+          path: target/release/graphene
+          if-no-files-found: error
+          retention-days: 30
