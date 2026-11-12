@@ -142,7 +142,13 @@ impl Palette {
     }
 
     /// Computes the final (foreground, background) pair for a cell.
-    pub fn cell_colors(&self, fg: Color, bg: Color, flags: Flags, overrides: &Colors) -> (Rgb, Rgb) {
+    pub fn cell_colors(
+        &self,
+        fg: Color,
+        bg: Color,
+        flags: Flags,
+        overrides: &Colors,
+    ) -> (Rgb, Rgb) {
         let mut fg_rgb = self.resolve(fg, overrides);
         let mut bg_rgb = self.resolve(bg, overrides);
 
@@ -168,10 +174,24 @@ mod tests {
     fn indexed_table_contains_cube_and_grays() {
         let p = Palette::default();
         assert_eq!(p.indexed[16], Rgb { r: 0, g: 0, b: 0 });
-        assert_eq!(p.indexed[231], Rgb { r: 255, g: 255, b: 255 });
+        assert_eq!(
+            p.indexed[231],
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            }
+        );
         assert_eq!(p.indexed[196], Rgb { r: 255, g: 0, b: 0 });
         assert_eq!(p.indexed[232], Rgb { r: 8, g: 8, b: 8 });
-        assert_eq!(p.indexed[255], Rgb { r: 238, g: 238, b: 238 });
+        assert_eq!(
+            p.indexed[255],
+            Rgb {
+                r: 238,
+                g: 238,
+                b: 238
+            }
+        );
     }
 
     #[test]
@@ -181,8 +201,14 @@ mod tests {
         let spec = Rgb { r: 1, g: 2, b: 3 };
         assert_eq!(p.resolve(Color::Spec(spec), &o), spec);
         assert_eq!(p.resolve(Color::Named(NamedColor::Red), &o), p.indexed[1]);
-        assert_eq!(p.resolve(Color::Named(NamedColor::Foreground), &o), p.foreground);
-        assert_eq!(p.resolve(Color::Named(NamedColor::Background), &o), p.background);
+        assert_eq!(
+            p.resolve(Color::Named(NamedColor::Foreground), &o),
+            p.foreground
+        );
+        assert_eq!(
+            p.resolve(Color::Named(NamedColor::Background), &o),
+            p.background
+        );
     }
 
     #[test]
@@ -223,8 +249,19 @@ mod tests {
     fn dim_darkens_foreground() {
         let p = Palette::default();
         let o = Colors::default();
-        let white = Color::Spec(Rgb { r: 200, g: 100, b: 0 });
+        let white = Color::Spec(Rgb {
+            r: 200,
+            g: 100,
+            b: 0,
+        });
         let (f, _) = p.cell_colors(white, Color::Named(NamedColor::Background), Flags::DIM, &o);
-        assert_eq!(f, Rgb { r: 132, g: 66, b: 0 });
+        assert_eq!(
+            f,
+            Rgb {
+                r: 132,
+                g: 66,
+                b: 0
+            }
+        );
     }
 }

@@ -26,7 +26,14 @@ impl Hash for TextRun {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.column.hash(state);
         self.text.hash(state);
-        (self.color.r, self.color.g, self.color.b, self.bold, self.italic).hash(state);
+        (
+            self.color.r,
+            self.color.g,
+            self.color.b,
+            self.bold,
+            self.italic,
+        )
+            .hash(state);
     }
 }
 
@@ -54,9 +61,19 @@ fn srgb_to_linear(c: u8) -> f32 {
 /// Converts a color for a render target, linearizing it when the target is sRGB.
 pub fn gpu_color(rgb: Rgb, srgb_target: bool) -> [f32; 4] {
     if srgb_target {
-        [srgb_to_linear(rgb.r), srgb_to_linear(rgb.g), srgb_to_linear(rgb.b), 1.0]
+        [
+            srgb_to_linear(rgb.r),
+            srgb_to_linear(rgb.g),
+            srgb_to_linear(rgb.b),
+            1.0,
+        ]
     } else {
-        [rgb.r as f32 / 255.0, rgb.g as f32 / 255.0, rgb.b as f32 / 255.0, 1.0]
+        [
+            rgb.r as f32 / 255.0,
+            rgb.g as f32 / 255.0,
+            rgb.b as f32 / 255.0,
+            1.0,
+        ]
     }
 }
 
@@ -140,7 +157,11 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         let (x, y) = layout.cell_origin(cursor.column, cursor.line);
         let color = gpu_color(cursor.color, srgb_target);
         let beam = (cell.width / 8.0).round().max(2.0);
-        let rect = |position: [f32; 2], size: [f32; 2]| RectInstance { position, size, color };
+        let rect = |position: [f32; 2], size: [f32; 2]| RectInstance {
+            position,
+            size,
+            color,
+        };
         match cursor.shape {
             CursorShape::Beam => over.push(rect([x, y], [beam, cell.height])),
             CursorShape::Underline => {
@@ -148,9 +169,15 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             }
             CursorShape::HollowBlock | CursorShape::Block => {
                 over.push(rect([x, y], [cell.width, thickness]));
-                over.push(rect([x, y + cell.height - thickness], [cell.width, thickness]));
+                over.push(rect(
+                    [x, y + cell.height - thickness],
+                    [cell.width, thickness],
+                ));
                 over.push(rect([x, y], [thickness, cell.height]));
-                over.push(rect([x + cell.width - thickness, y], [thickness, cell.height]));
+                over.push(rect(
+                    [x + cell.width - thickness, y],
+                    [thickness, cell.height],
+                ));
             }
             CursorShape::Hidden => {}
         }
@@ -171,7 +198,11 @@ mod tests {
     use crate::layout::CellSize;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
-    const FG: Rgb = Rgb { r: 255, g: 255, b: 255 };
+    const FG: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
     const RED: Rgb = Rgb { r: 255, g: 0, b: 0 };
 
     fn cell(c: char) -> FrameCell {
@@ -188,7 +219,15 @@ mod tests {
     }
 
     fn layout() -> GridLayout {
-        GridLayout::new(100, 100, CellSize { width: 10.0, height: 20.0 }, 0.0)
+        GridLayout::new(
+            100,
+            100,
+            CellSize {
+                width: 10.0,
+                height: 20.0,
+            },
+            0.0,
+        )
     }
 
     fn frame(rows: Vec<Vec<FrameCell>>) -> Frame {
@@ -218,17 +257,31 @@ mod tests {
     }
 
     fn runs(scene: &Scene) -> Vec<(usize, &str)> {
-        scene.rows[0].iter().map(|r| (r.column, r.text.as_str())).collect()
+        scene.rows[0]
+            .iter()
+            .map(|r| (r.column, r.text.as_str()))
+            .collect()
     }
 
     #[test]
     fn runs_group_by_style_and_isolate_non_ascii() {
-        let mut row = vec![cell('a'), cell('b'), cell('日'), cell(' '), cell('c'), cell('d'), cell('e')];
+        let mut row = vec![
+            cell('a'),
+            cell('b'),
+            cell('日'),
+            cell(' '),
+            cell('c'),
+            cell('d'),
+            cell('e'),
+        ];
         row[3].spacer = true;
         row[5].fg = RED;
         row[6].fg = RED;
         let scene = build(&frame(vec![row]), &layout(), false);
-        assert_eq!(runs(&scene), vec![(0, "ab"), (2, "日"), (4, "c"), (5, "de")]);
+        assert_eq!(
+            runs(&scene),
+            vec![(0, "ab"), (2, "日"), (4, "c"), (5, "de")]
+        );
     }
 
     #[test]
@@ -258,7 +311,14 @@ mod tests {
 
     #[test]
     fn srgb_target_linearizes() {
-        let c = gpu_color(Rgb { r: 128, g: 255, b: 0 }, true);
+        let c = gpu_color(
+            Rgb {
+                r: 128,
+                g: 255,
+                b: 0,
+            },
+            true,
+        );
         assert!((c[0] - 0.2158).abs() < 0.001);
         assert_eq!(c[1], 1.0);
         assert_eq!(c[2], 0.0);
