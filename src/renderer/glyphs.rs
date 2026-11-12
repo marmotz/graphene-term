@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use glyphon::cosmic_text::{
+use cosmic_text::{
     Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
 };
 
@@ -74,7 +74,7 @@ impl Glyphs {
         Self::with_atlas_size(family, font_size, ATLAS_SIZE)
     }
 
-    fn with_atlas_size(family: Option<String>, font_size: f32, atlas_size: u32) -> Self {
+    pub(super) fn with_atlas_size(family: Option<String>, font_size: f32, atlas_size: u32) -> Self {
         let mut font_system = FontSystem::new();
         let (metrics, cell) = Self::measure(&mut font_system, &family, font_size);
         Self {
@@ -162,12 +162,11 @@ impl Glyphs {
         std::mem::take(&mut self.uploads)
     }
 
-    /// The font system, swash cache and base attributes, for code still shaping text
-    /// itself.
-    pub(super) fn text_system(&mut self) -> (&mut FontSystem, &mut SwashCache, Attrs<'_>) {
+    /// The font system and base attributes, to shape text the way the cache does.
+    #[cfg(test)]
+    fn text_system(&mut self) -> (&mut FontSystem, Attrs<'_>) {
         (
             &mut self.font_system,
-            &mut self.swash_cache,
             Attrs::new().family(family(&self.family)),
         )
     }
@@ -339,7 +338,7 @@ mod tests {
         assert_eq!(glyphs.metrics(), Metrics::new(FONT_SIZE, cell.height));
 
         // Same computation as before the glyph cache: advance of a shaped "M".
-        let (font_system, _, attrs) = glyphs.text_system();
+        let (font_system, attrs) = glyphs.text_system();
         let mut buffer = Buffer::new(font_system, Metrics::new(FONT_SIZE, cell.height));
         buffer.set_text("M", &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);

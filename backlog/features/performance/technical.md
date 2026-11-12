@@ -66,6 +66,18 @@ per-frame cost the new renderer pays for its lookups.
 `changed` draws a blank frame then the fixture: nearly all of it is reshaping the text
 runs of every row. `idle` reuses the shaped rows.
 
+After the glyph pipeline ([#66](https://github.com/marmotz/graphene-term/issues/66),
+glyphon removed), same machine, same benches:
+
+| Bench                 | btop     | cat     | vim     | history |
+|-----------------------|----------|---------|---------|---------|
+| `frame`               | 182 µs   | 155 µs  | 161 µs  | 157 µs  |
+| `gpu_prepare/idle`    | 0.29 ms  | 0.19 ms | 0.21 ms | 0.18 ms |
+| `gpu_prepare/changed` | 0.42 ms  | 0.32 ms | 0.34 ms | 0.32 ms |
+
+`changed` drops by about 99.5 %: a frame no longer reshapes anything, it looks up each
+glyph in the cache and uploads one instance buffer. `idle` drops by about 45 %.
+
 Startup with `RUST_LOG=graphene::perf=debug`, release build, `SHELL=/usr/bin/btop`,
 default window size, three runs (ms since the start of `main`):
 

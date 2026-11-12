@@ -1,10 +1,10 @@
 //! GPU renderer: owns the wgpu surface and draws [`Frame`]s.
 
 mod atlas;
+mod cells;
 mod glyphs;
 mod rects;
 pub mod scene;
-mod text;
 
 use std::sync::Arc;
 
@@ -14,15 +14,17 @@ use winit::window::Window;
 use crate::frame::Frame;
 use crate::layout::{CellSize, GridLayout};
 use crate::perf;
+use cells::CellRenderer;
 pub use glyphs::{GlyphKey, Glyphs};
 use rects::RectRenderer;
-use text::TextGrid;
 
 /// GPU pipelines drawing a [`Frame`], shared by the window [`Renderer`] and the
 /// [`Headless`] one used by the benchmarks.
 struct Layers {
     rects: RectRenderer,
-    text: TextGrid,
+    cells: CellRenderer,
+    /// Font system, cell metrics and glyph cache feeding `cells`.
+    glyphs: Glyphs,
     srgb: bool,
 }
 
@@ -34,16 +36,11 @@ struct Prepared {
 }
 
 impl Layers {
-    fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        family: Option<String>,
-        font_size: f32,
-    ) -> Self {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, glyphs: Glyphs) -> Self {
         Self {
             rects: RectRenderer::new(device, format),
-            text: TextGrid::new(device, queue, format, Glyphs::new(family, font_size)),
+            cells: CellRenderer::new(device, format, glyphs.atlas_size()),
+            glyphs,
             srgb: format.is_srgb(),
         }
     }
@@ -56,7 +53,7 @@ impl Layers {
         screen: (u32, u32),
         frame: &Frame,
         layout: &GridLayout,
-    ) -> anyhow::Result<Prepared> {
+    ) -> Prepared {
         let scene = scene::build(frame, layout, self.srgb);
 
         let mut rects = scene.under;
@@ -64,13 +61,19 @@ impl Layers {
         rects.extend(scene.over);
         let total = rects.len() as u32;
         self.rects.prepare(device, queue, screen, &rects);
-        self.text
-            .prepare(device, queue, screen, layout, &scene.rows, &scene.overlay)?;
-        Ok(Prepared {
+        self.cells.prepare(
+            device,
+            queue,
+            screen,
+            &mut self.glyphs,
+            &scene.glyphs,
+            &scene.overlay,
+        );
+        Prepared {
             clear: scene.clear,
             under_count,
             total,
-        })
+        }
     }
 
     /// Records the render pass drawing what [`Self::prepare`] uploaded into `view`.
@@ -79,7 +82,7 @@ impl Layers {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &Prepared,
-    ) -> anyhow::Result<()> {
+    ) {
         let [r, g, b, a] = prepared.clear.map(f64::from);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("terminal pass"),
@@ -98,11 +101,10 @@ impl Layers {
             multiview_mask: None,
         });
         self.rects.render(&mut pass, 0..prepared.under_count);
-        self.text.render(&mut pass)?;
+        self.cells.render(&mut pass);
         self.rects
             .render(&mut pass, prepared.under_count..prepared.total);
-        self.text.render_overlay(&mut pass)?;
-        Ok(())
+        self.cells.render_overlay(&mut pass);
     }
 }
 
@@ -164,7 +166,7 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        let layers = Layers::new(&device, &queue, format, family, font_size);
+        let layers = Layers::new(&device, format, Glyphs::new(family, font_size));
         perf::mark("renderer ready");
 
         Ok(Self {
@@ -179,11 +181,11 @@ impl Renderer {
     }
 
     pub fn cell_size(&self) -> CellSize {
-        self.layers.text.cell_size()
+        self.layers.glyphs.cell_size()
     }
 
     pub fn set_font_size(&mut self, font_size: f32) {
-        self.layers.text.set_font_size(font_size);
+        self.layers.glyphs.set_font_size(font_size);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -198,7 +200,7 @@ impl Renderer {
         let screen = (self.config.width, self.config.height);
         let prepared = self
             .layers
-            .prepare(&self.device, &self.queue, screen, frame, layout)?;
+            .prepare(&self.device, &self.queue, screen, frame, layout);
 
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -225,12 +227,11 @@ impl Renderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.layers.draw(&mut encoder, &view, &prepared)?;
+        self.layers.draw(&mut encoder, &view, &prepared);
 
         self.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();
         self.queue.present(output);
-        self.layers.text.trim();
         Ok(true)
     }
 }
@@ -240,6 +241,8 @@ impl Renderer {
 pub struct Headless {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    #[cfg_attr(not(test), allow(dead_code))]
+    texture: wgpu::Texture,
     target: wgpu::TextureView,
     screen: (u32, u32),
     layers: Layers,
@@ -267,14 +270,15 @@ impl Headless {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let target = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let layers = Layers::new(&device, &queue, format, None, font_size);
+        let layers = Layers::new(&device, format, Glyphs::new(None, font_size));
         Some(Self {
             device,
             queue,
+            texture,
             target,
             screen: (width, height),
             layers,
@@ -282,20 +286,124 @@ impl Headless {
     }
 
     pub fn cell_size(&self) -> CellSize {
-        self.layers.text.cell_size()
+        self.layers.glyphs.cell_size()
     }
 
     /// Prepares, draws and submits `frame`, without waiting for the GPU.
     pub fn render(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<()> {
-        let prepared =
-            self.layers
-                .prepare(&self.device, &self.queue, self.screen, frame, layout)?;
+        let prepared = self
+            .layers
+            .prepare(&self.device, &self.queue, self.screen, frame, layout);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.layers.draw(&mut encoder, &self.target, &prepared)?;
+        self.layers.draw(&mut encoder, &self.target, &prepared);
         self.queue.submit(Some(encoder.finish()));
-        self.layers.text.trim();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Headless {
+    /// Waits for the GPU and reads the target back, as tightly packed RGBA rows.
+    /// The target width must be a multiple of 64 pixels.
+    fn read_pixels(&self) -> Vec<u8> {
+        let (width, height) = self.screen;
+        let bytes_per_row = width * 4;
+        assert_eq!(bytes_per_row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("headless readback"),
+            size: u64::from(bytes_per_row * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            self.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        buffer.map_async(wgpu::MapMode::Read, .., |result| result.unwrap());
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        buffer.get_mapped_range(..).unwrap().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::vte::ansi::Rgb;
+
+    use super::*;
+    use crate::frame::FrameCell;
+
+    const SIZE: u32 = 64;
+    const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
+    const WHITE: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
+
+    fn cell(c: char) -> FrameCell {
+        FrameCell {
+            c,
+            fg: WHITE,
+            bg: BLACK,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            spacer: false,
+        }
+    }
+
+    #[test]
+    fn grid_glyph_pixels_reach_the_target_inside_their_cell() {
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, 14.0) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let cell_size = renderer.cell_size();
+        let layout = GridLayout::new(SIZE, SIZE, cell_size, 0.0);
+        let frame = Frame {
+            rows: vec![vec![cell(' '), cell('M'), cell(' ')]],
+            cursor: None,
+            background: BLACK,
+            banner: None,
+        };
+        renderer.render(&frame, &layout).unwrap();
+        let pixels = renderer.read_pixels();
+
+        let lit = |x: u32, y: u32| pixels[((y * SIZE + x) * 4) as usize] > 0;
+        let lit_columns: Vec<u32> = (0..SIZE)
+            .filter(|&x| (0..SIZE).any(|y| lit(x, y)))
+            .collect();
+        let (first, last) = (lit_columns[0], *lit_columns.last().unwrap());
+        // Only the 'M' of the second cell is drawn, inside that cell (one pixel of
+        // antialiasing slack on each side).
+        assert!(first as f32 >= cell_size.width - 1.0, "{lit_columns:?}");
+        assert!(
+            last as f32 <= 2.0 * cell_size.width + 1.0,
+            "{lit_columns:?}"
+        );
+        assert!((0..SIZE).all(|x| !lit(x, cell_size.height as u32 + 1)));
+        // Full coverage somewhere: the mask is tinted with the cell color.
+        assert!(pixels.chunks(4).any(|px| px[0] == 255));
     }
 }

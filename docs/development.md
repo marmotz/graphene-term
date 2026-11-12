@@ -69,7 +69,9 @@ Unit tests live next to the code (`#[cfg(test)]` modules):
 | `input`           | key encoding, control codes, cursor modes, shortcuts, paste |
 | `layout`          | grid size from pixels, padding, minimum size                |
 | `frame`           | capture from a real `Term` fed with escape sequences        |
-| `renderer::scene` | background merging, text runs, decorations, sRGB conversion |
+| `renderer::scene` | background merging, glyph instances, decorations, sRGB conversion |
+| `renderer::cells` | glyph quad placement, skipped glyphs, frame resolved again after an atlas reset |
+| `renderer`        | headless render read back: glyph pixels land in their cell (skipped without GPU) |
 | `perf`            | timing line format, first output / first frame tracking     |
 
 `frame` tests build a `Term<VoidListener>` and feed bytes through

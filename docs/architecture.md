@@ -6,7 +6,7 @@
 |-----------------------------------|----------------------------------------------------------|---------|
 | Window, input events              | `winit`                                                  | 0.30    |
 | GPU                               | `wgpu`                                                   | 30      |
-| Text shaping and rendering        | `glyphon` (on `cosmic-text` 0.19)                        | 0.12    |
+| Font loading, fallback, raster    | `cosmic-text` (glyphs drawn by our own wgpu pipeline)    | 0.19    |
 | PTY, VT parsing, grid, scrollback | `alacritty_terminal`                                     | 0.26    |
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
 | Config file                       | `toml` + `serde`                                         | 1       |
@@ -37,12 +37,13 @@ src/
     checker.rs     update-check thread, pure tick (check or reuse the cache, next wake-up)
   renderer/
     mod.rs         wgpu device/surface, frame orchestration, headless renderer (benches)
-    scene.rs       Frame -> rects + text runs (pure, no GPU)
+    scene.rs       Frame -> rects + glyph instances (pure, no GPU)
     glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic) -> atlas slot
     atlas.rs       shelf allocator of the mask and color atlas pages (pure, no GPU)
+    cells.rs       instanced glyph pipeline: atlas textures, uploads, one quad per glyph
+    cell.wgsl      shader for glyphs (mask tinted with the cell color, or color glyph)
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
-    text.rs        glyphon text grid with per-row caching, overlay text (font system from glyphs.rs)
 themes/            built-in themes, embedded with include_str!
 benches/
   render.rs        criterion benchmarks: parse, frame, glyphs_cold/warm, gpu_prepare
@@ -96,31 +97,36 @@ RedrawRequested:
     - `under` rects: cell backgrounds, consecutive same-color cells merged, default
       background skipped (it is the clear color);
     - `over` rects: underline, strikeout, non-block cursor;
-    - text runs per row, each anchored at a grid column;
-    - overlay text at pixel positions (banner).
-3. `Renderer::render` draws in one pass: clear, `under` rects, text, `over` rects,
-   overlay text. Colors are linearized when the surface format is sRGB.
+    - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
+      anchored at the cell origin;
+    - overlay glyph instances at pixel positions (banner).
+3. `Renderer::render` resolves the glyph instances through the glyph cache, uploads the
+   newly rasterized glyphs, then draws in one pass: clear, `under` rects, glyphs,
+   `over` rects, overlay glyphs. Colors are linearized when the surface format is sRGB.
 
 ### Banner
 
 `Frame.banner` holds a `BannerLayout` (from `banner.rs`) and its theme colors
 (`ui.banner_background`, `ui.banner_text`). It covers the top of the window, over the
-grid (the grid does not move): its rect is the last `over` rect and its text goes to a
-second glyphon renderer drawn after it. The layout gives the pixel rect of each action,
+grid (the grid does not move): its rect is the last `over` rect and its text goes to the
+overlay glyphs (one character per cell width), drawn after it. The layout gives the pixel rect of each action,
 and `Session::left_press` hit-tests the banner before starting a selection.
 
 The configuration error banner shows the first error of `config.toml` and the theme
 file ("(+N more)" when there are several); every error is also logged. A click hides it.
 
-### Text runs
+### Glyphs
 
-A run groups consecutive ASCII cells sharing color, bold and italic. Every non-ASCII
-character gets its own run. Each run is a separate glyphon `Buffer` placed at its
-column origin, so a glyph whose advance differs from the cell width (fallback fonts,
-CJK, symbols) cannot shift the rest of the line. Blank runs are dropped.
+A cell holds one character, so nothing is shaped per frame. `Glyphs` (`glyphs.rs`)
+resolves each `(char, bold, italic)` once, by shaping that single character with
+`Shaping::Advanced` (font fallback included), rasterizes it once and places it in the
+atlas (`atlas.rs`: an `R8Unorm` mask page and an RGBA color page for emoji).
 
-`TextGrid` caches the buffers per row and reshapes a row only when the hash of its
-runs changes.
+`CellRenderer` (`cells.rs`) turns each glyph instance into one quad at the cell origin
+plus the glyph placement, rounded to whole pixels, and copies the pixels of new glyphs
+into the atlas textures. A glyph wider than its cell (fallback fonts, CJK, symbols)
+overflows the cell instead of shifting the rest of the line. When the atlas is full it
+is reset with the glyph cache, and the frame is resolved again.
 
 ## Input
 
