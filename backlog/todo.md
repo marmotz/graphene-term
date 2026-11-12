@@ -1,4 +1,4 @@
-<!-- backlog-sync 2026-11-12T15:36Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-12T16:45Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
@@ -107,3 +107,14 @@ _tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md
 | [ ]  | [#42](https://github.com/marmotz/graphene-term/issues/42) | Tabs: tab bar, UI text and tab shortcuts | #41 |
 | [ ]  | [#43](https://github.com/marmotz/graphene-term/issues/43) | Tabs: close confirmation dialog | #35, #42 |
 | [ ]  | [#44](https://github.com/marmotz/graphene-term/issues/44) | Tabs: command palette and docs | #35, #43 |
+
+## Update notification  ·  [overview](features/update-notification/overview.md)
+
+_tâches créées, voir [technical.md](features/update-notification/technical.md)_ — 0/4 tasks done
+
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [ ]  | [#56](https://github.com/marmotz/graphene-term/issues/56) | Updates: build timestamp version and tag derived from the binary | — |
+| [ ]  | [#57](https://github.com/marmotz/graphene-term/issues/57) | Updates: settings, state file and GitHub release check | #56, #14 |
+| [ ]  | [#58](https://github.com/marmotz/graphene-term/issues/58) | Updates: background check thread and update event | #57 |
+| [ ]  | [#59](https://github.com/marmotz/graphene-term/issues/59) | Updates: banner with open, ignore and close actions | #58, #18, #35 |
