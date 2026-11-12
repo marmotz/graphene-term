@@ -214,7 +214,9 @@ pub struct UpdatesConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeConfig {
     pub name: String,
+    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
     pub light: Option<String>,
+    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
     pub dark: Option<String>,
 }
 
@@ -231,7 +233,6 @@ pub struct Config {
     pub word_separators: String,
     #[allow(dead_code, reason = "applied by the tab bar position task")]
     pub tab_position: TabPosition,
-    #[allow(dead_code, reason = "applied by the themes task")]
     pub theme: ThemeConfig,
     /// Raw `"keys" = "action"` pairs, interpreted by the keybindings task.
     #[allow(dead_code, reason = "applied by the keybindings task")]

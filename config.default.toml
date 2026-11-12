@@ -38,7 +38,10 @@
 # position = "top"
 
 # [theme]
-## Single theme.
+## Single theme. Built-in themes: graphene-night, graphene-day, solarized-dark,
+## solarized-light, gruvbox-dark, gruvbox-light, catppuccin-mocha, catppuccin-latte.
+## A file themes/<name>.toml next to this one is used first, so it can override a
+## built-in theme; a color it does not set comes from graphene-night.
 # name = "graphene-night"
 ## Set both `light` and `dark` to follow the system appearance:
 ## light = "graphene-day"

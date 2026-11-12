@@ -23,7 +23,8 @@ src/
   frame.rs         snapshot of the visible grid with resolved colors
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
-  palette.rs       theme, 256-color table, color resolution
+  palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
+  theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
   update/
@@ -36,9 +37,10 @@ src/
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
     text.rs        glyphon text grid with per-row caching
+themes/            built-in themes, embedded with include_str!
 ```
 
-Pure modules (`config`, `palette`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
+Pure modules (`config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads

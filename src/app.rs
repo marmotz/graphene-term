@@ -24,6 +24,7 @@ use crate::palette::Palette;
 use crate::renderer::Renderer;
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
+use crate::theme;
 use crate::update::Release;
 use crate::update::checker::Checker;
 
@@ -346,6 +347,8 @@ impl Session {
 pub struct App {
     proxy: EventLoopProxy<UserEvent>,
     config: Config,
+    /// Palette of the configured theme.
+    palette: Palette,
     session: Option<Session>,
     update_checker: Checker,
     error: Option<anyhow::Error>,
@@ -391,7 +394,7 @@ impl App {
             renderer,
             terminal,
             layout,
-            palette: Palette::default(),
+            palette: self.palette.clone(),
             clipboard,
             focused: true,
             modifiers: ModifiersState::empty(),
@@ -508,25 +511,29 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
-/// Loads the configuration file. Errors are only logged for now.
-fn load_config() -> Config {
-    let (config, errors) = config::load();
+/// Loads the configuration file and its theme. Errors are only logged for now.
+fn load_config() -> (Config, Palette) {
+    let (config, mut errors) = config::load();
+    let (palette, theme_errors) = theme::load(&config.theme.name, config::config_dir().as_deref());
+    errors.extend(theme_errors);
     for error in &errors {
         log::warn!("{error}");
     }
-    config
+    (config, palette)
 }
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
+    let (config, palette) = load_config();
     let mut app = App {
         update_checker: Checker::new(move |release| {
             // The event loop may already be closed during shutdown.
             let _ = update_proxy.send_event(UserEvent::Update(release));
         }),
         proxy: event_loop.create_proxy(),
-        config: load_config(),
+        config,
+        palette,
         session: None,
         error: None,
     };

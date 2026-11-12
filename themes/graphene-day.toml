@@ -1,0 +1,43 @@
+# Graphene day: the default light theme.
+#
+# Graphene Term built-in theme.
+
+[colors]
+foreground = "#2b2f36"
+background = "#f6f7f9"
+cursor = "#3d6fd9"
+cursor_text = "#f6f7f9"
+selection_background = "#cdd8ee"
+selection_foreground = ""
+
+[colors.normal]
+black = "#2b2f36"
+red = "#c8414b"
+green = "#4f8a2e"
+yellow = "#a6780a"
+blue = "#2f6fd0"
+magenta = "#9a4fc8"
+cyan = "#1f8a8a"
+white = "#d5d8de"
+
+[colors.bright]
+black = "#6b7280"
+red = "#e05561"
+green = "#5fa33a"
+yellow = "#c08f17"
+blue = "#4a87e8"
+magenta = "#b066e0"
+cyan = "#2aa5a5"
+white = "#ffffff"
+
+[ui]
+tab_bar_background = "#e8eaee"
+tab_active_background = "#f6f7f9"
+tab_active_text = "#2b2f36"
+tab_inactive_text = "#6b7280"
+pane_border = "#d5d8de"
+palette_background = "#ffffff"
+palette_text = "#2b2f36"
+palette_match = "#3d6fd9"
+banner_background = "#f6d3d6"
+banner_text = "#2b2f36"

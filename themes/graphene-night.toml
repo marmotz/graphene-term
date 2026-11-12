@@ -1,0 +1,43 @@
+# Graphene night: the default dark theme.
+#
+# Graphene Term built-in theme.
+
+[colors]
+foreground = "#d7dae0"
+background = "#14161b"
+cursor = "#82aaff"
+cursor_text = "#14161b"
+selection_background = "#3a4252"
+selection_foreground = ""
+
+[colors.normal]
+black = "#1c1f26"
+red = "#f0717b"
+green = "#9ed072"
+yellow = "#e7c664"
+blue = "#6cb6ff"
+magenta = "#c792ea"
+cyan = "#5fd7d7"
+white = "#c8ccd4"
+
+[colors.bright]
+black = "#5c6370"
+red = "#ff8b92"
+green = "#b5e890"
+yellow = "#ffd982"
+blue = "#8ecaff"
+magenta = "#dcb0ff"
+cyan = "#82eaea"
+white = "#f2f4f8"
+
+[ui]
+tab_bar_background = "#0f1115"
+tab_active_background = "#1c1f26"
+tab_active_text = "#d7dae0"
+tab_inactive_text = "#7f8590"
+pane_border = "#2a2e37"
+palette_background = "#1c1f26"
+palette_text = "#d7dae0"
+palette_match = "#82aaff"
+banner_background = "#5c2a30"
+banner_text = "#f2f4f8"

@@ -15,6 +15,10 @@ Settings live in `~/.config/graphene/config.toml` (`$XDG_CONFIG_HOME/graphene/` 
 set). The file is created on first launch, fully commented, with the default values:
 uncomment a line to change it. See [config.default.toml](config.default.toml).
 
+Themes are set with `name` in the `[theme]` section. Eight are built in (see
+[themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,
+with the same format, and only needs the colors it changes.
+
 Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
 builds, every 24 hours for stable builds) and caches the result in
 `~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only

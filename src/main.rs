@@ -10,6 +10,7 @@ mod palette;
 mod renderer;
 mod selection;
 mod terminal;
+mod theme;
 mod update;
 
 /// Version of this build, computed by `build.rs`.
