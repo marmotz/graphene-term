@@ -1,0 +1,63 @@
+# Solarized
+#
+# Colors from Solarized by Ethan Schoonover, https://ethanschoonover.com/solarized/
+#
+# Copyright (c) 2011 Ethan Schoonover
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+[colors]
+foreground = "#657b83"
+background = "#fdf6e3"
+cursor = "#586e75"
+cursor_text = "#fdf6e3"
+selection_background = "#eee8d5"
+selection_foreground = "#586e75"
+
+[colors.normal]
+black = "#073642"
+red = "#dc322f"
+green = "#859900"
+yellow = "#b58900"
+blue = "#268bd2"
+magenta = "#d33682"
+cyan = "#2aa198"
+white = "#eee8d5"
+
+[colors.bright]
+black = "#002b36"
+red = "#cb4b16"
+green = "#586e75"
+yellow = "#657b83"
+blue = "#839496"
+magenta = "#6c71c4"
+cyan = "#93a1a1"
+white = "#fdf6e3"
+
+[ui]
+tab_bar_background = "#eee8d5"
+tab_active_background = "#fdf6e3"
+tab_active_text = "#586e75"
+tab_inactive_text = "#93a1a1"
+pane_border = "#eee8d5"
+palette_background = "#eee8d5"
+palette_text = "#586e75"
+palette_match = "#b58900"
+banner_background = "#dc322f"
+banner_text = "#fdf6e3"

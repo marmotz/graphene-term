@@ -37,6 +37,15 @@ impl Hash for TextRun {
     }
 }
 
+/// Text drawn above everything else, at a pixel position (banner).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayText {
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    pub color: Rgb,
+}
+
 #[derive(Debug, Clone)]
 pub struct Scene {
     /// Clear color (linear or sRGB depending on the target).
@@ -47,6 +56,8 @@ pub struct Scene {
     pub over: Vec<RectInstance>,
     /// Styled text runs per visible row.
     pub rows: Vec<Vec<TextRun>>,
+    /// Text drawn after the `over` rectangles.
+    pub overlay: Vec<OverlayText>,
 }
 
 fn srgb_to_linear(c: u8) -> f32 {
@@ -183,18 +194,37 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         }
     }
 
+    // The banner covers the grid: its rect comes last and its text goes in the overlay.
+    let mut overlay = Vec::new();
+    if let Some(banner) = &frame.banner {
+        let rect = banner.layout.rect;
+        over.push(RectInstance {
+            position: [rect.x, rect.y],
+            size: [rect.width, rect.height],
+            color: gpu_color(banner.background, srgb_target),
+        });
+        overlay.extend(banner.layout.texts.iter().map(|placed| OverlayText {
+            x: placed.x,
+            y: placed.y,
+            text: placed.text.clone(),
+            color: banner.text,
+        }));
+    }
+
     Scene {
         clear: gpu_color(frame.background, srgb_target),
         under,
         over,
         rows,
+        overlay,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{FrameCell, FrameCursor};
+    use crate::banner::{Banner, BannerLayout};
+    use crate::frame::{FrameBanner, FrameCell, FrameCursor};
     use crate::layout::CellSize;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -235,6 +265,7 @@ mod tests {
             rows,
             cursor: None,
             background: BG,
+            banner: None,
         }
     }
 
@@ -307,6 +338,45 @@ mod tests {
         let scene = build(&f, &layout(), false);
         assert_eq!(scene.over.len(), 2);
         assert_eq!(scene.over[1].position, [10.0, 0.0]);
+    }
+
+    #[test]
+    fn no_banner_draws_no_overlay() {
+        let scene = build(&frame(vec![vec![cell('a')]]), &layout(), false);
+        assert!(scene.over.is_empty());
+        assert!(scene.overlay.is_empty());
+    }
+
+    #[test]
+    fn banner_is_drawn_last_over_the_cursor() {
+        let banner = Banner {
+            text: "oops".into(),
+            actions: vec!["x".into()],
+        };
+        let mut f = frame(vec![vec![cell('a')]]);
+        f.cursor = Some(FrameCursor {
+            column: 0,
+            line: 0,
+            shape: CursorShape::Beam,
+            color: RED,
+        });
+        f.banner = Some(FrameBanner {
+            layout: BannerLayout::new(&banner, layout().cell, 100.0),
+            background: RED,
+            text: FG,
+        });
+        let scene = build(&f, &layout(), false);
+        assert_eq!(scene.over.len(), 2);
+        let last = scene.over[1];
+        assert_eq!(last.position, [0.0, 0.0]);
+        assert_eq!(last.size, [100.0, 30.0]);
+        assert_eq!(last.color, [1.0, 0.0, 0.0, 1.0]);
+        let texts: Vec<(&str, Rgb)> = scene
+            .overlay
+            .iter()
+            .map(|t| (t.text.as_str(), t.color))
+            .collect();
+        assert_eq!(texts, vec![("oops", FG), ("x", FG)]);
     }
 
     #[test]

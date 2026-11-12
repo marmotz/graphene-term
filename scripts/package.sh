@@ -2,35 +2,53 @@
 # Build the release packages (tarball, .deb, .rpm, AppImage) and the AUR files
 # from an already built `target/release/graphene`.
 #
-# Usage: scripts/package.sh <build-number>
-# Output: dist/
+# The version and the release tag are read from `graphene --version`: a dev build
+# (`<version>-dev.<UTC timestamp>`) or a stable one (`<version>`).
+#
+# Usage: scripts/package.sh
+# Output: dist/ (or $DIST_DIR)
 #
 # Requires: cargo-deb, cargo-generate-rpm, appimagetool (path in $APPIMAGETOOL,
 # defaults to `appimagetool` on PATH).
+# $GRAPHENE_BINARY overrides the binary read for the version, the tarball and the
+# AppImage (default: target/release/graphene; the .deb and .rpm assets always come
+# from Cargo.toml). Meant for tests.
 set -euo pipefail
 
-if [[ $# -ne 1 || ! $1 =~ ^[0-9]+$ ]]; then
-  echo "usage: $0 <build-number>" >&2
+if [[ $# -ne 0 ]]; then
+  echo "usage: $0" >&2
   exit 1
 fi
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-build=$1
-version=$(cargo metadata --no-deps --format-version 1 \
-  | jq -r '.packages[] | select(.name == "graphene") | .version')
+binary=${GRAPHENE_BINARY:-target/release/graphene}
+dist=${DIST_DIR:-dist}
 target=x86_64-unknown-linux-gnu
-tag="v${version}-dev.${build}"
-deb_version="${version}~dev.${build}"
-rpm_release="0.dev.${build}"
-aur_pkgver="${version}.r${build}"
-binary=target/release/graphene
-dist=dist
 
 if [[ ! -x $binary ]]; then
   echo "missing $binary: run 'cargo build --release --locked' first" >&2
   exit 1
+fi
+
+version_output=$("$binary" --version)
+if [[ ! $version_output =~ ^graphene\ (([0-9]+\.[0-9]+\.[0-9]+)(-dev\.([0-9]{14}))?)$ ]]; then
+  echo "unexpected '$binary --version' output: $version_output" >&2
+  exit 1
+fi
+version=${BASH_REMATCH[1]}
+base_version=${BASH_REMATCH[2]}
+build=${BASH_REMATCH[4]}
+tag="v${version}"
+if [[ -n $build ]]; then
+  deb_version="${base_version}~dev.${build}"
+  rpm_release="0.dev.${build}"
+  aur_pkgver="${base_version}.r${build}"
+else
+  deb_version=$base_version
+  rpm_release=1
+  aur_pkgver=$base_version
 fi
 
 rm -rf "$dist"
@@ -47,11 +65,11 @@ rm -rf "${dist:?}/$dirname"
 
 # Debian (no "~" in the file name: GitHub turns it into "." in release assets)
 cargo deb --no-build --no-strip --deb-version "$deb_version" \
-  --output "$dist/graphene-term_${version}-dev.${build}_amd64.deb"
+  --output "$dist/graphene-term_${version}_amd64.deb"
 
 # RPM
 cargo generate-rpm --set-metadata "release = \"${rpm_release}\"" \
-  --output "$dist/graphene-term-${version}-${rpm_release}.x86_64.rpm"
+  --output "$dist/graphene-term-${base_version}-${rpm_release}.x86_64.rpm"
 
 # AppImage
 appdir="$dist/Graphene.AppDir"

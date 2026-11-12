@@ -9,11 +9,28 @@ The binary is called `graphene`.
 cargo run --release
 ```
 
-Environment variables:
+## Configuration
 
-- `GRAPHENE_FONT`: font family (default: system monospace)
-- `GRAPHENE_FONT_SIZE`: font size in points (default: 14)
-- `RUST_LOG`: log level (default: `warn`)
+Settings live in `~/.config/graphene/config.toml` (`$XDG_CONFIG_HOME/graphene/` when
+set). The file is created on first launch, fully commented, with the default values:
+uncomment a line to change it. See [config.default.toml](config.default.toml).
+
+Themes are set with `name` in the `[theme]` section. Eight are built in (see
+[themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,
+with the same format, and only needs the colors it changes.
+
+Errors in these files are logged and shown in a banner at the top of the window (click
+to hide it); the faulty settings keep their default value.
+
+Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
+builds, every 24 hours for stable builds) and caches the result in
+`~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only
+network call is a GET to the GitHub releases API; set `check = false` in the `[updates]`
+section to turn it off. A newer release shows a banner at the top of the window: "Open
+release" opens its GitHub page, "Ignore this version" hides it for good (until an even
+newer release), and "×" hides it until the next launch.
+
+The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
 ## Shortcuts
 

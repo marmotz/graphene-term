@@ -27,16 +27,16 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 
 ## Configuration file and themes  ·  [overview](features/config-themes/overview.md)
 
-_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 0/9 tasks done
+_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 3/9 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [ ]  | [#13](https://github.com/marmotz/graphene-term/issues/13) | Config: centre the grid with the leftover pixels | — |
-| [ ]  | [#14](https://github.com/marmotz/graphene-term/issues/14) | Config: configuration file, model and startup settings | — |
-| [ ]  | [#15](https://github.com/marmotz/graphene-term/issues/15) | Config: themes, built-in themes and selection color | #14 |
+| [x]  | [#14](https://github.com/marmotz/graphene-term/issues/14) | Config: configuration file, model and startup settings | — |
+| [x]  | [#15](https://github.com/marmotz/graphene-term/issues/15) | Config: themes, built-in themes and selection color | #14 |
 | [ ]  | [#16](https://github.com/marmotz/graphene-term/issues/16) | Config: configurable keybindings | #14 |
 | [ ]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking | #14 |
-| [ ]  | [#18](https://github.com/marmotz/graphene-term/issues/18) | Config: error banner | #14, #15 |
+| [x]  | [#18](https://github.com/marmotz/graphene-term/issues/18) | Config: error banner | #14, #15 |
 | [ ]  | [#19](https://github.com/marmotz/graphene-term/issues/19) | Config: hot reload of the configuration and themes | #14, #15, #16 |
 | [ ]  | [#20](https://github.com/marmotz/graphene-term/issues/20) | Config: follow the system light/dark appearance | #15, #19 |
 | [ ]  | [#21](https://github.com/marmotz/graphene-term/issues/21) | Config: language, tab bar position and UI colors | #13, #15, #19, #35, #40, #42 |
@@ -93,11 +93,11 @@ _terminé — voir [technical.md](features/selection-copy/technical.md)_ — 5/5
 
 ## Tabs, splits and command palette  ·  [overview](features/tabs-splits-palette/overview.md)
 
-_tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md)_ — 0/10 tasks done
+_tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md)_ — 1/10 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#35](https://github.com/marmotz/graphene-term/issues/35) | Tabs: translation table and language detection | — |
+| [x]  | [#35](https://github.com/marmotz/graphene-term/issues/35) | Tabs: translation table and language detection | — |
 | [ ]  | [#36](https://github.com/marmotz/graphene-term/issues/36) | Tabs: pane identity in terminal events, shell pid, cwd and foreground program | — |
 | [ ]  | [#37](https://github.com/marmotz/graphene-term/issues/37) | Tabs: grid layout inside a pane rectangle | — |
 | [ ]  | [#38](https://github.com/marmotz/graphene-term/issues/38) | Tabs: binary split tree | #37 |
@@ -110,11 +110,11 @@ _tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md
 
 ## Update notification  ·  [overview](features/update-notification/overview.md)
 
-_tâches créées, voir [technical.md](features/update-notification/technical.md)_ — 0/4 tasks done
+_terminé, voir [technical.md](features/update-notification/technical.md)_ — 4/4 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#56](https://github.com/marmotz/graphene-term/issues/56) | Updates: build timestamp version and tag derived from the binary | — |
-| [ ]  | [#57](https://github.com/marmotz/graphene-term/issues/57) | Updates: settings, state file and GitHub release check | #56, #14 |
-| [ ]  | [#58](https://github.com/marmotz/graphene-term/issues/58) | Updates: background check thread and update event | #57 |
-| [ ]  | [#59](https://github.com/marmotz/graphene-term/issues/59) | Updates: banner with open, ignore and close actions | #58, #18, #35 |
+| [x]  | [#56](https://github.com/marmotz/graphene-term/issues/56) | Updates: build timestamp version and tag derived from the binary | — |
+| [x]  | [#57](https://github.com/marmotz/graphene-term/issues/57) | Updates: settings, state file and GitHub release check | #56, #14 |
+| [x]  | [#58](https://github.com/marmotz/graphene-term/issues/58) | Updates: background check thread and update event | #57 |
+| [x]  | [#59](https://github.com/marmotz/graphene-term/issues/59) | Updates: banner with open, ignore and close actions | #58, #18, #35 |

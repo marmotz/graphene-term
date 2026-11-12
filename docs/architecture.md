@@ -9,6 +9,8 @@
 | Text shaping and rendering        | `glyphon` (on `cosmic-text` 0.19)                        | 0.12    |
 | PTY, VT parsing, grid, scrollback | `alacritty_terminal`                                     | 0.26    |
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
+| Config file                       | `toml` + `serde`                                         | 1       |
+| Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 
 ## Modules
 
@@ -16,22 +18,32 @@
 src/
   main.rs          entry point, logger setup
   app.rs           winit ApplicationHandler, Session (one window + one shell)
+  banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
+  config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, Term state, event proxy to the UI thread
   frame.rs         snapshot of the visible grid with resolved colors
+  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
-  palette.rs       theme, 256-color table, color resolution
+  palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
+  theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry
+  opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
+  update/
+    mod.rs         GitHub release check, release selection, notice and scheduling decisions
+    state.rs       update.json state file (last check, latest release, ignored tag)
+    checker.rs     update-check thread, pure tick (check or reuse the cache, next wake-up)
   renderer/
     mod.rs         wgpu device/surface, frame orchestration
     scene.rs       Frame -> rects + text runs (pure, no GPU)
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
-    text.rs        glyphon text grid with per-row caching
+    text.rs        glyphon text grid with per-row caching, overlay text
+themes/            built-in themes, embedded with include_str!
 ```
 
-Pure modules (`palette`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
-and are unit tested. GPU and window code stay thin.
+Pure modules (`banner`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic
+and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
 
@@ -53,6 +65,18 @@ RedrawRequested:
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
 - When the shell exits, the event loop exits and the window closes.
+- The `update-check` thread (started in `App::resumed` when `updates.check` is true)
+  wakes up when a check is due, reloads `update.json`, calls GitHub only when the last
+  check is one interval old (otherwise reuses the cached release), saves the state and
+  sends `UserEvent::Update(Option<Release>)` when the release to show changes. The
+  session stores it and requests a redraw. `Checker::apply` forwards new `[updates]`
+  settings through an `mpsc` channel (`recv_timeout` is the sleep); `check = false` ends
+  the thread, `true` again restarts it. A failed check is retried after one hour.
+- The update banner shows once the configuration error banner is gone. Its click
+  targets are hit-tested in `left_press` before any selection: "Open release" runs
+  `opener::open`, "×" hides the banner until a newer release, "Ignore this version"
+  hides it and sends `Command::Ignore` to the thread, which writes `ignored` in
+  `update.json` (written directly when the thread is not running).
 
 ## Rendering pipeline
 
@@ -65,9 +89,21 @@ RedrawRequested:
     - `under` rects: cell backgrounds, consecutive same-color cells merged, default
       background skipped (it is the clear color);
     - `over` rects: underline, strikeout, non-block cursor;
-    - text runs per row, each anchored at a grid column.
-3. `Renderer::render` draws in one pass: clear, `under` rects, text, `over` rects.
-   Colors are linearized when the surface format is sRGB.
+    - text runs per row, each anchored at a grid column;
+    - overlay text at pixel positions (banner).
+3. `Renderer::render` draws in one pass: clear, `under` rects, text, `over` rects,
+   overlay text. Colors are linearized when the surface format is sRGB.
+
+### Banner
+
+`Frame.banner` holds a `BannerLayout` (from `banner.rs`) and its theme colors
+(`ui.banner_background`, `ui.banner_text`). It covers the top of the window, over the
+grid (the grid does not move): its rect is the last `over` rect and its text goes to a
+second glyphon renderer drawn after it. The layout gives the pixel rect of each action,
+and `Session::left_press` hit-tests the banner before starting a selection.
+
+The configuration error banner shows the first error of `config.toml` and the theme
+file ("(+N more)" when there are several); every error is also logged. A click hides it.
 
 ### Text runs
 
