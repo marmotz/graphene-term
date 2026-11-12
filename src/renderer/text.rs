@@ -58,7 +58,8 @@ impl TextGrid {
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
         let mut atlas = TextAtlas::new(device, queue, &cache, format);
-        let renderer = TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let (metrics, cell) = Self::measure(&mut font_system, &family, font_size);
         Self {
             font_system,
@@ -74,11 +75,20 @@ impl TextGrid {
     }
 
     /// Computes the cell size from the advance of a reference glyph.
-    fn measure(font_system: &mut FontSystem, name: &Option<String>, font_size: f32) -> (Metrics, CellSize) {
+    fn measure(
+        font_system: &mut FontSystem,
+        name: &Option<String>,
+        font_size: f32,
+    ) -> (Metrics, CellSize) {
         let line_height = (font_size * 1.3).ceil();
         let metrics = Metrics::new(font_size, line_height);
         let mut buffer = Buffer::new(font_system, metrics);
-        buffer.set_text("M", &Attrs::new().family(family(name)), Shaping::Advanced, None);
+        buffer.set_text(
+            "M",
+            &Attrs::new().family(family(name)),
+            Shaping::Advanced,
+            None,
+        );
         buffer.shape_until_scroll(font_system, false);
         // Keep the exact advance: rounding it would make text drift off the grid.
         let width = buffer
@@ -87,7 +97,13 @@ impl TextGrid {
             .and_then(|run| run.glyphs.first().map(|g| g.w))
             .unwrap_or(font_size * 0.6)
             .max(1.0);
-        (metrics, CellSize { width, height: line_height })
+        (
+            metrics,
+            CellSize {
+                width,
+                height: line_height,
+            },
+        )
     }
 
     pub fn cell_size(&self) -> CellSize {
@@ -134,9 +150,9 @@ impl TextGrid {
                 row.buffers.push((0, buffer));
             }
             for ((column, buffer), run) in row.buffers.iter_mut().zip(runs) {
-                let mut attrs = base
-                    .clone()
-                    .color(Color::rgb(run.color.r, run.color.g, run.color.b));
+                let mut attrs =
+                    base.clone()
+                        .color(Color::rgb(run.color.r, run.color.g, run.color.b));
                 if run.bold {
                     attrs = attrs.weight(Weight::BOLD);
                 }

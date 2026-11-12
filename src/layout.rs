@@ -24,7 +24,9 @@ pub struct GridLayout {
 impl GridLayout {
     /// Computes how many cells fit in a surface of the given physical size.
     pub fn new(width: u32, height: u32, cell: CellSize, padding: f32) -> Self {
-        let fit = |available: f32, size: f32| ((available - 2.0 * padding).max(0.0) / size).floor() as usize;
+        let fit = |available: f32, size: f32| {
+            ((available - 2.0 * padding).max(0.0) / size).floor() as usize
+        };
         Self {
             cell,
             padding,
@@ -48,7 +50,11 @@ impl GridLayout {
         let line_pos = (y - self.padding) / self.cell.height;
         let column = (column_pos.max(0.0) as usize).min(self.columns - 1);
         let line = (line_pos.max(0.0) as usize).min(self.lines - 1);
-        let side = if column_pos - (column as f32) < 0.5 { Side::Left } else { Side::Right };
+        let side = if column_pos - (column as f32) < 0.5 {
+            Side::Left
+        } else {
+            Side::Right
+        };
         (column, line, side)
     }
 
@@ -81,7 +87,10 @@ impl GridLayout {
 mod tests {
     use super::*;
 
-    const CELL: CellSize = CellSize { width: 10.0, height: 20.0 };
+    const CELL: CellSize = CellSize {
+        width: 10.0,
+        height: 20.0,
+    };
 
     #[test]
     fn computes_grid_from_pixels() {
