@@ -8,7 +8,6 @@ use winit::keyboard::ModifiersState;
 const X10_MAX_COORDINATE: usize = 223;
 
 /// Mouse button reported to the application.
-#[allow(dead_code, reason = "reported by the click routing task")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
     Left,
@@ -17,7 +16,7 @@ pub enum Button {
 }
 
 /// Mouse event reported to the application.
-#[allow(dead_code, reason = "reported by the click and wheel routing tasks")]
+#[allow(dead_code, reason = "Wheel is reported by the wheel routing task")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseEvent {
     Press(Button),
@@ -40,7 +39,6 @@ impl Button {
 
 /// Bytes for `event` at viewport cell (`column`, `line`), 0-based. `None` when the
 /// current mode does not report this event, or when X10 cannot encode the cell.
-#[allow(dead_code, reason = "called by the click and wheel routing tasks")]
 pub fn encode(
     event: MouseEvent,
     column: usize,
@@ -100,6 +98,80 @@ pub fn encode(
         32 + x as u8,
         32 + y as u8,
     ])
+}
+
+/// Mouse button of a winit event, `None` for the extra buttons (back, forward...).
+pub fn button_from(button: winit::event::MouseButton) -> Option<Button> {
+    match button {
+        winit::event::MouseButton::Left => Some(Button::Left),
+        winit::event::MouseButton::Middle => Some(Button::Middle),
+        winit::event::MouseButton::Right => Some(Button::Right),
+        _ => None,
+    }
+}
+
+/// Gesture owned by the application: the button pressed while mouse reporting was
+/// reserved, kept until its release, and the last cell reported so motion is only sent
+/// when the cell changes. The owner is fixed at press: `Shift` held mid-drag changes
+/// nothing.
+#[derive(Debug, Default)]
+pub struct Reporter {
+    button: Option<Button>,
+    last_cell: Option<(usize, usize)>,
+}
+
+impl Reporter {
+    /// Whether the application owns the gesture of `button`.
+    pub fn owns(&self, button: Button) -> bool {
+        self.button == Some(button)
+    }
+
+    /// Whether an application gesture is in progress.
+    pub fn active(&self) -> bool {
+        self.button.is_some()
+    }
+
+    /// Starts an application gesture at viewport cell `cell` (column, line).
+    pub fn press(
+        &mut self,
+        button: Button,
+        cell: (usize, usize),
+        mods: ModifiersState,
+        mode: TermMode,
+    ) -> Option<Vec<u8>> {
+        self.button = Some(button);
+        self.last_cell = Some(cell);
+        encode(MouseEvent::Press(button), cell.0, cell.1, mods, mode)
+    }
+
+    /// Ends the application gesture. Dropped by `encode` if the application left mouse
+    /// mode meanwhile.
+    pub fn release(
+        &mut self,
+        button: Button,
+        cell: (usize, usize),
+        mods: ModifiersState,
+        mode: TermMode,
+    ) -> Option<Vec<u8>> {
+        self.button = None;
+        self.last_cell = Some(cell);
+        encode(MouseEvent::Release(button), cell.0, cell.1, mods, mode)
+    }
+
+    /// Motion to `cell`, with the held application button if any. Nothing when the cell
+    /// did not change.
+    pub fn motion(
+        &mut self,
+        cell: (usize, usize),
+        mods: ModifiersState,
+        mode: TermMode,
+    ) -> Option<Vec<u8>> {
+        if self.last_cell == Some(cell) {
+            return None;
+        }
+        self.last_cell = Some(cell);
+        encode(MouseEvent::Motion(self.button), cell.0, cell.1, mods, mode)
+    }
 }
 
 /// `CSI I` / `CSI O` when `FOCUS_IN_OUT` is set.
@@ -306,5 +378,77 @@ mod tests {
             alternate_scroll_bytes(-2, TermMode::APP_CURSOR),
             b"\x1bOB\x1bOB".to_vec()
         );
+    }
+
+    #[test]
+    fn button_from_maps_main_buttons_only() {
+        use winit::event::MouseButton;
+        assert_eq!(button_from(MouseButton::Left), Some(Button::Left));
+        assert_eq!(button_from(MouseButton::Middle), Some(Button::Middle));
+        assert_eq!(button_from(MouseButton::Right), Some(Button::Right));
+        assert_eq!(button_from(MouseButton::Back), None);
+    }
+
+    #[test]
+    fn reporter_press_drag_release() {
+        let mode = sgr(TermMode::MOUSE_DRAG);
+        let mut r = Reporter::default();
+        assert!(!r.active());
+        assert_eq!(
+            r.press(Button::Left, (1, 2), NONE, mode),
+            Some(b"\x1b[<0;2;3M".to_vec())
+        );
+        assert!(r.owns(Button::Left));
+        assert!(!r.owns(Button::Right));
+        // Same cell: nothing.
+        assert_eq!(r.motion((1, 2), NONE, mode), None);
+        assert_eq!(
+            r.motion((2, 2), NONE, mode),
+            Some(b"\x1b[<32;3;3M".to_vec())
+        );
+        assert_eq!(
+            r.release(Button::Left, (2, 2), NONE, mode),
+            Some(b"\x1b[<0;3;3m".to_vec())
+        );
+        assert!(!r.active());
+    }
+
+    #[test]
+    fn reporter_motion_without_button_needs_any_motion_mode() {
+        let mut r = Reporter::default();
+        assert_eq!(r.motion((0, 0), NONE, sgr(TermMode::MOUSE_DRAG)), None);
+        assert_eq!(
+            r.motion((1, 0), NONE, sgr(TermMode::MOUSE_MOTION)),
+            Some(b"\x1b[<35;2;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn reporter_release_dropped_after_mouse_mode_left() {
+        let mut r = Reporter::default();
+        r.press(
+            Button::Right,
+            (0, 0),
+            NONE,
+            sgr(TermMode::MOUSE_REPORT_CLICK),
+        );
+        assert_eq!(
+            r.release(Button::Right, (0, 0), NONE, TermMode::empty()),
+            None
+        );
+        assert!(!r.active());
+    }
+
+    #[test]
+    fn reporter_owner_kept_when_shift_pressed_mid_drag() {
+        let mode = sgr(TermMode::MOUSE_DRAG);
+        let mut r = Reporter::default();
+        r.press(Button::Left, (0, 0), NONE, mode);
+        // Shift held during the drag: still reported, Shift bit never set.
+        assert_eq!(
+            r.motion((1, 0), ModifiersState::SHIFT, mode),
+            Some(b"\x1b[<32;2;1M".to_vec())
+        );
+        assert!(r.owns(Button::Left));
     }
 }

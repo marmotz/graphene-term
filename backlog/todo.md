@@ -58,12 +58,12 @@ _tâches créées, voir [technical.md](features/images-links/technical.md)_ — 
 
 ## Mouse reporting  ·  [overview](features/mouse-reporting/overview.md)
 
-_tâches créées, voir [technical.md](features/mouse-reporting/technical.md)_ — 1/4 tasks done
+_tâches créées, voir [technical.md](features/mouse-reporting/technical.md)_ — 2/4 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#45](https://github.com/marmotz/graphene-term/issues/45) | Mouse: pure encoding module for mouse, focus and alternate scroll | — |
-| [ ]  | [#46](https://github.com/marmotz/graphene-term/issues/46) | Mouse: report clicks, drag and motion to applications | #45 |
+| [x]  | [#46](https://github.com/marmotz/graphene-term/issues/46) | Mouse: report clicks, drag and motion to applications | #45 |
 | [ ]  | [#47](https://github.com/marmotz/graphene-term/issues/47) | Mouse: report the wheel, Shift + wheel scrolls the history | #45 |
 | [ ]  | [#48](https://github.com/marmotz/graphene-term/issues/48) | Mouse: arrow pointer while an application captures the mouse | — |
 

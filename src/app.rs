@@ -52,6 +52,8 @@ struct Session {
     /// A selection drag is in progress.
     left_pressed: bool,
     click_tracker: ClickTracker,
+    /// Gesture owned by the application (mouse reporting).
+    app_mouse: mouse::Reporter,
     /// When the next auto-scroll step is due during a drag past the grid edges.
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection kept while its text is unchanged.
@@ -194,27 +196,59 @@ impl Session {
         (point, side)
     }
 
+    /// Viewport cell (column, line) under the mouse cursor, clamped to the grid.
+    fn mouse_cell(&self) -> (usize, usize) {
+        let (column, line, _) = self
+            .layout
+            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
+        (column, line)
+    }
+
     fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        match (button, state) {
-            (MouseButton::Left, ElementState::Pressed) => self.left_press(),
-            (MouseButton::Left, ElementState::Released) => self.left_release(),
-            (MouseButton::Middle, ElementState::Pressed)
-                if !selection::mouse_reserved(self.mode(), self.modifiers) =>
-            {
-                self.paste_primary()
+        let Some(button) = mouse::button_from(button) else {
+            return;
+        };
+        match state {
+            ElementState::Pressed => self.mouse_press(button),
+            ElementState::Released => self.mouse_release(button),
+        }
+    }
+
+    fn mouse_press(&mut self, button: mouse::Button) {
+        if button == mouse::Button::Left && self.banner_press() {
+            return;
+        }
+        let mode = self.mode();
+        if selection::mouse_reserved(mode, self.modifiers) {
+            // The gesture belongs to the application; a click clears the selection.
+            self.clear_selection();
+            let cell = self.mouse_cell();
+            if let Some(bytes) = self.app_mouse.press(button, cell, self.modifiers, mode) {
+                self.terminal.write(bytes);
             }
-            _ => {}
+            return;
+        }
+        match button {
+            mouse::Button::Left => self.left_press(),
+            mouse::Button::Middle => self.paste_primary(),
+            mouse::Button::Right => {}
+        }
+    }
+
+    fn mouse_release(&mut self, button: mouse::Button) {
+        if self.app_mouse.owns(button) {
+            let cell = self.mouse_cell();
+            let mode = self.mode();
+            if let Some(bytes) = self.app_mouse.release(button, cell, self.modifiers, mode) {
+                self.terminal.write(bytes);
+            }
+        } else if button == mouse::Button::Left {
+            self.left_release();
         }
     }
 
     fn left_press(&mut self) {
-        if self.banner_press() {
-            return;
-        }
         let mut term = self.terminal.term.lock();
-        if selection::mouse_reserved(*term.mode(), self.modifiers) {
-            return;
-        }
         let (point, side) = self.mouse_point(term.grid().display_offset());
         let clicks = self.click_tracker.click(point, Instant::now());
         // The selection changes until the release: no text to keep meanwhile.
@@ -242,8 +276,14 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
-        if self.left_pressed {
+        if self.left_pressed && !self.app_mouse.active() {
             self.update_selection(&mut self.terminal.term.lock());
+            return;
+        }
+        let cell = self.mouse_cell();
+        let mode = self.mode();
+        if let Some(bytes) = self.app_mouse.motion(cell, self.modifiers, mode) {
+            self.terminal.write(bytes);
         }
     }
 
@@ -446,6 +486,7 @@ impl App {
             mouse_position: PhysicalPosition::default(),
             left_pressed: false,
             click_tracker: ClickTracker::default(),
+            app_mouse: mouse::Reporter::default(),
             auto_scroll_deadline: None,
             selection_snapshot: None,
             config_banner: self.config_banner.clone(),
