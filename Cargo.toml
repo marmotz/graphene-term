@@ -8,6 +8,16 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/marmotz/graphene-term"
 readme = "README.md"
 
+# Benchmarks use criterion (`benches/render.rs`): keep the lib and binary out of
+# `cargo bench` so criterion's command-line options reach it.
+[lib]
+bench = false
+
+[[bin]]
+name = "graphene"
+path = "src/main.rs"
+bench = false
+
 [dependencies]
 alacritty_terminal = "0.26.0"
 anyhow = "1.0.104"
@@ -24,6 +34,13 @@ toml = "1.2.1"
 ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
 wgpu = "30.0.1"
 winit = "0.30.13"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "rayon"] }
+
+[[bench]]
+name = "render"
+harness = false
 
 [package.metadata.deb]
 name = "graphene-term"

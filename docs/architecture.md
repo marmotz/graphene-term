@@ -16,7 +16,8 @@
 
 ```
 src/
-  main.rs          entry point, logger setup
+  main.rs          binary entry point: --version, logger setup, calls lib::run
+  lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   app.rs           winit ApplicationHandler, Session (one window + one shell)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation
@@ -34,12 +35,15 @@ src/
     state.rs       update.json state file (last check, latest release, ignored tag)
     checker.rs     update-check thread, pure tick (check or reuse the cache, next wake-up)
   renderer/
-    mod.rs         wgpu device/surface, frame orchestration
+    mod.rs         wgpu device/surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + text runs (pure, no GPU)
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
     text.rs        glyphon text grid with per-row caching, overlay text
 themes/            built-in themes, embedded with include_str!
+benches/
+  render.rs        criterion benchmarks: parse, frame, gpu_prepare
+  fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
 Pure modules (`banner`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`) hold the logic

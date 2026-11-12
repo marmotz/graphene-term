@@ -12,7 +12,11 @@ cargo run            # debug build
 cargo run --release  # optimized build
 cargo test           # unit tests
 cargo clippy --all-targets
+cargo bench          # criterion benchmarks (benches/render.rs)
 ```
+
+The application is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so the
+benchmarks can reach its internals through `graphene::bench`.
 
 Note: `cargo test` and `cargo clippy` do not rebuild `target/debug/graphene`. Run
 `cargo build` before launching the binary directly.
@@ -65,6 +69,23 @@ Unit tests live next to the code (`#[cfg(test)]` modules):
 
 `frame` tests build a `Term<VoidListener>` and feed bytes through
 `vte::ansi::Processor`, so they exercise the real emulator without a PTY or GPU.
+
+## Benchmarks
+
+`cargo bench` runs `benches/render.rs` (criterion) on PTY output recorded at 120x32 in
+`benches/fixtures/` (btop, `cat` of source files, vim, and the `cat` output scrolled
+into the history):
+
+| Group         | Measures                                                             |
+|---------------|----------------------------------------------------------------------|
+| `parse`       | the fixture bytes fed into a fresh `Term`                            |
+| `frame`       | `Frame::capture` + `scene::build`                                    |
+| `gpu_prepare` | upload, draw and submit on a headless device: `idle` (same frame), `changed` (blank frame then the fixture) |
+
+`gpu_prepare` is skipped with a message when no GPU adapter is available. Run one group
+with `cargo bench -- gpu_prepare`; compare two versions with
+`cargo bench -- --save-baseline before`, then `cargo bench -- --baseline before`.
+Re-recording the fixtures is described in `benches/fixtures/README.md`.
 
 ## Manual check on X11
 

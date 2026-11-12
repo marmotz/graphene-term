@@ -32,6 +32,15 @@ newer release), and "×" hides it until the next launch.
 
 The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
+## Performance
+
+```bash
+cargo bench    # rendering benchmarks
+```
+
+`cargo bench` measures parsing, frame building and GPU preparation on recorded terminal
+output (see [docs/development.md](docs/development.md#benchmarks)).
+
 ## Shortcuts
 
 | Keys                          | Action                                          |
