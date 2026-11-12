@@ -216,7 +216,10 @@ mod tests {
     #[test]
     fn arrows_follow_cursor_mode() {
         let up = named(NamedKey::ArrowUp);
-        assert_eq!(key_to_bytes(&up, None, NONE, TermMode::empty()), Some(b"\x1b[A".to_vec()));
+        assert_eq!(
+            key_to_bytes(&up, None, NONE, TermMode::empty()),
+            Some(b"\x1b[A".to_vec())
+        );
         assert_eq!(
             key_to_bytes(&up, None, NONE, TermMode::APP_CURSOR),
             Some(b"\x1bOA".to_vec())
@@ -230,14 +233,26 @@ mod tests {
     #[test]
     fn special_keys() {
         let m = TermMode::empty();
-        assert_eq!(key_to_bytes(&named(NamedKey::Enter), None, NONE, m), Some(b"\r".to_vec()));
-        assert_eq!(key_to_bytes(&named(NamedKey::Backspace), None, NONE, m), Some(vec![0x7f]));
+        assert_eq!(
+            key_to_bytes(&named(NamedKey::Enter), None, NONE, m),
+            Some(b"\r".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(&named(NamedKey::Backspace), None, NONE, m),
+            Some(vec![0x7f])
+        );
         assert_eq!(
             key_to_bytes(&named(NamedKey::Tab), None, ModifiersState::SHIFT, m),
             Some(b"\x1b[Z".to_vec())
         );
-        assert_eq!(key_to_bytes(&named(NamedKey::Delete), None, NONE, m), Some(b"\x1b[3~".to_vec()));
-        assert_eq!(key_to_bytes(&named(NamedKey::F1), None, NONE, m), Some(b"\x1bOP".to_vec()));
+        assert_eq!(
+            key_to_bytes(&named(NamedKey::Delete), None, NONE, m),
+            Some(b"\x1b[3~".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(&named(NamedKey::F1), None, NONE, m),
+            Some(b"\x1bOP".to_vec())
+        );
         assert_eq!(
             key_to_bytes(&named(NamedKey::F5), None, ModifiersState::SHIFT, m),
             Some(b"\x1b[15;2~".to_vec())
@@ -261,7 +276,10 @@ mod tests {
             Some(Action::ScrollPageUp)
         );
         assert_eq!(action_for(&named(NamedKey::PageUp), NONE), None);
-        assert_eq!(action_for(&ch("="), ModifiersState::CONTROL), Some(Action::FontSizeIncrease));
+        assert_eq!(
+            action_for(&ch("="), ModifiersState::CONTROL),
+            Some(Action::FontSizeIncrease)
+        );
     }
 
     #[test]

@@ -109,7 +109,8 @@ impl Renderer {
         let under_count = rects.len() as u32;
         rects.extend(scene.over);
         let total = rects.len() as u32;
-        self.rects.prepare(&self.device, &self.queue, screen, &rects);
+        self.rects
+            .prepare(&self.device, &self.queue, screen, &rects);
         self.text
             .prepare(&self.device, &self.queue, screen, layout, &scene.rows)?;
 
