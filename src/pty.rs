@@ -477,10 +477,16 @@ mod tests {
     fn real_pty_round_trip_until_child_exit() {
         use std::time::Duration;
 
+        // Like alacritty's loop without `drain_on_exit`, the loop stops on the child
+        // exit without reading what is left: the child waits a little after its output
+        // so the test does not depend on the order of the two poll events under load.
         let options = tty::Options {
             shell: Some(tty::Shell::new(
                 "sh".to_owned(),
-                vec!["-c".to_owned(), "read l; printf 'got:%s' \"$l\"".to_owned()],
+                vec![
+                    "-c".to_owned(),
+                    "read l; printf 'got:%s' \"$l\"; sleep 0.3".to_owned(),
+                ],
             )),
             ..Default::default()
         };
