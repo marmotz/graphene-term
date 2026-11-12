@@ -26,6 +26,7 @@ src/
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   osc133.rs        incremental OSC 133 / OSC 8 scanner over the PTY byte stream (pure)
   blocks.rs        ShellState (phase, blocks, status), cell tags, row roles, block bounds (pure)
+  block_actions.rs target block, block navigation, block selection, copied command / output (pure)
   view.rs          viewport rows: grid line and block role of each row, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors and block marks
@@ -56,7 +57,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `blocks`, `osc133`, `view`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `blocks`, `block_actions`, `osc133`, `view`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
@@ -129,6 +130,16 @@ RedrawRequested:
   `DimForeground` for `Success`, `Failure`, `Running`, `Unknown`), and the first row of
   a block a 1 px separator in `DimForeground` across the grid. Rows below the cursor
   get no mark. `GridLayout::hit` tells a gutter pixel from a grid cell.
+- Block actions (`block_actions`): the target block is the one holding the selection
+  start, otherwise the last finished block (`ShellState::is_finished`: any block but the
+  one being drawn or run). A block selection is a `Simple` selection from the start of
+  the command to the end of the block's last row, with a `SelectionSnapshot` and the
+  primary selection written, as after a mouse release. A gutter click selects the
+  block of its row; `Ctrl+Shift+PageUp/PageDown` select the finished neighbour among
+  `blocks::blocks_in_grid` (the last finished block on the first press) and scroll by
+  `view::reveal` until its first row is visible. `Ctrl+Shift+Alt+C` / `O` copy the
+  cleaned command (`input_start..=input_end`) / output rows; an empty part leaves the
+  clipboard untouched.
 
 ## Rendering pipeline
 
@@ -207,3 +218,6 @@ is reset with the glyph cache, and the frame is resolved again.
   differs from the snapshot. Every place that clears the selection drops the snapshot.
 - Left and middle clicks are ignored when the application enabled mouse reporting,
   unless `Shift` is held (`selection::mouse_reserved`).
+- A left press in the gutter (`layout::hit` gives `Hit::Gutter`) is checked first and is
+  always Graphene's, even under mouse reporting: on a block row it selects the block
+  (see Command blocks), elsewhere it is ignored.

@@ -47,6 +47,21 @@ pub fn point(rows: &[ViewRow], line_index: usize, column: usize) -> Point {
     Point::new(row.line, Column(column))
 }
 
+/// `Scroll::Delta` lines (positive into the history) that bring grid `line` into a
+/// view of `screen_lines` rows scrolled `display_offset` lines into the history: 0 when
+/// it is visible, otherwise the smallest scroll putting it on the top or bottom row.
+pub fn reveal(display_offset: usize, screen_lines: usize, line: Line) -> i32 {
+    let top = -(display_offset as i32);
+    let bottom = top + screen_lines as i32 - 1;
+    if line.0 < top {
+        top - line.0
+    } else if line.0 > bottom {
+        bottom - line.0
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +144,20 @@ mod tests {
                 .iter()
                 .all(|row| row.role == RowRole::None)
         );
+    }
+
+    #[test]
+    fn reveal_scrolls_the_least_to_show_a_line() {
+        // Visible: no scroll.
+        assert_eq!(reveal(0, 3, Line(0)), 0);
+        assert_eq!(reveal(0, 3, Line(2)), 0);
+        assert_eq!(reveal(5, 3, Line(-3)), 0);
+        // Above the view: up into the history, the line on the top row.
+        assert_eq!(reveal(0, 3, Line(-4)), 4);
+        assert_eq!(reveal(2, 3, Line(-4)), 2);
+        // Below the view: down, the line on the bottom row.
+        assert_eq!(reveal(5, 3, Line(0)), -3);
+        assert_eq!(reveal(5, 3, Line(2)), -5);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::sync::{Arc, PoisonError};
 use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::term::{self, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
@@ -17,11 +17,13 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
+use crate::block_actions::{self, Direction, Part};
+use crate::blocks;
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{Frame, FrameBanner};
 use crate::i18n::Lang;
 use crate::input::{self, Action};
-use crate::layout::GridLayout;
+use crate::layout::{GridLayout, Hit};
 use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
@@ -184,6 +186,93 @@ impl Session {
         }
     }
 
+    /// Copies one part of the target block to the clipboard. An empty part leaves the
+    /// clipboard untouched.
+    fn copy_block_part(&mut self, part: Part) {
+        let text = {
+            let term = self.terminal.term.lock();
+            let shell = self
+                .terminal
+                .shell
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            block_actions::target(&term, &shell)
+                .and_then(|id| blocks::block_bounds(&term, id))
+                .and_then(|bounds| block_actions::text(&term, &bounds, part))
+        };
+        let Some(text) = text else {
+            return;
+        };
+        if let Some(Err(error)) = self.clipboard.as_mut().map(|c| c.set_text(text)) {
+            log::warn!("copy failed: {error}");
+        }
+    }
+
+    /// Selects the neighbour block in `direction` and scrolls until its first row is
+    /// visible.
+    fn navigate_block(&mut self, direction: Direction) {
+        let text = {
+            let mut term = self.terminal.term.lock();
+            let id = {
+                let shell = self
+                    .terminal
+                    .shell
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                block_actions::neighbour(&term, &shell, direction)
+            };
+            let Some(bounds) = id.and_then(|id| block_actions::select(&mut term, id)) else {
+                return;
+            };
+            let delta = view::reveal(
+                term.grid().display_offset(),
+                term.screen_lines(),
+                bounds.first_row,
+            );
+            if delta != 0 {
+                term.scroll_display(Scroll::Delta(delta));
+            }
+            self.selection_snapshot = SelectionSnapshot::capture(&term);
+            selection::selected_text(&term)
+        };
+        self.block_selected(text);
+    }
+
+    /// Left press in the gutter on viewport row `line`: selects the block of the row,
+    /// ignored outside blocks.
+    fn gutter_press(&mut self, line: usize) {
+        let text = {
+            let mut term = self.terminal.term.lock();
+            let rows = {
+                let shell = self
+                    .terminal
+                    .shell
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                view::rows(&term, &shell, term.grid().display_offset())
+            };
+            let id = rows.get(line.min(rows.len().saturating_sub(1)));
+            let Some(id) = id.and_then(|row| row.role.block()) else {
+                return;
+            };
+            if block_actions::select(&mut term, id).is_none() {
+                return;
+            }
+            self.selection_snapshot = SelectionSnapshot::capture(&term);
+            selection::selected_text(&term)
+        };
+        self.block_selected(text);
+    }
+
+    /// After a block selection: redraws and writes the primary selection, as a mouse
+    /// release does.
+    fn block_selected(&mut self, text: Option<String>) {
+        self.window.request_redraw();
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.set_primary(text);
+        }
+    }
+
     fn clear_selection(&mut self) {
         self.selection_snapshot = None;
         let mut term = self.terminal.term.lock();
@@ -240,6 +329,15 @@ impl Session {
 
     fn mouse_press(&mut self, button: mouse::Button) {
         if button == mouse::Button::Left && self.banner_press() {
+            return;
+        }
+        // The gutter is outside the application's grid: always Graphene's.
+        if button == mouse::Button::Left
+            && let Hit::Gutter { line } = self
+                .layout
+                .hit(self.mouse_position.x as f32, self.mouse_position.y as f32)
+        {
+            self.gutter_press(line);
             return;
         }
         let mode = self.mode();
@@ -381,6 +479,10 @@ impl Session {
             Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
             Action::FontSizeDecrease => self.apply_font_size(self.font_size - 1.0),
             Action::FontSizeReset => self.apply_font_size(default_font_size),
+            Action::PreviousBlock => self.navigate_block(Direction::Previous),
+            Action::NextBlock => self.navigate_block(Direction::Next),
+            Action::CopyCommand => self.copy_block_part(Part::Command),
+            Action::CopyOutput => self.copy_block_part(Part::Output),
         }
     }
 

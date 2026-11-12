@@ -88,7 +88,6 @@ impl RowRole {
 
 /// Where a block lies in the grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code, reason = "read by the block selection and copy actions")]
 pub struct BlockBounds {
     /// First row of the prompt.
     pub first_row: Line,
@@ -144,6 +143,11 @@ impl ShellState {
 
     pub fn block(&self, id: BlockId) -> Option<&BlockInfo> {
         self.blocks.get(&id)
+    }
+
+    /// Whether block `id` is over: any block but the one being drawn or run.
+    pub fn is_finished(&self, id: BlockId) -> bool {
+        self.current != Some(id) || self.phase == Phase::Idle
     }
 
     /// Known blocks, oldest first.
@@ -361,8 +365,21 @@ pub fn index<L>(term: &Term<L>, lines: Range<Line>) -> Vec<RowRole> {
         .collect()
 }
 
+/// Blocks with rows left in the grid, top to bottom.
+pub fn blocks_in_grid<L>(term: &Term<L>) -> Vec<BlockId> {
+    let grid = term.grid();
+    let mut ids: Vec<BlockId> = Vec::new();
+    for role in index(term, grid.topmost_line()..grid.bottommost_line() + 1) {
+        if let RowRole::Prompt(id) | RowRole::Input(id) = role
+            && ids.last() != Some(&id)
+        {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
 /// Where block `id` lies in the grid, `None` when none of its rows is left.
-#[allow(dead_code, reason = "read by the block selection and copy actions")]
 pub fn block_bounds<L>(term: &Term<L>, id: BlockId) -> Option<BlockBounds> {
     let grid = term.grid();
     let top = grid.topmost_line();
@@ -416,7 +433,6 @@ pub fn block_bounds<L>(term: &Term<L>, id: BlockId) -> Option<BlockBounds> {
 }
 
 /// The cell after `point`, wrapping to the next row; `point` itself at the grid end.
-#[allow(dead_code, reason = "read by the block selection and copy actions")]
 fn next_cell<L>(term: &Term<L>, point: Point) -> Point {
     if point.column + 1 < term.columns() {
         Point::new(point.line, point.column + 1)
@@ -845,6 +861,40 @@ mod tests {
         assert_eq!(bounds.input_start, Point::new(Line(0), Column(2)));
         assert_eq!(bounds.input_end, None);
         assert_eq!(bounds.output, Line(1)..Line(1));
+    }
+
+    #[test]
+    fn blocks_in_grid_lists_each_block_once_top_to_bottom() {
+        let mut h = Harness::new(20, 4);
+        h.feed(&format!(
+            "{A}user\r\n$ {B}echo \\\r\n> x\r\n{C}x\r\n{}",
+            d(0)
+        ));
+        h.command("$ ", "ls", "a\r\nb\r\n", 0);
+        h.feed(&format!("{A}$ "));
+        // Part of the blocks went to the history: still listed.
+        assert!(h.term.grid().history_size() > 0);
+        assert_eq!(blocks_in_grid(&h.term), [ID0, ID1, BlockId(2)]);
+
+        h.feed("\x1b[H\x1b[2J\x1b[3J");
+        assert_eq!(blocks_in_grid(&h.term), []);
+    }
+
+    #[test]
+    fn only_the_block_in_progress_is_not_finished() {
+        let mut h = Harness::new(20, 8);
+        h.command("$ ", "ls", "", 0);
+        assert!(h.shell.is_finished(ID0));
+
+        h.feed(&format!("{A}$ {B}make\r\n{C}"));
+        assert!(h.shell.is_finished(ID0));
+        assert!(!h.shell.is_finished(ID1));
+
+        h.feed(&d(2));
+        assert!(h.shell.is_finished(ID1));
+
+        h.feed(&format!("{A}$ "));
+        assert!(!h.shell.is_finished(BlockId(2)));
     }
 
     #[test]

@@ -73,6 +73,10 @@ first output.
 | Shift+left click              | Extend the selection                            |
 | Shift+mouse                   | Select even when the app captures the mouse     |
 | Ctrl+Shift+C                  | Copy the selection to the clipboard             |
+| Left click in the gutter      | Select the command block of the row             |
+| Ctrl+Shift+PageUp / PageDown  | Select the previous / next command block        |
+| Ctrl+Shift+Alt+C              | Copy the command of the selected or last block  |
+| Ctrl+Shift+Alt+O              | Copy the output of the selected or last block   |
 | Middle click                  | Paste the primary selection                     |
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)      |
 | Shift+PageUp / Shift+PageDown | Scroll the history                              |
