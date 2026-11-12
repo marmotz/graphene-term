@@ -70,3 +70,33 @@ sleep 2; import -window $W shot.png
 
 Things worth checking after rendering changes: htop bottom bar (background/text
 alignment), wide characters, box drawing, colors, cursor in vim.
+
+## Releases
+
+Every push to `develop` (so every merged pull request) runs
+`.github/workflows/release.yml`: tests, release build, then a GitHub pre-release
+tagged `v<crate version>-dev.<run number>` with these assets:
+
+- `graphene-<tag>-x86_64-unknown-linux-gnu.tar.gz`: binary, desktop entry, icon, licenses
+- `graphene-term_<version>~dev.<n>_amd64.deb`
+- `graphene-term-<version>-0.dev.<n>.x86_64.rpm`
+- `graphene-<tag>-x86_64.AppImage`
+- `SHA256SUMS`
+
+Packaging lives in `scripts/package.sh` (output in `dist/`) and `packaging/`. To run it
+locally: `cargo install --locked cargo-deb cargo-generate-rpm`, put `appimagetool` on
+`PATH` (or set `APPIMAGETOOL`), then:
+
+```bash
+cargo build --release --locked
+scripts/package.sh 1
+```
+
+### AUR
+
+`scripts/package.sh` also renders `dist/aur/PKGBUILD` and `.SRCINFO` for the AUR
+package `graphene-term-bin`. The workflow step that pushes them to the AUR is
+commented out for now; once uncommented it runs only when the `AUR_SSH_PRIVATE_KEY`
+repository secret is set. One-time setup: create an AUR account, add the public half of a dedicated SSH key to
+it, and store the private half in that secret. Install with `paru -S graphene-term-bin`
+(or `yay`).

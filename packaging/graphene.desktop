@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Graphene Term
+GenericName=Terminal
+Comment=GPU-accelerated terminal emulator
+Exec=graphene
+Icon=graphene
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;console;command;prompt;
