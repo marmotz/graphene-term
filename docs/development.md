@@ -12,7 +12,11 @@ cargo run            # debug build
 cargo run --release  # optimized build
 cargo test           # unit tests
 cargo clippy --all-targets
+cargo bench          # criterion benchmarks (benches/render.rs)
 ```
+
+The application is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so the
+benchmarks can reach its internals through `graphene::bench`.
 
 Note: `cargo test` and `cargo clippy` do not rebuild `target/debug/graphene`. Run
 `cargo build` before launching the binary directly.
@@ -38,6 +42,11 @@ equals `Config::default()`, so keep the file in sync with the code.
 |------------|---------|--------------------------|
 | `RUST_LOG` | `warn`  | Log level (`env_logger`) |
 
+`RUST_LOG=graphene::perf=debug` logs the time of each startup step since the start of
+`main` (window, glyphs ready, shell spawned, GPU instance and surface, adapter, device,
+renderer ready)
+and of the first frame drawn after the first PTY output.
+
 The theme ("graphene night") is defined in `src/palette.rs`.
 
 ## Shortcuts
@@ -61,10 +70,32 @@ Unit tests live next to the code (`#[cfg(test)]` modules):
 | `input`           | key encoding, control codes, cursor modes, shortcuts, paste |
 | `layout`          | grid size from pixels, padding, minimum size                |
 | `frame`           | capture from a real `Term` fed with escape sequences        |
-| `renderer::scene` | background merging, text runs, decorations, sRGB conversion |
+| `renderer::scene` | background merging, glyph instances, decorations, sRGB conversion |
+| `renderer::cells` | glyph quad placement, skipped glyphs, frame resolved again after an atlas reset |
+| `renderer`        | headless render read back: glyph pixels land in their cell (skipped without GPU) |
+| `perf`            | timing line format, first output / first frame tracking     |
 
 `frame` tests build a `Term<VoidListener>` and feed bytes through
 `vte::ansi::Processor`, so they exercise the real emulator without a PTY or GPU.
+
+## Benchmarks
+
+`cargo bench` runs `benches/render.rs` (criterion) on PTY output recorded at 120x32 in
+`benches/fixtures/` (btop, `cat` of source files, vim, and the `cat` output scrolled
+into the history):
+
+| Group         | Measures                                                             |
+|---------------|----------------------------------------------------------------------|
+| `parse`       | the fixture bytes fed into a fresh `Term`                            |
+| `frame`       | `Frame::capture` + `scene::build`                                    |
+| `glyphs_cold` | glyph cache lookup of every drawn cell, cache emptied first (rasterization included) |
+| `glyphs_warm` | the same lookups with the cache already filled                       |
+| `gpu_prepare` | upload, draw and submit on a headless device: `idle` (same frame), `changed` (blank frame then the fixture) |
+
+`gpu_prepare` is skipped with a message when no GPU adapter is available. Run one group
+with `cargo bench -- gpu_prepare`; compare two versions with
+`cargo bench -- --save-baseline before`, then `cargo bench -- --baseline before`.
+Re-recording the fixtures is described in `benches/fixtures/README.md`.
 
 ## Manual check on X11
 
