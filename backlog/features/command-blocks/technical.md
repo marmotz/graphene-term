@@ -2,578 +2,341 @@
 
 Product decisions: [overview.md](overview.md).
 
+This document describes the reworked block model: one terminal per block. The first
+implementation (one alacritty grid cut into blocks by OSC 133 marks and cell tags,
+issues #6 to #12 and #70 to #73, branch `feature-command-blocks`, never merged) is
+summarised in [First implementation](#first-implementation-what-is-kept), with what
+the rework keeps from it.
+
 ## Starting point
 
-- `alacritty_terminal` 0.26 does not handle OSC 133: `vte` 0.15 `osc_dispatch` logs
-  unknown OSC as `[unhandled osc_dispatch]` and drops them, with no handler callback.
-- The shell runs under alacritty's `EventLoop` ([terminal.rs:70-72](../../../src/terminal.rs)).
-  Its `pty_read` reads into a buffer, possibly several reads in a row while the `Term`
-  lock is busy, then parses the whole buffer at once. The cursor position at the moment
-  a mark is parsed is therefore unknown.
-- `Term` exposes no scroll counter: a grid `Line` taken now is wrong after the next
-  scroll, history eviction or reflow on resize. Only the selection is rotated by `Term`
-  (`term/mod.rs` `scroll_up_relative` / `scroll_down_relative`).
-- Cells carry an `extra: Option<Arc<CellExtra>>` holding an OSC 8 `Hyperlink`.
-  `write_at_cursor` copies the cursor template's `extra` into every written cell, and
-  `SGR 0` (`Attr::Reset`) keeps the template's hyperlink. Cells move with the grid on
-  scroll, eviction and reflow.
-- The view is alacritty's `display_offset` ([app.rs:105](../../../src/app.rs)).
-  `Frame::capture` walks `renderable_content().display_iter`
-  ([frame.rs:76-99](../../../src/frame.rs)), and mouse points go through
-  `term::viewport_to_point` ([app.rs:156-162](../../../src/app.rs)).
-- `GridLayout` places the grid at `padding` with no side area
-  ([layout.rs:26-53](../../../src/layout.rs)).
-- fish 4.9.3 (checked locally, `fish-terminal-compatibility(1)`) emits `OSC 133;A`
-  (with `click_events=1`), `B`, `C` (with `cmdline_url=`) and `D;<status>` natively.
-  zsh 5.9 and bash 5.3 emit nothing.
+Current code on `feature-command-blocks`:
+
+- **PTY loop.** [pty.rs](../../../src/pty.rs) replaces alacritty's `EventLoop`.
+  `process` ([pty.rs:74](../../../src/pty.rs)) splits the byte stream with the OSC
+  scanner and applies each mark right after the bytes before it, under the `Term`
+  lock, then the `ShellState` lock (fixed order, [terminal.rs:46](../../../src/terminal.rs)).
+- **Scanner.** [osc133.rs](../../../src/osc133.rs) reports `133;A/P/B/C/D` and `8;…`
+  (`Mark`, [osc133.rs:19](../../../src/osc133.rs)).
+- **Shell state.** [blocks.rs](../../../src/blocks.rs) tags the cells of the prompt and
+  the input with a template hyperlink `graphene-block://<id>/<kind>`, then rebuilds a
+  row index from those tags (`index`, [blocks.rs:433](../../../src/blocks.rs)).
+- **Injection.** [shell_integration.rs:56](../../../src/shell_integration.rs) `prepare`
+  injects zsh (`ZDOTDIR`), bash (`--posix` + `ENV`) and fish (`XDG_DATA_DIRS`). The zsh
+  and bash scripts wrap `PS1` / `RPS1` in `133;A` … `133;B`
+  ([graphene.bash:51-56](../../../shell-integration/bash/graphene.bash)).
+- **View.** [view.rs:151](../../../src/view.rs) `rows` walks alacritty's viewport
+  (`display_offset`) and skips folded output rows; gaps between cards are half lines
+  (`ViewRow::top`, `gap_before`).
+- **Rendering.** [frame.rs:173](../../../src/frame.rs) `Frame::capture` reads one `Term`;
+  [frame.rs:298](../../../src/frame.rs) `marks` builds the `Card`s;
+  [scene.rs](../../../src/renderer/scene.rs) draws card backgrounds, status stripes and
+  chevrons with the rounded rect pipeline ([rects.rs](../../../src/renderer/rects.rs)).
+- **Mouse.** [app.rs:441](../../../src/app.rs) `mouse_press` routes `Hit::{Margin,
+  Chevron, Gap, Cell}` ([layout.rs:138](../../../src/layout.rs));
+  [app.rs:663](../../../src/app.rs) `mouse_wheel` scrolls alacritty's viewport through
+  `view::grid_delta`.
+
+Why it broke: everything depends on the marks the shell writes around its prompt.
+powerlevel10k rebuilds `PS1` in a `precmd` hook that always runs last and emits its own
+`133;A/B` marks when asked (`/usr/share/zsh-theme-powerlevel10k/internal/p10k.zsh:8408-8421`),
+so the wrapping does not stick, and a second `133;B` after the right prompt moves the
+input start. fish emits `133;A/B/C/D` natively as well. And since all blocks share one
+grid, any cursor move up from a command can overwrite older blocks.
+
+`alacritty_terminal` 0.26 API used by the rework (checked in the crate sources):
+
+- `Term::grid_mut(&mut self) -> &mut Grid<Cell>` (`term/mod.rs:650`): the active grid.
+- `Grid<T>` is `Clone`, with `pub cursor` / `pub saved_cursor`, `Grid::new(lines,
+  columns, max_scroll_limit)` (`grid/mod.rs:141`), `clear_history`, `reset_region`,
+  and `Grid::resize(reflow, lines, columns)` (`grid/resize.rs:14`).
+- `Term::new(config, dims, listener)`, `Term::resize`, `selection`,
+  `selection_to_string`, `bounds_to_string`, `swap_alt`, `mode`.
+- `clear_screen(ClearMode::All)` on the main screen moves the viewport content into the
+  history (`clear_viewport`, `term/mod.rs:1788-1797`); `ClearMode::Saved` (`CSI 3 J`)
+  clears the history.
 
 ## Alternatives considered
 
 | Topic | Options | Retained |
 |---|---|---|
-| Getting the mark position | Wrap the PTY reader under alacritty's `EventLoop` / own PTY loop / fork `alacritty_terminal` | Own PTY loop: the wrapper cannot know when its bytes are parsed. A fork contradicts "public API only" ([decisions.md](../../../docs/decisions.md)). |
-| Anchoring blocks in the grid | Grid line + own scroll counter / per-row mark in a fork / cell tag through the template hyperlink | Cell tag (user decision): follows scroll, eviction and reflow for free, public API only. Cost: hyperlinks with a reserved scheme must be ignored by the links feature. |
-| Block granularity | Cell ranges / whole rows | Rows for display, folding and navigation. Cells only for the command start and end, needed by copy and by rich-input-editor. |
-| Folding | Own scroll position / alacritty `display_offset` plus a row filter at capture time | `display_offset` kept: alacritty keeps the view stable when output arrives while scrolled up. Graphene only skips hidden rows and converts scroll deltas. |
-| Copy of a whole block | `Lines` selection / `Simple` selection from the command start | `Simple` from the command start: the prompt is never copied, and the highlight shows exactly what is copied. |
-| Left margin | Always reserved / added with the first block | Always reserved (user decision): no reflow mid-session. |
+| Terminal per block | One fresh `Term` per block, replaying the shell's modes (bracketed paste, mouse, keypad, palette, title, kitty keyboard flags) into each new one / one live `Term` whose grid is detached into a frozen block at each signal | Live `Term` + frozen blocks (user decision): one parser and one set of modes, nothing to replay; frozen blocks keep alacritty's selection, copy and reflow. |
+| Block split | Header and output in one grid, with an output start mark / two grids, the header frozen when the command starts | Two grids (user decision): the output start is the grid boundary, it survives reflow without any tag, and a command can never redraw its prompt or command line. |
+| Block boundaries | OSC 133 marks around the prompt / OSC 133 `C` / `D` only / private OSC with a session token | Private OSC + token (user decision): no collision with the 133 marks of fish, powerlevel10k, a remote shell, or a file printed by `cat`. |
+| Cross-block selection | Limited to one block / composed by Graphene over several blocks | Composed (user decision): one alacritty `Selection` per block involved. |
+| Scroll position | alacritty `display_offset` / Graphene offsets (timeline + one per block) | Graphene offsets: the timeline spans several grids, and a block's visible rows (capped, header pinned) are not alacritty's viewport. The live grid stays at `display_offset` 0. |
+| Frozen block storage | Rows copied into our own structure / a small `Term<VoidListener>` holding the detached grid | `Term<VoidListener>`: selection, `bounds_to_string`, reflow and the frame capture code work on it unchanged. |
 
 ## Design
 
-### Shell integration scripts
+### Signals: private OSC and hooks
 
-New repo folder `shell-integration/` (`zsh/.zshenv`, `bash/graphene.bash`,
-`fish/vendor_conf.d/graphene.fish`), embedded with `include_str!` and written at
-startup to `$XDG_RUNTIME_DIR/graphene/shell-integration/`, or `std::env::temp_dir()`
-when that variable is missing. The injection follows the mechanisms already set in
-[rich-input-editor/technical.md](../rich-input-editor/technical.md):
+Sequence, `ST` being `ESC \`:
 
-- **zsh**: `ZDOTDIR` points to the integration folder, and the original value is kept
-  in `GRAPHENE_ZDOTDIR`. The `.zshenv` there restores `ZDOTDIR`, sources the user's
-  `.zshenv`, then installs the hooks:
-  - `precmd` emits `D;$?`, except before the first prompt;
-  - `PS1` is wrapped in `%{\e]133;A\e\\%}` … `%{\e]133;B\e\\%}`;
-  - `RPS1` is wrapped in `%{\e]133;P;k=r\e\\%}` … `%{\e]133;B\e\\%}`;
-  - `preexec` emits `C`.
-- **bash**: the shell is started with `--posix` and `ENV` pointing to `graphene.bash`.
-  The script turns POSIX mode off, sources the usual rc files like an interactive bash,
-  then installs the hooks:
-  - `PROMPT_COMMAND` emits `D;$?` first;
-  - `PS1` is wrapped in `\[…A…\]` … `\[…B…\]`;
-  - `PS0` emits `C` (bash 4.4 and later).
-- **fish**: `XDG_DATA_DIRS` gets the integration folder prepended. fish emits the marks
-  itself, so the script emits none and only carries rich-input-editor's bindings. For a
-  fish without native marks, the script emits them from `fish_prompt`, `fish_preexec`
-  and `fish_postexec`, guarded by a version check. The oldest fish version with native
-  marks is to be verified during implementation: only 4.9.3 is checked here.
-- Shell detection: basename of `$SHELL`. `tty::Options::shell` is set to
-  `Shell::new(program, args)` in `Terminal::spawn` ([terminal.rs:50-60](../../../src/terminal.rs)).
-  Other shells are started as today, with no injection.
-- Interim opt-out until the configuration feature exists: `GRAPHENE_SHELL_INTEGRATION=0`.
-  This follows `GRAPHENE_FONT` / `GRAPHENE_FONT_SIZE` ([app.rs:42](../../../src/app.rs)).
-
-`OSC 133;P;k=r` (right prompt) is borrowed from kitty's extension. Graphene treats it
-as a prompt start for the current block, so `RPROMPT` cells are tagged as prompt and
-not as input. This also removes the `RPROMPT` limit listed by rich-input-editor.
-
-### OSC 133 scanner: `src/osc133.rs` (pure)
-
-`Scanner::split(&mut self, bytes) -> impl Iterator<Item = Chunk>` with
-`Chunk::Bytes(&[u8])` and `Chunk::Mark(Mark)`:
-
-- An incremental state machine for `ESC ] … (BEL | ESC \)`. A sequence split across
-  two reads is still found.
-- Only `133;…` and `8;…` are reported:
-  - 133 gives `Mark::{PromptStart, RightPrompt, InputStart, OutputStart,
-    CommandEnd(Option<i32>)}`;
-  - 8 gives `Mark::Hyperlink`, used only to know the template may have changed.
-- Options such as `aid=`, `click_events=` and `cmdline_url=` are ignored.
-- An OSC longer than 4 KiB is abandoned.
-- Every byte, marks included, is still passed to the `vte` parser, so other OSC
-  sequences keep working.
-
-### Shell state: `src/blocks.rs` (pure, tested on `Term<VoidListener>`)
-
-```rust
-pub struct ShellState {
-    pub phase: Phase,                 // Idle | Prompt | Input | Running
-    current: Option<BlockId>,
-    next_id: u64,
-    blocks: BTreeMap<BlockId, BlockInfo>, // status, folded
-}
-pub enum Status { Running, Success, Failure(i32), Unknown }
+```
+ESC ] 6973 ; <token> ; start ; <command line, base64> ST
+ESC ] 6973 ; <token> ; end ; <exit status> ST
 ```
 
-`ShellState::apply(&mut self, term: &mut Term<_>, mark)` runs in the PTY thread under
-the `Term` lock:
+- `6973` is `GRAPHENE_OSC`. Before implementing, check it is unused in xterm's
+  ctlseqs, kitty, iTerm2, WezTerm and foot; pick another number otherwise.
+- `<token>`: 32 random hex characters per session, passed in `GRAPHENE_BLOCK_TOKEN`.
+  The hook scripts copy it into a non-exported shell variable and unset the
+  environment variable, so commands run from the shell (ssh, cat) never see it. A
+  sequence with another token is passed through to the parser untouched.
+- The command line is base64 so it may hold `;`, `BEL` or `ESC`. It is capped at
+  64 KiB; longer ones are sent empty (copy then falls back to the header text).
 
-- `PromptStart`:
-  - when the cursor column is not 0, `carriage_return()` then `linefeed()` (OSC 133 `A`
-    implies a fresh line), so every block starts on its own row;
-  - a previous block still `Running` becomes `Unknown`;
-  - allocate a new id, set the template hyperlink to the tag
-    `graphene-block://<id>/prompt`, and set the phase to `Prompt`.
-- `RightPrompt`: the tag becomes `prompt` again.
-- `InputStart`: the tag becomes `graphene-block://<id>/input`, and the phase becomes
-  `Input`.
-- `OutputStart`: the template hyperlink is cleared, but only when it is our tag (a real
-  OSC 8 link is never touched). The phase becomes `Running`.
-- `CommandEnd(code)`: same clearing, and the status is set from `code`. Auto-fold applies
-  when the block's output has more rows than `term.screen_lines()` (user decision:
-  window height, until the configuration feature exists). The phase becomes `Idle`.
-- After each `Bytes` chunk, when the phase is `Prompt` or `Input` and the template has
-  no hyperlink, the tag is applied again. This covers a real OSC 8 link closed inside a
-  prompt.
-- Marks are ignored on the alternate screen (`TermMode::ALT_SCREEN`).
-- `blocks` is capped at 10 000 entries (the scrollback size): the oldest ids are dropped
-  first, because their rows have left the history by then.
+Hooks, injected with the mechanisms that already exist
+([shell_integration.rs:56](../../../src/shell_integration.rs)). None of them wraps,
+reads or rebuilds the prompt:
 
-`BLOCK_LINK_SCHEME = "graphene-block"` is public: the images-links feature must ignore
-these hyperlinks.
+- **zsh** (`.zshenv`): `preexec` emits `start` with `$1`; `precmd` emits `end` with `$?`,
+  only when a command ran since the last prompt (`_graphene_command_ran`, already in
+  the script). The `PS1` / `RPS1` wrapping, `zle-line-init` redraw and the
+  powerlevel10k branch are removed, and `__p9k_force_term_shell_integration` is no
+  longer set (commit `bf12533` is reverted): powerlevel10k's own 133 marks are now
+  ignored.
+- **bash** (`graphene.bash`): `PS0` emits `start`; the command line comes from
+  `$(HISTTIMEFORMAT= builtin history 1)` with the number stripped, empty when history
+  is off (to verify during implementation). The first `PROMPT_COMMAND` entry emits
+  `end` with `$?` when a command ran. The `PS1` wrapping is removed.
+- **fish** (`graphene.fish`): `fish_preexec` emits `start` with `$argv`,
+  `fish_postexec` emits `end` with `$status`. fish's native 133 marks are ignored.
+- `GRAPHENE_SHELL_INTEGRATION=0` still turns the injection off.
 
-**Row index.** `index(term, lines: Range<Line>) -> Vec<RowRole>` with
-`RowRole::{None, Prompt(id), Input(id), Output(id)}`. A row takes the tag of its first
-non-blank cell. A row with no tag continues the previous block as `Output`; rows before
-the first block are `None`. A range that starts inside an output first walks up to the
-nearest tagged row. The cost is one row-start check per row (about 10 000 for a full
-history), done again on each wakeup only when it is needed.
+An empty command line or `Ctrl+C` at the prompt runs `precmd` but not `preexec`: no
+`start`, so the `end` is not sent, and the new prompt is drawn below the old one in the
+same header.
 
-**Block geometry.** `block_bounds(term, id)` returns:
+### Scanner: `src/osc133.rs` becomes `src/signals.rs` (pure)
 
-- `first_row`;
-- `input_start` / `input_end`: first and last cell tagged `input`;
-- `output`: rows after the last `Input` row, up to the row before the next block, or up
-  to the cursor row while the block runs.
+`Scanner::split(bytes) -> impl Iterator<Item = Chunk>`, same incremental structure
+(sequences split across reads, 4 KiB cap on an OSC):
 
-`input_start` is the `ShellState` input point expected by rich-input-editor. It is
-derived from the tags rather than stored as a rotated `Point`, with the same meaning.
-Before anything is typed, it falls back to the cell after the last `prompt` cell.
+- `Chunk::Signal(Signal::{Start { command: String }, End { status: Option<i32> }})`
+  for `GRAPHENE_OSC` with the session token. The scanner is built with the token.
+- `Chunk::Clear` for `CSI 2 J` and `CSI 3 J`, which needs a small CSI state: `ESC [`,
+  parameter bytes, final byte. Only the final `J` with parameter 2 or 3 is reported.
+- Every byte is still passed to the `vte` parser, the signal sequences included (`vte`
+  drops unknown OSC, so they show nothing).
+- `133;…` and `8;…` are no longer reported.
 
-### Own PTY loop: `src/pty.rs`
+### Timeline: `src/timeline.rs` (pure, tested on `Term<VoidListener>`)
 
-Replaces `alacritty_terminal::event_loop::EventLoop`. It keeps that loop's structure:
+Replaces `blocks.rs` (`ShellState`, cell tags, row index, `BlockBounds`).
 
-- a `polling::Poller` thread, using `polling` 3.11, already in `Cargo.lock` and to be
-  added to `Cargo.toml`;
-- a write queue, `Msg::{Input, Resize, Shutdown}`, `ChildExit`, and `EIO` ignored on
-  Linux;
-- synchronized updates through `Processor::sync_timeout` / `stop_sync`.
+```rust
+pub struct Timeline {
+    blocks: VecDeque<Block>,          // finished blocks, oldest first
+    current: Current,                 // the block whose grid is live
+    next_id: u64,
+    pub scroll: TimelineScroll,       // offset from the bottom, in half lines
+}
+pub struct Block {
+    pub id: BlockId,
+    pub header: Term<VoidListener>,   // prompt + typed command, frozen at `start`
+    pub output: Term<VoidListener>,   // frozen at `end`
+    pub command: String,              // from the `start` signal
+    pub status: Status,               // Success | Failure(i32) | Unknown
+    pub folded: bool,
+    pub scroll: usize,                // output rows hidden below, 0 = bottom
+}
+pub struct Current {
+    pub id: BlockId,
+    pub phase: Phase,                 // Prompt | Running
+    pub header: Option<Term<VoidListener>>, // frozen once running
+    pub command: String,
+    pub folded: bool,
+    pub scroll: usize,
+    pub pin_top: bool,                // set by a clear: show this block at the top
+}
+```
 
-Read path:
+The live grid is the session's `Term` (`Terminal::term`); `Timeline` is locked after it
+(`Terminal::shell` becomes `Terminal::timeline`, same order).
 
-1. Read a buffer.
-2. Take the `Term` lock, then the `ShellState` lock (fixed order, everywhere).
-3. For each `Chunk::Bytes`, call `processor.advance(&mut term, bytes)`.
-4. For each `Chunk::Mark`: first `stop_sync` if a synchronized update holds bytes
-   (`sync_bytes_count() > 0`), so the cursor is correct, then `shell.apply(&mut term,
-   mark)`.
-5. Send `Event::Wakeup` as today.
+**Detaching the live grid** (`detach(term) -> Term<VoidListener>`):
 
-`Terminal` keeps `term: Arc<FairMutex<Term<_>>>`, gains
-`shell: Arc<Mutex<ShellState>>`, and its `Notifier` becomes `pty::Sender` (mpsc sender +
-`poller.notify()`). `alacritty_terminal::event_loop` is no longer used.
+1. `rows` = content rows: `history_size` + last line holding the cursor or a non-blank
+   cell, plus one.
+2. `let old = mem::replace(term.grid_mut(), Grid::new(screen_lines, columns,
+   scrollback))`; the new grid gets `old.cursor` with its point reset to the origin, so
+   the SGR template and charsets carry over.
+3. `old` is resized to `rows` lines (`Grid::resize(false, rows, columns)`, the cursor
+   first moved to the last content row so no content row is dropped) and placed in a
+   `Term<VoidListener>` created with `rows` × `columns` (`*frozen.grid_mut() = old`),
+   so its alternate grid is that small too.
 
-### Layout: gutter
+**Signals**, applied by the PTY thread like the marks today (after `stop_sync` when a
+synchronized update holds bytes):
 
-`GridLayout` gains `gutter: f32`, one cell width, always reserved (user decision).
+- `Start { command }` in phase `Prompt`: the live grid is detached into
+  `current.header`; phase `Running`.
+- `End { status }` in phase `Running`: the live grid is detached into the output; the
+  current block is pushed to `blocks` with its status; a new `Current` starts in phase
+  `Prompt`. `End` in phase `Prompt` is ignored.
+- A signal received on the alternate screen is kept and applied when the alternate
+  screen is left (a program that never leaves it delays the block until `reset`).
+- `Clear` on the main screen sets `current.pin_top`. When the block of a `clear`
+  command ends with an empty output, `pin_top` moves to the next block, so the new
+  prompt is at the top of the view.
+- Without signals (unsupported shell, `ssh` to a remote host), nothing is ever
+  detached: the current block keeps growing in the live grid and is drawn as one card,
+  with no chevron and a neutral stripe.
 
-- `columns` = `fit(width - gutter)`.
-- `cell_origin` x = `padding + gutter + column * width`.
-- `hit(x, y) -> Hit::{Gutter { line }, Cell { column, line, side }}`.
-- `point_at` stays for cells, and its clamping starts at the gutter's right edge.
+**Eviction.** The frozen rows (headers + outputs) are capped at the scrollback size
+(`scrolling_history`, [config.rs:337](../../../src/config.rs)); the oldest blocks are
+dropped whole.
 
-### View with folding: `src/view.rs` (pure)
+**Resize.** The live `Term` is resized as today. Frozen blocks keep the columns they
+were reflowed for; a block is reflowed (`Term::resize` with its own row count) the next
+time it is captured, selected or copied with other columns. A resize never runs over
+every block at once.
 
-- `rows(term, shell, display_offset) -> Vec<ViewRow { line: Line, role: RowRole }>`:
-  - start from the bottom grid line of alacritty's viewport and walk up;
-  - skip `Output` rows of folded blocks, until `screen_lines` rows are collected;
-  - at the top of the history, complete downward, then pad with blank rows.
-  - Without folds or blocks, this is exactly today's viewport.
-- `grid_delta(term, shell, display_offset, view_delta) -> i32` converts a scroll in
-  visible rows into a `Scroll::Delta` in grid lines. It is used by:
-  - the mouse wheel;
-  - `Shift+PageUp/PageDown`, where a page is `screen_lines` visible rows;
-  - selection auto-scroll ([app.rs:226-240](../../../src/app.rs)).
-  `Top` and `Bottom` are unchanged.
-- `point(view_rows, line_index, column) -> Point` replaces `viewport_to_point` in
-  `mouse_point`.
+### Block geometry and view: `src/view.rs` (pure)
 
-### Frame and rendering
+- A block's rows: header rows, then output rows (none while `Prompt`). A folded block
+  shows its header and one summary row ("342 lines hidden"). For the current block,
+  output rows end at the live cursor row or the last non-blank row.
+- `cap` = view lines minus the card padding. A block taller than `cap` shows its whole
+  header, then the last `cap - header` output rows shifted up by `block.scroll`. A
+  header taller than `cap` (rare) is cut to `cap - 1` rows, keeping its last rows (the
+  command).
+- `rows(timeline, live, lines) -> Vec<ViewRow>` walks the blocks from the bottom with
+  `timeline.scroll`, as today but over blocks: each `ViewRow` gets `source:
+  RowSource::{Header(BlockId), Output(BlockId), Live, Summary(BlockId)}`, the grid
+  `Line` in that source, `top` and `gap_before` (half-line gaps unchanged). With
+  `pin_top`, the view starts at the pinned block and leaves blank rows below it.
+- The view stays anchored at the bottom while `timeline.scroll` is 0. When scrolled up,
+  the offset grows by the rows added below, so the view does not move while output
+  arrives (alacritty did this for us; now the growth of the current block's row count
+  between two captures is added).
+- The current block follows its new output while `current.scroll` is 0; otherwise its
+  offset grows by the added rows, like the timeline.
+- Alternate screen: the view is the live `Term`'s screen, full window, no card, no gap,
+  as today.
 
-- `Frame::capture` takes the `ViewRow`s and reads `term.grid()[line]` directly instead
-  of `display_iter`. Selection highlight and cursor are mapped through the same rows.
-  On the alternate screen, the view is the plain viewport with no decoration.
-- `Frame` gains a `RowDecoration` per row:
-  - `bar: Option<Status>`;
-  - `separator: bool`, on a block's first row;
-  - `chevron: Option<Folded | Unfolded>`, on the first `Input` row;
-  - `summary: Option<usize>`, the hidden row count of a folded block, on its last
-    `Input` row.
-- `scene::build` adds:
-  - **bar**: a gutter rect a quarter of a cell wide, full row height, on every row of
-    a block;
-  - **separator**: a 1 px rect across the grid width at the top of the block's first
-    row, in `DimForeground`;
-  - **chevron**: `▸` / `▾` as a gutter text run, in the status color;
-  - **summary**: `"<n> lines hidden"` as a dim text run two columns after the last
-    non-blank cell of its row, cut at the grid edge.
-- `TextRun` gains an optional pixel `x` for gutter runs. As implemented: `TextRun` was
-  removed by the glyph pipeline rewrite (#69), whose `GlyphInstance` is already placed
-  in pixels, so the chevron is a glyph at the gutter origin and the summary one glyph
-  per cell; nothing was added to the renderer. Status colors:
-  - `Success`: ANSI green;
-  - `Failure`: ANSI red;
-  - `Running`: ANSI yellow;
-  - `Unknown`: `DimForeground`.
-  A dedicated theme is left to config-themes.
+### PTY loop: `src/pty.rs`
 
-### Mouse: `app.rs`
+`process` keeps its shape: `Chunk::Bytes` to the parser, `Chunk::Signal` /
+`Chunk::Clear` to `Timeline::apply(&mut term, …)`. The PTY size stays the window's
+(`columns`, view lines): programs see the full window height, and a block shows what
+fits under its cap and scrolls the rest.
 
-`left_press` ([app.rs:177](../../../src/app.rs)) checks `layout.hit` first. A gutter
-hit is always Graphene's, even when an application captures the mouse, because the
-gutter is outside the application's grid:
+### Frame and rendering: `src/frame.rs`, `src/renderer/scene.rs`
 
-- chevron row: toggle the fold;
-- any other row of a block: select the block;
-- outside blocks: ignored.
+- `Frame::capture(live, timeline, view, …)` builds each row from its source: frozen
+  rows by indexing the block's `Term` grid (`grid()[line]`), live rows and the cursor
+  through `renderable_content` as today.
+- `Card` is unchanged (`rows`, `clipped_top`, `status`, `chevron`, `selected`); `marks`
+  now reads the blocks instead of the tags. A chevron is shown on a finished block with
+  output, as before. `clipped_top` also covers a block shown from its middle.
+- A scrollable block shows a thin scroll indicator on the card's right edge (the
+  output part only), in the dim color.
+- The card drawing from #70 and #72 (rounded rects, stripe, chevron disc and triangle)
+  is unchanged.
 
-Clicking the summary text unfolds the block.
+### Mouse: `src/app.rs`, `src/layout.rs`
 
-Selecting a block:
+`Hit` gains the block: `Cell { block: RowSource, line, column, side }`.
 
-1. Create a `Simple` selection from `input_start` (`Side::Left`) to the end of the
-   block's last row (`Side::Right`).
-2. Capture `SelectionSnapshot`.
-3. Write the primary selection, as a mouse release does.
+- **Wheel** ([app.rs:663](../../../src/app.rs)): over a block whose output can scroll,
+  scroll `block.scroll` and stop at its ends; otherwise (short block, gap, margin,
+  blank rows) scroll `timeline.scroll`. Over the live output with an application
+  capturing the mouse, the wheel is reported to it as today.
+- **Mouse reporting**: only over the live output rows (or the whole window on the
+  alternate screen); the cell sent is the live grid's viewport cell under the pointer.
+  Everywhere else, the mouse is Graphene's.
+- **Text selection**: `TimelineSelection { start, end }`, each end a `(RowSource, Point,
+  Side)`. For capture and copy it is split into one alacritty `Selection` per block
+  involved (whole blocks in the middle), set on each block's `Term`. The copied text
+  joins the parts with a line break and goes through `clean_copied_text`
+  ([selection.rs:142](../../../src/selection.rs)). Auto-scroll at the view edges
+  scrolls the timeline.
+- Margin click, chevron click and its hand pointer, summary click: unchanged, mapped to
+  the block of the row.
 
-A folded block's hidden rows are inside the selection, so they are copied: folding is
-visual only.
+### Keyboard: `src/input.rs`, `src/app.rs`
 
-### Keyboard: `input.rs` / `app.rs`
-
-New `Action`s in `action_for` ([input.rs:21-46](../../../src/input.rs)), with a
-`ctrl_shift_alt` branch next to `ctrl_shift`:
-
-| Shortcut | Action |
-|---|---|
-| `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | `PreviousBlock` / `NextBlock` |
-| `Ctrl+Shift+Alt+C` | `CopyCommand` |
-| `Ctrl+Shift+Alt+O` | `CopyOutput` |
-| `Ctrl+Shift+F` | `ToggleFold` |
-| `Ctrl+Shift+Alt+F` | `ToggleFoldAll` |
-
-- **Target block**: the block that contains the start of the selection, otherwise the
-  last finished block.
-- **Previous / Next**: select the neighbour of the target block. The first press with
-  no selection selects the last finished block. The view then scrolls with `grid_delta`
-  until the block's first row is visible.
-- **Copy**: `Ctrl+Shift+C` stays unchanged, and on a block selection it copies the
-  command and the output. `CopyCommand` copies `bounds_to_string(input_start,
-  input_end)`. `CopyOutput` copies the `output` rows. Both go through
-  `selection::clean_copied_text` to the clipboard. An empty output leaves the clipboard
-  untouched.
-- **ToggleFoldAll**: folds every finished block if any is unfolded, otherwise unfolds
-  them all.
-- rich-input-editor intercepts keys before `action_for`. Its `editor_command` must not
-  match `Ctrl+Shift+PageUp/PageDown` nor any `Ctrl+Shift+Arrow`, which belongs to pane
-  focus ([tabs-splits-palette](../tabs-splits-palette/overview.md)).
-
-### Docs
-
-- `docs/architecture.md`:
-  - new modules `osc133`, `blocks`, `view`, `pty`;
-  - threads section: own PTY loop, lock order `Term` then `ShellState`.
-- `docs/decisions.md`:
-  - own PTY loop;
-  - cell tags through hyperlinks;
-  - gutter always reserved;
-  - folding as a row filter over `display_offset`.
-- `README.md`: block shortcuts and mouse actions, `GRAPHENE_SHELL_INTEGRATION=0`.
-- `docs/vision.md`: roadmap row set to "Done".
+- `Ctrl+Shift+PageUp/PageDown`: previous / next block, scrolled into view.
+- `Shift+PageUp/PageDown`: scroll the selected block when it can scroll, otherwise the
+  timeline, one view height. `Shift+Home/End`: top / bottom of the timeline.
+- Copy actions: whole block = `command` + output text; command only = `command` (or
+  the header's last rows when the signal had none); output only = output text.
+  Folding: unchanged, auto-fold removed.
 
 ## Consequences checked against the code
 
-- One column fewer for every user, even without shell integration (gutter).
-- `terminal.rs` loses the alacritty `EventLoop` and `Notifier`. `Terminal::write` /
-  `resize` keep their signatures, so `app.rs` callers are unchanged.
-- `Frame::capture` changes signature, so its tests move to the `ViewRow` input. With no
-  block and no fold, the output stays identical (non-regression test).
-- `mouse_point`, `mouse_wheel`, `auto_scroll` and the `ScrollPage*` actions go through
-  `view`. Without folds, `grid_delta` returns its input unchanged.
-- A shell started by hand inside Graphene, or an ssh session, emits no marks: no block,
-  and the gutter stays empty.
-- `clear` / `ESC c` erase cells and their tags, so the blocks vanish with them. Orphan
-  `BlockInfo` entries are dropped by the cap.
+- `blocks.rs` is replaced: cell tags (`BLOCK_LINK_SCHEME`), `RowRole`, `index`,
+  `block_bounds` and the `after_bytes` re-tagging disappear. images-links no longer has
+  to filter internal hyperlinks (its overview and technical notes are updated).
+- `view.rs`, `frame.rs::marks`, `block_actions.rs` and the mouse / wheel paths of
+  `app.rs` are rewritten on the timeline. `view::grid_delta` and `view::reveal` go away
+  with `display_offset`.
+- `osc133.rs` becomes `signals.rs`; the zsh and bash scripts lose the prompt wrapping
+  and the zsh tests on prompt marks (`zsh_powerlevel10k_emits_the_marks`,
+  `RightPrompt` checks) are replaced by tests on the start / end signals.
+- rich-input-editor located the input from the `133;B` mark: it must be revisited (its
+  overview says so). The live grid only holds the prompt and the input before `start`,
+  which may help.
+- Memory: each frozen block is a `Term` sized to its content (header and output), not
+  to the window.
+- Benchmarks ([benches/render.rs](../../../benches/render.rs)) build frames from one
+  `Term`: they need a timeline fixture.
 
 ## Known limits
 
-- An empty row printed before a multi-line prompt (starship `add_newline`) is not
-  written, so it carries no tag and belongs to the previous block's output.
-- A mark received during a synchronized update ends the update early. Visible only if a
-  redraw happens before the next wakeup.
-- A prompt drawn on the alternate screen gets no block (by design).
+- zsh's `PROMPT_SP` mark after an output without a final newline lands in the next
+  block's header (to check; Graphene could hide it since the output grid's cursor
+  column tells it).
+- A command that moves the cursor above its first output row hits the top of its own
+  grid instead of rewriting the command line, unlike a classic terminal.
+- bash with history turned off sends no command line: copying the command falls back to
+  the header text.
+- A remote shell over `ssh` produces one block until the local shell signals again.
 
 ## Tests
 
-- `osc133.rs`:
-  - BEL and ST terminators;
-  - a sequence split across two and three reads;
-  - options ignored, unrelated OSC passed through untouched;
-  - overlong OSC abandoned;
-  - `D` with and without a status.
-- `blocks.rs`: feed byte streams to `Term<VoidListener>` + `ShellState`:
-  - tags on prompt and input cells, none on output;
-  - fresh line on `A` mid-row;
-  - tag reapplied after an OSC 8 close inside a prompt;
-  - a real OSC 8 link kept at `C`;
-  - `RightPrompt` cells tagged as prompt;
-  - index roles after scroll, history eviction and a resize with reflow;
-  - `input_start` / `input_end`, auto-fold threshold, `Unknown` status, id cap.
-- `view.rs`:
-  - rows with zero, one and several folded blocks;
-  - top-of-history completion;
-  - `grid_delta` across a fold;
-  - `point` mapping.
-- `layout.rs`: gutter offset, `hit` in gutter and grid.
-- `scene.rs`: bar, separator, chevron and summary rects or runs for a decorated frame.
-- `input.rs`: the new shortcuts; `Ctrl+Shift+C/V` unchanged.
-- Integration scripts: one test per shell, skipped when the shell is missing. Spawn it
-  in a PTY with the injection and run `true` then `false`. Check the stream holds
-  `A, B, C, D;0` then `A, B, C, D;1`. The user's rc files must still be sourced (marker
-  variable set in a temporary `HOME`).
+- `signals.rs`: start / end with the token, a wrong token passed through, base64 and
+  64 KiB cap, sequences split across reads, `CSI 2 J` / `3 J` detection, other CSI and
+  OSC 133 ignored.
+- `timeline.rs`: detach keeps content rows and the SGR template, header / output split,
+  `End` without `Start` ignored, signals deferred on the alternate screen, eviction,
+  `pin_top` after `clear` and after `Ctrl+L`, no signal = one block.
+- `view.rs`: cap with pinned header, block scroll and its ends, timeline anchoring and
+  stability while output arrives, folded summary, pinned top, alternate screen.
+- `frame.rs` / `scene.rs`: rows from frozen and live sources, cards, scroll indicator.
+- `app.rs` routing helpers kept pure where possible: wheel target, mouse reporting
+  region, cross-block selection split and copied text.
+- `shell_integration.rs`: real zsh (with powerlevel10k when installed), bash and fish
+  sessions emit exactly one start and one end per command, nothing for an empty line,
+  and the token is not in the command's environment.
 
-## Card rendering (redesign)
+## First implementation: what is kept
 
-The first rendering (#10, #12) put a one-cell gutter mark, a 1 px separator over the
-grid and a font chevron on the command row. Tried with a real powerlevel10k prompt, it
-read as console content, and the chevron glyph (`▸`, from a fallback font, under a
-status bar of the same color) was a few pixels wide. The overview now asks for cards.
-This section supersedes, for rendering only, the bar / separator / chevron parts of
-"Layout: gutter", "Frame and rendering" and "Mouse" above. Shell state, row index,
-folding, selection and copy are unchanged.
-
-### Starting point
-
-- Rows are evenly spaced: `GridLayout::cell_origin` is `padding + line * cell.height`
-  ([layout.rs:59-64](../../../src/layout.rs)), and `point_at`, `hit` and
-  `vertical_overflow` invert that ([layout.rs:72-110](../../../src/layout.rs)).
-- `view::rows` collects exactly `screen_lines` rows upward from the viewport bottom,
-  skipping folded rows, then completes downward and pads
-  ([view.rs:118-188](../../../src/view.rs)).
-- Decorations are per row: `RowDecoration { bar, separator, chevron, summary }`
-  ([frame.rs:61-70](../../../src/frame.rs)), drawn by `scene::build` as a gutter rect,
-  a 1 px rect and a glyph ([scene.rs:107-151](../../../src/renderer/scene.rs)).
-- The rect pipeline draws plain axis-aligned quads with alpha blending, no corner
-  radius and no shape ([rect.wgsl](../../../src/renderer/rect.wgsl),
-  [rects.rs:12-18, 101](../../../src/renderer/rects.rs)).
-- A block selection is an ordinary `Simple` selection, highlighted cell by cell by
-  `Frame::capture` ([frame.rs:141-161](../../../src/frame.rs)); the app keeps no
-  "selected block" ([app.rs:284-327](../../../src/app.rs)).
-- Default window padding is 8 logical pixels and may be set to 0
-  ([config.rs:255, 428-430](../../../src/config.rs)).
-
-### Alternatives considered
-
-| Topic | Options | Retained |
+| Piece | Issue | Fate |
 |---|---|---|
-| Gaps vs fixed PTY size | Shrink the PTY when cards add gaps / keep the PTY size and push rows into the history | Keep the PTY size (user decision): the gaps push the top rows above the view, reachable by scrolling. Resizing the PTY per block would reflow and redraw full-screen programs. |
-| Leftover height at the top | Partial top row, clipped / whole rows only, blank leftover | Whole rows (user decision): integer layout in half-lines, exact mouse mapping, no scissor. |
-| Vertical unit | Pixels / half-lines | Half-lines: a row is 2 units, a gap 1, so `view` stays pure and integer; pixels only in `layout`. |
-| Rounded corners and chevron | Icon font embedded / SDF shapes in the rect shader | SDF in the rect shader (user decision): crisp at any size, no font dependency, antialiased. |
-| Horizontal inner padding | None / half a cell each side | Half a cell (user decision): text never touches the rounded corners. Columns are fixed once at layout time. |
-| Card colors | New theme keys / derived from the palette | Derived (user decision): blend of background and foreground, overridable later by config-themes. |
-| Selected block highlight | Cell highlight / card accent | Card accent (overview), with the cell highlight skipped for a block selection only. |
-
-### Layout: `src/layout.rs`
-
-From the left: `padding`, margin (status stripe), card padding, grid, card padding,
-right reserve.
-
-- `margin` = `round(cell.width / 2)`: holds the stripe; replaces `gutter`.
-- `card_pad` = `round(cell.width / 2)` on each side of the grid.
-- `chevron_radius` = `round(cell.height * 0.45)`. The chevron is centered on the
-  card's top-right corner, so it needs `chevron_radius` free pixels right of the card:
-  `right_reserve = max(padding, chevron_radius)`. With the default padding (8 px) and a
-  14 px font, no extra column is lost.
-- `columns = fit(width - padding - margin - 2 * card_pad - right_reserve)`. Always
-  reserved, with or without blocks, alternate screen included: the column count never
-  changes mid-session.
-- `grid_left() = padding + margin + card_pad`.
-- `lines` (PTY lines) unchanged: `fit(height)` in whole rows.
-- Vertical placement moves out of `GridLayout`: `row_top(units) = padding + units *
-  cell.height / 2`, where `units` comes from the view (below). `point_at`, `hit` and
-  `vertical_overflow` take the view geometry (`&[ViewRow]`) to map `y` to a view row.
-- `Hit` gains `Margin { row }` (replaces `Gutter`), `Chevron { row }` (inside the
-  chevron circle), `Gap` (between cards: ignored) and keeps `Cell`.
-
-### View: `src/view.rs`
-
-- `ViewRow` gains `top: u32`, its offset from the view top in half-lines, and
-  `gap_before: bool`.
-- `rows` takes a height budget of `2 * screen_lines` half-lines instead of a row count.
-  Walking up from the viewport bottom (folds still skipped), each row costs 2 units, and
-  a block's first row costs 1 more when a row of another block (or a blank row) shows
-  above it. The walk stops when the next row does not fit; the leftover units (0 or 1,
-  2 only when padding is needed) go to the top. `top` is assigned after the walk.
-- On the alternate screen or without blocks: no gap, so exactly today's viewport.
-- `grid_delta` and `reveal` keep their contract in grid lines. A page
-  (`Shift+PageUp/PageDown`) becomes "the number of rows of the current view", which is
-  `screen_lines` without blocks.
-- `point(rows, row_index, column)` unchanged; the row index now comes from `y` through
-  the view geometry.
-
-As implemented:
-
-- The leftover can be 2 half-lines when the next row up would need a gap (cost 3).
-- Scrolled to the top of the history (`display_offset == history_size`), a view whose
-  walk up stops before the top grid line would leave rows out of reach (a fresh screen
-  with blank rows below the cursor, or the top of a long history): it is rebuilt from
-  the top grid line downward, unless that cuts the cursor row shown at the bottom.
-- `reveal` checks the new view and scrolls one more row while a gap coming in pushes
-  the line out.
-- `GridLayout` keeps `cell_x(column)`, `grid_right()` and `row_top(units)` instead of
-  `cell_origin`; `Frame` gains `row_tops` now (the cards come with the frame task).
-  In a gap, `point_at` maps to the row below. The chevron hit area is the disc on the
-  top-right corner of every card start (a block row below a row of another block, or
-  the first view row); the app toggles the fold only when that block has a chevron,
-  otherwise the press goes on as a cell press.
-- `mouse_cell` (mouse reporting) returns the alacritty viewport line of the grid line
-  under the cursor, so the gaps never shift the reported cells.
-
-### Frame: `src/frame.rs`
-
-- `RowDecoration` keeps `summary` only. `bar`, `separator` and `chevron` move to cards.
-- `Frame` gains `cards: Vec<Card>` and `row_tops: Vec<u32>` (from the view):
-
-  ```rust
-  pub struct Card {
-      pub rows: Range<usize>,       // view rows covered
-      pub clipped_top: bool,        // the block continues above the view
-      pub status: Option<Status>,   // None: active prompt, neutral
-      pub chevron: Option<Fold>,    // finished block with output
-      pub selected: bool,
-  }
-  ```
-
-  A card covers the consecutive view rows of one block up to the cursor row (as the bar
-  does today). The active prompt card (current block, phase `Prompt` / `Input`) has
-  `status: None`.
-- `Frame::capture` takes `selected_block: Option<BlockId>`. When the selection is that
-  block's selection, its cells are not highlighted and its card gets `selected`.
-- `BlockColors` gains `card` and `card_selected`: background blended toward the
-  foreground by 6 % and 14 %. Status colors unchanged.
-
-As implemented: `frame::marks` returns the row decorations and the cards in one pass
-(`app.rs` uses it for the chevron press: the card starting on the pressed row must have
-a chevron). A card's chevron comes from its first command row, so a card whose command
-row is above the view has none, as before. `selected` is set by `Frame::capture` from
-`selected_block` (#73). `frame::blend` mixes the sRGB channels.
-
-### Rect pipeline: `src/renderer/rects.rs`, `rect.wgsl`
-
-`RectInstance` gains `radius: f32` and `shape: u32` (0 rectangle, 1 triangle right,
-2 triangle down), padded to keep `Pod`. The fragment shader computes a signed distance
-from the local pixel position (passed from the vertex shader): rounded box for shape 0,
-triangle for 1 and 2. Coverage is `clamp(0.5 - d, 0, 1)` times the color alpha (1 px
-antialiasing). A rect with `radius: 0, shape: 0` renders as today, so cell backgrounds,
-cursor and underlines are unaffected.
-As implemented: `RectInstance::new` builds a plain rect, `with_radius` / `with_shape`
-(a `Shape` enum stored as `u32`) the others; a plain rect skips the distance in the
-shader and returns its color, so off-grid edges keep the rasterizer's full coverage
-instead of gaining half-pixel antialiasing.
-
-### Scene: `src/renderer/scene.rs`
-
-Per card, in `under` (below cell backgrounds and glyphs):
-
-1. Card background: from `grid_left - card_pad` to `grid_right + card_pad`, rows'
-   `top..bottom`, `radius = round(cell.height / 4)`, color `card` or `card_selected`.
-   A card clipped at the top starts `radius` above the view so its top corners stay
-   off screen.
-2. Status stripe: in the margin, `round(cell.width / 6)` wide (at least 2 px), full card
-   height, rounded ends, status color; none for a neutral card.
-3. Chevron (in `over`, above the glyphs): a disc of `chevron_radius` in the card color,
-   centered on the card's top-right corner, then a triangle (shape 1 folded, 2
-   unfolded) of about half its size, in the status color, or the dim color for a
-   neutral or `Unknown` status.
-
-Cell backgrounds equal to the terminal background are already skipped, so the card
-shows behind them. The summary run and the cursor are unchanged, placed with
-`row_top`.
-
-As implemented: the stripe is centered in the margin; the chevron triangle is a box of
-`round(chevron_radius * 1.2)` side centered on the corner; the chevrons go in `over` before the
-cursor and the banner. A headless GPU test checks that a card's corner pixel keeps the
-background color. The pointer becomes a hand (`CursorIcon::Pointer`) over the disc of a
-card that has a chevron, even while the application captures the mouse, since the
-click is always Graphene's (`mouse::pointer_icon`, `frame::has_chevron`).
-
-### Mouse: `src/app.rs`
-
-- `mouse_press` uses `layout.hit(x, y, &view)`:
-  - `Chevron`: toggle the fold (replaces the chevron-row test in `gutter_press`);
-  - `Margin`: select the block, as `gutter_press` does today;
-  - `Gap`: nothing;
-  - `Cell`: unchanged (summary click, selection, mouse reporting).
-- `Session` gains `selected_block: Option<BlockId>`, set by a margin click and
-  `PreviousBlock` / `NextBlock`, cleared by `clear_selection`, by any new mouse
-  selection and when `validate_selection` drops the snapshot.
-- `mouse_point`, `mouse_cell` and `auto_scroll` map `y` through the view geometry
-  built for the last frame (recomputed under the lock as today).
-
-As implemented (#73): "the selection is that block's selection" is checked by
-`block_actions::is_selected`, which compares the current selection range with the one
-`block_actions::select` builds for the block. A selection replaced or erased by the
-terminal (a `Shift` extension, a clear) therefore falls back to the cell highlight even
-before `validate_selection` drops `selected_block`.
-
-### Consequences checked against the code
-
-- About one more column lost than with the one-cell gutter (`margin + 2 * card_pad` ≈
-  1.5 cells, plus `right_reserve - padding` when the padding is smaller than the
-  chevron radius).
-- Fewer rows visible at once when blocks are shown: one half-line per card boundary.
-  The PTY size never changes.
-- `RowDecoration` loses three fields: frame and scene tests about bar, separator and
-  chevron are rewritten on `cards`.
-- `GridLayout::hit` / `point_at` / `vertical_overflow` change signature; their callers
-  are `mouse_press`, `mouse_point`, `mouse_cell` and `auto_scroll` in `app.rs`.
-- Mouse reporting to applications uses `mouse_cell`: on the alternate screen the view
-  has no gap, so reported cells are unchanged.
-- The banner draws over the grid and is unaffected.
-
-### Tests
-
-- `layout.rs`: column count with margin, card padding and right reserve; `grid_left`;
-  `hit` for margin, chevron disc, gap and cell with a view containing gaps.
-- `view.rs`: budget in half-lines with 0, 1 and several card boundaries; leftover at
-  the top; no gap without blocks or on the alternate screen; folds and gaps together.
-- `frame.rs`: cards for finished, failed, running and active-prompt blocks; card clipped
-  at the top; chevron only on finished blocks with output; block selection marks the
-  card and leaves the cells unhighlighted, a mouse selection still highlights them.
-- `scene.rs`: card background, stripe and chevron instances (positions, radius, shape,
-  colors); no card on a frame without blocks.
-- `renderer/mod.rs` (headless GPU, skipped without adapter): a rounded card leaves its
-  corner pixel at the background color; a triangle chevron lights pixels inside its
-  disc only.
+| Own PTY loop | #6 | Kept; `process` routes signals instead of marks. |
+| OSC 133 scanner | #7 | Reworked into `signals.rs` (same state machine). |
+| Injection and scripts | #8 | Injection kept; scripts reduced to the start / end hooks. |
+| Shell state, cell tags, row index | #9 | Replaced by `timeline.rs`. |
+| Margin, view rows, decorations | #10, #71 | Layout (margin, card padding, gaps, chevron disc) kept; view rewritten. |
+| Block selection, navigation, copy | #11 | Behaviour kept, rewritten on the timeline. |
+| Folding, chevron, summary | #12 | Kept, auto-fold removed. |
+| Rounded rects, card frame, selected card | #70, #72, #73 | Kept. |
 
 ## Découpage en tâches d'implémentation
 
-| Order | Issue | Task | Depends on |
-|---|---|---|---|
-| 1 | [#6](https://github.com/marmotz/graphene-term/issues/6) | Own PTY loop replacing alacritty's `EventLoop` | - |
-| 1 | [#7](https://github.com/marmotz/graphene-term/issues/7) | OSC 133 stream scanner | - |
-| 1 | [#8](https://github.com/marmotz/graphene-term/issues/8) | Shell integration scripts and automatic injection | - |
-| 2 | [#9](https://github.com/marmotz/graphene-term/issues/9) | Shell state, cell tags and row index | #6, #7 |
-| 3 | [#10](https://github.com/marmotz/graphene-term/issues/10) | Gutter, view rows and block decorations | #9 |
-| 4 | [#11](https://github.com/marmotz/graphene-term/issues/11) | Block selection, navigation and copy actions | #10 |
-| 5 | [#12](https://github.com/marmotz/graphene-term/issues/12) | Folding, chevron, summary and auto-fold | #11 |
+Rework tasks, in order (the first implementation's issues #6 to #12 and #70 to #73
+close when the branch merges):
 
-Card rendering redesign:
-
-| Order | Issue | Task | Depends on |
-|---|---|---|---|
-| 6 | [#70](https://github.com/marmotz/graphene-term/issues/70) | Rounded corners and vector shapes in the rect pipeline | - |
-| 6 | [#71](https://github.com/marmotz/graphene-term/issues/71) | Card layout and view geometry with gaps | - |
-| 7 | [#72](https://github.com/marmotz/graphene-term/issues/72) | Card frame and scene rendering | #70, #71 |
-| 8 | [#73](https://github.com/marmotz/graphene-term/issues/73) | Selected block shown as a highlighted card | #72 |
+| Issue | Task | Depends on |
+|---|---|---|
+| [#74](https://github.com/marmotz/graphene-term/issues/74) | Private OSC signals scanner (`signals.rs`) | — |
+| [#75](https://github.com/marmotz/graphene-term/issues/75) | Timeline model with live grid and frozen blocks (`timeline.rs`) | #74 |
+| [#76](https://github.com/marmotz/graphene-term/issues/76) | View over the timeline with capped blocks | #75 |
+| [#77](https://github.com/marmotz/graphene-term/issues/77) | Switch the PTY loop and rendering to the timeline | #76 |
+| [#78](https://github.com/marmotz/graphene-term/issues/78) | Start and end hooks for zsh, bash and fish | #74, #77 |
+| [#79](https://github.com/marmotz/graphene-term/issues/79) | Block and timeline scrolling, mouse routing | #77 |
+| [#80](https://github.com/marmotz/graphene-term/issues/80) | Cross-block selection, block actions and copy | #79 |

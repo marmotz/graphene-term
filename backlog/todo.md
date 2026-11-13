@@ -1,4 +1,4 @@
-<!-- backlog-sync 2026-11-12T19:51Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-13T19:50Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
@@ -13,21 +13,28 @@ _terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
-_terminé — voir [technical.md](features/command-blocks/technical.md)_ — 11/11 tasks done
+_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 0/18 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [x]  | [#6](https://github.com/marmotz/graphene-term/issues/6) | Command blocks: own PTY loop replacing alacritty's EventLoop | — |
-| [x]  | [#7](https://github.com/marmotz/graphene-term/issues/7) | Command blocks: OSC 133 stream scanner | — |
-| [x]  | [#8](https://github.com/marmotz/graphene-term/issues/8) | Command blocks: shell integration scripts and automatic injection | — |
-| [x]  | [#9](https://github.com/marmotz/graphene-term/issues/9) | Command blocks: shell state, cell tags and row index | #6, #7 |
-| [x]  | [#10](https://github.com/marmotz/graphene-term/issues/10) | Command blocks: gutter, view rows and block decorations | #9 |
-| [x]  | [#11](https://github.com/marmotz/graphene-term/issues/11) | Command blocks: block selection, navigation and copy actions | #10 |
-| [x]  | [#12](https://github.com/marmotz/graphene-term/issues/12) | Command blocks: folding, chevron, summary and auto-fold | #11 |
-| [x]  | [#70](https://github.com/marmotz/graphene-term/issues/70) | Command blocks: rounded corners and vector shapes in the rect pipeline | — |
-| [x]  | [#71](https://github.com/marmotz/graphene-term/issues/71) | Command blocks: card layout and view geometry with gaps | — |
-| [x]  | [#72](https://github.com/marmotz/graphene-term/issues/72) | Command blocks: card frame and scene rendering | #70, #71 |
-| [x]  | [#73](https://github.com/marmotz/graphene-term/issues/73) | Command blocks: selected block shown as a highlighted card | #72 |
+| [ ]  | [#6](https://github.com/marmotz/graphene-term/issues/6) | Command blocks: own PTY loop replacing alacritty's EventLoop | — |
+| [ ]  | [#7](https://github.com/marmotz/graphene-term/issues/7) | Command blocks: OSC 133 stream scanner | — |
+| [ ]  | [#8](https://github.com/marmotz/graphene-term/issues/8) | Command blocks: shell integration scripts and automatic injection | — |
+| [ ]  | [#9](https://github.com/marmotz/graphene-term/issues/9) | Command blocks: shell state, cell tags and row index | #6, #7 |
+| [ ]  | [#10](https://github.com/marmotz/graphene-term/issues/10) | Command blocks: gutter, view rows and block decorations | #9 |
+| [ ]  | [#11](https://github.com/marmotz/graphene-term/issues/11) | Command blocks: block selection, navigation and copy actions | #10 |
+| [ ]  | [#12](https://github.com/marmotz/graphene-term/issues/12) | Command blocks: folding, chevron, summary and auto-fold | #11 |
+| [ ]  | [#70](https://github.com/marmotz/graphene-term/issues/70) | Command blocks: rounded corners and vector shapes in the rect pipeline | — |
+| [ ]  | [#71](https://github.com/marmotz/graphene-term/issues/71) | Command blocks: card layout and view geometry with gaps | — |
+| [ ]  | [#72](https://github.com/marmotz/graphene-term/issues/72) | Command blocks: card frame and scene rendering | #70, #71 |
+| [ ]  | [#73](https://github.com/marmotz/graphene-term/issues/73) | Command blocks: selected block shown as a highlighted card | #72 |
+| [ ]  | [#74](https://github.com/marmotz/graphene-term/issues/74) | Command blocks: private OSC signals scanner | — |
+| [ ]  | [#75](https://github.com/marmotz/graphene-term/issues/75) | Command blocks: timeline model with live grid and frozen blocks | #74 |
+| [ ]  | [#76](https://github.com/marmotz/graphene-term/issues/76) | Command blocks: view over the timeline with capped blocks | #75 |
+| [ ]  | [#77](https://github.com/marmotz/graphene-term/issues/77) | Command blocks: switch the PTY loop and rendering to the timeline | #76 |
+| [ ]  | [#78](https://github.com/marmotz/graphene-term/issues/78) | Command blocks: start and end hooks for zsh, bash and fish | #74, #77 |
+| [ ]  | [#79](https://github.com/marmotz/graphene-term/issues/79) | Command blocks: block and timeline scrolling, mouse routing | #77 |
+| [ ]  | [#80](https://github.com/marmotz/graphene-term/issues/80) | Command blocks: cross-block selection, block actions and copy | #79 |
 
 ## Configuration file and themes  ·  [overview](features/config-themes/overview.md)
 
@@ -75,15 +82,15 @@ _terminé, voir [technical.md](features/mouse-reporting/technical.md)_ — 4/4 t
 
 ## Performance  ·  [overview](features/performance/overview.md)
 
-_tâches créées, voir [technical.md](features/performance/technical.md)_ — 0/5 tasks done
+_terminé, voir [technical.md](features/performance/technical.md)_ — 5/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#64](https://github.com/marmotz/graphene-term/issues/64) | Performance: local benchmarks and startup timing logs | — |
-| [ ]  | [#65](https://github.com/marmotz/graphene-term/issues/65) | Performance: glyph cache and atlas allocator | — |
-| [ ]  | [#66](https://github.com/marmotz/graphene-term/issues/66) | Performance: glyph pipeline replaces glyphon | #65 |
-| [ ]  | [#67](https://github.com/marmotz/graphene-term/issues/67) | Performance: spawn the shell before the GPU init | #65 |
-| [ ]  | [#68](https://github.com/marmotz/graphene-term/issues/68) | Performance: try the Vulkan backend first | #64 |
+| [x]  | [#64](https://github.com/marmotz/graphene-term/issues/64) | Performance: local benchmarks and startup timing logs | — |
+| [x]  | [#65](https://github.com/marmotz/graphene-term/issues/65) | Performance: glyph cache and atlas allocator | — |
+| [x]  | [#66](https://github.com/marmotz/graphene-term/issues/66) | Performance: glyph pipeline replaces glyphon | #65 |
+| [x]  | [#67](https://github.com/marmotz/graphene-term/issues/67) | Performance: spawn the shell before the GPU init | #65 |
+| [x]  | [#68](https://github.com/marmotz/graphene-term/issues/68) | Performance: try the Vulkan backend first | #64 |
 
 ## Rich input editor  ·  [overview](features/rich-input-editor/overview.md)
 

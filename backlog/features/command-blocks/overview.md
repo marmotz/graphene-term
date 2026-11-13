@@ -1,6 +1,6 @@
 # Command blocks
 
-**Statut** : terminé — voir [technical.md](technical.md)
+**Statut** : tâches créées — voir [technical.md](technical.md)
 
 ## Contexte
 
@@ -10,26 +10,58 @@ in the scrollback: finding where an output starts, copying it cleanly or hiding 
 log takes manual scrolling and careful mouse selection. The roadmap places this item
 after **Selection and copy** and **Mouse reporting**, which it builds on.
 
+A first implementation cut a single terminal grid into blocks by reading the OSC 133
+marks the shell puts in its prompt. Tried with a real configuration (powerlevel10k), it
+broke: the theme rebuilds the prompt and its own marks, and the blocks, chevrons and
+stripes went wrong or vanished. The block model is reworked so that it no longer
+depends on how the shell draws its prompt.
+
 ## Objectif
 
 Group each command and its output into a block that the user can select, copy or fold
-as a unit, using the shell integration protocol OSC 133 (prompt, command start, output
-start, command end with exit status) to know where each block begins and ends, while
-keeping full compatibility with shells and full-screen programs.
+as a unit. Each block is a small terminal of its own, drawn and managed entirely by
+Graphene; the shell only tells Graphene when a command starts and ends. Full
+compatibility with shells, prompt themes and full-screen programs is kept.
 
 ## Décisions actées
 
-### Shell integration
+### Block model
 
-- Block boundaries come from shell integration (OSC 133).
-- The shell integration scripts (zsh, bash, fish) are shipped and injected by
-  Graphene, without modifying the user's dotfiles (decided while designing
-  [rich-input-editor](../rich-input-editor/technical.md), which needs it).
-- Graphene injects the integration automatically when it launches bash, zsh or fish:
-  no action needed from the user. It can be turned off later through the
-  configuration feature.
-- Other shells get blocks only if they emit OSC 133 themselves; otherwise the terminal
-  behaves as a classic one, with no block.
+- Each block is its own terminal: its own grid, holding the shell prompt, the typed
+  command and the command's output. A command can only redraw its own block (progress
+  bars, cursor moves up): it can never alter a previous block.
+- Graphene owns the blocks: where they start and end, how they are drawn, folded,
+  selected and copied. Nothing of this is read from the prompt.
+- The shell keeps the command line: its prompt (any theme, powerlevel10k included),
+  its line editor, completion and history are unchanged and shown inside the current
+  block.
+- The only signals taken from the shell are "a command starts" (with its command
+  line) and "the command ended, with this exit status". They come from invisible
+  hooks Graphene injects (before / after each command), which neither wrap nor parse
+  the prompt.
+- The hooks (zsh, bash, fish) are shipped and injected by Graphene when it launches
+  the shell, without modifying the user's dotfiles. They can be turned off later
+  through the configuration feature.
+- Without those signals (unsupported shell, `sh`, an `ssh` session to a remote host),
+  everything that follows goes into one single block, until the local shell signals
+  again.
+- A block's output starts in an empty terminal of its own: a program that clears the
+  screen before drawing (without the alternate screen) only clears its own block.
+- `clear` / `Ctrl+L` empties the view: previous blocks leave the screen but stay in
+  the history, reachable by scrolling up.
+
+### Timeline and scrolling
+
+- The blocks form a timeline, scrolled as a whole and anchored at the bottom (the
+  current block always visible) until the user scrolls up.
+- A block is never taller than the window (later: its pane). When its content is
+  taller, the content scrolls inside the block; its prompt and command stay fixed at
+  the top of the block, only the output scrolls.
+- Mouse wheel over a block that can scroll scrolls its content, and stops at its ends.
+  Over a block that cannot scroll, over a gap or around the blocks, it scrolls the
+  timeline.
+- While a command runs, its block follows the new output, unless the user scrolled
+  inside it.
 
 ### Display
 
@@ -45,14 +77,17 @@ keeping full compatibility with shells and full-screen programs.
 - The left margin shows only a status stripe beside each card, colored by the exit
   status (success / failure / running). It is always reserved, even without shell
   integration, so the number of columns never changes mid-session.
+- No header above a block for now: no cwd, duration or other information drawn by
+  Graphene. The card, the stripe and the chevron are the whole decoration.
 - The active prompt (nothing run yet) sits in a neutral card, with no status color; it
   turns "running" when the command starts.
 - A running command shows a "running" stripe; its partial output can already be
   selected, copied and folded.
-- Without shell integration: no cards, the terminal renders as a classic one.
-- Full-screen programs (alternate screen: vim, htop, less) are outside blocks: no card
-  and no gap while they run, same number of columns (the margin stays reserved, empty).
-  Once they exit, the block holds the command and whatever remains in the main history.
+- Without the shell signals: the single block is drawn as one card.
+- Full-screen programs (alternate screen: vim, htop, less) take the whole window while
+  they run: no card and no gap, same number of columns (the margin stays reserved,
+  empty). Once they exit, the block list comes back and their block holds the command
+  and whatever remains of its output.
 
 ### Selecting a block
 
@@ -61,6 +96,8 @@ keeping full compatibility with shells and full-screen programs.
   the mouse.
 - A selected block is shown by highlighting its card (accent), not by highlighting its
   text like a classic selection. What gets copied is unchanged.
+- A mouse text selection can span several blocks, as in a classic terminal; the
+  copied text joins the selected parts of each block.
 - Keyboard shortcuts move to the previous / next block and select the current one.
   `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` keep this meaning at the prompt too.
   `Ctrl+Shift+Up` / `Ctrl+Shift+Down` were first chosen, then given to pane focus by
@@ -69,7 +106,8 @@ keeping full compatibility with shells and full-screen programs.
 ### Copy
 
 - Copying a block copies command + output by default; distinct actions copy only the
-  command or only the output. The prompt is never copied.
+  command or only the output. The prompt is never copied. The command copied is the
+  command line the shell reported when it ran it.
 - Copied text follows the same cleaning rules as
   [selection-copy](../selection-copy/overview.md): trailing spaces removed, common
   indentation removed, wrapped lines joined, no final line break, Unicode preserved.
@@ -82,8 +120,8 @@ keeping full compatibility with shells and full-screen programs.
   gap above, so it never covers text nor takes a column. It is always visible on a
   finished block with output, folded or not, and folds / unfolds the block on click.
 - Actions: fold / unfold one block, fold / unfold all blocks at once.
-- Long outputs fold automatically when the command ends, when they are taller than the
-  window. The threshold becomes configurable with the configuration feature.
+- No automatic folding: a long output is already capped to the window height and
+  scrolls inside its block.
 - Folding is visual only: copying a folded block copies its whole output.
 
 ### Shortcuts
@@ -98,10 +136,8 @@ keeping full compatibility with shells and full-screen programs.
 
 - Depends on [selection-copy](../selection-copy/overview.md): block selection and copy
   reuse its selection, highlight and copied-text rules.
-- [rich-input-editor](../rich-input-editor/overview.md) depends on this feature: it
-  reuses the OSC 133 shell integration to locate the prompt and the input.
-- [images-links](../images-links/overview.md) must ignore the internal hyperlinks
-  this feature puts on prompt and command cells (scheme `graphene-block`, see
-  [technical.md](technical.md)).
+- [rich-input-editor](../rich-input-editor/overview.md) depends on this feature. It
+  planned to locate the prompt and the input from OSC 133 prompt marks, which this
+  rework drops: it must be revisited once the block model is settled.
 - [images-links](../images-links/overview.md) depends on this feature: its image
   sequence splitter plugs into the own PTY loop built here (#6).
