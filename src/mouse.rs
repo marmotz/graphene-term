@@ -219,10 +219,13 @@ pub fn wheel_bytes(
     None
 }
 
-/// Pointer shape: the arrow while the application captures the mouse, the I-beam
-/// (text selection) otherwise.
-pub fn pointer_icon(mode: TermMode) -> CursorIcon {
-    if mode.intersects(TermMode::MOUSE_MODE) {
+/// Pointer shape: the hand over a fold chevron (always Graphene's, even while the
+/// application captures the mouse), the arrow while the application captures the
+/// mouse, the I-beam (text selection) otherwise.
+pub fn pointer_icon(mode: TermMode, over_chevron: bool) -> CursorIcon {
+    if over_chevron {
+        CursorIcon::Pointer
+    } else if mode.intersects(TermMode::MOUSE_MODE) {
         CursorIcon::Default
     } else {
         CursorIcon::Text
@@ -545,15 +548,24 @@ mod tests {
 
     #[test]
     fn pointer_is_arrow_while_the_application_captures_the_mouse() {
-        assert_eq!(pointer_icon(TermMode::empty()), CursorIcon::Text);
-        assert_eq!(pointer_icon(TermMode::ALT_SCREEN), CursorIcon::Text);
+        assert_eq!(pointer_icon(TermMode::empty(), false), CursorIcon::Text);
+        assert_eq!(pointer_icon(TermMode::ALT_SCREEN, false), CursorIcon::Text);
         for mode in [
             TermMode::MOUSE_REPORT_CLICK,
             TermMode::MOUSE_DRAG,
             TermMode::MOUSE_MOTION,
             TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE,
         ] {
-            assert_eq!(pointer_icon(mode), CursorIcon::Default);
+            assert_eq!(pointer_icon(mode, false), CursorIcon::Default);
         }
+    }
+
+    #[test]
+    fn pointer_is_a_hand_over_a_fold_chevron_even_while_the_application_captures_the_mouse() {
+        assert_eq!(pointer_icon(TermMode::empty(), true), CursorIcon::Pointer);
+        assert_eq!(
+            pointer_icon(TermMode::MOUSE_REPORT_CLICK, true),
+            CursorIcon::Pointer
+        );
     }
 }

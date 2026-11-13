@@ -356,6 +356,14 @@ pub fn marks<T>(
     (decorations, cards)
 }
 
+/// Whether the card starting on view row `row` of `view` has a fold chevron.
+pub fn has_chevron<T>(term: &Term<T>, view: &[ViewRow], shell: &ShellState, row: usize) -> bool {
+    let (_, cards) = marks(term, view, shell);
+    cards
+        .iter()
+        .any(|card| card.rows.start == row && card.chevron.is_some())
+}
+
 /// Status shown by the card of block `id`: none for the active prompt.
 fn card_status(shell: &ShellState, id: BlockId) -> Option<Status> {
     let active_prompt =
@@ -843,6 +851,19 @@ mod tests {
         );
         let summaries: Vec<_> = frame.decorations.iter().map(|d| d.summary).collect();
         assert_eq!(summaries[..4], [None, None, Some(3), None]);
+    }
+
+    #[test]
+    fn has_chevron_only_on_the_first_row_of_a_card_with_one() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 8), VoidListener);
+        let mut shell = ShellState::new();
+        feed_blocks(&mut term, &mut shell, TWO_BLOCKS);
+        let rows = view::rows(&term, &shell, term.grid().display_offset());
+        // Cards: 0..2 and 2..4 with chevrons, then the active prompt without one.
+        assert!(has_chevron(&term, &rows, &shell, 0));
+        assert!(!has_chevron(&term, &rows, &shell, 1));
+        assert!(has_chevron(&term, &rows, &shell, 2));
+        assert!(!has_chevron(&term, &rows, &shell, 4));
     }
 
     #[test]

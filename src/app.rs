@@ -148,13 +148,32 @@ impl Session {
         *self.terminal.term.lock().mode()
     }
 
-    /// Arrow while the application captures the mouse, I-beam otherwise; the window is
-    /// only updated when the shape changes.
+    /// Hand over a fold chevron, arrow while the application captures the mouse, I-beam
+    /// otherwise; the window is only updated when the shape changes.
     fn update_pointer(&mut self) {
-        let icon = mouse::pointer_icon(self.mode());
+        let icon = mouse::pointer_icon(self.mode(), self.over_chevron());
         if self.pointer != Some(icon) {
             self.window.set_cursor(icon);
             self.pointer = Some(icon);
+        }
+    }
+
+    /// Whether the mouse cursor is over the fold chevron of a card that has one.
+    fn over_chevron(&self) -> bool {
+        let term = self.terminal.term.lock();
+        let shell = self
+            .terminal
+            .shell
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let rows = view::rows(&term, &shell, term.grid().display_offset());
+        match self.layout.hit(
+            self.mouse_position.x as f32,
+            self.mouse_position.y as f32,
+            &rows,
+        ) {
+            Hit::Chevron { row } => frame::has_chevron(&term, &rows, &shell, row),
+            _ => false,
         }
     }
 
@@ -334,10 +353,7 @@ impl Session {
             let Some(id) = rows.get(row).and_then(|row| row.role.block()) else {
                 return false;
             };
-            let (_, cards) = frame::marks(&term, &rows, &shell);
-            let chevron = cards
-                .iter()
-                .any(|card| card.rows.start == row && card.chevron.is_some());
+            let chevron = frame::has_chevron(&term, &rows, &shell, row);
             if chevron {
                 shell.toggle_fold(id);
             }
@@ -550,6 +566,7 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
+        self.update_pointer();
         if self.left_pressed && !self.app_mouse.active() {
             self.update_selection(&mut self.terminal.term.lock());
             return;

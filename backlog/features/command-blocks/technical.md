@@ -504,7 +504,9 @@ shows behind them. The summary run and the cursor are unchanged, placed with
 As implemented: the stripe is centered in the margin; the chevron triangle is a box of
 `round(chevron_radius * 1.2)` side centered on the corner; the chevrons go in `over` before the
 cursor and the banner. A headless GPU test checks that a card's corner pixel keeps the
-background color.
+background color. The pointer becomes a hand (`CursorIcon::Pointer`) over the disc of a
+card that has a chevron, even while the application captures the mouse, since the
+click is always Graphene's (`mouse::pointer_icon`, `frame::has_chevron`).
 
 ### Mouse: `src/app.rs`
 
