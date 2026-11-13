@@ -425,7 +425,6 @@ pub fn max_block_scroll<L>(
 }
 
 /// Whether block `id` shows only part of its output, so its own scroll can move.
-#[allow(dead_code)] // Used by the wheel routing (#79).
 pub fn can_scroll<L>(timeline: &Timeline, live: &Term<L>, id: BlockId, lines: usize) -> bool {
     max_block_scroll(timeline, live, id, lines) > 0
 }
@@ -450,6 +449,27 @@ pub fn scroll_block<L>(
     let before = (*scroll).min(max);
     *scroll = before.saturating_add_signed(delta).min(max);
     *scroll as isize - before as isize
+}
+
+/// What a wheel step or a page key scrolls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTarget {
+    /// The output of a block that shows only part of it.
+    Block(BlockId),
+    /// The whole timeline.
+    Timeline,
+}
+
+/// What `Shift+PageUp/PageDown` scrolls: the selected block when it can scroll
+/// (`scrollable`), otherwise the timeline.
+pub fn page_target(
+    selected: Option<BlockId>,
+    scrollable: impl Fn(BlockId) -> bool,
+) -> ScrollTarget {
+    match selected {
+        Some(id) if scrollable(id) => ScrollTarget::Block(id),
+        _ => ScrollTarget::Timeline,
+    }
 }
 
 /// Most half-lines the timeline can scroll up from rest.
@@ -1043,5 +1063,19 @@ mod tests {
         // A block no longer in the timeline.
         let gone = RowSource::Output(BlockId(42));
         assert_eq!(selection_end(timeline, live, gone, at(output, 0, 0)), None);
+    }
+
+    #[test]
+    fn page_keys_scroll_the_selected_block_when_it_can_scroll() {
+        let scrollable = |id: BlockId| id == BlockId(2);
+        assert_eq!(
+            page_target(Some(BlockId(2)), scrollable),
+            ScrollTarget::Block(BlockId(2))
+        );
+        assert_eq!(
+            page_target(Some(BlockId(1)), scrollable),
+            ScrollTarget::Timeline
+        );
+        assert_eq!(page_target(None, scrollable), ScrollTarget::Timeline);
     }
 }

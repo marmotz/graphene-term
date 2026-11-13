@@ -87,10 +87,10 @@ first output.
 | Ctrl+Shift+Alt+F              | Fold all finished blocks / unfold them all      |
 | Middle click                  | Paste the primary selection                     |
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)      |
-| Shift+PageUp / Shift+PageDown | Scroll the history                              |
+| Shift+PageUp / Shift+PageDown | Scroll the selected block, or the history       |
 | Shift+Home / Shift+End        | Top / bottom of the history                     |
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
-| Mouse wheel                   | Scroll history (arrow keys in full-screen apps) |
+| Mouse wheel                   | Scroll the block under the pointer, or history  |
 
 ## Documentation
 

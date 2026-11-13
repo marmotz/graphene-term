@@ -1,9 +1,14 @@
 //! Byte encoding of mouse, focus and alternate scroll events sent to the application
-//! (xterm `ctlseqs`). No window, clipboard or `Term` access.
+//! (xterm `ctlseqs`), and the routing of the mouse between the application and
+//! Graphene. No window, clipboard or `Term` access.
 
 use alacritty_terminal::term::TermMode;
 use winit::keyboard::ModifiersState;
 use winit::window::CursorIcon;
+
+use crate::layout::Hit;
+use crate::timeline::BlockId;
+use crate::view::{RowSource, ScrollTarget};
 
 /// Highest 1-based coordinate the X10 encoding can carry (`32 + 223 = 255`).
 const X10_MAX_COORDINATE: usize = 223;
@@ -217,6 +222,32 @@ pub fn wheel_bytes(
         return Some(alternate_scroll_bytes(lines, mode));
     }
     None
+}
+
+/// Whether a mouse event over `hit` goes to the application when it captures the
+/// mouse: over the live grid's rows only, where the application draws (the whole window
+/// on the alternate screen). Everywhere else the mouse is Graphene's.
+pub fn reports_at(hit: &Hit, alternate: bool) -> bool {
+    alternate
+        || matches!(
+            hit,
+            Hit::Cell {
+                source: RowSource::Live,
+                ..
+            }
+        )
+}
+
+/// What a wheel step over `hit` scrolls, when the application does not take it: the
+/// output of the block under the pointer when it can scroll (`scrollable`), otherwise
+/// (short block, gap, margin, chevron, blank space) the timeline.
+pub fn wheel_target(hit: &Hit, scrollable: impl Fn(BlockId) -> bool) -> ScrollTarget {
+    match hit {
+        Hit::Cell {
+            block: Some(id), ..
+        } if scrollable(*id) => ScrollTarget::Block(*id),
+        _ => ScrollTarget::Timeline,
+    }
 }
 
 /// Pointer shape: the hand over a fold chevron (always Graphene's, even while the
@@ -567,5 +598,79 @@ mod tests {
             pointer_icon(TermMode::MOUSE_REPORT_CLICK, true),
             CursorIcon::Pointer
         );
+    }
+
+    fn cell(source: RowSource, block: Option<u64>) -> Hit {
+        Hit::Cell {
+            column: 0,
+            row: 0,
+            side: alacritty_terminal::index::Side::Left,
+            source,
+            line: alacritty_terminal::index::Line(0),
+            block: block.map(BlockId),
+        }
+    }
+
+    #[test]
+    fn mouse_is_reported_over_the_live_rows_only() {
+        assert!(reports_at(&cell(RowSource::Live, Some(3)), false));
+        for hit in [
+            cell(RowSource::Header(BlockId(3)), Some(3)),
+            cell(RowSource::Output(BlockId(2)), Some(2)),
+            cell(RowSource::Summary(BlockId(2)), Some(2)),
+            Hit::Margin { row: 0 },
+            Hit::Chevron { row: 0 },
+            Hit::Gap,
+            Hit::Blank,
+        ] {
+            assert!(!reports_at(&hit, false), "{hit:?}");
+        }
+    }
+
+    #[test]
+    fn mouse_is_reported_over_the_whole_window_on_the_alternate_screen() {
+        for hit in [
+            cell(RowSource::Live, None),
+            Hit::Margin { row: 0 },
+            Hit::Blank,
+        ] {
+            assert!(reports_at(&hit, true), "{hit:?}");
+        }
+    }
+
+    #[test]
+    fn wheel_scrolls_the_block_under_the_pointer_when_it_can_scroll() {
+        let scrollable = |id: BlockId| id == BlockId(2);
+        for source in [
+            RowSource::Header(BlockId(2)),
+            RowSource::Output(BlockId(2)),
+            RowSource::Live,
+        ] {
+            assert_eq!(
+                wheel_target(&cell(source, Some(2)), scrollable),
+                ScrollTarget::Block(BlockId(2))
+            );
+        }
+    }
+
+    #[test]
+    fn wheel_scrolls_the_timeline_elsewhere() {
+        let scrollable = |id: BlockId| id == BlockId(2);
+        for hit in [
+            // A short block.
+            cell(RowSource::Output(BlockId(1)), Some(1)),
+            // The alternate screen: no block.
+            cell(RowSource::Live, None),
+            Hit::Margin { row: 0 },
+            Hit::Chevron { row: 0 },
+            Hit::Gap,
+            Hit::Blank,
+        ] {
+            assert_eq!(
+                wheel_target(&hit, scrollable),
+                ScrollTarget::Timeline,
+                "{hit:?}"
+            );
+        }
     }
 }

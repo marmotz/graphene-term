@@ -34,7 +34,7 @@ use crate::terminal::{EventProxy, Terminal, UserEvent};
 use crate::theme;
 use crate::timeline::{BlockId, Timeline};
 use crate::update::checker::Checker;
-use crate::view::{self, Anchor, RowSource, ViewRow};
+use crate::view::{self, Anchor, RowSource, ScrollTarget, ViewRow};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
@@ -154,38 +154,82 @@ impl Session {
         *self.terminal.term.lock().mode()
     }
 
-    /// Hand over a fold chevron, arrow while the application captures the mouse, I-beam
-    /// otherwise; the window is only updated when the shape changes.
+    /// Hand over a fold chevron, arrow while the application captures the mouse under
+    /// the pointer, I-beam otherwise; the window is only updated when the shape changes.
     fn update_pointer(&mut self) {
-        let icon = mouse::pointer_icon(self.mode(), self.over_chevron());
+        let (hit, over_chevron) = self.pointer_hit();
+        let mode = self.mode();
+        let captured = if mouse::reports_at(&hit, mode.contains(TermMode::ALT_SCREEN)) {
+            mode
+        } else {
+            TermMode::empty()
+        };
+        let icon = mouse::pointer_icon(captured, over_chevron);
         if self.pointer != Some(icon) {
             self.window.set_cursor(icon);
             self.pointer = Some(icon);
         }
     }
 
-    /// Whether the mouse cursor is over the fold chevron of a card that has one.
-    fn over_chevron(&self) -> bool {
+    /// What lies under the mouse cursor, and whether it is the fold chevron of a card
+    /// that has one.
+    fn pointer_hit(&self) -> (Hit, bool) {
         let term = self.terminal.term.lock();
         let mut timeline = lock(&self.terminal.timeline);
         let rows = shown_rows(&self.anchor, &term, &mut timeline);
-        match self.layout.hit(
+        let hit = self.layout.hit(
             self.mouse_position.x as f32,
             self.mouse_position.y as f32,
             &rows,
-        ) {
+        );
+        let over_chevron = match hit {
             Hit::Chevron { row } => frame::has_chevron(&*term, &timeline, &rows, row),
             _ => false,
-        }
+        };
+        (hit, over_chevron)
+    }
+
+    /// Whether a mouse event over `hit` goes to the application when it captures the
+    /// mouse (see [`mouse::reports_at`]).
+    fn reports_at(&self, hit: &Hit) -> bool {
+        mouse::reports_at(hit, self.mode().contains(TermMode::ALT_SCREEN))
     }
 
     /// Scrolls the timeline by `rows` rows (positive shows older blocks), stopping at
     /// its ends.
     fn scroll_timeline(&self, rows: isize) {
+        self.scroll(ScrollTarget::Timeline, rows);
+    }
+
+    /// Scrolls `target` by `rows` rows (positive shows older rows), stopping at its ends:
+    /// a block's output stops there, the timeline does not take over.
+    fn scroll(&self, target: ScrollTarget, rows: isize) {
         let term = self.terminal.term.lock();
         let mut timeline = lock(&self.terminal.timeline);
-        view::scroll_timeline(&mut timeline, &term, term.screen_lines(), rows * 2);
+        let lines = term.screen_lines();
+        match target {
+            ScrollTarget::Block(id) => {
+                view::scroll_block(&mut timeline, &term, id, lines, rows);
+            }
+            ScrollTarget::Timeline => {
+                view::scroll_timeline(&mut timeline, &term, lines, rows * 2);
+            }
+        }
         self.window.request_redraw();
+    }
+
+    /// `Shift+PageUp/PageDown`: scrolls the selected block by a page when it can scroll,
+    /// otherwise the timeline. `pages` is positive toward older rows.
+    fn scroll_page(&self, pages: isize) {
+        let target = {
+            let term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            let lines = term.screen_lines();
+            view::page_target(self.selected_block, |id| {
+                view::can_scroll(&timeline, &*term, id, lines)
+            })
+        };
+        self.scroll(target, pages * self.page_rows());
     }
 
     /// Scrolls the timeline to its top.
@@ -428,19 +472,10 @@ impl Session {
         if button == mouse::Button::Left && self.banner_press() {
             return;
         }
+        let (hit, _) = self.pointer_hit();
         // The margin, the chevrons and the gaps are outside the application's grid:
         // always Graphene's.
         if button == mouse::Button::Left {
-            let hit = {
-                let term = self.terminal.term.lock();
-                let mut timeline = lock(&self.terminal.timeline);
-                let rows = self.view_rows(&term, &mut timeline);
-                self.layout.hit(
-                    self.mouse_position.x as f32,
-                    self.mouse_position.y as f32,
-                    &rows,
-                )
-            };
             match hit {
                 Hit::Margin { row } => {
                     self.margin_press(row);
@@ -448,11 +483,12 @@ impl Session {
                 }
                 Hit::Chevron { row } if self.chevron_press(row) => return,
                 Hit::Gap => return,
-                Hit::Chevron { .. } | Hit::Cell { .. } => {}
+                Hit::Chevron { .. } | Hit::Cell { .. } | Hit::Blank => {}
             }
         }
         let mode = self.mode();
-        if selection::mouse_reserved(mode, self.modifiers) {
+        // Only the live rows are the application's: elsewhere the mouse is Graphene's.
+        if selection::mouse_reserved(mode, self.modifiers) && self.reports_at(&hit) {
             // The gesture belongs to the application; a click clears the selection.
             self.clear_selection();
             let cell = self.mouse_cell();
@@ -584,6 +620,11 @@ impl Session {
             self.update_selection();
             return;
         }
+        // A gesture the application owns follows the pointer anywhere; a bare motion is
+        // only reported over the application's rows.
+        if !self.app_mouse.active() && !self.reports_at(&self.pointer_hit().0) {
+            return;
+        }
         let cell = self.mouse_cell();
         let mode = self.mode();
         if let Some(bytes) = self.app_mouse.motion(cell, self.modifiers, mode) {
@@ -676,8 +717,8 @@ impl Session {
         match action {
             Action::Copy => self.copy(),
             Action::Paste => self.paste(),
-            Action::ScrollPageUp => self.scroll_timeline(self.page_rows()),
-            Action::ScrollPageDown => self.scroll_timeline(-self.page_rows()),
+            Action::ScrollPageUp => self.scroll_page(1),
+            Action::ScrollPageDown => self.scroll_page(-1),
             Action::ScrollToTop => self.scroll_to_top(),
             Action::ScrollToBottom => self.scroll_to_bottom(),
             Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
@@ -704,12 +745,22 @@ impl Session {
         }
         self.scroll_accumulator -= whole as f64;
 
-        let mode = self.mode();
-        let (column, line) = self.mouse_cell();
-        match mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
-            Some(bytes) => self.terminal.write(bytes),
-            None => self.scroll_timeline(whole as isize),
+        let (hit, _) = self.pointer_hit();
+        if self.reports_at(&hit) {
+            let mode = self.mode();
+            let (column, line) = self.mouse_cell();
+            if let Some(bytes) = mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
+                self.terminal.write(bytes);
+                return;
+            }
         }
+        let target = {
+            let term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            let lines = term.screen_lines();
+            mouse::wheel_target(&hit, |id| view::can_scroll(&timeline, &*term, id, lines))
+        };
+        self.scroll(target, whole as isize);
     }
 
     fn handle_terminal_event(&mut self, event: TermEvent, event_loop: &ActiveEventLoop) {

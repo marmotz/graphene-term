@@ -1,10 +1,11 @@
 //! Geometry: conversion between pixel sizes and terminal grid dimensions.
 
 use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::index::Side;
+use alacritty_terminal::index::{Line, Side};
 use alacritty_terminal::term::{MIN_COLUMNS, MIN_SCREEN_LINES};
 
-use crate::view::ViewRow;
+use crate::timeline::BlockId;
+use crate::view::{RowSource, ViewRow};
 
 /// Size of a single character cell, in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,11 +49,18 @@ pub enum Hit {
     Chevron { row: usize },
     /// In the gap between two cards.
     Gap,
-    /// A grid cell, with the half of the cell the pixel falls in.
+    /// Below the last view row: the blank space under the cards, or the bottom padding.
+    Blank,
+    /// A grid cell, with the half of the cell the pixel falls in, and what the view row
+    /// shows: its source, the line in that source and its block (`None` on the
+    /// alternate screen).
     Cell {
         column: usize,
         row: usize,
         side: Side,
+        source: RowSource,
+        line: Line,
+        block: Option<BlockId>,
     },
 }
 
@@ -133,8 +141,9 @@ impl GridLayout {
     }
 
     /// What lies under the physical pixel (`x`, `y`) of the view `view`: a fold chevron,
-    /// the margin left of the grid, a gap between cards, or a grid cell. The row is
-    /// clamped to the view, the column too right of the grid.
+    /// a gap between cards, the blank space below the last row, the margin left of the
+    /// grid, or a grid cell. Above the first row, the row is clamped to it; right of the
+    /// grid, the column is clamped to the last one.
     pub fn hit(&self, x: f32, y: f32, view: &[ViewRow]) -> Hit {
         let cx = self.grid_right() + self.card_pad;
         let chevron = (0..view.len()).find(|&row| {
@@ -148,11 +157,22 @@ impl GridLayout {
         if let RowAt::Gap(_) = self.row_at(y, view) {
             return Hit::Gap;
         }
+        match view.last() {
+            Some(last) if y < self.row_top(last.top + 2) => {}
+            _ => return Hit::Blank,
+        }
         let (column, row, side) = self.point_at(x, y, view);
         if x < self.grid_left() {
-            Hit::Margin { row }
-        } else {
-            Hit::Cell { column, row, side }
+            return Hit::Margin { row };
+        }
+        let shown = view[row];
+        Hit::Cell {
+            column,
+            row,
+            side,
+            source: shown.source,
+            line: shown.line,
+            block: shown.block,
         }
     }
 
@@ -343,29 +363,60 @@ mod tests {
         assert_eq!(l.point_at(18.0, 10_000.0, &view).1, 3);
     }
 
+    /// The cell hit on view row `row` of `view`.
+    fn cell(column: usize, row: usize, side: Side, view: &[ViewRow]) -> Hit {
+        Hit::Cell {
+            column,
+            row,
+            side,
+            source: view[row].source,
+            line: view[row].line,
+            block: view[row].block,
+        }
+    }
+
     #[test]
     fn hit_tells_the_margin_from_the_grid() {
         let l = layout();
         let view = plain(20);
         assert_eq!(l.hit(0.0, 8.0, &view), Hit::Margin { row: 0 });
         assert_eq!(l.hit(8.0, 48.0, &view), Hit::Margin { row: 2 });
-        assert_eq!(l.hit(17.9, 10_000.0, &view), Hit::Margin { row: 19 });
+        assert_eq!(l.hit(17.9, 407.9, &view), Hit::Margin { row: 19 });
+        assert_eq!(l.hit(18.0, 8.0, &view), cell(0, 0, Side::Left, &view));
+        assert_eq!(l.hit(57.9, 67.9, &view), cell(3, 2, Side::Right, &view));
+    }
+
+    #[test]
+    fn hit_cell_carries_the_row_source_line_and_block() {
+        let l = layout();
+        let mut view = gapped();
+        view[1].source = RowSource::Output(BlockId(0));
+        view[1].line = Line(7);
         assert_eq!(
-            l.hit(18.0, 8.0, &view),
+            l.hit(100.0, 40.0, &view),
             Hit::Cell {
-                column: 0,
-                row: 0,
-                side: Side::Left
+                column: 8,
+                row: 1,
+                side: Side::Left,
+                source: RowSource::Output(BlockId(0)),
+                line: Line(7),
+                block: Some(BlockId(0)),
             }
         );
-        assert_eq!(
-            l.hit(57.9, 67.9, &view),
-            Hit::Cell {
-                column: 3,
-                row: 2,
-                side: Side::Right
-            }
-        );
+    }
+
+    #[test]
+    fn hit_below_the_last_row_is_blank() {
+        let l = layout();
+        // The gapped view ends at pixel row 108: blank below, margin included.
+        let view = gapped();
+        assert_eq!(l.hit(100.0, 107.9, &view), cell(8, 3, Side::Left, &view));
+        assert_eq!(l.hit(100.0, 108.0, &view), Hit::Blank);
+        assert_eq!(l.hit(0.0, 300.0, &view), Hit::Blank);
+        // The bottom padding of a full view.
+        assert_eq!(l.hit(100.0, 408.0, &plain(20)), Hit::Blank);
+        // An empty view is blank everywhere.
+        assert_eq!(l.hit(100.0, 8.0, &[]), Hit::Blank);
     }
 
     #[test]
@@ -377,22 +428,8 @@ mod tests {
         assert_eq!(l.hit(100.0, 67.9, &view), Hit::Gap);
         assert_eq!(l.hit(0.0, 60.0, &view), Hit::Gap);
         assert_eq!(l.hit(5.0, 70.0, &view), Hit::Margin { row: 2 });
-        assert_eq!(
-            l.hit(100.0, 68.0, &view),
-            Hit::Cell {
-                column: 8,
-                row: 2,
-                side: Side::Left
-            }
-        );
-        assert_eq!(
-            l.hit(100.0, 57.9, &view),
-            Hit::Cell {
-                column: 8,
-                row: 1,
-                side: Side::Left
-            }
-        );
+        assert_eq!(l.hit(100.0, 68.0, &view), cell(8, 2, Side::Left, &view));
+        assert_eq!(l.hit(100.0, 57.9, &view), cell(8, 1, Side::Left, &view));
     }
 
     #[test]

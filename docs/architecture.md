@@ -150,9 +150,15 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
   `Ctrl+Shift+Alt+F` folds every finished block when any is unfolded, otherwise unfolds
   them all. A click on the chevron disc (`Hit::Chevron`) toggles the fold, a click on
   the summary label unfolds. Nothing is folded automatically.
-- The wheel (unless an application captures it) and `Shift+PageUp/PageDown` scroll the
-  timeline; `Shift+Home/End` go to its top / bottom. A key press or a paste brings the
+- The wheel (unless an application captures it) scrolls the output of the block under
+  the pointer when it shows only part of it (`view::can_scroll`), stopping at its ends;
+  elsewhere (short block, gap, margin, chevron, blank space below the cards) it scrolls
+  the timeline (`mouse::wheel_target`). `Shift+PageUp/PageDown` scroll the selected
+  block by a page when it can scroll, otherwise the timeline (`view::page_target`);
+  `Shift+Home/End` go to the timeline's top / bottom. A key press or a paste brings the
   timeline and the current block back to the bottom.
+- A block that shows only part of its output has a scroll indicator: a thin bar in the
+  dim color in the card's right padding, beside its output rows (`frame::ScrollBar`).
 - The window holds, from the left: the padding, a margin of half a cell, half a cell of
   card padding, the grid, the card padding, then a right reserve (the padding, or the
   chevron radius when larger), always reserved. The view rows of one block form a card
@@ -239,8 +245,14 @@ is reset with the glyph cache, and the frame is resolved again.
   modifier parameter `1 + shift + 2*alt + 4*ctrl`, application cursor mode (`SS3`),
   Alt as ESC prefix, Ctrl+char control codes.
 - Any input scrolls the view back to the bottom.
-- Mouse wheel: scrollback on the primary screen, arrow keys on the alternate screen
-  when the application enabled alternate scroll.
+- Mouse wheel: block or timeline scrolling on the primary screen (see Command blocks),
+  arrow keys on the alternate screen when the application enabled alternate scroll.
+- Mouse reporting only covers the live grid's rows (`mouse::reports_at`: a
+  `Hit::Cell` whose source is `RowSource::Live`), or the whole window on the alternate
+  screen; the cell sent is the live grid's viewport cell. Frozen blocks, the margin,
+  the chevrons, the gaps and the blank space below the cards (`Hit::Blank`) are always
+  Graphene's: there the pointer is the I-beam and clicks select. A gesture the
+  application owns keeps being reported until its release, wherever the pointer goes.
 
 ### Mouse selection
 
@@ -263,8 +275,8 @@ is reset with the glyph cache, and the frame is resolved again.
   On each `TermEvent::Wakeup`, `SelectionSnapshot::validate` restores the selection if
   `Term` erased it, then clears it (and drops the snapshot) when its cleaned text
   differs from the snapshot. Every place that clears the selection drops the snapshot.
-- Left and middle clicks are ignored when the application enabled mouse reporting,
-  unless `Shift` is held (`selection::mouse_reserved`).
+- Left and middle clicks over the live rows are ignored when the application enabled
+  mouse reporting, unless `Shift` is held (`selection::mouse_reserved`).
 - A left press in the margin (`layout::hit` gives `Hit::Margin`, the status stripe) or
   on a chevron disc (`Hit::Chevron`) is checked first and is always Graphene's, even
   under mouse reporting: the chevron toggles the fold of a card that has one, the

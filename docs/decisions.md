@@ -123,8 +123,9 @@ text renderer unaware of the cursor. Non-block shapes are drawn as rects over th
   debug level, clipboard copy is unaffected.
 - Word separators are alacritty's defaults without `:`, so a URL or `host:port` is one
   word on double-click.
-- When the application enabled mouse reporting, left and middle clicks are reserved
-  for it; `Shift` forces a local selection.
+- When the application enabled mouse reporting, left and middle clicks over its rows
+  (the live grid, the whole window on the alternate screen) are reserved for it;
+  `Shift` forces a local selection. Over frozen blocks the mouse stays Graphene's.
 - Keystrokes sent to the shell and pastes clear the selection; app shortcuts keep it.
 - Program output clears the selection only when the selected text really changes. `Term`
   clears it on erase sequences even when the same text is redrawn (prompt redraws,
