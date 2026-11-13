@@ -4,10 +4,10 @@ use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use super::glyphs::GlyphKey;
 use super::rects::{RectInstance, Shape};
-use crate::blocks::Status;
 use crate::frame::{self, Card, Fold, Frame};
 use crate::i18n::{self, Msg};
 use crate::layout::GridLayout;
+use crate::timeline::Status;
 
 fn plain(c: char) -> GlyphKey {
     GlyphKey {
@@ -318,11 +318,11 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
 mod tests {
     use super::*;
     use crate::banner::{Banner, BannerLayout};
-    use crate::blocks::Status;
     use crate::frame::{
         BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration,
     };
     use crate::layout::CellSize;
+    use crate::timeline::Status;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
     const FG: Rgb = Rgb {

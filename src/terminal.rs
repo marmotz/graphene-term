@@ -2,7 +2,10 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::sync::FairMutex;
@@ -11,9 +14,9 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
-use crate::blocks::ShellState;
 use crate::pty::{self, Msg, PtyLoop};
 use crate::shell_integration;
+use crate::timeline::Timeline;
 
 /// Events sent from the PTY and update check threads to the UI thread.
 #[derive(Debug)]
@@ -41,9 +44,13 @@ impl EventListener for EventProxy {
 }
 
 pub struct Terminal {
+    /// The live terminal: its grid holds the current block.
     pub term: Arc<FairMutex<Term<EventProxy>>>,
-    /// Shell integration state. Lock order: `term` first, then `shell`.
-    pub shell: Arc<Mutex<ShellState>>,
+    /// The command blocks. Lock order: `term` first, then `timeline`.
+    pub timeline: Arc<Mutex<Timeline>>,
+    /// Session token the shell hooks put in their block signals.
+    #[allow(dead_code)] // Passed to the shell hooks by the injection (#78).
+    pub token: String,
     sender: pty::Sender,
 }
 
@@ -68,17 +75,18 @@ impl Terminal {
         let pty = tty::new(&options, size, 0)?;
 
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
+        let timeline = Arc::new(Mutex::new(Timeline::new(config.scrolling_history)));
         let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
+        let token = session_token();
 
-        let shell = Arc::new(Mutex::new(ShellState::new()));
-
-        let pty_loop = PtyLoop::new(term.clone(), shell.clone(), proxy, pty)?;
+        let pty_loop = PtyLoop::new(term.clone(), timeline.clone(), token.clone(), proxy, pty)?;
         let sender = pty_loop.sender();
         pty_loop.spawn();
 
         Ok(Self {
             term,
-            shell,
+            timeline,
+            token,
             sender,
         })
     }
@@ -99,8 +107,49 @@ impl Terminal {
     }
 }
 
+/// A new session token: 32 random hex characters, so a signal printed by a program (a
+/// file shown by `cat`, a remote shell) is not taken for one of this session's hooks.
+fn session_token() -> String {
+    let mut bytes = [0u8; 16];
+    if let Err(error) = File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)) {
+        // Unlikely on Linux; the clock and the process id still make it unguessable
+        // enough for its purpose, which is avoiding accidental matches.
+        log::warn!("no random source for the block token: {error}");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let seed = nanos ^ (u128::from(std::process::id()) << 64);
+        bytes = seed.to_le_bytes();
+    }
+    hex(&bytes)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 impl Drop for Terminal {
     fn drop(&mut self) {
         self.sender.send(Msg::Shutdown);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_tokens_are_32_hex_characters_and_differ() {
+        let (a, b) = (session_token(), session_token());
+        for token in [&a, &b] {
+            assert_eq!(token.len(), 32);
+            assert!(token.bytes().all(|c| c.is_ascii_hexdigit()));
+        }
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn hex_is_lowercase_and_padded() {
+        assert_eq!(hex(&[0x00, 0x0f, 0xab]), "000fab");
     }
 }

@@ -33,6 +33,9 @@ pub enum Status {
     Failure(i32),
     /// The `end` signal carried no status.
     Unknown,
+    /// The command of the current block still runs. Never the status of a finished
+    /// block: only shown by its card.
+    Running,
 }
 
 impl Status {
@@ -203,6 +206,23 @@ impl Timeline {
             self.current.folded = !self.current.folded;
         } else if let Some(block) = self.block_mut(id) {
             block.folded = !block.folded;
+        }
+    }
+
+    /// Reflows block `id` (or the current header) when it was frozen with other columns
+    /// than `columns`. Returns whether it changed.
+    pub fn reflow(&mut self, id: BlockId, columns: usize) -> bool {
+        if let Some(block) = self.block_mut(id) {
+            let stale = block.header.columns() != columns || block.output.columns() != columns;
+            block.reflow(columns);
+            return stale;
+        }
+        match self.current.header.as_mut() {
+            Some(header) if self.current.id == id && header.columns() != columns => {
+                reflow(header, columns);
+                true
+            }
+            _ => false,
         }
     }
 

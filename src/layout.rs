@@ -126,10 +126,10 @@ impl GridLayout {
     /// Whether a card starts on view row `row`: a block row right below a row of another
     /// block, or the first view row.
     fn starts_card(view: &[ViewRow], row: usize) -> bool {
-        let Some(block) = view[row].role.block() else {
+        let Some(block) = view[row].block else {
             return false;
         };
-        row == 0 || view[row - 1].role.block() != Some(block)
+        row == 0 || view[row - 1].block != Some(block)
     }
 
     /// What lies under the physical pixel (`x`, `y`) of the view `view`: a fold chevron,
@@ -204,7 +204,8 @@ impl GridLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blocks::{BlockId, RowRole};
+    use crate::timeline::BlockId;
+    use crate::view::RowSource;
     use alacritty_terminal::index::Line;
 
     const CELL: CellSize = CellSize {
@@ -222,10 +223,11 @@ mod tests {
         GridLayout::new(WIDTH, HEIGHT, CELL, 8.0)
     }
 
-    fn row(top: u32, gap_before: bool, role: RowRole) -> ViewRow {
+    fn row(top: u32, gap_before: bool, block: Option<u64>) -> ViewRow {
         ViewRow {
-            line: Some(Line(0)),
-            role,
+            source: RowSource::Live,
+            block: block.map(BlockId),
+            line: Line(0),
             hidden: 0,
             top,
             gap_before,
@@ -234,19 +236,17 @@ mod tests {
 
     /// Rows of a view without gaps.
     fn plain(rows: u32) -> Vec<ViewRow> {
-        (0..rows)
-            .map(|i| row(2 * i, false, RowRole::None))
-            .collect()
+        (0..rows).map(|i| row(2 * i, false, None)).collect()
     }
 
     /// Block 0's output on rows 0-1, then block 1 (prompt and output) after a gap, with
     /// one leftover half-line at the top: tops 1, 3, 6, 8.
     fn gapped() -> Vec<ViewRow> {
         vec![
-            row(1, false, RowRole::Output(BlockId(0))),
-            row(3, false, RowRole::Output(BlockId(0))),
-            row(6, true, RowRole::Prompt(BlockId(1))),
-            row(8, false, RowRole::Output(BlockId(1))),
+            row(1, false, Some(0)),
+            row(3, false, Some(0)),
+            row(6, true, Some(1)),
+            row(8, false, Some(1)),
         ]
     }
 

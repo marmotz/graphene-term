@@ -1,771 +1,1047 @@
-//! Rows shown in the window: which grid line each viewport row displays, and its role
-//! in the command blocks.
+//! Rows shown in the window over the timeline: which row of which block each view row
+//! displays.
 //!
-//! The view follows alacritty's `display_offset`: its bottom row is the bottom grid line
-//! of alacritty's viewport. Folding is a row filter over it: the output rows of folded
-//! blocks are skipped while the rows are collected upward from that line, and scroll
-//! deltas in visible rows are converted to grid lines ([`grid_delta`]).
+//! The timeline is a column of cards, oldest at the top, the current block at the
+//! bottom. A card holds its block's header rows, then its output rows, or one summary
+//! row when the block is folded. A block never takes more than [`cap`] rows: a taller
+//! one shows its header and the last output rows that fit, shifted up by its own scroll.
 //!
-//! The view height is counted in half-lines: a row takes two, and the first row of a
-//! block takes one more when a row of another block shows above it (the gap between two
-//! cards). Rows are whole, so the view may hold fewer rows than the screen; the leftover
-//! half-lines go to the top. Without blocks, or on the alternate screen, there is no gap
-//! and the view is exactly alacritty's viewport.
+//! Heights are counted in half-lines: a row takes two, the gap between two cards one.
+//! Positions are measured from the bottom of the timeline: the view shows the half-lines
+//! from `view_top - budget` to `view_top`, and only whole rows. At rest (`scroll` 0),
+//! `view_top` is the timeline height when it fits in the view (the cards start at the
+//! top, blank rows below), the view height otherwise (anchored at the bottom), or the
+//! top of the pinned block when a screen clear pinned one and the rest fits. Scrolling
+//! adds to it.
+//!
+//! On the alternate screen the view is the live screen, full window, with no card.
 
+use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::term::{Term, TermMode};
 
-use crate::blocks::{self, BlockId, RowRole, ShellState};
+use crate::timeline::{BlockId, Phase, Timeline, content_rows};
 
-// The view over the timeline, used once rendering switches to it (#77).
-#[allow(dead_code)]
-pub mod timeline;
+/// Where a view row takes its cells from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowSource {
+    /// The frozen header of a block (finished, or the current one once it runs).
+    Header(BlockId),
+    /// The frozen output of a finished block.
+    Output(BlockId),
+    /// The session's live grid: the current block's prompt, or its output once it runs.
+    Live,
+    /// The summary row of a folded block, which stands for its hidden output rows.
+    Summary(BlockId),
+}
 
-/// One viewport row.
+/// One view row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewRow {
-    /// Grid line shown by the row (history lines are negative); `None` for a blank row
-    /// padding the view below the content, when folds hide more rows than the history
-    /// can replace.
-    pub line: Option<Line>,
-    pub role: RowRole,
-    /// Output rows of a folded block hidden right below this row.
+    pub source: RowSource,
+    /// Block the row belongs to; `None` on the alternate screen, where there is no card.
+    pub block: Option<BlockId>,
+    /// Line shown in the source's grid (live history lines are negative). Meaningless on
+    /// a summary row.
+    pub line: Line,
+    /// On a summary row, the output rows the fold hides.
     pub hidden: usize,
     /// Offset of the row from the view top, in half-lines.
     pub top: u32,
-    /// A gap of half a line separates the row from the row above: it starts a block
-    /// below a row of another block.
+    /// A gap of half a line separates the row from the row above: it starts a card
+    /// below a row of another card.
     pub gap_before: bool,
 }
 
-impl ViewRow {
-    fn shown(line: Line, role: RowRole) -> Self {
-        Self {
-            line: Some(line),
-            role,
-            hidden: 0,
-            top: 0,
-            gap_before: false,
-        }
-    }
-
-    /// Blank row padding the view below the content.
-    fn blank() -> Self {
-        Self {
-            line: None,
-            role: RowRole::None,
-            hidden: 0,
-            top: 0,
-            gap_before: false,
-        }
-    }
-}
-
 /// Half-lines taken by a row.
-const ROW_UNITS: u32 = 2;
+const ROW_UNITS: usize = 2;
+/// Half-lines taken by the gap between two cards.
+const GAP_UNITS: usize = 1;
+/// View lines kept out of a block's cap: room for the gap above its card, so a capped
+/// block always fits whole in the view.
+const CAP_MARGIN: usize = 1;
 
-/// Whether a gap separates a row of role `lower` from the row of role `upper` above it:
-/// `lower` starts a block.
-fn gap_between(upper: RowRole, lower: RowRole) -> bool {
-    lower.block().is_some() && upper.block() != lower.block()
+/// Most rows a block shows: the view lines minus the room for a gap, at least two (a
+/// header row and an output row).
+pub fn cap(lines: usize) -> usize {
+    lines.saturating_sub(CAP_MARGIN).max(2)
 }
 
-/// Bottom grid line of alacritty's viewport scrolled `display_offset` lines into the
-/// history.
-fn bottom_line<L>(term: &Term<L>, display_offset: usize) -> Line {
-    Line(term.screen_lines() as i32 - 1 - display_offset as i32)
+/// Consecutive rows of one source.
+#[derive(Debug, Clone, Copy)]
+struct Part {
+    source: RowSource,
+    /// Line of the first row.
+    first: Line,
+    rows: usize,
 }
 
-/// Whether rows get block roles: not on the alternate screen, and only once a block is
-/// known (shell integration active).
-fn decorated<L>(term: &Term<L>, shell: &ShellState) -> bool {
-    !term.mode().contains(TermMode::ALT_SCREEN) && shell.blocks().next().is_some()
-}
-
-/// Which rows the folds hide: the output rows of folded blocks above the cursor. The
-/// cursor row stays visible, so does anything the shell draws next.
-struct Folds<'a> {
-    shell: &'a ShellState,
-    cursor: Line,
-}
-
-impl<'a> Folds<'a> {
-    /// `None` when no row is hidden: no fold, alternate screen, or no block.
-    fn new<L>(term: &Term<L>, shell: &'a ShellState) -> Option<Self> {
-        (decorated(term, shell) && shell.any_folded()).then(|| Self {
-            shell,
-            cursor: term.grid().cursor.point.line,
-        })
-    }
-
-    fn hides(&self, line: Line, role: RowRole) -> bool {
-        matches!(role, RowRole::Output(id) if line < self.cursor && self.shell.is_folded(id))
+impl Part {
+    fn line(&self, index: usize) -> Line {
+        Line(self.first.0 + index as i32)
     }
 }
 
-/// Visits the rows from `from` up to the top of the history with their role, bottom to
-/// top, until `visit` returns `false`. An untagged row waits for the next tagged row
-/// above it to know its block.
-fn walk_up<L>(term: &Term<L>, from: Line, mut visit: impl FnMut(Line, RowRole) -> bool) {
-    let top = term.grid().topmost_line();
-    let mut pending = Vec::new();
-    let mut line = from;
-    while line >= top {
-        match blocks::head_role(term, line) {
-            None => pending.push(line),
-            Some(role) => {
-                let output = role.block().map_or(RowRole::None, RowRole::Output);
-                for row in pending.drain(..) {
-                    if !visit(row, output) {
-                        return;
-                    }
-                }
-                if !visit(line, role) {
-                    return;
-                }
+/// A block as the view sees it, finished or current.
+#[derive(Debug, Clone, Copy)]
+struct Shape {
+    id: BlockId,
+    header: Option<Part>,
+    /// Output rows; for the current block, the live grid (its prompt before it runs).
+    body: Option<Part>,
+    folded: bool,
+    /// Body rows hidden below.
+    scroll: usize,
+}
+
+/// What a block shows under its cap.
+#[derive(Debug, Clone, Copy)]
+struct Shown {
+    /// First header row shown, and how many.
+    header: (usize, usize),
+    body: Body,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Body {
+    None,
+    /// The summary row of a folded block, with the rows it hides.
+    Summary(usize),
+    /// First body row shown, and how many.
+    Rows(usize, usize),
+}
+
+impl Shape {
+    fn header_rows(&self) -> usize {
+        self.header.map_or(0, |part| part.rows)
+    }
+
+    fn body_rows(&self) -> usize {
+        self.body.map_or(0, |part| part.rows)
+    }
+
+    /// Folded only with a header to show above the summary and output to hide.
+    fn is_folded(&self) -> bool {
+        self.folded && self.header.is_some() && self.body_rows() > 0
+    }
+
+    /// Body rows shown under `cap`, and the most the body can scroll.
+    fn body_window(&self, cap: usize) -> (usize, usize) {
+        let header = self.header_shown(cap);
+        let shown = self.body_rows().min(cap - header);
+        (shown, self.body_rows() - shown)
+    }
+
+    /// Header rows shown: all of them, or the last ones leaving one row below.
+    fn header_shown(&self, cap: usize) -> usize {
+        let below = usize::from(self.body_rows() > 0);
+        self.header_rows().min(cap - below)
+    }
+
+    fn shown(&self, cap: usize) -> Shown {
+        let header = self.header_shown(cap);
+        let body = if self.is_folded() {
+            Body::Summary(self.body_rows())
+        } else if self.body_rows() == 0 {
+            Body::None
+        } else {
+            let (shown, max_scroll) = self.body_window(cap);
+            let scroll = self.scroll.min(max_scroll);
+            Body::Rows(self.body_rows() - shown - scroll, shown)
+        };
+        Shown {
+            header: (self.header_rows() - header, header),
+            body,
+        }
+    }
+
+    fn rows(&self, cap: usize) -> usize {
+        let shown = self.shown(cap);
+        shown.header.1
+            + match shown.body {
+                Body::None => 0,
+                Body::Summary(_) => 1,
+                Body::Rows(_, count) => count,
             }
-        }
-        line -= 1;
     }
-    // Rows before the first block left in the grid.
-    for row in pending {
-        if !visit(row, RowRole::None) {
-            return;
+
+    fn units(&self, cap: usize) -> usize {
+        self.rows(cap) * ROW_UNITS
+    }
+
+    /// The rows shown, top to bottom, as `(source, line, hidden)`.
+    fn row_sources(&self, cap: usize) -> Vec<(RowSource, Line, usize)> {
+        let shown = self.shown(cap);
+        let mut rows = Vec::new();
+        if let Some(header) = self.header {
+            let (first, count) = shown.header;
+            rows.extend((first..first + count).map(|i| (header.source, header.line(i), 0)));
         }
+        match (shown.body, self.body) {
+            (Body::Summary(hidden), _) => rows.push((RowSource::Summary(self.id), Line(0), hidden)),
+            (Body::Rows(first, count), Some(body)) => {
+                rows.extend((first..first + count).map(|i| (body.source, body.line(i), 0)))
+            }
+            _ => {}
+        }
+        rows
     }
 }
 
-/// Role of the rows below a row of `block` until the next tagged row, as in
-/// [`blocks::index`].
-fn role_below<L>(term: &Term<L>, line: Line, block: &mut Option<BlockId>) -> RowRole {
-    match blocks::head_role(term, line) {
-        Some(role) => {
-            *block = role.block();
-            role
+/// Rows of the live grid that belong to the current block: its history, then the
+/// screen down to the cursor row or the last row holding text, at least one.
+pub fn live_rows<L>(live: &Term<L>) -> usize {
+    let grid = live.grid();
+    let cursor = grid.history_size() + grid.cursor.point.line.0.max(0) as usize + 1;
+    content_rows(grid).max(cursor)
+}
+
+/// The blocks, oldest first, the current one last.
+fn shapes<L>(timeline: &Timeline, live: &Term<L>) -> Vec<Shape> {
+    let mut shapes: Vec<Shape> = timeline
+        .blocks()
+        .iter()
+        .map(|block| Shape {
+            id: block.id,
+            header: Some(Part {
+                source: RowSource::Header(block.id),
+                first: Line(0),
+                rows: block.header.screen_lines(),
+            }),
+            body: (!block.output_is_empty()).then(|| Part {
+                source: RowSource::Output(block.id),
+                first: Line(0),
+                rows: block.output.screen_lines(),
+            }),
+            folded: block.folded,
+            scroll: block.scroll,
+        })
+        .collect();
+    let current = timeline.current();
+    let header = match current.phase {
+        Phase::Prompt => None,
+        Phase::Running => current.header.as_ref().map(|header| Part {
+            source: RowSource::Header(current.id),
+            first: Line(0),
+            rows: header.screen_lines(),
+        }),
+    };
+    shapes.push(Shape {
+        id: current.id,
+        header,
+        body: Some(Part {
+            source: RowSource::Live,
+            first: Line(-(live.grid().history_size() as i32)),
+            rows: live_rows(live),
+        }),
+        folded: current.folded,
+        scroll: current.scroll,
+    });
+    shapes
+}
+
+/// Heights of the timeline for a view of `lines` lines.
+struct Geometry {
+    cap: usize,
+    /// View height, in half-lines.
+    budget: usize,
+    /// Height of the timeline, in half-lines.
+    total: usize,
+    /// Top of the view at rest, in half-lines from the timeline bottom.
+    rest_top: usize,
+}
+
+impl Geometry {
+    fn new(shapes: &[Shape], pinned: Option<BlockId>, lines: usize) -> Self {
+        let cap = cap(lines);
+        let budget = lines * ROW_UNITS;
+        let total = tail_units(shapes, shapes.first().map(|shape| shape.id), cap);
+        let anchor = pinned
+            .filter(|id| shapes.iter().any(|shape| shape.id == *id))
+            .map_or(total, |id| tail_units(shapes, Some(id), cap));
+        Geometry {
+            cap,
+            budget,
+            total,
+            rest_top: anchor.min(budget),
         }
-        None => block.map_or(RowRole::None, RowRole::Output),
+    }
+
+    fn max_scroll(&self) -> usize {
+        self.total - self.rest_top
     }
 }
 
-/// Rows of the view, top to bottom, for the view scrolled `display_offset` lines into
-/// the history, with their offset from the view top. Every row has [`RowRole::None`] on
-/// the alternate screen, or when no block is known (no shell integration): no row index
-/// is built then, and the view is alacritty's viewport.
-pub fn rows<L>(term: &Term<L>, shell: &ShellState, display_offset: usize) -> Vec<ViewRow> {
-    let screen_lines = term.screen_lines();
-    let bottom = bottom_line(term, display_offset);
-    if !decorated(term, shell) {
-        let top = bottom.0 - (screen_lines as i32 - 1);
-        return (0..screen_lines)
+/// Height in half-lines from the top of block `from` to the bottom of the timeline,
+/// the gaps included; 0 without `from`.
+fn tail_units(shapes: &[Shape], from: Option<BlockId>, cap: usize) -> usize {
+    let Some(from) = from else {
+        return 0;
+    };
+    let tail = shapes.iter().filter(|shape| shape.id >= from);
+    let count = tail.clone().count();
+    tail.map(|shape| shape.units(cap)).sum::<usize>() + count.saturating_sub(1) * GAP_UNITS
+}
+
+fn alternate<L>(live: &Term<L>) -> bool {
+    live.mode().contains(TermMode::ALT_SCREEN)
+}
+
+/// Rows of the view, top to bottom, for a view of `lines` lines over `timeline`, whose
+/// current block lives in `live`. Blank space is left out: below the cards when they
+/// do not fill the view, and in the gaps.
+pub fn rows<L>(timeline: &Timeline, live: &Term<L>, lines: usize) -> Vec<ViewRow> {
+    if alternate(live) {
+        return (0..live.screen_lines())
             .map(|index| ViewRow {
-                top: ROW_UNITS * index as u32,
-                ..ViewRow::shown(Line(top + index as i32), RowRole::None)
+                source: RowSource::Live,
+                block: None,
+                line: Line(index as i32),
+                hidden: 0,
+                top: (ROW_UNITS * index) as u32,
+                gap_before: false,
             })
             .collect();
     }
-    let folds = Folds::new(term, shell);
-    let budget = ROW_UNITS * screen_lines as u32;
-    let (rows, reached_top) = block_rows(term, folds.as_ref(), bottom, budget);
-    // Scrolled to the top of the history, rows cut at the top could never be reached:
-    // the view starts at the top instead, unless that cuts the cursor row shown at the
-    // bottom (a fresh screen, the rows below the cursor are blank).
-    if !reached_top && display_offset == term.grid().history_size() {
-        let (anchored, _) = block_rows(term, folds.as_ref(), term.grid().topmost_line(), budget);
-        let cursor = term.grid().cursor.point.line;
-        if cursor > bottom || anchored.iter().any(|row| row.line == Some(cursor)) {
-            return anchored;
+    let shapes = shapes(timeline, live);
+    let geometry = Geometry::new(&shapes, timeline.pinned(), lines);
+    let view_top = geometry.rest_top + timeline.scroll.min(geometry.max_scroll());
+    let view_bottom = view_top as isize - geometry.budget as isize;
+
+    // Newest block first, each block's rows top to bottom.
+    let mut cards: Vec<Vec<ViewRow>> = Vec::new();
+    let mut bottom = 0;
+    for shape in shapes.iter().rev() {
+        if bottom >= view_top {
+            break;
         }
+        let upper = bottom + shape.units(geometry.cap);
+        if upper as isize > view_bottom {
+            let mut card = Vec::new();
+            for (index, (source, line, hidden)) in
+                shape.row_sources(geometry.cap).into_iter().enumerate()
+            {
+                let row_top = upper - ROW_UNITS * index;
+                let row_bottom = row_top - ROW_UNITS;
+                if row_top <= view_top && row_bottom as isize >= view_bottom {
+                    card.push(ViewRow {
+                        source,
+                        block: Some(shape.id),
+                        line,
+                        hidden,
+                        top: (view_top - row_top) as u32,
+                        gap_before: false,
+                    });
+                }
+            }
+            if !card.is_empty() {
+                cards.push(card);
+            }
+        }
+        bottom = upper + GAP_UNITS;
+    }
+    let mut rows: Vec<ViewRow> = Vec::new();
+    for mut card in cards.into_iter().rev() {
+        card[0].gap_before = !rows.is_empty();
+        rows.append(&mut card);
     }
     rows
 }
 
-/// Rows of a view with blocks, within `budget` half-lines: collected upward from
-/// `bottom`, skipping the rows hidden by `folds`, until the next row does not fit; at the
-/// top of the history, completed downward from `bottom`, then padded with blank rows.
-/// The rows hidden below `bottom` are still counted on the row above them. Also tells
-/// whether the walk up reached the top of the history.
-fn block_rows<L>(
-    term: &Term<L>,
-    folds: Option<&Folds<'_>>,
-    bottom: Line,
-    budget: u32,
-) -> (Vec<ViewRow>, bool) {
-    let hides = |line, role| folds.is_some_and(|folds| folds.hides(line, role));
-    // Bottom to top.
-    let mut up: Vec<ViewRow> = Vec::new();
-    let mut used = 0;
-    let mut hidden = 0;
-    let mut bottom_role = RowRole::None;
-    // The budget stopped the walk before the top of the history.
-    let mut full = false;
-    walk_up(term, bottom, |line, role| {
-        if line == bottom {
-            bottom_role = role;
-        }
-        if hides(line, role) {
-            hidden += 1;
-            return true;
-        }
-        let gap = up.last().is_some_and(|below| gap_between(role, below.role));
-        let cost = ROW_UNITS + u32::from(gap);
-        if used + cost > budget {
-            full = true;
-            return false;
-        }
-        used += cost;
-        if let Some(below) = up.last_mut() {
-            below.gap_before = gap;
-        }
-        up.push(ViewRow {
-            hidden: std::mem::take(&mut hidden),
-            ..ViewRow::shown(line, role)
-        });
-        full = used + ROW_UNITS > budget;
-        !full
-    });
-    let mut rows: Vec<ViewRow> = up.into_iter().rev().collect();
-    let reached_top = !full;
-
-    // Below `bottom`: the rest of a hidden run, then the rows completing a view that
-    // reached the top of the history.
-    let mut block = bottom_role.block();
-    let mut line = bottom + 1;
-    while line <= term.grid().bottommost_line() {
-        let role = role_below(term, line, &mut block);
-        if hides(line, role) {
-            if let Some(last) = rows.last_mut() {
-                last.hidden += 1;
-            }
-        } else {
-            let gap = rows
-                .last()
-                .is_some_and(|above| gap_between(above.role, role));
-            let cost = ROW_UNITS + u32::from(gap);
-            if full || used + cost > budget {
-                full = true;
-                break;
-            }
-            used += cost;
-            rows.push(ViewRow {
-                gap_before: gap,
-                ..ViewRow::shown(line, role)
-            });
-        }
-        line += 1;
-    }
-
-    // Blank rows only when the content ran out.
-    while !full && used + ROW_UNITS <= budget {
-        used += ROW_UNITS;
-        rows.push(ViewRow::blank());
-    }
-
-    // The leftover half-lines go to the top.
-    let mut top = budget - used;
-    for row in &mut rows {
-        top += u32::from(row.gap_before);
-        row.top = top;
-        top += ROW_UNITS;
-    }
-    (rows, reached_top)
+/// What the view looked like at the last [`follow`], to keep it still while output
+/// arrives.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Anchor {
+    /// The block that was current, and the height from its top to the timeline bottom.
+    tail: Option<(BlockId, usize)>,
+    /// Top of the view at rest.
+    rest_top: usize,
+    /// The current block, its phase and its body rows.
+    current: Option<(BlockId, Phase, usize)>,
 }
 
-/// `Scroll::Delta` lines (positive into the history) for a scroll of `view_delta`
-/// visible rows from the view scrolled `display_offset` lines into the history. The
-/// hidden rows crossed on the way are added. Without folds, `view_delta` itself.
-pub fn grid_delta<L>(
-    term: &Term<L>,
-    shell: &ShellState,
-    display_offset: usize,
-    view_delta: i32,
-) -> i32 {
-    let Some(folds) = Folds::new(term, shell).filter(|_| view_delta != 0) else {
-        return view_delta;
+/// Keeps the view still while the timeline grows, before the rows are computed for a
+/// new frame: when scrolled up, the timeline scroll grows by the half-lines added below
+/// the view since the last call; when the current block is scrolled up, its scroll
+/// grows by the rows its output gained. Both scrolls are clamped to their range.
+pub fn follow<L>(timeline: &mut Timeline, live: &Term<L>, lines: usize, anchor: &mut Anchor) {
+    if alternate(live) {
+        return;
+    }
+    let shapes = shapes(timeline, live);
+    let current = *shapes.last().expect("the current block is always there");
+    let geometry = Geometry::new(&shapes, timeline.pinned(), lines);
+    let phase = timeline.current().phase;
+
+    // The current block first: its scroll does not change its height.
+    let body_rows = current.body_rows();
+    let block = timeline.current_mut();
+    if let Some((id, was_phase, rows)) = anchor.current
+        && block.scroll > 0
+        && id == block.id
+        && was_phase == phase
+    {
+        block.scroll = block
+            .scroll
+            .saturating_add_signed(body_rows as isize - rows as isize);
+    }
+    block.scroll = block.scroll.min(current.body_window(geometry.cap).1);
+
+    if let Some((id, units)) = anchor.tail
+        && timeline.scroll > 0
+    {
+        let grown = tail_units(&shapes, Some(id), geometry.cap) as isize - units as isize;
+        let rest_moved = geometry.rest_top as isize - anchor.rest_top as isize;
+        timeline.scroll = timeline.scroll.saturating_add_signed(grown - rest_moved);
+    }
+    timeline.scroll = timeline.scroll.min(geometry.max_scroll());
+
+    *anchor = Anchor {
+        tail: Some((current.id, current.units(geometry.cap))),
+        rest_top: geometry.rest_top,
+        current: Some((current.id, phase, body_rows)),
     };
-    let bottom = bottom_line(term, display_offset);
-    if view_delta > 0 {
-        // The new bottom row is the `view_delta`-th visible row above the current one.
-        let mut seen = -1;
-        let mut last = bottom;
-        walk_up(term, bottom, |line, role| {
-            if folds.hides(line, role) {
-                return true;
-            }
-            seen += 1;
-            last = line;
-            seen < view_delta
-        });
-        // At the top of the history, the rest is clamped by alacritty.
-        bottom.0 - last.0 + (view_delta - seen.max(0))
+}
+
+/// The shape of block `id`, if it is still in the timeline.
+fn shape<L>(timeline: &Timeline, live: &Term<L>, id: BlockId) -> Option<Shape> {
+    shapes(timeline, live)
+        .into_iter()
+        .find(|shape| shape.id == id)
+}
+
+/// Most body rows block `id` can hide below: 0 when its output fits under its cap, or
+/// when it is folded.
+pub fn max_block_scroll<L>(
+    timeline: &Timeline,
+    live: &Term<L>,
+    id: BlockId,
+    lines: usize,
+) -> usize {
+    shape(timeline, live, id)
+        .filter(|shape| !shape.is_folded())
+        .map_or(0, |shape| shape.body_window(cap(lines)).1)
+}
+
+/// Whether block `id` shows only part of its output, so its own scroll can move.
+#[allow(dead_code)] // Used by the wheel routing (#79).
+pub fn can_scroll<L>(timeline: &Timeline, live: &Term<L>, id: BlockId, lines: usize) -> bool {
+    max_block_scroll(timeline, live, id, lines) > 0
+}
+
+/// Scrolls the output of block `id` by `delta` rows (positive shows older rows),
+/// stopping at its ends. Returns the rows actually scrolled.
+pub fn scroll_block<L>(
+    timeline: &mut Timeline,
+    live: &Term<L>,
+    id: BlockId,
+    lines: usize,
+    delta: isize,
+) -> isize {
+    let max = max_block_scroll(timeline, live, id, lines);
+    let scroll = if id == timeline.current().id {
+        &mut timeline.current_mut().scroll
+    } else if let Some(block) = timeline.block_mut(id) {
+        &mut block.scroll
     } else {
-        // The new bottom row is the `-view_delta`-th visible row below the current one.
-        let mut block = blocks::index(term, bottom..bottom + 1)[0].block();
-        let mut seen = 0;
-        let mut line = bottom + 1;
-        while line <= term.grid().bottommost_line() {
-            let role = role_below(term, line, &mut block);
-            if !folds.hides(line, role) {
-                seen += 1;
-                if seen == -view_delta {
-                    return bottom.0 - line.0;
-                }
-            }
-            line += 1;
-        }
-        -(display_offset as i32)
-    }
+        return 0;
+    };
+    let before = (*scroll).min(max);
+    *scroll = before.saturating_add_signed(delta).min(max);
+    *scroll as isize - before as isize
 }
 
-/// `Scroll::Delta` lines (positive into the history) that bring grid `line` into the
-/// view scrolled `display_offset` lines into the history: 0 when it is shown (or
-/// hidden by a fold), otherwise the smallest scroll putting it on the top or bottom row
-/// (the top row, or the second one when a gap would otherwise push it out).
-pub fn reveal<L>(term: &Term<L>, shell: &ShellState, display_offset: usize, line: Line) -> i32 {
-    let bottom = bottom_line(term, display_offset);
-    if line > bottom {
-        return bottom.0 - line.0;
-    }
-    let view = rows(term, shell, display_offset);
-    let Some(top) = view.iter().find_map(|row| row.line) else {
-        return 0;
-    };
-    if line >= top {
+/// Most half-lines the timeline can scroll up from rest.
+pub fn max_timeline_scroll<L>(timeline: &Timeline, live: &Term<L>, lines: usize) -> usize {
+    if alternate(live) {
         return 0;
     }
-    // Up: by the visible rows from `line` to the top row.
-    let shown = match Folds::new(term, shell) {
-        Some(folds) => blocks::index(term, line..top)
-            .into_iter()
-            .zip(line.0..top.0)
-            .filter(|(role, row)| !folds.hides(Line(*row), *role))
-            .count(),
-        None => (top.0 - line.0) as usize,
-    };
-    // The gaps of the new view may leave fewer rows above its bottom: one more row up
-    // until `line` shows, or the top of the history is reached.
-    let history = term.grid().history_size() as i32;
-    let mut shown = shown as i32;
+    let shapes = shapes(timeline, live);
+    Geometry::new(&shapes, timeline.pinned(), lines).max_scroll()
+}
+
+/// Scrolls the timeline by `delta` half-lines (positive shows older blocks), stopping at
+/// its ends. Returns the half-lines actually scrolled.
+pub fn scroll_timeline<L>(
+    timeline: &mut Timeline,
+    live: &Term<L>,
+    lines: usize,
+    delta: isize,
+) -> isize {
+    let max = max_timeline_scroll(timeline, live, lines);
+    let before = timeline.scroll.min(max);
+    timeline.scroll = before.saturating_add_signed(delta).min(max);
+    timeline.scroll as isize - before as isize
+}
+
+/// Rows of the view for a frame or an input event: the view follows the timeline
+/// ([`follow`]), and the frozen blocks it shows are reflowed for the live columns
+/// first, never every block at once.
+pub fn prepare<L>(
+    timeline: &mut Timeline,
+    live: &Term<L>,
+    lines: usize,
+    anchor: &mut Anchor,
+) -> Vec<ViewRow> {
+    let columns = live.columns();
     loop {
-        let delta = grid_delta(term, shell, display_offset, shown);
-        let offset = (display_offset as i32 + delta).clamp(0, history);
-        let top = rows(term, shell, offset as usize)
-            .iter()
-            .find_map(|row| row.line);
-        if offset == history || top.is_none_or(|top| line >= top) {
-            return delta;
+        follow(timeline, live, lines, anchor);
+        let rows = rows(timeline, live, lines);
+        let mut reflowed = false;
+        let mut previous = None;
+        for id in rows.iter().filter_map(|row| row.block) {
+            if previous != Some(id) {
+                reflowed |= timeline.reflow(id, columns);
+                previous = Some(id);
+            }
         }
-        shown += 1;
+        if !reflowed {
+            return rows;
+        }
     }
 }
 
-/// Grid point of the cell at `column` on view row `line_index`, clamped to the last row
-/// showing a grid line.
-pub fn point(rows: &[ViewRow], line_index: usize, column: usize) -> Point {
-    let index = line_index.min(rows.len() - 1);
-    let line = rows[..=index]
-        .iter()
-        .rev()
-        .chain(&rows[index + 1..])
-        .find_map(|row| row.line)
-        .unwrap_or(Line(0));
-    Point::new(line, Column(column))
+/// Scrolls the timeline the least so that block `id` is in the view, its top first.
+pub fn reveal<L>(timeline: &mut Timeline, live: &Term<L>, lines: usize, id: BlockId) {
+    if alternate(live) {
+        return;
+    }
+    let shapes = shapes(timeline, live);
+    let Some(shape) = shapes.iter().find(|shape| shape.id == id) else {
+        return;
+    };
+    let geometry = Geometry::new(&shapes, timeline.pinned(), lines);
+    let top = tail_units(&shapes, Some(id), geometry.cap);
+    let bottom = top - shape.units(geometry.cap);
+    let view_top = geometry.rest_top + timeline.scroll.min(geometry.max_scroll());
+    let new_top = if top > view_top {
+        top
+    } else if bottom + geometry.budget < view_top {
+        // A block always fits under its cap: its bottom on the view bottom.
+        bottom + geometry.budget
+    } else {
+        return;
+    };
+    timeline.scroll = new_top
+        .saturating_sub(geometry.rest_top)
+        .min(geometry.max_scroll());
+}
+
+/// Frozen terminal shown by `source`: a block's header or output. `None` for the live
+/// grid and summary rows, or a block no longer in the timeline.
+pub fn frozen_term(timeline: &Timeline, source: RowSource) -> Option<&Term<VoidListener>> {
+    match source {
+        RowSource::Header(id) => match timeline.block(id) {
+            Some(block) => Some(&block.header),
+            None => {
+                let current = timeline.current();
+                current.header.as_ref().filter(|_| current.id == id)
+            }
+        },
+        RowSource::Output(id) => timeline.block(id).map(|block| &block.output),
+        RowSource::Live | RowSource::Summary(_) => None,
+    }
+}
+
+/// Mutable [`frozen_term`].
+pub fn frozen_term_mut(
+    timeline: &mut Timeline,
+    source: RowSource,
+) -> Option<&mut Term<VoidListener>> {
+    match source {
+        RowSource::Header(id) if timeline.block(id).is_some() => {
+            timeline.block_mut(id).map(|block| &mut block.header)
+        }
+        RowSource::Header(id) => {
+            let current = timeline.current_mut();
+            current.header.as_mut().filter(|_| current.id == id)
+        }
+        RowSource::Output(id) => timeline.block_mut(id).map(|block| &mut block.output),
+        RowSource::Live | RowSource::Summary(_) => None,
+    }
+}
+
+/// Position of `source` in the timeline, top to bottom: by block, the header first.
+fn source_rank(timeline: &Timeline, source: RowSource) -> (BlockId, u8) {
+    match source {
+        RowSource::Header(id) => (id, 0),
+        RowSource::Output(id) | RowSource::Summary(id) => (id, 1),
+        RowSource::Live => (timeline.current().id, 1),
+    }
+}
+
+/// End of a text selection made in `source` when the pointer is on `pointer` (source,
+/// point, side): that point in the same source, otherwise the first cell of `source`
+/// when the pointer is above it, its last cell when below. `None` when `source` is
+/// gone or holds no grid.
+pub fn selection_end<L>(
+    timeline: &Timeline,
+    live: &Term<L>,
+    source: RowSource,
+    pointer: (RowSource, Point, Side),
+) -> Option<(Point, Side)> {
+    let (at, point, side) = pointer;
+    if at == source {
+        return Some((point, side));
+    }
+    let (top, bottom, last_column) = match source {
+        RowSource::Live => (
+            live.topmost_line(),
+            live.bottommost_line(),
+            live.last_column(),
+        ),
+        source => {
+            let term = frozen_term(timeline, source)?;
+            (
+                term.topmost_line(),
+                term.bottommost_line(),
+                term.last_column(),
+            )
+        }
+    };
+    Some(
+        if source_rank(timeline, at) < source_rank(timeline, source) {
+            (Point::new(top, Column(0)), Side::Left)
+        } else {
+            (Point::new(bottom, last_column), Side::Right)
+        },
+    )
+}
+
+/// Source and point of the cell at `column` on view row `index`, clamped to the last
+/// row; `None` for an empty view.
+pub fn point(rows: &[ViewRow], index: usize, column: usize) -> Option<(RowSource, Point)> {
+    let row = rows.get(index).or(rows.last())?;
+    Some((row.source, Point::new(row.line, Column(column))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::osc133::Scanner;
-    use crate::pty;
+    use crate::timeline::testing::{Session, end, start, texts};
     use alacritty_terminal::event::VoidListener;
-    use alacritty_terminal::grid::Scroll;
-    use alacritty_terminal::term::Config;
-    use alacritty_terminal::term::test::TermSize;
-    use alacritty_terminal::vte::ansi::Processor;
 
-    const A: &str = "\x1b]133;A\x07";
-    const B: &str = "\x1b]133;B\x07";
-    const C: &str = "\x1b]133;C\x07";
-
-    fn feed(term: &mut Term<VoidListener>, shell: &mut ShellState, bytes: &str) {
-        pty::process(
-            &mut Scanner::new(),
-            &mut Processor::new(),
-            shell,
-            term,
-            bytes.as_bytes(),
-        );
-    }
-
-    fn new_term(lines: usize) -> Term<VoidListener> {
-        Term::new(Config::default(), &TermSize::new(10, lines), VoidListener)
-    }
-
-    /// One full command with `output_rows` numbered output rows, ended with status 0.
-    fn command(term: &mut Term<VoidListener>, shell: &mut ShellState, name: &str, rows: usize) {
-        let output: String = (1..=rows).map(|row| format!("{name}{row}\r\n")).collect();
-        feed(
-            term,
-            shell,
-            &format!("{A}$ {B}{name}\r\n{C}{output}\x1b]133;D;0\x07"),
-        );
-    }
-
-    /// Text of the first cells of each row, `~` for a padding row.
-    fn texts(term: &Term<VoidListener>, rows: &[ViewRow]) -> Vec<String> {
+    /// Text of each view row: `[s] n hidden` for a summary row.
+    fn view(session: &Session, rows: &[ViewRow]) -> Vec<String> {
         rows.iter()
-            .map(|row| match row.line {
-                Some(line) => term.grid()[line][..]
-                    .iter()
-                    .map(|cell| cell.c)
-                    .collect::<String>()
-                    .trim_end()
-                    .to_owned(),
-                None => "~".to_owned(),
+            .map(|row| {
+                let text = |term: &Term<VoidListener>| {
+                    let top = -(term.grid().history_size() as i32);
+                    texts(term)[(row.line.0 - top) as usize].clone()
+                };
+                let timeline = &session.timeline;
+                match row.source {
+                    RowSource::Live => text(&session.term),
+                    RowSource::Header(id) => match timeline.block(id) {
+                        Some(block) => text(&block.header),
+                        None => text(timeline.current().header.as_ref().expect("header")),
+                    },
+                    RowSource::Output(id) => text(&timeline.block(id).expect("block").output),
+                    RowSource::Summary(_) => format!("[s] {}", row.hidden),
+                }
             })
             .collect()
     }
 
-    /// Offset from the view top of each row, in half-lines, and whether a gap is above.
     fn tops(rows: &[ViewRow]) -> Vec<(u32, bool)> {
         rows.iter().map(|row| (row.top, row.gap_before)).collect()
     }
 
-    fn lines(rows: &[ViewRow]) -> Vec<i32> {
-        rows.iter()
-            .map(|row| row.line.expect("grid line").0)
-            .collect()
+    fn numbered(name: &str, count: usize) -> Vec<String> {
+        (1..=count).map(|row| format!("{name}{row}")).collect()
+    }
+
+    fn run(session: &mut Session, name: &str, output: usize) {
+        let output = numbered(name, output);
+        let output: Vec<&str> = output.iter().map(String::as_str).collect();
+        session.command(name, &output, 0);
+    }
+
+    /// A session with a 5-line window and the prompt `$ ` after the commands.
+    fn session(commands: &[(&str, usize)]) -> Session {
+        let mut session = Session::new(1000);
+        for (name, output) in commands {
+            run(&mut session, name, *output);
+        }
+        session.feed("$ ");
+        session
+    }
+
+    fn rows_of(session: &Session, lines: usize) -> Vec<ViewRow> {
+        rows(&session.timeline, &session.term, lines)
+    }
+
+    /// Rows of the view scrolled to the top of the timeline.
+    fn top_rows(session: &mut Session, lines: usize) -> Vec<ViewRow> {
+        let max = max_timeline_scroll(&session.timeline, &session.term, lines);
+        scroll_timeline(&mut session.timeline, &session.term, lines, max as isize);
+        rows_of(session, lines)
     }
 
     #[test]
-    fn plain_viewport_without_blocks() {
-        let mut term = new_term(3);
-        let mut shell = ShellState::new();
-        feed(&mut term, &mut shell, "1\r\n2\r\n3\r\n4\r\n5");
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(lines(&rows), [0, 1, 2]);
-        assert!(rows.iter().all(|row| row.role == RowRole::None));
-        // No gap: exactly the viewport.
-        assert_eq!(tops(&rows), [(0, false), (2, false), (4, false)]);
-
-        term.scroll_display(Scroll::Delta(2));
-        let offset = term.grid().display_offset();
-        assert_eq!(lines(&super::rows(&term, &shell, offset)), [-2, -1, 0]);
+    fn cards_start_at_the_top_when_they_fit() {
+        let session = session(&[("a", 1)]);
+        let rows = rows_of(&session, 8);
+        assert_eq!(view(&session, &rows), ["$ a", "a1", "$"]);
+        assert_eq!(tops(&rows), [(0, false), (2, false), (5, true)]);
+        assert_eq!(rows[0].source, RowSource::Header(BlockId(0)));
+        assert_eq!(rows[1].source, RowSource::Output(BlockId(0)));
+        assert_eq!(rows[2].source, RowSource::Live);
+        assert_eq!(rows[2].block, Some(BlockId(1)));
     }
 
     #[test]
-    fn rows_carry_block_roles() {
-        let mut term = new_term(4);
-        let mut shell = ShellState::new();
-        feed(
-            &mut term,
-            &mut shell,
-            &format!("{A}$ {B}ls\r\n{C}out\r\n\x1b]133;D;0\x07"),
+    fn a_tall_timeline_is_anchored_at_the_bottom_with_gaps() {
+        let session = session(&[("a", 1), ("b", 1), ("c", 1)]);
+        // 8 lines: 16 half-lines. From the bottom: "$" (2), gap, "$ c" "c1" (4), gap,
+        // "$ b" "b1" (4), gap: 13; "a1" takes 2 more, "$ a" does not fit.
+        let rows = rows_of(&session, 8);
+        assert_eq!(view(&session, &rows), ["a1", "$ b", "b1", "$ c", "c1", "$"]);
+        assert_eq!(
+            tops(&rows),
+            [
+                (1, false),
+                (4, true),
+                (6, false),
+                (9, true),
+                (11, false),
+                (14, true)
+            ]
         );
+    }
+
+    #[test]
+    fn a_tall_block_shows_its_header_and_the_last_output_rows() {
+        let mut session = session(&[("a", 10)]);
+        // 5 lines: cap 4, the header then the last three output rows. At rest the view
+        // is anchored at the bottom and the header is cut: scrolled to the top here.
+        let rows = top_rows(&mut session, 5);
+        assert_eq!(view(&session, &rows), ["$ a", "a8", "a9", "a10"]);
+        assert_eq!(cap(5), 4);
+        assert!(can_scroll(&session.timeline, &session.term, BlockId(0), 5));
+        assert_eq!(
+            max_block_scroll(&session.timeline, &session.term, BlockId(0), 5),
+            7
+        );
+    }
+
+    #[test]
+    fn a_header_taller_than_the_cap_keeps_its_last_rows() {
+        let mut session = Session::new(1000);
+        session.feed(&format!("p1\r\np2\r\np3\r\np4\r\n$ a\r\n{}", start("a")));
+        session.feed("a1\r\na2\r\n");
+        session.feed(&end(0));
+        session.feed("$ ");
+        let rows = top_rows(&mut session, 5);
+        // Header of five rows under a cap of 4: its last three, then one output row.
+        assert_eq!(view(&session, &rows), ["p3", "p4", "$ a", "a2"]);
+    }
+
+    #[test]
+    fn block_scroll_shifts_the_output_and_stops_at_its_ends() {
+        let mut session = session(&[("a", 10)]);
         let id = BlockId(0);
-        let roles: Vec<RowRole> = rows(&term, &shell, 0).iter().map(|r| r.role).collect();
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        assert_eq!(scroll_block(timeline, live, id, 5, 2), 2);
+        assert_eq!(scroll_block(timeline, live, id, 5, 10), 5);
+        assert_eq!(timeline.block(id).unwrap().scroll, 7);
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows), ["a1", "a2", "a3", "$"]);
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        assert_eq!(scroll_block(timeline, live, id, 5, -20), -7);
+        assert_eq!(scroll_block(timeline, live, id, 5, -1), 0);
+        // A short block cannot scroll.
+        let mut session = self::session(&[("a", 2)]);
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        assert!(!can_scroll(timeline, live, BlockId(0), 5));
+        assert_eq!(scroll_block(timeline, live, BlockId(0), 5, 1), 0);
+    }
+
+    #[test]
+    fn folded_block_shows_its_header_and_a_summary() {
+        let mut session = session(&[("a", 10), ("b", 1)]);
+        session.timeline.toggle_fold(BlockId(0));
+        let rows = rows_of(&session, 8);
+        assert_eq!(view(&session, &rows), ["$ a", "[s] 10", "$ b", "b1", "$"]);
+        assert_eq!(rows[1].source, RowSource::Summary(BlockId(0)));
+        assert!(!can_scroll(&session.timeline, &session.term, BlockId(0), 8));
+    }
+
+    #[test]
+    fn timeline_scroll_moves_the_view_and_stops_at_the_top() {
+        let mut session = session(&[("a", 1), ("b", 1), ("c", 1)]);
+        // Total: "$ a" "a1" "$ b" "b1" "$ c" "c1" "$" = 14 + 3 gaps = 17 half-lines.
+        let max = max_timeline_scroll(&session.timeline, &session.term, 8);
+        assert_eq!(max, 1);
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        assert_eq!(scroll_timeline(timeline, live, 8, 5), 1);
+        let rows = rows_of(&session, 8);
         assert_eq!(
-            roles,
-            [
-                RowRole::Prompt(id),
-                RowRole::Output(id),
-                RowRole::Output(id),
-                RowRole::Output(id)
-            ]
+            view(&session, &rows),
+            ["$ a", "a1", "$ b", "b1", "$ c", "c1"]
         );
+        assert_eq!(rows[0].top, 0);
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        assert_eq!(scroll_timeline(timeline, live, 8, -5), -1);
     }
 
     #[test]
-    fn alternate_screen_rows_have_no_role() {
-        let mut term = new_term(3);
-        let mut shell = ShellState::new();
-        feed(&mut term, &mut shell, &format!("{A}$ {B}vim\r\n"));
-        feed(&mut term, &mut shell, &format!("{C}\x1b[?1049h"));
-        let rows = rows(&term, &shell, 0);
-        assert!(rows.iter().all(|row| row.role == RowRole::None));
-        assert_eq!(tops(&rows), [(0, false), (2, false), (4, false)]);
-    }
-
-    #[test]
-    fn a_gap_starts_a_block_below_another_one() {
-        let (a, b) = (RowRole::Output(BlockId(0)), RowRole::Prompt(BlockId(1)));
-        assert!(gap_between(a, b));
-        assert!(gap_between(RowRole::None, RowRole::Prompt(BlockId(0))));
-        assert!(!gap_between(b, RowRole::Output(BlockId(1))));
-        assert!(!gap_between(a, RowRole::None));
-        assert!(!gap_between(RowRole::None, RowRole::None));
-    }
-
-    #[test]
-    fn no_gap_inside_one_block() {
-        let mut term = new_term(4);
-        let mut shell = ShellState::new();
-        command(&mut term, &mut shell, "a", 3);
-        // Grid lines 0 to 3: "a1" to "a3", then the cursor row, all in block 0.
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["a1", "a2", "a3", ""]);
-        assert_eq!(
-            tops(&rows),
-            [(0, false), (2, false), (4, false), (6, false)]
-        );
-    }
-
-    #[test]
-    fn a_fresh_screen_starts_at_the_top() {
-        let mut term = new_term(6);
-        let mut shell = ShellState::new();
-        command(&mut term, &mut shell, "a", 1);
-        command(&mut term, &mut shell, "b", 0);
-        feed(&mut term, &mut shell, &format!("{A}$ "));
-        assert_eq!(term.grid().history_size(), 0);
-        // Grid lines 0 to 5: "$ a", "a1", "$ b", "$", two blank rows below the cursor.
-        // From the bottom, the gaps would cut "$ a", out of reach without a history:
-        // the view starts at the top and cuts a blank row instead.
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["$ a", "a1", "$ b", "$", ""]);
-        assert_eq!(
-            tops(&rows),
-            [(0, false), (2, false), (5, true), (8, true), (10, false)]
-        );
-    }
-
-    #[test]
-    fn the_top_of_the_history_stays_reachable() {
-        let (term, shell) = three_blocks();
-        // Scrolled to the top (8 lines of history), from the bottom line "a3" the gap
-        // would not cut anything: "$ a" is the top grid line.
-        assert_eq!(lines(&rows(&term, &shell, 8)), [-8, -7, -6, -5]);
-        // A view that would cut the top of the history but show the cursor row keeps
-        // its bottom: the cursor row comes first.
-        let mut term = new_term(3);
-        let mut shell = ShellState::new();
-        command(&mut term, &mut shell, "a", 1);
-        feed(&mut term, &mut shell, &format!("{A}$ "));
-        // Grid lines 0 to 2: "$ a", "a1", "$", no history.
-        assert_eq!(texts(&term, &rows(&term, &shell, 0)), ["a1", "$"]);
-    }
-
-    #[test]
-    fn several_card_boundaries_take_half_a_line_each() {
-        let mut term = new_term(8);
-        let mut shell = ShellState::new();
-        for name in ["a", "b", "c"] {
-            command(&mut term, &mut shell, name, 1);
+    fn the_view_stays_still_while_output_arrives_when_scrolled_up() {
+        let mut session = Session::new(1000);
+        for name in ["a", "b", "c", "d"] {
+            run(&mut session, name, 1);
         }
-        feed(&mut term, &mut shell, &format!("{A}$ "));
-        // Grid lines 0 to 7: "$ a", "a1", "$ b", "b1", "$ c", "c1", "$", the cursor row
-        // below. From the bottom: 2 + 2 + 3 + 2 + 3 + 2 = 14 half-lines out of 16; "a1"
-        // would take 3 more. The 2 left go to the top.
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["$ b", "b1", "$ c", "c1", "$", ""]);
+        session.feed(&format!("$ e\r\n{}", start("e")));
+        let mut anchor = Anchor::default();
+        follow(&mut session.timeline, &session.term, 8, &mut anchor);
+        scroll_timeline(&mut session.timeline, &session.term, 8, 6);
+        let before = view(&session, &rows_of(&session, 8));
+
+        session.feed("e1\r\ne2\r\n");
+        follow(&mut session.timeline, &session.term, 8, &mut anchor);
+        assert_eq!(view(&session, &rows_of(&session, 8)), before);
+
+        // The block ends and a new prompt comes: still in place.
+        session.feed(&end(0));
+        session.feed("$ ");
+        follow(&mut session.timeline, &session.term, 8, &mut anchor);
+        assert_eq!(view(&session, &rows_of(&session, 8)), before);
+    }
+
+    #[test]
+    fn the_view_follows_the_bottom_at_rest() {
+        let mut session = Session::new(1000);
+        run(&mut session, "a", 3);
+        session.feed(&format!("$ b\r\n{}", start("b")));
+        let mut anchor = Anchor::default();
+        follow(&mut session.timeline, &session.term, 5, &mut anchor);
+        session.feed("b1\r\nb2\r\nb3\r\n");
+        follow(&mut session.timeline, &session.term, 5, &mut anchor);
+        assert_eq!(session.timeline.scroll, 0);
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows).last().unwrap(), "");
+        assert_eq!(view(&session, &rows)[rows.len() - 2], "b3");
+    }
+
+    #[test]
+    fn the_current_block_follows_its_output_unless_scrolled() {
+        let mut session = Session::new(1000);
+        session.feed(&format!("$ a\r\n{}", start("a")));
+        session.feed(&numbered("a", 6).join("\r\n"));
+        let mut anchor = Anchor::default();
+        follow(&mut session.timeline, &session.term, 5, &mut anchor);
+        // Cap 4: header and the last three live rows.
         assert_eq!(
-            tops(&rows),
-            [
-                (2, false),
-                (4, false),
-                (7, true),
-                (9, false),
-                (12, true),
-                (14, false)
-            ]
+            view(&session, &rows_of(&session, 5)),
+            ["$ a", "a4", "a5", "a6"]
+        );
+
+        let id = session.timeline.current().id;
+        scroll_block(&mut session.timeline, &session.term, id, 5, 2);
+        assert_eq!(
+            view(&session, &rows_of(&session, 5)),
+            ["$ a", "a2", "a3", "a4"]
+        );
+        session.feed("\r\na7\r\na8");
+        follow(&mut session.timeline, &session.term, 5, &mut anchor);
+        assert_eq!(session.timeline.current().scroll, 4);
+        assert_eq!(
+            view(&session, &rows_of(&session, 5)),
+            ["$ a", "a2", "a3", "a4"]
+        );
+
+        // Back at the bottom, it follows again.
+        scroll_block(&mut session.timeline, &session.term, id, 5, -10);
+        session.feed("\r\na9");
+        follow(&mut session.timeline, &session.term, 5, &mut anchor);
+        assert_eq!(
+            view(&session, &rows_of(&session, 5)),
+            ["$ a", "a7", "a8", "a9"]
         );
     }
 
-    /// Three blocks `a` (3 rows), `b` (2 rows) and `c` (3 rows) in a 4-row terminal,
-    /// then a prompt: grid lines -8 to 3.
-    fn three_blocks() -> (Term<VoidListener>, ShellState) {
-        let mut term = new_term(4);
-        let mut shell = ShellState::new();
-        command(&mut term, &mut shell, "a", 3);
-        command(&mut term, &mut shell, "b", 2);
-        command(&mut term, &mut shell, "c", 3);
-        feed(&mut term, &mut shell, &format!("{A}$ "));
-        (term, shell)
+    #[test]
+    fn a_pinned_block_starts_the_view_with_blank_rows_below() {
+        let mut session = session(&[("a", 2), ("b", 2)]);
+        // Ctrl+L at the prompt: the shell clears the screen and redraws its prompt.
+        session.feed("\x1b[H\x1b[2J$ ");
+        assert_eq!(
+            session.timeline.pinned(),
+            Some(session.timeline.current().id)
+        );
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows), ["$"]);
+        assert_eq!(tops(&rows), [(0, false)]);
+        // The blocks above are still there, by scrolling up.
+        let max = max_timeline_scroll(&session.timeline, &session.term, 5);
+        assert!(max > 0);
+        scroll_timeline(&mut session.timeline, &session.term, 5, max as isize);
+        assert_eq!(view(&session, &rows_of(&session, 5))[0], "$ a");
     }
 
     #[test]
-    fn three_blocks_layout() {
-        let (term, shell) = three_blocks();
-        let all = blocks::index(&term, Line(-8)..Line(4));
-        assert_eq!(all[0], RowRole::Prompt(BlockId(0)));
-        assert_eq!(all[4], RowRole::Prompt(BlockId(1)));
-        assert_eq!(all[7], RowRole::Prompt(BlockId(2)));
-        assert_eq!(all[11], RowRole::Prompt(BlockId(3)));
-        assert_eq!(term.grid().cursor.point.line, Line(3));
-        assert!(!shell.any_folded());
-    }
-
-    #[test]
-    fn the_view_bottom_follows_the_viewport_and_gaps_push_rows_out() {
-        let (term, shell) = three_blocks();
-        // "$" (2), a gap and "c3" (3), "c2" (2): "c1" does not fit in the 8 half-lines,
-        // the one left goes to the top.
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(lines(&rows), [1, 2, 3]);
-        assert_eq!(tops(&rows), [(1, false), (3, false), (6, true)]);
-        // "b2", "b1", "$ b" (6), then "a3" would need a gap: 2 half-lines left at the
-        // top.
-        let rows = super::rows(&term, &shell, 5);
-        assert_eq!(lines(&rows), [-4, -3, -2]);
-        assert_eq!(tops(&rows), [(2, false), (4, false), (6, false)]);
-        // Without a gap, as many rows as the screen.
-        assert_eq!(lines(&super::rows(&term, &shell, 1)), [-1, 0, 1, 2]);
-    }
-
-    #[test]
-    fn one_fold_skips_its_output_and_counts_it() {
-        let (term, mut shell) = three_blocks();
-        shell.set_folded(BlockId(2), true);
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["b2", "$ c", "$"]);
-        assert_eq!(rows.iter().map(|r| r.hidden).collect::<Vec<_>>(), [0, 3, 0]);
-        // Folds and gaps together: the 8 half-lines are used up, nothing left.
-        assert_eq!(tops(&rows), [(0, false), (3, true), (6, true)]);
-    }
-
-    #[test]
-    fn several_folds() {
-        let (term, mut shell) = three_blocks();
-        shell.set_folded(BlockId(1), true);
-        shell.set_folded(BlockId(2), true);
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["$ b", "$ c", "$"]);
-        assert_eq!(rows.iter().map(|r| r.hidden).collect::<Vec<_>>(), [2, 3, 0]);
-        assert_eq!(tops(&rows), [(0, false), (3, true), (6, true)]);
-    }
-
-    #[test]
-    fn top_of_history_completes_downward_then_pads() {
-        let (term, mut shell) = three_blocks();
-        for id in 0..3 {
-            shell.set_folded(BlockId(id), true);
+    fn a_pinned_block_taller_than_the_view_is_anchored_at_the_bottom() {
+        let mut session = Session::new(1000);
+        run(&mut session, "a", 1);
+        session.feed(&format!("$ b\r\n{}", start("b")));
+        session.feed("\x1b[H\x1b[2J");
+        for line in numbered("b", 3) {
+            session.feed(&format!("{line}\r\n"));
         }
-        // All blocks folded: four visible rows in the whole grid, three fit with the
-        // gaps.
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["$ b", "$ c", "$"]);
-
-        // Scrolled to the top of the history: the bottom grid line is hidden, the rows
-        // below it complete the view, the hidden rows below "$ c" still counted.
-        let rows = super::rows(&term, &shell, 8);
-        assert_eq!(texts(&term, &rows), ["$ a", "$ b", "$ c"]);
-        assert_eq!(rows.iter().map(|r| r.hidden).collect::<Vec<_>>(), [3, 2, 3]);
-        assert_eq!(tops(&rows), [(0, false), (3, true), (6, true)]);
+        session.feed(&end(0));
+        session.feed("$ ");
+        assert_eq!(session.timeline.pinned(), Some(BlockId(1)));
+        // "$ b" and its three rows, then "$": 8 + 1 + 2 = 11 half-lines out of 10.
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows), ["b1", "b2", "b3", "$"]);
     }
 
     #[test]
-    fn padding_rows_below_the_content() {
-        let mut term = new_term(4);
-        let mut shell = ShellState::new();
-        command(&mut term, &mut shell, "a", 6);
-        feed(&mut term, &mut shell, &format!("{A}$ "));
-        shell.set_folded(BlockId(0), true);
-        let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["$ a", "$", "~"]);
-        assert_eq!(rows[0].hidden, 6);
-        assert_eq!(rows[2].role, RowRole::None);
-        // The padding row takes no gap; the half-line left goes to the top.
-        assert_eq!(tops(&rows), [(1, false), (4, true), (6, false)]);
+    fn alternate_screen_is_the_live_screen_without_cards() {
+        let mut session = session(&[("a", 1)]);
+        session.feed("\x1b[?1049h\x1b[Hfull");
+        let rows = rows_of(&session, 5);
+        assert_eq!(rows.len(), session.term.screen_lines());
+        assert!(
+            rows.iter()
+                .all(|row| row.block.is_none() && !row.gap_before)
+        );
+        assert!(rows.iter().all(|row| row.source == RowSource::Live));
+        assert_eq!(tops(&rows)[..2], [(0, false), (2, false)]);
+        assert_eq!(view(&session, &rows)[0], "full");
+        assert_eq!(max_timeline_scroll(&session.timeline, &session.term, 5), 0);
     }
 
     #[test]
-    fn rows_hidden_below_the_bottom_line_are_counted() {
-        let (term, mut shell) = three_blocks();
-        shell.set_folded(BlockId(2), true);
-        // Bottom grid line 1 is "c2", hidden: the view ends on "$ c", whose count
-        // includes "c3", hidden below the bottom line.
-        let rows = rows(&term, &shell, 2);
-        assert_eq!(texts(&term, &rows), ["b1", "b2", "$ c"]);
-        assert_eq!(rows[2].hidden, 3);
+    fn without_signals_the_live_grid_is_one_scrollable_card() {
+        let mut session = Session::new(1000);
+        session.feed(&numbered("l", 8).join("\r\n"));
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows), ["l5", "l6", "l7", "l8"]);
+        assert!(rows.iter().all(|row| row.block == Some(BlockId(0))));
+        let id = session.timeline.current().id;
+        assert!(can_scroll(&session.timeline, &session.term, id, 5));
+        scroll_block(&mut session.timeline, &session.term, id, 5, 4);
+        assert_eq!(
+            view(&session, &rows_of(&session, 5)),
+            ["l1", "l2", "l3", "l4"]
+        );
     }
 
     #[test]
-    fn the_cursor_row_of_a_folded_block_stays_visible() {
-        let mut term = new_term(4);
-        let mut shell = ShellState::new();
-        command(&mut term, &mut shell, "a", 2);
-        feed(&mut term, &mut shell, "tail");
-        shell.set_folded(BlockId(0), true);
-        let rows = rows(&term, &shell, 0);
-        // Grid lines 0 to 3: nothing above or below to fill the view.
-        assert_eq!(texts(&term, &rows), ["$ a", "tail", "~", "~"]);
-        assert_eq!(rows[0].hidden, 2);
-    }
-
-    #[test]
-    fn grid_delta_without_folds_is_the_view_delta() {
-        let (term, shell) = three_blocks();
-        assert_eq!(grid_delta(&term, &shell, 0, 3), 3);
-        assert_eq!(grid_delta(&term, &shell, 5, -2), -2);
-    }
-
-    #[test]
-    fn grid_delta_across_a_fold() {
-        let (term, mut shell) = three_blocks();
-        shell.set_folded(BlockId(1), true);
-        // View rows from the bottom: "$" (3), "c3".."c1", "$ c" (-1), "$ b" (-4, its two
-        // output rows hidden), "a3" (-5).
-        assert_eq!(grid_delta(&term, &shell, 0, 4), 4);
-        assert_eq!(grid_delta(&term, &shell, 0, 5), 7);
-        assert_eq!(grid_delta(&term, &shell, 0, 6), 8);
-        // Back down from bottom line -5: "$ b", then "$ c".
-        assert_eq!(grid_delta(&term, &shell, 8, -1), -1);
-        assert_eq!(grid_delta(&term, &shell, 8, -2), -4);
-        // Past the bottom of the grid: to the bottom.
-        assert_eq!(grid_delta(&term, &shell, 8, -20), -8);
-        // Past the top: the rest is left to alacritty's clamp.
-        assert_eq!(grid_delta(&term, &shell, 0, 20), 22);
-    }
-
-    #[test]
-    fn reveal_scrolls_the_least_to_show_a_line() {
-        let (term, shell) = three_blocks();
-        // Visible (the view shows lines 1 to 3): no scroll.
-        assert_eq!(reveal(&term, &shell, 0, Line(1)), 0);
-        assert_eq!(reveal(&term, &shell, 0, Line(3)), 0);
-        // Above the view: up, the line on the top row.
-        assert_eq!(reveal(&term, &shell, 0, Line(0)), 1);
-        assert_eq!(reveal(&term, &shell, 0, Line(-4)), 5);
-        assert_eq!(reveal(&term, &shell, 2, Line(-4)), 3);
-        // Below the view: down, the line on the bottom row.
-        assert_eq!(reveal(&term, &shell, 5, Line(0)), -2);
-    }
-
-    #[test]
-    fn reveal_scrolls_one_more_row_when_a_gap_comes_in() {
-        let (term, shell) = three_blocks();
-        // Lines -1 to 2 shown without a gap. One row up, "b2" would come in with a gap
-        // and push "$ c" out: one more row.
-        assert_eq!(lines(&rows(&term, &shell, 1)), [-1, 0, 1, 2]);
-        assert_eq!(lines(&rows(&term, &shell, 2)), [-1, 0, 1]);
-        let delta = reveal(&term, &shell, 1, Line(-2));
-        assert_eq!(delta, 2);
-        assert_eq!(lines(&rows(&term, &shell, 3)), [-2, -1, 0]);
-    }
-
-    #[test]
-    fn reveal_counts_visible_rows_across_a_fold() {
-        let (term, mut shell) = three_blocks();
-        shell.set_folded(BlockId(1), true);
-        // View: "c2", "c3", "$". Block 1's prompt (-4) is three visible rows above the
-        // top row ("c1", "$ c", then "$ b").
-        assert_eq!(lines(&rows(&term, &shell, 0)), [1, 2, 3]);
-        let delta = reveal(&term, &shell, 0, Line(-4));
-        assert_eq!(delta, grid_delta(&term, &shell, 0, 3));
-        assert_eq!(texts(&term, &rows(&term, &shell, delta as usize))[0], "$ b");
-    }
-
-    #[test]
-    fn point_maps_view_rows_to_grid_lines() {
-        let mut rows: Vec<ViewRow> = [Line(-2), Line(-1), Line(0)]
-            .map(|line| ViewRow::shown(line, RowRole::None))
-            .to_vec();
-        assert_eq!(point(&rows, 0, 3), Point::new(Line(-2), Column(3)));
-        assert_eq!(point(&rows, 2, 0), Point::new(Line(0), Column(0)));
+    fn point_maps_a_view_row_to_its_source() {
+        let session = session(&[("a", 1)]);
+        let rows = rows_of(&session, 8);
+        assert_eq!(
+            point(&rows, 1, 3),
+            Some((
+                RowSource::Output(BlockId(0)),
+                Point::new(Line(0), Column(3))
+            ))
+        );
         // Clamped to the last row.
-        assert_eq!(point(&rows, 9, 1), Point::new(Line(0), Column(1)));
-        // A padding row maps to the last row showing a grid line.
-        rows.push(ViewRow::blank());
-        assert_eq!(point(&rows, 3, 2), Point::new(Line(0), Column(2)));
+        assert_eq!(
+            point(&rows, 9, 0),
+            Some((RowSource::Live, Point::new(Line(0), Column(0))))
+        );
+        assert_eq!(point(&[], 0, 0), None);
+    }
+
+    #[test]
+    fn prepare_reflows_only_the_blocks_it_shows() {
+        let mut session = session(&[("a", 1), ("b", 1), ("c", 1), ("d", 1)]);
+        session
+            .term
+            .resize(alacritty_terminal::term::test::TermSize::new(10, 5));
+        let mut anchor = Anchor::default();
+        let rows = prepare(&mut session.timeline, &session.term, 5, &mut anchor);
+        let columns = |id: u64| {
+            let block = session.timeline.block(BlockId(id)).unwrap();
+            (block.header.columns(), block.output.columns())
+        };
+        // Shown: "d1", then the prompt, with "$ d" above and "c1" before it.
+        assert_eq!(view(&session, &rows), ["c1", "$ d", "d1", "$"]);
+        assert_eq!(columns(0), (20, 20));
+        assert_eq!(columns(2), (10, 10));
+        assert_eq!(columns(3), (10, 10));
+    }
+
+    #[test]
+    fn reveal_scrolls_the_least_to_show_a_block() {
+        let mut session = session(&[("a", 1), ("b", 1), ("c", 1), ("d", 1)]);
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        reveal(timeline, live, 5, BlockId(0));
+        let rows = rows_of(&session, 5);
+        assert_eq!(rows[0].source, RowSource::Header(BlockId(0)));
+        assert_eq!(rows[0].line, Line(0));
+
+        // Block 1 is already in view: nothing moves.
+        let scroll = session.timeline.scroll;
+        reveal(&mut session.timeline, &session.term, 5, BlockId(1));
+        assert_eq!(session.timeline.scroll, scroll);
+
+        // Down to block 3, shown whole at the bottom of the view.
+        reveal(&mut session.timeline, &session.term, 5, BlockId(3));
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows)[rows.len() - 2..], ["$ d", "d1"]);
+        // An unknown block changes nothing.
+        let scroll = session.timeline.scroll;
+        reveal(&mut session.timeline, &session.term, 5, BlockId(42));
+        assert_eq!(session.timeline.scroll, scroll);
+    }
+
+    #[test]
+    fn frozen_terms_of_headers_and_outputs() {
+        let mut session = session(&[("a", 1)]);
+        session.feed(&format!("b\r\n{}", start("b")));
+        let timeline = &mut session.timeline;
+        let current = timeline.current().id;
+        assert!(frozen_term(timeline, RowSource::Header(BlockId(0))).is_some());
+        assert!(frozen_term(timeline, RowSource::Output(BlockId(0))).is_some());
+        assert!(frozen_term(timeline, RowSource::Header(current)).is_some());
+        assert!(frozen_term(timeline, RowSource::Output(current)).is_none());
+        assert!(frozen_term(timeline, RowSource::Live).is_none());
+        assert!(frozen_term(timeline, RowSource::Summary(BlockId(0))).is_none());
+        assert!(frozen_term(timeline, RowSource::Header(BlockId(42))).is_none());
+        assert!(frozen_term_mut(timeline, RowSource::Header(current)).is_some());
+        assert!(frozen_term_mut(timeline, RowSource::Output(BlockId(0))).is_some());
+        assert!(frozen_term_mut(timeline, RowSource::Live).is_none());
+    }
+
+    #[test]
+    fn selection_end_stays_in_its_source() {
+        let session = session(&[("a", 1)]);
+        let (timeline, live) = (&session.timeline, &session.term);
+        let output = RowSource::Output(BlockId(0));
+        let at =
+            |source, line, column| (source, Point::new(Line(line), Column(column)), Side::Left);
+        // In the same source: the pointer's point.
+        assert_eq!(
+            selection_end(timeline, live, output, at(output, 0, 1)),
+            Some((Point::new(Line(0), Column(1)), Side::Left))
+        );
+        // Above (its header): the first cell; below (the prompt): the last cell.
+        assert_eq!(
+            selection_end(
+                timeline,
+                live,
+                output,
+                at(RowSource::Header(BlockId(0)), 0, 5)
+            ),
+            Some((Point::new(Line(0), Column(0)), Side::Left))
+        );
+        assert_eq!(
+            selection_end(timeline, live, output, at(RowSource::Live, 0, 5)),
+            Some((Point::new(Line(0), Column(19)), Side::Right))
+        );
+        // A live selection with the pointer on an older block: the live grid's top.
+        assert_eq!(
+            selection_end(timeline, live, RowSource::Live, at(output, 0, 5)),
+            Some((Point::new(live.topmost_line(), Column(0)), Side::Left))
+        );
+        // A block no longer in the timeline.
+        let gone = RowSource::Output(BlockId(42));
+        assert_eq!(selection_end(timeline, live, gone, at(output, 0, 0)), None);
     }
 }

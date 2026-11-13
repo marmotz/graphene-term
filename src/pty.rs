@@ -22,8 +22,8 @@ use alacritty_terminal::vte::ansi::Processor;
 use log::error;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
-use crate::blocks::ShellState;
-use crate::osc133::{Chunk, Scanner};
+use crate::signals::{Chunk, Scanner};
+use crate::timeline::Timeline;
 
 /// Max bytes read from the PTY before forcing the `Term` lock.
 const READ_BUFFER_SIZE: usize = 0x10_0000;
@@ -68,13 +68,13 @@ pub fn feed<L: EventListener>(processor: &mut Processor, term: &mut Term<L>, byt
     processor.advance(term, bytes);
 }
 
-/// Parses `bytes` into `term` and applies the shell integration marks found in them,
-/// each one right after the bytes of its sequence, so the cursor is where the shell put
-/// the mark.
+/// Parses `bytes` into `term` and applies the block signals and screen clears found in
+/// them to `timeline`, each one right after the bytes of its sequence, so the live grid
+/// holds everything the shell wrote before it.
 pub fn process<L: EventListener>(
     scanner: &mut Scanner,
     processor: &mut Processor,
-    shell: &mut ShellState,
+    timeline: &mut Timeline,
     term: &mut Term<L>,
     bytes: &[u8],
 ) {
@@ -82,15 +82,15 @@ pub fn process<L: EventListener>(
         match chunk {
             Chunk::Bytes(bytes) => {
                 feed(processor, term, bytes);
-                shell.after_bytes(term);
+                timeline.apply(term, Chunk::Bytes(bytes));
             }
-            Chunk::Mark(mark) => {
-                // A synchronized update holds bytes back: flush them so the cursor is
+            chunk => {
+                // A synchronized update holds bytes back: flush them so the live grid is
                 // up to date.
                 if processor.sync_bytes_count() > 0 {
                     processor.stop_sync(term);
                 }
-                shell.apply(term, mark);
+                timeline.apply(term, chunk);
             }
         }
     }
@@ -146,7 +146,9 @@ pub struct PtyLoop<T, L: EventListener> {
     tx: mpsc::Sender<Msg>,
     term: Arc<FairMutex<Term<L>>>,
     /// Locked after `term`, never before.
-    shell: Arc<Mutex<ShellState>>,
+    timeline: Arc<Mutex<Timeline>>,
+    /// Session token expected in the block signals.
+    token: String,
     event_proxy: L,
 }
 
@@ -164,7 +166,8 @@ where
 {
     pub fn new(
         term: Arc<FairMutex<Term<L>>>,
-        shell: Arc<Mutex<ShellState>>,
+        timeline: Arc<Mutex<Timeline>>,
+        token: String,
         event_proxy: L,
         pty: T,
     ) -> io::Result<Self> {
@@ -175,7 +178,8 @@ where
             rx,
             tx,
             term,
-            shell,
+            timeline,
+            token,
             event_proxy,
         })
     }
@@ -195,7 +199,7 @@ where
         let mut state = State {
             writes: WriteQueue::default(),
             processor: Processor::new(),
-            scanner: Scanner::new(),
+            scanner: Scanner::new(&self.token),
         };
         let mut buf = vec![0u8; READ_BUFFER_SIZE];
         let mode = PollMode::Level;
@@ -232,7 +236,12 @@ where
                     peeked = self.rx.try_recv().ok();
                 }
                 if peeked.is_none() {
-                    state.processor.stop_sync(&mut *self.term.lock());
+                    let mut term = self.term.lock();
+                    state.processor.stop_sync(&mut *term);
+                    // The flushed bytes may leave the alternate screen: release the
+                    // signals held meanwhile.
+                    self.lock_timeline().apply(&mut *term, Chunk::Bytes(&[]));
+                    drop(term);
                     self.event_proxy.send_event(Event::Wakeup);
                     continue;
                 }
@@ -293,6 +302,12 @@ where
         let _ = self.pty.deregister(&self.poller);
     }
 
+    /// Locks the timeline. Only while `term` is locked: lock order `Term`, then
+    /// `Timeline`.
+    fn lock_timeline(&self) -> std::sync::MutexGuard<'_, Timeline> {
+        self.timeline.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Handles queued messages. Returns `false` on `Shutdown`.
     fn drain_channel(&mut self, state: &mut State, first: Option<Msg>) -> bool {
         let mut next = first;
@@ -347,12 +362,12 @@ where
                 }),
             };
 
-            // Lock order: `Term`, then `ShellState`.
-            let mut shell = self.shell.lock().unwrap_or_else(PoisonError::into_inner);
+            // Lock order: `Term`, then `Timeline`.
+            let mut timeline = self.timeline.lock().unwrap_or_else(PoisonError::into_inner);
             process(
                 &mut state.scanner,
                 &mut state.processor,
-                &mut shell,
+                &mut timeline,
                 term,
                 &buf[..unprocessed],
             );
@@ -379,6 +394,9 @@ mod tests {
     use alacritty_terminal::index::{Column, Line, Point};
     use alacritty_terminal::term::Config;
     use alacritty_terminal::term::test::TermSize;
+
+    use crate::timeline::Status;
+    use crate::timeline::testing::{TOKEN, end, start, texts};
 
     fn term() -> Term<VoidListener> {
         Term::new(Config::default(), &TermSize::new(20, 5), VoidListener)
@@ -423,6 +441,48 @@ mod tests {
             .advance(&mut whole, b"ab\x1b[3;5Hz");
 
         assert_eq!(screen(&split), screen(&whole));
+    }
+
+    /// Feeds `bytes` to a fresh 20x5 session through `process`, `split` bytes per read.
+    fn process_in_reads(bytes: &str, split: usize) -> (Term<VoidListener>, Timeline) {
+        let mut term = term();
+        let mut timeline = Timeline::new(100);
+        let mut scanner = Scanner::new(TOKEN);
+        let mut processor = Processor::new();
+        for read in bytes.as_bytes().chunks(split) {
+            process(&mut scanner, &mut processor, &mut timeline, &mut term, read);
+        }
+        (term, timeline)
+    }
+
+    #[test]
+    fn process_applies_signals_split_across_reads() {
+        let bytes = format!("$ ls\r\n{}out\r\n{}$ ", start("ls"), end(2));
+        for split in [1, 3, 7, bytes.len()] {
+            let (term, timeline) = process_in_reads(&bytes, split);
+            let block = &timeline.blocks()[0];
+            assert_eq!(block.command, "ls");
+            assert_eq!(block.status, Status::Failure(2));
+            assert_eq!(texts(&block.header), ["$ ls"], "split {split}");
+            assert_eq!(texts(&block.output), ["out"], "split {split}");
+            assert_eq!(texts(&term)[0], "$");
+        }
+    }
+
+    #[test]
+    fn process_flushes_a_synchronized_update_before_a_signal() {
+        let bytes = format!("\x1b[?2026h$ ls\r\n{}", start("ls"));
+        let (_, timeline) = process_in_reads(&bytes, bytes.len());
+        let header = timeline.current().header.as_ref().expect("header");
+        assert_eq!(texts(header), ["$ ls"]);
+    }
+
+    #[test]
+    fn process_ignores_signals_with_another_token() {
+        let bytes = "$ ls\r\n\x1b]6973;ffffffffffffffffffffffffffffffff;start;bHM=\x07out";
+        let (term, timeline) = process_in_reads(bytes, bytes.len());
+        assert!(timeline.current().header.is_none());
+        assert_eq!(texts(&term)[..2], ["$ ls", "out"]);
     }
 
     /// Accepts at most `chunk` bytes per call, then blocks after `budget` bytes.
@@ -552,8 +612,15 @@ mod tests {
             &TermSize::new(20, 5),
             Events(tx.clone()),
         )));
-        let shell = Arc::new(Mutex::new(ShellState::new()));
-        let pty_loop = PtyLoop::new(term.clone(), shell, Events(tx), pty).unwrap();
+        let timeline = Arc::new(Mutex::new(Timeline::new(100)));
+        let pty_loop = PtyLoop::new(
+            term.clone(),
+            timeline,
+            "0123456789abcdef0123456789abcdef".to_owned(),
+            Events(tx),
+            pty,
+        )
+        .unwrap();
         let sender = pty_loop.sender();
         let handle = pty_loop.spawn();
 

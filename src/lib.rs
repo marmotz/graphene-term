@@ -4,7 +4,6 @@
 mod app;
 mod banner;
 mod block_actions;
-mod blocks;
 #[cfg(test)]
 mod build_version;
 mod config;
@@ -14,6 +13,9 @@ mod input;
 mod layout;
 mod mouse;
 mod opener;
+// The OSC 133 scanner only reads the marks of the current shell scripts in their tests,
+// until the scripts send the block signals (#78).
+#[cfg(test)]
 mod osc133;
 mod palette;
 mod perf;
@@ -21,13 +23,9 @@ mod pty;
 mod renderer;
 mod selection;
 mod shell_integration;
-// Used once the PTY loop switches to the timeline (#77).
-#[allow(dead_code)]
 mod signals;
 mod terminal;
-// Used once the PTY loop switches to the timeline (#77).
 mod theme;
-#[allow(dead_code)]
 mod timeline;
 mod update;
 mod view;
@@ -48,11 +46,13 @@ pub fn start_perf_clock() {
 /// Internals exercised by `benches/render.rs`. Not a stable API.
 #[doc(hidden)]
 pub mod bench {
-    pub use crate::blocks::ShellState;
     pub use crate::frame::Frame;
     pub use crate::layout::{CellSize, GridLayout};
     pub use crate::palette::Palette;
+    pub use crate::pty::process;
     pub use crate::renderer::scene;
     pub use crate::renderer::{GlyphKey, Glyphs, Headless};
-    pub use crate::view::rows as view_rows;
+    pub use crate::signals::Scanner;
+    pub use crate::timeline::Timeline;
+    pub use crate::view::{rows as view_rows, scroll_block};
 }

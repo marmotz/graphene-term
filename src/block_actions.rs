@@ -1,14 +1,13 @@
-//! Block actions: which block an action targets, block navigation, block selection and
-//! the copied command and output texts. Pure: works on a `Term` and its `ShellState`,
-//! no window or clipboard access.
+//! Block actions: which block an action targets, block navigation and the copied texts
+//! of a block. Pure: works on the [`Timeline`], no window or clipboard access. Only
+//! finished blocks are targets: the current one is still being written.
 
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::Term;
 
-use crate::blocks::{self, BlockBounds, BlockId, ShellState};
 use crate::selection::clean_copied_text;
+use crate::timeline::{BlockId, Timeline};
 
 /// Direction of a block navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,343 +23,212 @@ pub enum Part {
     Output,
 }
 
-/// Block holding the start of the selection, `None` without selection or outside blocks.
-fn selected_block<L>(term: &Term<L>) -> Option<BlockId> {
-    let start = term.selection.as_ref()?.to_range(term)?.start;
-    blocks::index(term, start.line..start.line + 1)[0].block()
+/// `selected` when it is a finished block still in the timeline.
+fn finished(timeline: &Timeline, selected: Option<BlockId>) -> Option<BlockId> {
+    selected.filter(|id| timeline.block(*id).is_some())
 }
 
-/// Finished blocks with rows left in the grid, top to bottom.
-fn finished_blocks<L>(term: &Term<L>, shell: &ShellState) -> Vec<BlockId> {
-    blocks::blocks_in_grid(term)
-        .into_iter()
-        .filter(|id| shell.is_finished(*id))
-        .collect()
+fn last_finished(timeline: &Timeline) -> Option<BlockId> {
+    timeline.blocks().back().map(|block| block.id)
 }
 
-/// Block an action applies to: the one holding the start of the selection, otherwise
-/// the last finished block.
-pub fn target<L>(term: &Term<L>, shell: &ShellState) -> Option<BlockId> {
-    selected_block(term).or_else(|| finished_blocks(term, shell).last().copied())
+/// Block an action applies to: the selected block, otherwise the last finished block.
+pub fn target(timeline: &Timeline, selected: Option<BlockId>) -> Option<BlockId> {
+    finished(timeline, selected).or_else(|| last_finished(timeline))
 }
 
-/// Block selected by a navigation: the finished neighbour of the selected block in
-/// `direction`, the selected block itself at either end. Without a block selection,
-/// the last finished block.
-pub fn neighbour<L>(term: &Term<L>, shell: &ShellState, direction: Direction) -> Option<BlockId> {
-    let finished = finished_blocks(term, shell);
-    let Some(current) = selected_block(term) else {
-        return finished.last().copied();
+/// Block selected by a navigation: the neighbour of the selected block in `direction`,
+/// the selected block itself at either end. Without a selected block, the last finished
+/// block.
+pub fn neighbour(
+    timeline: &Timeline,
+    selected: Option<BlockId>,
+    direction: Direction,
+) -> Option<BlockId> {
+    let Some(current) = finished(timeline, selected) else {
+        return last_finished(timeline);
     };
+    let blocks = timeline.blocks();
     let found = match direction {
-        // Block ids increase from top to bottom of the grid.
-        Direction::Previous => finished.iter().rev().find(|id| **id < current),
-        Direction::Next => finished.iter().find(|id| **id > current),
+        // Finished blocks are ordered oldest first, ids increasing.
+        Direction::Previous => blocks.iter().rev().find(|block| block.id < current),
+        Direction::Next => blocks.iter().find(|block| block.id > current),
     };
-    Some(found.copied().unwrap_or(current))
+    Some(found.map_or(current, |block| block.id))
 }
 
-/// Selects block `id`: from the start of its command to the end of its last row.
-/// Returns its bounds, `None` (selection untouched) when none of its rows is left.
-pub fn select<L>(term: &mut Term<L>, id: BlockId) -> Option<BlockBounds> {
-    let bounds = blocks::block_bounds(term, id)?;
-    term.selection = Some(block_selection(term, &bounds));
-    Some(bounds)
+/// Cleaned text of finished block `id`: its command, then its output. `None` when both
+/// are empty.
+pub fn block_text(timeline: &Timeline, id: BlockId) -> Option<String> {
+    let parts: Vec<String> = [Part::Command, Part::Output]
+        .into_iter()
+        .filter_map(|part| text(timeline, id, part))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
-/// Selection of a whole block: from the start of its command to the end of its last row.
-fn block_selection<L>(term: &Term<L>, bounds: &BlockBounds) -> Selection {
-    let last_line = if bounds.output.is_empty() {
-        bounds.input_end.unwrap_or(bounds.input_start).line
-    } else {
-        bounds.output.end - 1
-    };
-    let mut selection = Selection::new(SelectionType::Simple, bounds.input_start, Side::Left);
-    selection.update(Point::new(last_line, term.last_column()), Side::Right);
-    selection
-}
-
-/// Whether the selection of `term` is exactly the one [`select`] makes for block `id`.
-pub fn is_selected<L>(term: &Term<L>, id: BlockId) -> bool {
-    let Some(range) = term.selection.as_ref().and_then(|s| s.to_range(term)) else {
-        return false;
-    };
-    blocks::block_bounds(term, id)
-        .and_then(|bounds| block_selection(term, &bounds).to_range(term))
-        .is_some_and(|expected| expected == range)
-}
-
-/// Cleaned text of one part of a block, `None` when that part is empty.
-pub fn text<L>(term: &Term<L>, bounds: &BlockBounds, part: Part) -> Option<String> {
-    let (start, end) = match part {
-        Part::Command => (bounds.input_start, bounds.input_end?),
-        Part::Output if bounds.output.is_empty() => return None,
-        Part::Output => (
-            Point::new(bounds.output.start, Column(0)),
-            Point::new(bounds.output.end - 1, term.last_column()),
+/// Cleaned text of one part of finished block `id`, `None` when that part is empty. The
+/// command is the one its `start` signal carried, or the last header row (where the
+/// command was typed) when the signal carried none.
+pub fn text(timeline: &Timeline, id: BlockId, part: Part) -> Option<String> {
+    let block = timeline.block(id)?;
+    let text = match part {
+        Part::Command if !block.command.is_empty() => block.command.clone(),
+        Part::Command => {
+            let last = block.header.bottommost_line();
+            rows_text(&block.header, last, last)
+        }
+        Part::Output => rows_text(
+            &block.output,
+            block.output.topmost_line(),
+            block.output.bottommost_line(),
         ),
     };
-    Some(clean_copied_text(&term.bounds_to_string(start, end))).filter(|text| !text.is_empty())
+    Some(clean_copied_text(&text)).filter(|text| !text.is_empty())
+}
+
+/// Text of the rows `first` to `last` of a frozen terminal.
+fn rows_text<L>(term: &Term<L>, first: Line, last: Line) -> String {
+    term.bounds_to_string(
+        Point::new(first, Column(0)),
+        Point::new(last, term.last_column()),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::osc133::Scanner;
-    use crate::pty;
-    use crate::selection::selected_text;
-    use alacritty_terminal::event::VoidListener;
-    use alacritty_terminal::index::Line;
-    use alacritty_terminal::term::Config;
-    use alacritty_terminal::term::test::TermSize;
-    use alacritty_terminal::vte::ansi::Processor;
+    use crate::timeline::testing::{Session, end, start};
 
-    const A: &str = "\x1b]133;A\x07";
-    const B: &str = "\x1b]133;B\x07";
-    const C: &str = "\x1b]133;C\x07";
-
-    struct Harness {
-        term: Term<VoidListener>,
-        shell: ShellState,
-        scanner: Scanner,
-        processor: Processor,
-    }
-
-    impl Harness {
-        fn new(lines: usize) -> Self {
-            Self {
-                term: Term::new(Config::default(), &TermSize::new(20, lines), VoidListener),
-                shell: ShellState::new(),
-                scanner: Scanner::new(),
-                processor: Processor::new(),
-            }
-        }
-
-        fn feed(&mut self, bytes: &str) -> &mut Self {
-            pty::process(
-                &mut self.scanner,
-                &mut self.processor,
-                &mut self.shell,
-                &mut self.term,
-                bytes.as_bytes(),
-            );
-            self
-        }
-
-        /// One full command: prompt, input, output, end with status 0.
-        fn command(&mut self, input: &str, output: &str) -> &mut Self {
-            self.feed(&format!("{A}$ {B}{input}\r\n{C}{output}\x1b]133;D;0\x07"))
-        }
-
-        /// Three finished blocks, then a fresh prompt (block 3, not finished).
-        fn three_blocks() -> Self {
-            let mut h = Self::new(20);
-            h.command("one", "1\r\n")
-                .command("two", "2a\r\n2b\r\n")
-                .command("three", "")
-                .feed(&format!("{A}$ "));
-            h
-        }
-
-        fn select_at(&mut self, line: i32, column: usize) {
-            let point = Point::new(Line(line), Column(column));
-            let mut selection = Selection::new(SelectionType::Simple, point, Side::Left);
-            selection.update(point, Side::Right);
-            self.term.selection = Some(selection);
-        }
-
-        fn bounds(&self, id: u64) -> BlockBounds {
-            blocks::block_bounds(&self.term, BlockId(id)).unwrap()
-        }
+    /// Three finished blocks ("one", "two" printing two rows, "three" printing nothing),
+    /// then a fresh prompt.
+    fn three_blocks() -> Session {
+        let mut session = Session::sized(20, 10, 1000);
+        session.command("one", &["1"], 0);
+        session.command("two", &["2a", "2b"], 0);
+        session.command("three", &[], 0);
+        session.feed("$ ");
+        session
     }
 
     #[test]
     fn target_is_the_last_finished_block_without_selection() {
-        let h = Harness::three_blocks();
-        assert_eq!(target(&h.term, &h.shell), Some(BlockId(2)));
+        let session = three_blocks();
+        assert_eq!(target(&session.timeline, None), Some(BlockId(2)));
     }
 
     #[test]
-    fn target_is_the_last_block_once_its_command_ended() {
-        let mut h = Harness::new(10);
-        h.command("ls", "out\r\n");
-        assert_eq!(target(&h.term, &h.shell), Some(BlockId(0)));
+    fn running_block_is_not_a_target() {
+        let mut session = Session::new(1000);
+        session.command("ls", &["out"], 0);
+        session.feed(&format!("$ make\r\n{}", start("make")));
+        assert_eq!(target(&session.timeline, None), Some(BlockId(0)));
+        let current = session.timeline.current().id;
+        assert_eq!(target(&session.timeline, Some(current)), Some(BlockId(0)));
     }
 
     #[test]
-    fn running_block_is_not_a_default_target() {
-        let mut h = Harness::new(10);
-        h.command("ls", "out\r\n")
-            .feed(&format!("{A}$ {B}make\r\n{C}"));
-        assert_eq!(target(&h.term, &h.shell), Some(BlockId(0)));
-    }
-
-    #[test]
-    fn target_is_the_block_holding_the_selection_start() {
-        let mut h = Harness::three_blocks();
-        // Row 3 is the first output row of block 1 ("2a").
-        h.select_at(3, 0);
-        assert_eq!(target(&h.term, &h.shell), Some(BlockId(1)));
-        // A selection on the fresh prompt targets it, finished or not.
-        h.select_at(6, 0);
-        assert_eq!(target(&h.term, &h.shell), Some(BlockId(3)));
+    fn target_is_the_selected_block() {
+        let session = three_blocks();
+        assert_eq!(
+            target(&session.timeline, Some(BlockId(1))),
+            Some(BlockId(1))
+        );
+        // A block no longer in the timeline is not selected any more.
+        assert_eq!(
+            target(&session.timeline, Some(BlockId(42))),
+            Some(BlockId(2))
+        );
     }
 
     #[test]
     fn no_target_without_blocks() {
-        let mut h = Harness::new(5);
-        h.feed("plain shell\r\n");
-        assert_eq!(target(&h.term, &h.shell), None);
+        let mut session = Session::new(1000);
+        session.feed("plain shell\r\n");
+        assert_eq!(target(&session.timeline, None), None);
     }
 
     #[test]
     fn first_navigation_selects_the_last_finished_block() {
-        let h = Harness::three_blocks();
+        let session = three_blocks();
         for direction in [Direction::Previous, Direction::Next] {
-            assert_eq!(neighbour(&h.term, &h.shell, direction), Some(BlockId(2)));
+            assert_eq!(
+                neighbour(&session.timeline, None, direction),
+                Some(BlockId(2))
+            );
         }
     }
 
     #[test]
     fn navigation_moves_to_the_neighbours_and_stops_at_the_ends() {
-        let mut h = Harness::three_blocks();
-        select(&mut h.term, BlockId(1)).unwrap();
-        assert_eq!(
-            neighbour(&h.term, &h.shell, Direction::Previous),
-            Some(BlockId(0))
-        );
-        assert_eq!(
-            neighbour(&h.term, &h.shell, Direction::Next),
-            Some(BlockId(2))
-        );
-
-        select(&mut h.term, BlockId(0)).unwrap();
-        assert_eq!(
-            neighbour(&h.term, &h.shell, Direction::Previous),
-            Some(BlockId(0))
-        );
+        let timeline = &three_blocks().timeline;
+        let at = |id, direction| neighbour(timeline, Some(BlockId(id)), direction);
+        assert_eq!(at(1, Direction::Previous), Some(BlockId(0)));
+        assert_eq!(at(1, Direction::Next), Some(BlockId(2)));
+        assert_eq!(at(0, Direction::Previous), Some(BlockId(0)));
         // The fresh prompt is not finished: Next stays on the last finished block.
-        select(&mut h.term, BlockId(2)).unwrap();
-        assert_eq!(
-            neighbour(&h.term, &h.shell, Direction::Next),
-            Some(BlockId(2))
-        );
+        assert_eq!(at(2, Direction::Next), Some(BlockId(2)));
     }
 
     #[test]
-    fn navigation_skips_blocks_cleared_from_the_grid() {
-        let mut h = Harness::new(10);
-        // Clears the screen and the history.
-        h.command("old", "x\r\n").feed("\x1b[H\x1b[2J\x1b[3J");
-        h.command("new", "y\r\n").feed(&format!("{A}$ "));
+    fn navigation_skips_evicted_blocks() {
+        // A scrollback of 4 rows keeps the last two blocks only.
+        let mut session = Session::new(4);
+        session.command("a", &["1"], 0);
+        session.command("b", &["1"], 0);
+        session.command("c", &["1"], 0);
+        assert_eq!(session.timeline.blocks()[0].id, BlockId(1));
         assert_eq!(
-            neighbour(&h.term, &h.shell, Direction::Previous),
+            neighbour(&session.timeline, Some(BlockId(2)), Direction::Previous),
             Some(BlockId(1))
         );
-        select(&mut h.term, BlockId(1)).unwrap();
         assert_eq!(
-            neighbour(&h.term, &h.shell, Direction::Previous),
+            neighbour(&session.timeline, Some(BlockId(1)), Direction::Previous),
             Some(BlockId(1))
         );
     }
 
     #[test]
-    fn block_selection_spans_the_command_and_the_output() {
-        let mut h = Harness::three_blocks();
-        let bounds = select(&mut h.term, BlockId(1)).unwrap();
-        assert_eq!(bounds.first_row, Line(2));
-
-        let range = h
-            .term
-            .selection
-            .as_ref()
-            .unwrap()
-            .to_range(&h.term)
-            .unwrap();
-        assert_eq!(range.start, Point::new(Line(2), Column(2)));
-        assert_eq!(range.end, Point::new(Line(4), Column(19)));
-        assert_eq!(selected_text(&h.term).as_deref(), Some("two\n2a\n2b"));
-    }
-
-    #[test]
-    fn block_selection_without_output_ends_on_the_command_row() {
-        let mut h = Harness::three_blocks();
-        select(&mut h.term, BlockId(2)).unwrap();
-        let range = h
-            .term
-            .selection
-            .as_ref()
-            .unwrap()
-            .to_range(&h.term)
-            .unwrap();
-        assert_eq!(range.start, Point::new(Line(5), Column(2)));
-        assert_eq!(range.end, Point::new(Line(5), Column(19)));
-        assert_eq!(selected_text(&h.term).as_deref(), Some("three"));
-    }
-
-    #[test]
-    fn is_selected_only_for_the_exact_block_selection() {
-        let mut h = Harness::three_blocks();
-        assert!(!is_selected(&h.term, BlockId(1)));
-        select(&mut h.term, BlockId(1)).unwrap();
-        assert!(is_selected(&h.term, BlockId(1)));
-        assert!(!is_selected(&h.term, BlockId(0)));
-        assert!(!is_selected(&h.term, BlockId(42)));
-        // A selection inside the block is not the block selection.
-        let start = h.bounds(1).input_start;
-        h.select_at(start.line.0, start.column.0);
-        assert!(!is_selected(&h.term, BlockId(1)));
-    }
-
-    #[test]
-    fn selecting_an_unknown_block_keeps_the_selection() {
-        let mut h = Harness::three_blocks();
-        h.select_at(0, 0);
-        let before = h.term.selection.clone();
-        assert_eq!(select(&mut h.term, BlockId(42)), None);
-        assert_eq!(h.term.selection, before);
-    }
-
-    #[test]
-    fn copied_command_and_output() {
-        let h = Harness::three_blocks();
-        let bounds = h.bounds(1);
+    fn copied_command_output_and_whole_block() {
+        let timeline = &three_blocks().timeline;
         assert_eq!(
-            text(&h.term, &bounds, Part::Command).as_deref(),
+            text(timeline, BlockId(1), Part::Command).as_deref(),
             Some("two")
         );
         assert_eq!(
-            text(&h.term, &bounds, Part::Output).as_deref(),
+            text(timeline, BlockId(1), Part::Output).as_deref(),
             Some("2a\n2b")
         );
+        assert_eq!(
+            block_text(timeline, BlockId(1)).as_deref(),
+            Some("two\n2a\n2b")
+        );
+        assert_eq!(block_text(timeline, BlockId(2)).as_deref(), Some("three"));
     }
 
     #[test]
-    fn copied_multi_line_command() {
-        let mut h = Harness::new(10);
-        h.feed(&format!(
-            "{A}$ {B}echo \\\r\n> x\r\n{C}x\r\n\x1b]133;D;0\x07"
-        ));
-        let bounds = h.bounds(0);
+    fn command_falls_back_to_the_last_header_row() {
+        let mut session = Session::new(1000);
+        session.feed(&format!("~/dev\r\n$ make  \r\n{}", start("")));
+        session.feed(&format!("ok\r\n{}", end(0)));
         assert_eq!(
-            text(&h.term, &bounds, Part::Command).as_deref(),
-            Some("echo \\\n> x")
+            text(&session.timeline, BlockId(0), Part::Command).as_deref(),
+            Some("$ make")
         );
-        assert_eq!(text(&h.term, &bounds, Part::Output).as_deref(), Some("x"));
     }
 
     #[test]
     fn empty_parts_have_no_text() {
-        let h = Harness::three_blocks();
+        let timeline = &three_blocks().timeline;
         // Block 2 printed nothing.
-        assert_eq!(text(&h.term, &h.bounds(2), Part::Output), None);
-        // Block 3 is a prompt with nothing typed.
-        assert_eq!(text(&h.term, &h.bounds(3), Part::Command), None);
-        assert_eq!(text(&h.term, &h.bounds(3), Part::Output), None);
+        assert_eq!(text(timeline, BlockId(2), Part::Output), None);
+        // The current block and unknown blocks are no targets.
+        assert_eq!(text(timeline, BlockId(3), Part::Command), None);
+        assert_eq!(block_text(timeline, BlockId(42)), None);
 
         // Blank output rows only.
-        let mut h = Harness::new(10);
-        h.command("blank", "   \r\n\r\n").feed(&format!("{A}$ "));
-        assert_eq!(text(&h.term, &h.bounds(0), Part::Output), None);
+        let mut session = Session::new(1000);
+        session.command("blank", &["   ", ""], 0);
+        assert_eq!(text(&session.timeline, BlockId(0), Part::Output), None);
     }
 }
