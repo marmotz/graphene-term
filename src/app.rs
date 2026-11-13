@@ -1,11 +1,11 @@
 //! Window and event handling.
 
-use std::sync::Arc;
+use std::cell::Cell;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::{self, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
@@ -17,11 +17,12 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
+use crate::block_actions::{self, Direction, Part};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
-use crate::frame::{Frame, FrameBanner};
-use crate::i18n::Lang;
+use crate::frame::{self, Frame, FrameBanner};
+use crate::i18n::{self, Lang, Msg};
 use crate::input::{self, Action};
-use crate::layout::GridLayout;
+use crate::layout::{GridLayout, Hit};
 use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
@@ -30,7 +31,10 @@ use crate::renderer::{Glyphs, Renderer};
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 use crate::theme;
+use crate::timeline::{BlockId, Timeline};
+use crate::timeline_selection::{self, End, TimelineSelection};
 use crate::update::checker::Checker;
+use crate::view::{self, Anchor, RowSource, ScrollTarget, ViewRow};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
@@ -59,8 +63,16 @@ struct Session {
     pointer: Option<winit::window::CursorIcon>,
     /// When the next auto-scroll step is due during a drag past the grid edges.
     auto_scroll_deadline: Option<Instant>,
-    /// Finished selection kept while its text is unchanged.
+    /// Finished selection of the live grid kept while its text is unchanged.
     selection_snapshot: Option<SelectionSnapshot>,
+    /// Text selection over the timeline, set on the grids it covers.
+    selection: Option<TimelineSelection>,
+    /// Block selected whole by a margin click or a block navigation, shown as a
+    /// highlighted card instead of highlighted cells.
+    selected_block: Option<BlockId>,
+    /// What the view looked like at the last frame, to keep it still while output
+    /// arrives.
+    anchor: Cell<Anchor>,
     /// Configuration error banner; `None` once dismissed or without error.
     config_banner: Option<Banner>,
     /// Update banner: the newer release reported by the check thread.
@@ -142,19 +154,119 @@ impl Session {
         *self.terminal.term.lock().mode()
     }
 
-    /// Arrow while the application captures the mouse, I-beam otherwise; the window is
-    /// only updated when the shape changes.
+    /// Hand over a fold chevron, arrow while the application captures the mouse under
+    /// the pointer, I-beam otherwise; the window is only updated when the shape changes.
     fn update_pointer(&mut self) {
-        let icon = mouse::pointer_icon(self.mode());
+        let (hit, over_chevron) = self.pointer_hit();
+        let mode = self.mode();
+        let captured = if mouse::reports_at(&hit, mode.contains(TermMode::ALT_SCREEN)) {
+            mode
+        } else {
+            TermMode::empty()
+        };
+        let icon = mouse::pointer_icon(captured, over_chevron);
         if self.pointer != Some(icon) {
             self.window.set_cursor(icon);
             self.pointer = Some(icon);
         }
     }
 
-    fn scroll_display(&self, scroll: Scroll) {
-        self.terminal.term.lock().scroll_display(scroll);
+    /// What lies under the mouse cursor, and whether it is the fold chevron of a card
+    /// that has one.
+    fn pointer_hit(&self) -> (Hit, bool) {
+        let term = self.terminal.term.lock();
+        let mut timeline = lock(&self.terminal.timeline);
+        let rows = shown_rows(&self.anchor, &term, &mut timeline);
+        let hit = self.layout.hit(
+            self.mouse_position.x as f32,
+            self.mouse_position.y as f32,
+            &rows,
+        );
+        let over_chevron = match hit {
+            Hit::Chevron { row } => frame::has_chevron(&*term, &timeline, &rows, row),
+            _ => false,
+        };
+        (hit, over_chevron)
+    }
+
+    /// Whether a mouse event over `hit` goes to the application when it captures the
+    /// mouse (see [`mouse::reports_at`]).
+    fn reports_at(&self, hit: &Hit) -> bool {
+        mouse::reports_at(hit, self.mode().contains(TermMode::ALT_SCREEN))
+    }
+
+    /// Scrolls the timeline by `rows` rows (positive shows older blocks), stopping at
+    /// its ends.
+    fn scroll_timeline(&self, rows: isize) {
+        self.scroll(ScrollTarget::Timeline, rows);
+    }
+
+    /// Scrolls `target` by `rows` rows (positive shows older rows), stopping at its ends:
+    /// a block's output stops there, the timeline does not take over.
+    fn scroll(&self, target: ScrollTarget, rows: isize) {
+        let term = self.terminal.term.lock();
+        let mut timeline = lock(&self.terminal.timeline);
+        let lines = term.screen_lines();
+        match target {
+            ScrollTarget::Block(id) => {
+                view::scroll_block(&mut timeline, &term, id, lines, rows);
+            }
+            ScrollTarget::Timeline => {
+                view::scroll_timeline(&mut timeline, &term, lines, rows * 2);
+            }
+        }
         self.window.request_redraw();
+    }
+
+    /// `Shift+PageUp/PageDown`: scrolls the selected block by a page when it can scroll,
+    /// otherwise the timeline. `pages` is positive toward older rows.
+    fn scroll_page(&self, pages: isize) {
+        let target = {
+            let term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            let lines = term.screen_lines();
+            view::page_target(self.selected_block, |id| {
+                view::can_scroll(&timeline, &*term, id, lines)
+            })
+        };
+        self.scroll(target, pages * self.page_rows());
+    }
+
+    /// Scrolls the timeline to its top.
+    fn scroll_to_top(&self) {
+        let term = self.terminal.term.lock();
+        let mut timeline = lock(&self.terminal.timeline);
+        let lines = term.screen_lines();
+        timeline.scroll = view::max_timeline_scroll(&timeline, &term, lines);
+        self.window.request_redraw();
+    }
+
+    /// Brings the view back to the bottom: the timeline and the current block at rest.
+    fn scroll_to_bottom(&self) {
+        let mut timeline = lock(&self.terminal.timeline);
+        timeline.scroll = 0;
+        timeline.current_mut().scroll = 0;
+        self.window.request_redraw();
+    }
+
+    /// Rows scrolled by a page: the view lines.
+    fn page_rows(&self) -> isize {
+        self.layout.lines as isize
+    }
+
+    /// Changes the folds with `change`, given the selected block, then redraws.
+    fn change_folds(&mut self, change: impl FnOnce(&mut Timeline, Option<BlockId>)) {
+        change(&mut lock(&self.terminal.timeline), self.selected_block);
+        self.window.request_redraw();
+    }
+
+    /// Folds or unfolds the target block.
+    fn toggle_fold(&mut self) {
+        self.change_folds(|timeline, selected| {
+            if let Some(id) = block_actions::target(timeline, selected) {
+                timeline.toggle_fold(id);
+            }
+        });
     }
 
     fn paste(&mut self) {
@@ -168,14 +280,25 @@ impl Session {
     fn send_paste(&mut self, text: &str) {
         self.clear_selection();
         let bytes = input::paste_bytes(text, self.mode());
-        self.scroll_display(Scroll::Bottom);
+        self.scroll_to_bottom();
         self.terminal.write(bytes);
+    }
+
+    /// Cleaned text of the selected block, or of the text selection.
+    fn selected_text(&self) -> Option<String> {
+        let term = self.terminal.term.lock();
+        let timeline = lock(&self.terminal.timeline);
+        if let Some(id) = self.selected_block {
+            return block_actions::block_text(&timeline, id);
+        }
+        self.selection.as_ref()?;
+        timeline_selection::text(&*term, &timeline)
     }
 
     /// Writes the cleaned selection to the clipboard. Without selection, the shortcut is
     /// still swallowed so it never sends `^C`.
     fn copy(&mut self) {
-        let Some(text) = selection::selected_text(&self.terminal.term.lock()) else {
+        let Some(text) = self.selected_text() else {
             return;
         };
         if let Some(Err(error)) = self.clipboard.as_mut().map(|c| c.set_text(text)) {
@@ -183,40 +306,162 @@ impl Session {
         }
     }
 
+    /// Copies one part of the target block to the clipboard. An empty part leaves the
+    /// clipboard untouched.
+    fn copy_block_part(&mut self, part: Part) {
+        let text = {
+            let timeline = lock(&self.terminal.timeline);
+            block_actions::target(&timeline, self.selected_block)
+                .and_then(|id| block_actions::text(&timeline, id, part))
+        };
+        let Some(text) = text else {
+            return;
+        };
+        if let Some(Err(error)) = self.clipboard.as_mut().map(|c| c.set_text(text)) {
+            log::warn!("copy failed: {error}");
+        }
+    }
+
+    /// Selects the neighbour block in `direction` and scrolls it into view.
+    fn navigate_block(&mut self, direction: Direction) {
+        let selected = {
+            let term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            block_actions::neighbour(&timeline, self.selected_block, direction).map(|id| {
+                view::reveal(&mut timeline, &term, term.screen_lines(), id);
+                (id, block_actions::block_text(&timeline, id))
+            })
+        };
+        if let Some((id, text)) = selected {
+            self.select_block(id, text);
+        }
+    }
+
+    /// Left press in the margin on view row `row`: selects the block of a finished block
+    /// row, ignored elsewhere.
+    fn margin_press(&mut self, row: usize) {
+        let selected = {
+            let term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let rows = shown_rows(&self.anchor, &term, &mut timeline);
+            let row = row.min(rows.len().saturating_sub(1));
+            rows.get(row)
+                .and_then(|row| row.block)
+                .filter(|id| timeline.block(*id).is_some())
+                .map(|id| (id, block_actions::block_text(&timeline, id)))
+        };
+        if let Some((id, text)) = selected {
+            self.select_block(id, text);
+        }
+    }
+
+    /// Selects block `id` whole, shown as a highlighted card instead of highlighted
+    /// cells, then writes `text` to the primary selection, as a mouse release does.
+    fn select_block(&mut self, id: BlockId, text: Option<String>) {
+        self.clear_selection();
+        self.selected_block = Some(id);
+        self.window.request_redraw();
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.set_primary(text);
+        }
+    }
+
+    /// Left press on the chevron disc of the card starting on view row `row`: toggles
+    /// the fold of its block when it has a chevron. Returns whether it had one.
+    fn chevron_press(&mut self, row: usize) -> bool {
+        let toggled = {
+            let term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let rows = shown_rows(&self.anchor, &term, &mut timeline);
+            let Some(id) = rows.get(row).and_then(|row| row.block) else {
+                return false;
+            };
+            let chevron = frame::has_chevron(&*term, &timeline, &rows, row);
+            if chevron {
+                timeline.toggle_fold(id);
+            }
+            chevron
+        };
+        if toggled {
+            self.window.request_redraw();
+        }
+        toggled
+    }
+
+    /// View rows shown for `term` and `timeline`, the locked terminal and timeline.
+    fn view_rows(&self, term: &term::Term<EventProxy>, timeline: &mut Timeline) -> Vec<ViewRow> {
+        shown_rows(&self.anchor, term, timeline)
+    }
+
+    /// Clears the text selection and the selected block.
     fn clear_selection(&mut self) {
         self.selection_snapshot = None;
-        let mut term = self.terminal.term.lock();
-        if term.selection.take().is_some() {
+        let had_block = self.selected_block.take().is_some();
+        let had_text = self.selection.take().is_some() && {
+            let mut term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            timeline_selection::clear(&mut *term, &mut timeline)
+        };
+        if had_block || had_text {
             self.window.request_redraw();
         }
     }
 
-    /// After new PTY output: restores a selection `Term` erased while its text was
-    /// redrawn unchanged, and clears it when the selected text really changed.
+    /// After new PTY output, for a selection reaching the live grid (frozen blocks never
+    /// change): restores the live part erased while its text was redrawn unchanged, and
+    /// clears the whole selection when the selected live text really changed, or when the
+    /// live grid was detached into a block.
     fn validate_selection(&mut self) {
-        let Some(snapshot) = self.selection_snapshot.as_mut() else {
-            return;
+        let valid = {
+            let mut term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            match self.selection.as_ref() {
+                Some(selection) if selection.covers_live(&timeline) => {
+                    !selection.is_stale(&timeline)
+                        && self
+                            .selection_snapshot
+                            .as_mut()
+                            .is_none_or(|snapshot| snapshot.validate(&mut *term))
+                }
+                _ => true,
+            }
         };
-        if !snapshot.validate(&mut self.terminal.term.lock()) {
-            self.selection_snapshot = None;
+        if !valid {
+            self.clear_selection();
         }
     }
 
-    /// Grid point and cell side under the mouse cursor.
-    fn mouse_point(&self, display_offset: usize) -> (Point, Side) {
-        let (column, line, side) = self
-            .layout
-            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
-        let point = term::viewport_to_point(display_offset, Point::new(line, Column(column)));
-        (point, side)
+    /// Source, grid point and cell side under the mouse cursor. `term` and `timeline`
+    /// are the locked terminal and timeline.
+    fn mouse_target(&self, term: &term::Term<EventProxy>, timeline: &mut Timeline) -> Option<End> {
+        let rows = self.view_rows(term, timeline);
+        let (column, row, side) = self.layout.point_at(
+            self.mouse_position.x as f32,
+            self.mouse_position.y as f32,
+            &rows,
+        );
+        view::point(&rows, row, column).map(|(source, point)| End {
+            source,
+            point,
+            side,
+        })
     }
 
-    /// Viewport cell (column, line) under the mouse cursor, clamped to the grid.
+    /// Viewport cell (column, line) under the mouse cursor, clamped to the grid, as
+    /// reported to the application: the live grid's line under the cursor (its viewport
+    /// is never scrolled), line 0 over a frozen row.
     fn mouse_cell(&self) -> (usize, usize) {
-        let (column, line, _) = self
-            .layout
-            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
-        (column, line)
+        let term = self.terminal.term.lock();
+        let mut timeline = lock(&self.terminal.timeline);
+        let Some(End { source, point, .. }) = self.mouse_target(&term, &mut timeline) else {
+            return (0, 0);
+        };
+        let last = term.screen_lines() as i32 - 1;
+        let line = match source {
+            RowSource::Live => point.line.0.clamp(0, last),
+            _ => 0,
+        };
+        (point.column.0, line as usize)
     }
 
     fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
@@ -233,8 +478,23 @@ impl Session {
         if button == mouse::Button::Left && self.banner_press() {
             return;
         }
+        let (hit, _) = self.pointer_hit();
+        // The margin, the chevrons and the gaps are outside the application's grid:
+        // always Graphene's.
+        if button == mouse::Button::Left {
+            match hit {
+                Hit::Margin { row } => {
+                    self.margin_press(row);
+                    return;
+                }
+                Hit::Chevron { row } if self.chevron_press(row) => return,
+                Hit::Gap => return,
+                Hit::Chevron { .. } | Hit::Cell { .. } | Hit::Blank => {}
+            }
+        }
         let mode = self.mode();
-        if selection::mouse_reserved(mode, self.modifiers) {
+        // Only the live rows are the application's: elsewhere the mouse is Graphene's.
+        if selection::mouse_reserved(mode, self.modifiers) && self.reports_at(&hit) {
             // The gesture belongs to the application; a click clears the selection.
             self.clear_selection();
             let cell = self.mouse_cell();
@@ -262,13 +522,62 @@ impl Session {
         }
     }
 
+    /// Left press on the summary label of a folded block: unfolds it. Returns whether
+    /// the press was on a summary.
+    fn summary_press(&mut self) -> bool {
+        let unfolded = {
+            let term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let rows = self.view_rows(&term, &mut timeline);
+            let (column, row, _) = self.layout.point_at(
+                self.mouse_position.x as f32,
+                self.mouse_position.y as f32,
+                &rows,
+            );
+            // The summary row is blank: its label starts on the first column.
+            let hit = rows
+                .get(row)
+                .filter(|row| matches!(row.source, RowSource::Summary(_)))
+                .filter(|row| {
+                    let label = i18n::text(self.lang, &Msg::LinesHidden(row.hidden));
+                    column < label.chars().count()
+                })
+                .and_then(|row| row.block);
+            if let Some(id) = hit {
+                timeline.toggle_fold(id);
+            }
+            hit.is_some()
+        };
+        if unfolded {
+            self.window.request_redraw();
+        }
+        unfolded
+    }
+
     fn left_press(&mut self) {
-        let mut term = self.terminal.term.lock();
-        let (point, side) = self.mouse_point(term.grid().display_offset());
-        let clicks = self.click_tracker.click(point, Instant::now());
+        if self.summary_press() {
+            return;
+        }
         // The selection changes until the release: no text to keep meanwhile.
         self.selection_snapshot = None;
-        selection::start_selection(&mut term, point, side, clicks, self.modifiers);
+        if self.selected_block.take().is_some() {
+            self.window.request_redraw();
+        }
+        let mut term = self.terminal.term.lock();
+        let mut timeline = lock(&self.terminal.timeline);
+        let Some(at) = self.mouse_target(&term, &mut timeline) else {
+            return;
+        };
+        let clicks = self.click_tracker.click(at.point, Instant::now());
+        // `Shift` extends the existing selection, across blocks too.
+        match self.selection.as_mut() {
+            Some(selection) if self.modifiers.shift_key() => selection.update(at, &*term),
+            _ => {
+                let kind = selection::selection_type(clicks, self.modifiers);
+                self.selection = Some(TimelineSelection::new(kind, at, &timeline, &*term));
+            }
+        }
+        timeline_selection::apply(self.selection.as_ref(), &mut *term, &mut timeline);
         self.left_pressed = true;
         self.window.request_redraw();
     }
@@ -279,9 +588,22 @@ impl Session {
         }
         let text = {
             let mut term = self.terminal.term.lock();
-            let text = selection::finish_selection(&mut term);
-            self.selection_snapshot = SelectionSnapshot::capture(&term);
-            text
+            let mut timeline = lock(&self.terminal.timeline);
+            match self.selection.as_ref() {
+                // A click without drag selects nothing.
+                Some(selection) if selection.is_empty(&timeline, &*term) => {
+                    self.selection = None;
+                    timeline_selection::clear(&mut *term, &mut timeline);
+                    None
+                }
+                Some(selection) => {
+                    if selection.covers_live(&timeline) {
+                        self.selection_snapshot = SelectionSnapshot::capture(&*term);
+                    }
+                    timeline_selection::text(&*term, &timeline)
+                }
+                None => None,
+            }
         };
         self.window.request_redraw();
         if let Some(text) = text.filter(|t| !t.is_empty()) {
@@ -291,8 +613,14 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
+        self.update_pointer();
         if self.left_pressed && !self.app_mouse.active() {
-            self.update_selection(&mut self.terminal.term.lock());
+            self.update_selection();
+            return;
+        }
+        // A gesture the application owns follows the pointer anywhere; a bare motion is
+        // only reported over the application's rows.
+        if !self.app_mouse.active() && !self.reports_at(&self.pointer_hit().0) {
             return;
         }
         let cell = self.mouse_cell();
@@ -302,31 +630,44 @@ impl Session {
         }
     }
 
-    /// Moves the selection end to the cell under the mouse cursor.
-    fn update_selection(&self, term: &mut term::Term<EventProxy>) {
-        let (point, side) = self.mouse_point(term.grid().display_offset());
-        if let Some(selection) = term.selection.as_mut() {
-            selection.update(point, side);
-            self.window.request_redraw();
-        }
+    /// Moves the selection end to the cell under the mouse cursor, in whichever block it
+    /// lies.
+    fn update_selection(&mut self) {
+        let mut term = self.terminal.term.lock();
+        let mut timeline = lock(&self.terminal.timeline);
+        let Some(at) = self.mouse_target(&term, &mut timeline) else {
+            return;
+        };
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        selection.update(at, &*term);
+        timeline_selection::apply(Some(selection), &mut *term, &mut timeline);
+        self.window.request_redraw();
     }
 
     /// Auto-scroll while dragging a selection past the top or bottom edge: once per
-    /// `AUTO_SCROLL_INTERVAL`, scrolls the display and moves the selection end onto the
+    /// `AUTO_SCROLL_INTERVAL`, scrolls the timeline and moves the selection end onto the
     /// edge row. Returns when the next step is due, `None` when auto-scroll is idle.
     fn auto_scroll(&mut self, now: Instant) -> Option<Instant> {
-        let mut term = self.terminal.term.lock();
-        let overflow = self.layout.vertical_overflow(self.mouse_position.y as f32);
-        let delta = selection::auto_scroll_delta(overflow, *term.mode());
-        if !self.left_pressed || delta == 0 || term.selection.is_none() {
+        let delta = {
+            let term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let rows = self.view_rows(&term, &mut timeline);
+            let overflow = self
+                .layout
+                .vertical_overflow(self.mouse_position.y as f32, &rows);
+            selection::auto_scroll_delta(overflow, *term.mode())
+        };
+        if !self.left_pressed || delta == 0 || self.selection.is_none() {
             self.auto_scroll_deadline = None;
             return None;
         }
         match self.auto_scroll_deadline {
             Some(deadline) if now < deadline => {}
             _ => {
-                term.scroll_display(Scroll::Delta(delta));
-                self.update_selection(&mut term);
+                self.scroll_timeline(delta as isize);
+                self.update_selection();
                 self.auto_scroll_deadline = Some(now + selection::AUTO_SCROLL_INTERVAL);
             }
         }
@@ -365,13 +706,19 @@ impl Session {
         match action {
             Action::Copy => self.copy(),
             Action::Paste => self.paste(),
-            Action::ScrollPageUp => self.scroll_display(Scroll::PageUp),
-            Action::ScrollPageDown => self.scroll_display(Scroll::PageDown),
-            Action::ScrollToTop => self.scroll_display(Scroll::Top),
-            Action::ScrollToBottom => self.scroll_display(Scroll::Bottom),
+            Action::ScrollPageUp => self.scroll_page(1),
+            Action::ScrollPageDown => self.scroll_page(-1),
+            Action::ScrollToTop => self.scroll_to_top(),
+            Action::ScrollToBottom => self.scroll_to_bottom(),
             Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
             Action::FontSizeDecrease => self.apply_font_size(self.font_size - 1.0),
             Action::FontSizeReset => self.apply_font_size(default_font_size),
+            Action::PreviousBlock => self.navigate_block(Direction::Previous),
+            Action::NextBlock => self.navigate_block(Direction::Next),
+            Action::CopyCommand => self.copy_block_part(Part::Command),
+            Action::CopyOutput => self.copy_block_part(Part::Output),
+            Action::ToggleFold => self.toggle_fold(),
+            Action::ToggleFoldAll => self.change_folds(|timeline, _| timeline.toggle_fold_all()),
         }
     }
 
@@ -387,12 +734,22 @@ impl Session {
         }
         self.scroll_accumulator -= whole as f64;
 
-        let mode = self.mode();
-        let (column, line) = self.mouse_cell();
-        match mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
-            Some(bytes) => self.terminal.write(bytes),
-            None => self.scroll_display(Scroll::Delta(whole)),
+        let (hit, _) = self.pointer_hit();
+        if self.reports_at(&hit) {
+            let mode = self.mode();
+            let (column, line) = self.mouse_cell();
+            if let Some(bytes) = mouse::wheel_bytes(whole, column, line, self.modifiers, mode) {
+                self.terminal.write(bytes);
+                return;
+            }
         }
+        let target = {
+            let term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            let lines = term.screen_lines();
+            mouse::wheel_target(&hit, |id| view::can_scroll(&timeline, &*term, id, lines))
+        };
+        self.scroll(target, whole as isize);
     }
 
     fn handle_terminal_event(&mut self, event: TermEvent, event_loop: &ActiveEventLoop) {
@@ -516,6 +873,9 @@ impl App {
             pointer: None,
             auto_scroll_deadline: None,
             selection_snapshot: None,
+            selection: None,
+            selected_block: None,
+            anchor: Cell::default(),
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),
             ignored_tag: None,
@@ -603,7 +963,7 @@ impl ApplicationHandler<UserEvent> for App {
                     mode,
                 ) {
                     session.clear_selection();
-                    session.scroll_display(Scroll::Bottom);
+                    session.scroll_to_bottom();
                     session.terminal.write(bytes);
                 }
             }
@@ -618,8 +978,18 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 let mut frame = {
                     let term = session.terminal.term.lock();
-                    Frame::capture(&term, &session.palette, session.focused)
+                    let mut timeline = lock(&session.terminal.timeline);
+                    let rows = shown_rows(&session.anchor, &term, &mut timeline);
+                    Frame::capture(
+                        &*term,
+                        &timeline,
+                        &rows,
+                        &session.palette,
+                        session.focused,
+                        session.selected_block,
+                    )
                 };
+                frame.lang = session.lang;
                 frame.banner = session.shown_banner().map(|shown| FrameBanner {
                     layout: session.banner_layout(&shown),
                     background: session.palette.ui.banner_background,
@@ -636,6 +1006,25 @@ impl ApplicationHandler<UserEvent> for App {
             _ => {}
         }
     }
+}
+
+/// Locks the timeline. Only while the terminal is locked, or without it: lock order
+/// `Term`, then `Timeline`.
+fn lock(timeline: &Mutex<Timeline>) -> MutexGuard<'_, Timeline> {
+    timeline.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Rows of the view over `timeline`, whose current block lives in `term`, kept still
+/// with `anchor` while output arrives (see [`view::prepare`]).
+fn shown_rows(
+    anchor: &Cell<Anchor>,
+    term: &term::Term<EventProxy>,
+    timeline: &mut Timeline,
+) -> Vec<ViewRow> {
+    let mut shown = anchor.get();
+    let rows = view::prepare(timeline, term, term.screen_lines(), &mut shown);
+    anchor.set(shown);
+    rows
 }
 
 /// Loads the configuration file and its theme. Errors are logged and reported by the
