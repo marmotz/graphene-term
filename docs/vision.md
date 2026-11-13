@@ -18,7 +18,7 @@ while adding the ergonomics people expect from modern tools.
 Selected as the project's "modern" pillars:
 
 1. **Command blocks**: each command and its output form a block that can be selected,
-   copied, folded (relies on shell integration, OSC 133).
+   copied, folded (relies on shell integration hooks).
 2. **Rich input editor**: multi-line input with mouse cursor placement, selection and
    editor-like shortcuts.
 3. **Tabs and splits**: tabs, split panes, command palette.

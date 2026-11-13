@@ -21,33 +21,34 @@ be layered on top.
 
 alacritty's `event_loop::EventLoop` parses whole read buffers, sometimes several reads
 at once, inside its own thread: the cursor position at a given byte of the stream is
-unknown. Command blocks need it (an OSC 133 mark must be applied where the shell emitted
-it, and `vte` 0.15 drops OSC 133 without a callback). Graphene therefore runs its own
-PTY thread (`src/pty.rs`), a close copy of alacritty's loop on `polling`, whose parse
-step `pty::feed` can be split around marks. alacritty's `tty` module still spawns the
+unknown. Command blocks need it (a block signal must be applied where the shell emitted
+it, and `vte` 0.15 drops unknown OSC without a callback). Graphene therefore runs its
+own PTY thread (`src/pty.rs`), a close copy of alacritty's loop on `polling`, whose
+parse step `pty::feed` can be split around signals. alacritty's `tty` module still spawns the
 shell and owns the PTY file descriptors. Poller keys `0` (read/write) and `1` (child
 event) mirror alacritty's unix `tty`, where they are `pub(crate)`.
 
-## Cell tags through hyperlinks
+## One terminal per block: live grid and frozen blocks
 
-`Term` exposes no scroll counter: a grid line stored when a mark arrives is wrong after
-the next scroll, history eviction or reflow. Blocks are anchored in the cells instead:
-while the shell draws the prompt and the input, the cursor template carries an OSC 8
-hyperlink with the reserved scheme `graphene-block` (`graphene-block://<id>/prompt`,
-`right-prompt` or `input`), which `write_at_cursor` copies into every written cell.
-Cells keep it on scroll, eviction and reflow, and erased cells lose it, so the rows of a
-block are found again from the grid alone, through the public API. A real OSC 8 link
-opened by the prompt is never overwritten: the tag comes back when it closes. Output
-cells carry no tag; a row with no tag belongs to the block above it. The links feature
-must ignore the `graphene-block` scheme. The right prompt has its own tag kind so it is
-never taken for the command start.
+The first implementation cut one grid into blocks with the OSC 133 marks the shell
+puts around its prompt, and anchored them in the cells with internal hyperlinks.
+Prompt themes (powerlevel10k) rebuild the prompt and their own marks after every hook,
+so the blocks broke, and any cursor move up from a command could overwrite older
+blocks. Each block is now its own terminal: the session's `Term` is the live grid of
+the current block, detached into a frozen `Term<VoidListener>` when the shell signals
+that a command starts (the header: prompt and typed command) and ends (the output).
+One parser and one set of modes stay with the session (nothing to replay into a new
+`Term`), and frozen blocks keep alacritty's selection, copy and reflow. The only
+signals are two private OSC sequences carrying a session token (`start` with the
+command line, `end` with the status), so the 133 marks of fish, powerlevel10k, a remote
+shell or a printed file never matter. The prompt is never wrapped or parsed.
 
 ## Card space always reserved
 
 The command blocks are drawn as cards: a margin for the status stripe and half a cell
 of card padding left of the grid, the card padding and room for the fold chevron
 (on the card's top-right corner) right of it. This space is reserved from the start,
-even when the shell sends no marks, so the first block never changes the column count:
+even when the shell sends no signal, so the first block never changes the column count:
 no reflow mid-session. The cost is about one and a half columns fewer for every user.
 
 ## Cards replace the gutter marks
@@ -64,22 +65,18 @@ triangle) in the rect pipeline, so it is crisp at any size and needs no font.
 Half a line separates two cards. The PTY size never changes: the gaps push the top rows
 of the view out, reachable by scrolling, rather than shrinking the PTY per block (which
 would reflow and redraw full-screen programs). The view is laid out in half-lines with
-whole rows only, the leftover at the top; at the top of the history it starts from the
-top grid line, so no row is ever out of reach (unless that would cut the cursor row
-shown at the bottom of a screen with no history yet).
+whole rows only; a block is capped one line short of the view, so the gap above it
+always fits and a capped block is always shown whole.
 
-## Folding as a row filter over `display_offset`
+## Scroll positions owned by Graphene
 
-Folding a block hides its output rows from the view; the grid is untouched. Graphene
-keeps alacritty's `display_offset` as the scroll position instead of its own:
-alacritty already keeps the view stable when output arrives while scrolled up, and
-`Shift+Home/End` keep working as is. The view is built from the bottom line of
-alacritty's viewport, collecting rows upward and skipping the hidden ones, so a fold
-costs nothing when there is none (the plain viewport). Scrolls given in visible rows
-are converted into grid lines (`view::grid_delta`). The cost: the folded rows are still
-in the history and count against the scrollback size, and the view has to be padded
-with blank rows when folds hide more rows than the history can replace. The cursor row
-is never hidden, so the shell's next prompt always shows.
+The view spans several grids, and a block shows at most a view height (its header
+pinned, its output scrolled), which is not alacritty's viewport. The scroll positions
+are Graphene's: one for the timeline (half-lines from its bottom) and one per block
+(output rows hidden below). The live grid stays at `display_offset` 0. When scrolled
+up, the timeline offset grows by what was added below (`view::follow`), so the view
+stays still while output arrives, which alacritty used to do for its viewport. Folding
+a block replaces its output with one summary row; the grids are untouched.
 
 ## Own glyph pipeline on `cosmic-text` (glyphon dropped)
 

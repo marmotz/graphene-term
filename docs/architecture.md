@@ -22,13 +22,14 @@ src/
   app.rs           winit ApplicationHandler, Session (one window + one shell)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation
-  terminal.rs      PTY spawn, Term state, event proxy to the UI thread
+  terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
-  osc133.rs        incremental OSC 133 / OSC 8 scanner over the PTY byte stream (pure)
-  blocks.rs        ShellState (phase, blocks, status), cell tags, row roles, block bounds (pure)
-  block_actions.rs target block, block navigation, block selection, copied command / output (pure)
-  view.rs          view rows: grid line, block role and hidden rows of each row (folds),
-                   scroll deltas across folds, mouse point mapping (pure)
+  signals.rs       incremental scanner of the private block signals and screen clears (pure)
+  timeline.rs      command blocks: finished blocks frozen in their own Term, current block (pure)
+  osc133.rs        OSC 133 scanner, test-only: reads the marks of the shell scripts in their tests
+  block_actions.rs target block, block navigation, copied block / command / output (pure)
+  view.rs          view rows over the timeline: source grid and line of each row, caps,
+                   block and timeline scrolls, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors and block marks
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
@@ -52,13 +53,13 @@ src/
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
 themes/            built-in themes, embedded with include_str!
-shell-integration/ zsh, bash and fish scripts emitting OSC 133 marks, embedded with include_str!
+shell-integration/ zsh, bash and fish scripts, embedded with include_str!
 benches/
   render.rs        criterion benchmarks: parse, frame, glyphs_cold/warm, gpu_prepare
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `blocks`, `block_actions`, `osc133`, `view`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
@@ -67,21 +68,21 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 UI thread (winit)                         PTY thread (pty::PtyLoop)
 -----------------                         -------------------------
 keyboard / mouse  --pty::Sender(Msg)-->   writes to PTY (WriteQueue)
-                                          reads PTY, osc133::Scanner splits it,
+                                          reads PTY, signals::Scanner splits it,
                                           pty::feed parses VT into Term,
-                                          ShellState::apply handles each mark
+                                          Timeline::apply handles each signal
 request_redraw   <--UserEvent::Terminal-- EventProxy::send_event(Wakeup, Title, ...)
 RedrawRequested:
-  lock Term (FairMutex)
-  Frame::capture  (short critical section)
+  lock Term (FairMutex), then Timeline
+  view::prepare + Frame::capture  (short critical section)
   unlock
   Renderer::render(frame)
 ```
 
 - `Term` is shared as `Arc<FairMutex<Term<EventProxy>>>`. The UI thread only holds the
   lock to read the mode, scroll, resize or capture a frame.
-- `ShellState` (`src/blocks.rs`) is shared as `Arc<Mutex<ShellState>>` in `Terminal`.
-  Lock order, everywhere: `Term` first, then `ShellState`.
+- The `Timeline` (`src/timeline.rs`) is shared as `Arc<Mutex<Timeline>>` in `Terminal`.
+  Lock order, everywhere: `Term` first, then `Timeline`.
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
 - When the shell exits, the event loop exits and the window closes.
@@ -90,10 +91,12 @@ RedrawRequested:
   `Msg::{Input, Resize, Shutdown}` sent through `pty::Sender` (mpsc + `poller.notify()`);
   a `WriteQueue` resumed on partial writes; `EIO` on read ignored until the child exit
   event; synchronized updates flushed with `stop_sync` on their timeout. Each read goes
-  through `pty::process`: `osc133::Scanner` splits it into byte chunks and marks, each
-  byte chunk is parsed by `pty::feed` (the single parse step), and each mark is applied
-  by `ShellState::apply` right after the bytes of its sequence, so the cursor is where
-  the shell put it (a synchronized update holding bytes is flushed first). The `Term` lock is leased before reading and held for at most 64 KiB of parsing.
+  through `pty::process`: `signals::Scanner` (built with the session token) splits it
+  into byte chunks, block signals and screen clears; each byte chunk is parsed by
+  `pty::feed` (the single parse step), and each signal or clear is applied by
+  `Timeline::apply` right after the bytes of its sequence, so the live grid holds
+  everything the shell wrote before it (a synchronized update holding bytes is flushed
+  first, and its timeout flush also releases the signals held on the alternate screen). The `Term` lock is leased before reading and held for at most 64 KiB of parsing.
 - The `update-check` thread (started in `App::resumed` when `updates.check` is true)
   wakes up when a check is due, reloads `update.json`, calls GitHub only when the last
   check is one interval old (otherwise reuses the cached release), saves the state and
@@ -109,78 +112,78 @@ RedrawRequested:
 
 ## Command blocks
 
-- `ShellState::apply` turns the OSC 133 marks into blocks: `A` starts a block (on a
-  fresh line when the cursor is not at column 0; a prompt drawn again in place keeps
-  its block), `B` starts the input, `C` the command (`Status::Running`), `D;<code>` ends
-  it (`Success` / `Failure(code)`). A block still running when the next one starts
-  becomes `Unknown`. Marks are ignored on the alternate screen.
-- During the prompt and the input, the cursor template carries a hyperlink
-  `graphene-block://<id>/{prompt,right-prompt,input}` (`blocks::BLOCK_LINK_SCHEME`), so every
-  cell the shell writes is tagged. The tag is applied again when something removed it
-  (a real OSC 8 link closed inside the prompt, a reset) and dropped outside them.
-- `blocks::index(term, lines)` gives each row a `RowRole` (`None`, `Prompt`, `Input`,
-  `Output`) from its first tagged cell; untagged rows continue the block above.
-  `blocks::block_bounds(term, id)` gives the first row, the command cells and the
-  output rows of a block.
-- `view::rows(term, shell, display_offset)` lists the view rows: the grid line each
-  one shows, its `RowRole`, the folded rows hidden right below it, its offset from the
-  view top in half-lines (`top`) and whether a gap is above it (`gap_before`). Rows have
-  no role on the alternate screen or while no block is known, and then no row index is
-  built. `Frame::capture` and the mouse (`GridLayout::hit` / `point_at`, then
-  `view::point`) both go through these rows.
-- The view height is a budget of `2 * screen_lines` half-lines: a row takes 2, the
-  first row of a block 1 more when a row of another block shows above it (the gap
-  between two cards). Whole rows only, the leftover at the top. At the top of the
-  history, when rows would be cut there, the view starts from the top grid line instead
-  (unless that cuts the cursor row shown at the bottom). Without blocks, no gap: the
-  plain viewport.
-- Folding (`BlockInfo::folded`) is a row filter over alacritty's `display_offset`: the
-  view starts from the bottom grid line of alacritty's viewport and collects rows
-  upward, skipping the output rows of folded blocks above the cursor; at the top of the
-  history it completes downward, then pads with blank rows (`ViewRow::line` is `None`).
-  Scrolls in visible rows (mouse wheel, `Shift+PageUp/PageDown` with a page of the
-  current view's row count, selection auto-scroll) go through `view::grid_delta`, which adds the hidden rows
-  crossed; `Shift+Home/End` are unchanged.
-- A block is folded automatically on `D` when its output has more rows than the
-  window. `Ctrl+Shift+F` toggles the fold of the target block; `Ctrl+Shift+Alt+F` folds
-  every finished block when any is unfolded, otherwise unfolds them all. A click on the
-  chevron disc (`Hit::Chevron`, on the card's top-right corner) toggles the fold, a
-  click on the summary unfolds. Folding is visual
-  only: a block selection and the copy actions still include the hidden rows.
+Design and rationale: [command-blocks technical design](../backlog/features/command-blocks/technical.md).
+
+- Each block is a terminal of its own. The session's `Term` is the live grid: it holds
+  the current block (`timeline::Current`). On a `start` signal the live grid is
+  detached (`timeline::detach`) into the current block's frozen header (prompt and
+  typed command); on `end` it is detached into its output and the block joins the
+  finished ones (`timeline::Block`, oldest first), with its command line and status.
+  Each detach hands the session a fresh grid, so a command can never redraw an older
+  block. A frozen grid lives in a `Term<VoidListener>` sized to its content rows, so
+  selection, `bounds_to_string` and reflow work on it unchanged.
+- Signals received on the alternate screen wait until it is left. A screen clear on
+  the main screen pins the current block at the top of the view (`pin_top`). Without
+  signals (no hook, `ssh`), nothing is detached: the session is one block, drawn as one
+  neutral card. The frozen rows are capped at the scrollback size, the oldest blocks
+  dropped whole. Frozen blocks are reflowed for new columns only when the view shows
+  them (`Timeline::reflow`, from `view::prepare`).
+- The session token (`Terminal::token`, 32 random hex characters) is the one the
+  scanner expects in the signals; the shell hooks receive it with the injection.
+- `view::rows(timeline, live, lines)` lists the view rows: the source each one takes
+  its cells from (`RowSource::{Header, Output, Live, Summary}`), the line in that
+  source, its block, its offset from the view top in half-lines (`top`) and whether a
+  gap is above it (`gap_before`). A block never shows more than `view::cap` rows: its
+  header, then the last output rows that fit, shifted by its own scroll. The scroll
+  positions are Graphene's: `Timeline::scroll` (half-lines from the bottom) and one per
+  block; the live grid stays at `display_offset` 0. `view::follow` keeps the view still
+  while output arrives when scrolled up (its `Anchor` lives in the session).
+  `view::prepare` (reflow, follow, rows) is what `Frame::capture` and the mouse
+  (`GridLayout::hit` / `point_at`, then `view::point`) go through. On the alternate
+  screen the view is the live screen, with no card.
+- Folding shows a block's header and one summary row (`RowSource::Summary`, "N lines
+  hidden") instead of its output. `Ctrl+Shift+F` toggles the fold of the target block;
+  `Ctrl+Shift+Alt+F` folds every finished block when any is unfolded, otherwise unfolds
+  them all. A click on the chevron disc (`Hit::Chevron`) toggles the fold, a click on
+  the summary label unfolds. Nothing is folded automatically.
+- The wheel (unless an application captures it) and `Shift+PageUp/PageDown` scroll the
+  timeline; `Shift+Home/End` go to its top / bottom. A key press or a paste brings the
+  timeline and the current block back to the bottom.
 - The window holds, from the left: the padding, a margin of half a cell, half a cell of
   card padding, the grid, the card padding, then a right reserve (the padding, or the
-  chevron radius when larger), always reserved. The consecutive view rows of one block,
-  up to the cursor row, form a card (`frame::Card`): a rounded background (the
+  chevron radius when larger), always reserved. The view rows of one block form a card
+  (`frame::Card`, by `frame::marks` from the timeline): a rounded background (the
   background blended 6 % toward the foreground, 14 % when selected) behind the grid and
   its card padding, a status stripe in the margin (green, red, yellow, or
   `DimForeground` for `Success`, `Failure`, `Running`, `Unknown`; none for the neutral
-  card of the active prompt), and, on a finished block with output whose first command
-  row is shown, a fold chevron on the card's top-right corner: a disc in the card color
-  with a triangle (right folded, down unfolded) in the status color. A card cut by the
-  view top keeps its top corners above the view. Half a line separates two cards. The
-  last command row of a folded block gets a dim summary (`i18n::Msg::LinesHidden`) two columns after its last non-blank cell, cut at
-  the grid edge. Rows below the cursor get no mark. `GridLayout::hit` tells a margin
-  pixel, a chevron disc, a gap between cards and a grid cell apart; a margin click
-  selects the block, a gap click does nothing.
-- Block actions (`block_actions`): the target block is the one holding the selection
-  start, otherwise the last finished block (`ShellState::is_finished`: any block but the
-  one being drawn or run). A block selection is a `Simple` selection from the start of
-  the command to the end of the block's last row, with a `SelectionSnapshot` and the
-  primary selection written, as after a mouse release. The session keeps that block as
-  `selected_block` (cleared by `clear_selection`, a new mouse selection or a dropped
-  snapshot); while the selection is still exactly that block's
-  (`block_actions::is_selected`), `Frame::capture` leaves its cells unhighlighted and
-  marks its card `selected` (`card_selected` color). A margin click selects the
-  block of its row; `Ctrl+Shift+PageUp/PageDown` select the finished neighbour among
-  `blocks::blocks_in_grid` (the last finished block on the first press) and scroll by
-  `view::reveal` (through `view::grid_delta`) until its first row is visible. `Ctrl+Shift+Alt+C` / `O` copy the
-  cleaned command (`input_start..=input_end`) / output rows; an empty part leaves the
+  card of the current block at its prompt), and, on a finished block with output whose
+  first row is shown, a fold chevron on the card's top-right corner: a disc in the card
+  color with a triangle (right folded, down unfolded) in the status color. A card whose
+  block starts above the view (or is cut by its cap) keeps its top corners above the
+  view. Half a line separates two cards. The summary row of a folded block shows a dim
+  label (`i18n::Msg::LinesHidden`). `GridLayout::hit` tells a margin pixel, a chevron
+  disc, a gap between cards and a grid cell apart; a margin click selects the block, a
+  gap click does nothing.
+- Text selection lives in one source grid for now (`Session::selection_source`): an
+  alacritty `Selection` on the live `Term` or on a frozen block's `Term`; a drag past
+  that source ends on its first or last cell (`view::selection_end`). The
+  `SelectionSnapshot` applies to the live grid only.
+- Block actions (`block_actions`, finished blocks only): the target block is the
+  selected one, otherwise the last finished block. A margin click or
+  `Ctrl+Shift+PageUp/PageDown` (neighbour block, the last finished block on the first
+  press, scrolled into view by `view::reveal`) select a block: the session keeps it as
+  `selected_block`, its card is `selected` (`card_selected` color), and its text
+  (`block_actions::block_text`: command line, then output) goes to the primary
+  selection and to `Ctrl+Shift+C`. `Ctrl+Shift+Alt+C` / `O` copy the command (the
+  signal's command line, or the last header row) / the output; an empty part leaves the
   clipboard untouched.
 
 ## Rendering pipeline
 
-1. `Frame::capture` reads the grid lines given by `view::rows` (colors overrides,
-   selection and cursor from `term.renderable_content()`) and produces one `FrameCell`
+1. `Frame::capture` reads the rows given by `view::rows` from their source grid (frozen
+   rows from their block's `Term`, live rows from the session's; colors overrides and
+   cursor from the live `renderable_content()`, the selection of each grid) and
+   produces one `FrameCell`
    per visible cell, plus one `RowDecoration` (hidden rows summary) per row and the
    block cards (`Frame::cards`, by `frame::marks`): character, final fg/bg (after DIM, INVERSE, HIDDEN, OSC overrides),
    bold/italic/underline/strikeout, wide-char spacer flag.
