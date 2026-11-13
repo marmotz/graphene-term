@@ -1,9 +1,9 @@
-//! Mouse selection logic: click counting, selection kind, capture rule, selection updates
-//! on the `Term` and copied text cleanup. No window or clipboard access.
+//! Mouse selection logic: click counting, selection kind, capture rule, the live
+//! selection snapshot and copied text cleanup. No window or clipboard access.
 
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::index::{Point, Side};
+use alacritty_terminal::index::Point;
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Term, TermMode};
 use winit::keyboard::ModifiersState;
@@ -66,32 +66,6 @@ pub fn auto_scroll_delta(overflow: i32, mode: TermMode) -> i32 {
         return 0;
     }
     -overflow.clamp(-AUTO_SCROLL_MAX_LINES, AUTO_SCROLL_MAX_LINES)
-}
-
-/// Left press on `point`: with `Shift` held, extends the existing selection; otherwise
-/// starts a new one whose kind depends on the click count. A single click starts an empty
-/// selection, which renders nothing.
-pub fn start_selection<T>(
-    term: &mut Term<T>,
-    point: Point,
-    side: Side,
-    clicks: u8,
-    mods: ModifiersState,
-) {
-    match term.selection.as_mut() {
-        Some(selection) if mods.shift_key() => selection.update(point, side),
-        _ => term.selection = Some(Selection::new(selection_type(clicks, mods), point, side)),
-    }
-}
-
-/// Left release: an empty selection (click without drag) is cleared and `None` returned;
-/// otherwise returns the cleaned selected text.
-pub fn finish_selection<T>(term: &mut Term<T>) -> Option<String> {
-    if term.selection.as_ref().is_none_or(Selection::is_empty) {
-        term.selection = None;
-        return None;
-    }
-    selected_text(term)
 }
 
 /// Cleaned text of the current selection, `None` without selection.
@@ -179,6 +153,32 @@ mod tests {
     use alacritty_terminal::term::test::TermSize;
     use alacritty_terminal::term::{Config, Term};
     use alacritty_terminal::vte::ansi::Processor;
+
+    /// Left press on `point` in one grid: with `Shift` held, extends the existing
+    /// selection; otherwise starts a new one whose kind depends on the click count. A
+    /// single click starts an empty selection, which renders nothing.
+    fn start_selection<T>(
+        term: &mut Term<T>,
+        point: Point,
+        side: Side,
+        clicks: u8,
+        mods: ModifiersState,
+    ) {
+        match term.selection.as_mut() {
+            Some(selection) if mods.shift_key() => selection.update(point, side),
+            _ => term.selection = Some(Selection::new(selection_type(clicks, mods), point, side)),
+        }
+    }
+
+    /// Left release in one grid: an empty selection (click without drag) is cleared and
+    /// `None` returned; otherwise returns the cleaned selected text.
+    fn finish_selection<T>(term: &mut Term<T>) -> Option<String> {
+        if term.selection.as_ref().is_none_or(Selection::is_empty) {
+            term.selection = None;
+            return None;
+        }
+        selected_text(term)
+    }
 
     fn point(line: i32, column: usize) -> Point {
         Point::new(Line(line), Column(column))

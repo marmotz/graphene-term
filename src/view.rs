@@ -18,13 +18,13 @@
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{Term, TermMode};
 
 use crate::timeline::{BlockId, Phase, Timeline, content_rows};
 
 /// Where a view row takes its cells from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RowSource {
     /// The frozen header of a block (finished, or the current one once it runs).
     Header(BlockId),
@@ -564,69 +564,17 @@ pub fn frozen_term(timeline: &Timeline, source: RowSource) -> Option<&Term<VoidL
     }
 }
 
-/// Mutable [`frozen_term`].
-pub fn frozen_term_mut(
-    timeline: &mut Timeline,
-    source: RowSource,
-) -> Option<&mut Term<VoidListener>> {
-    match source {
-        RowSource::Header(id) if timeline.block(id).is_some() => {
-            timeline.block_mut(id).map(|block| &mut block.header)
-        }
-        RowSource::Header(id) => {
-            let current = timeline.current_mut();
-            current.header.as_mut().filter(|_| current.id == id)
-        }
-        RowSource::Output(id) => timeline.block_mut(id).map(|block| &mut block.output),
-        RowSource::Live | RowSource::Summary(_) => None,
+/// Grids shown by the view, top to bottom: each block's header, then its output when
+/// it is not empty, the live grid last. Only the live grid on the alternate screen.
+pub fn sources<L>(timeline: &Timeline, live: &Term<L>) -> Vec<RowSource> {
+    if alternate(live) {
+        return vec![RowSource::Live];
     }
-}
-
-/// Position of `source` in the timeline, top to bottom: by block, the header first.
-fn source_rank(timeline: &Timeline, source: RowSource) -> (BlockId, u8) {
-    match source {
-        RowSource::Header(id) => (id, 0),
-        RowSource::Output(id) | RowSource::Summary(id) => (id, 1),
-        RowSource::Live => (timeline.current().id, 1),
-    }
-}
-
-/// End of a text selection made in `source` when the pointer is on `pointer` (source,
-/// point, side): that point in the same source, otherwise the first cell of `source`
-/// when the pointer is above it, its last cell when below. `None` when `source` is
-/// gone or holds no grid.
-pub fn selection_end<L>(
-    timeline: &Timeline,
-    live: &Term<L>,
-    source: RowSource,
-    pointer: (RowSource, Point, Side),
-) -> Option<(Point, Side)> {
-    let (at, point, side) = pointer;
-    if at == source {
-        return Some((point, side));
-    }
-    let (top, bottom, last_column) = match source {
-        RowSource::Live => (
-            live.topmost_line(),
-            live.bottommost_line(),
-            live.last_column(),
-        ),
-        source => {
-            let term = frozen_term(timeline, source)?;
-            (
-                term.topmost_line(),
-                term.bottommost_line(),
-                term.last_column(),
-            )
-        }
-    };
-    Some(
-        if source_rank(timeline, at) < source_rank(timeline, source) {
-            (Point::new(top, Column(0)), Side::Left)
-        } else {
-            (Point::new(bottom, last_column), Side::Right)
-        },
-    )
+    shapes(timeline, live)
+        .into_iter()
+        .flat_map(|shape| shape.header.into_iter().chain(shape.body))
+        .map(|part| part.source)
+        .collect()
 }
 
 /// Source and point of the cell at `column` on view row `index`, clamped to the last
@@ -1024,45 +972,35 @@ mod tests {
         assert!(frozen_term(timeline, RowSource::Live).is_none());
         assert!(frozen_term(timeline, RowSource::Summary(BlockId(0))).is_none());
         assert!(frozen_term(timeline, RowSource::Header(BlockId(42))).is_none());
-        assert!(frozen_term_mut(timeline, RowSource::Header(current)).is_some());
-        assert!(frozen_term_mut(timeline, RowSource::Output(BlockId(0))).is_some());
-        assert!(frozen_term_mut(timeline, RowSource::Live).is_none());
     }
 
     #[test]
-    fn selection_end_stays_in_its_source() {
-        let session = session(&[("a", 1)]);
-        let (timeline, live) = (&session.timeline, &session.term);
-        let output = RowSource::Output(BlockId(0));
-        let at =
-            |source, line, column| (source, Point::new(Line(line), Column(column)), Side::Left);
-        // In the same source: the pointer's point.
+    fn sources_list_the_shown_grids_top_to_bottom() {
+        let mut session = session(&[("a", 1), ("b", 0)]);
+        let (a, b) = (BlockId(0), BlockId(1));
         assert_eq!(
-            selection_end(timeline, live, output, at(output, 0, 1)),
-            Some((Point::new(Line(0), Column(1)), Side::Left))
+            sources(&session.timeline, &session.term),
+            vec![
+                RowSource::Header(a),
+                RowSource::Output(a),
+                // An empty output shows no row.
+                RowSource::Header(b),
+                RowSource::Live,
+            ]
         );
-        // Above (its header): the first cell; below (the prompt): the last cell.
+        // A running command: its frozen header, then the live grid.
+        session.feed(&format!("c\r\n{}", start("c")));
+        let c = session.timeline.current().id;
         assert_eq!(
-            selection_end(
-                timeline,
-                live,
-                output,
-                at(RowSource::Header(BlockId(0)), 0, 5)
-            ),
-            Some((Point::new(Line(0), Column(0)), Side::Left))
+            sources(&session.timeline, &session.term)[3..],
+            [RowSource::Header(c), RowSource::Live]
         );
+        // The alternate screen shows the live grid only.
+        session.feed("\x1b[?1049h");
         assert_eq!(
-            selection_end(timeline, live, output, at(RowSource::Live, 0, 5)),
-            Some((Point::new(Line(0), Column(19)), Side::Right))
+            sources(&session.timeline, &session.term),
+            vec![RowSource::Live]
         );
-        // A live selection with the pointer on an older block: the live grid's top.
-        assert_eq!(
-            selection_end(timeline, live, RowSource::Live, at(output, 0, 5)),
-            Some((Point::new(live.topmost_line(), Column(0)), Side::Left))
-        );
-        // A block no longer in the timeline.
-        let gone = RowSource::Output(BlockId(42));
-        assert_eq!(selection_end(timeline, live, gone, at(output, 0, 0)), None);
     }
 
     #[test]

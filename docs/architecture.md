@@ -172,12 +172,19 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
   block starts above the view (or is cut by its cap) keeps its top corners above the
   view. Half a line separates two cards. The summary row of a folded block shows a dim
   label (`i18n::Msg::LinesHidden`). `GridLayout::hit` tells a margin pixel, a chevron
-  disc, a gap between cards and a grid cell apart; a margin click selects the block, a
-  gap click does nothing.
-- Text selection lives in one source grid for now (`Session::selection_source`): an
-  alacritty `Selection` on the live `Term` or on a frozen block's `Term`; a drag past
-  that source ends on its first or last cell (`view::selection_end`). The
-  `SelectionSnapshot` applies to the live grid only.
+  disc, a gap between cards and a grid cell apart; a margin click selects the block (the
+  margin below the cards counts as the last row's), a gap click does nothing.
+- Text selection spans blocks (`timeline_selection::TimelineSelection`, kept as
+  `Session::selection`): two ends, each a view source, a point and a side. It is split
+  into one alacritty `Selection` per grid it covers, top to bottom
+  (`view::sources`: each block's header, its output when not empty, the live grid
+  last), the grids in between whole, and each part is set on its grid's `Term`
+  (`timeline_selection::apply`), which the frame highlights. An end on a summary row
+  takes the whole hidden output; live ends count lines from the top of the live
+  history so they stay on their text while output scrolls. The copied text joins the
+  parts with a line break, then `clean_copied_text`. The `SelectionSnapshot` applies to
+  the live grid only; a selection reaching the live grid is dropped when that grid is
+  detached into a block.
 - Block actions (`block_actions`, finished blocks only): the target block is the
   selected one, otherwise the last finished block. A margin click or
   `Ctrl+Shift+PageUp/PageDown` (neighbour block, the last finished block on the first
@@ -260,12 +267,12 @@ is reset with the glyph cache, and the frame is resolved again.
   clamps to the first column), then `view::point` to a grid point through the view
   rows (the view may be scrolled).
 - Left press: `ClickTracker` counts clicks (400 ms, same cell) and `selection::
-  start_selection` creates a `Simple` (or `Block` with `Ctrl`), `Semantic` or `Lines`
-  selection in `Term::selection`, or extends it with `Shift`.
+  selection_type` picks a `Simple` (or `Block` with `Ctrl`), `Semantic` or `Lines`
+  `TimelineSelection`, or `Shift` extends the existing one, across blocks too.
 - `CursorMoved` while pressed updates the selection. Left release clears an empty
   selection (simple click), otherwise writes the cleaned text to the primary selection.
 - Auto-scroll: in `about_to_wait`, while dragging with the cursor above or below the
-  grid (`layout::vertical_overflow`), the display scrolls by `selection::
+  grid (`layout::vertical_overflow`), the timeline scrolls by `selection::
   auto_scroll_delta` lines (1 plus 1 per cell height of overflow, capped at 10) every
   50 ms (`ControlFlow::WaitUntil`) and the selection end follows the edge row. Disabled
   on the alternate screen, which has no history.
@@ -273,7 +280,7 @@ is reset with the glyph cache, and the frame is resolved again.
   every paste, clears the selection.
 - Text change: the release stores a `selection::SelectionSnapshot` in the `Session`.
   On each `TermEvent::Wakeup`, `SelectionSnapshot::validate` restores the selection if
-  `Term` erased it, then clears it (and drops the snapshot) when its cleaned text
+  `Term` erased it, then clears the whole selection (and drops the snapshot) when its live text
   differs from the snapshot. Every place that clears the selection drops the snapshot.
 - Left and middle clicks over the live rows are ignored when the application enabled
   mouse reporting, unless `Shift` is held (`selection::mouse_reserved`).

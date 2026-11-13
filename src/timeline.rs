@@ -170,6 +170,46 @@ impl Timeline {
         &mut self.current
     }
 
+    /// Every frozen terminal, top to bottom: each finished block's header then output,
+    /// then the current block's header. Each comes with its block and whether it is a
+    /// header.
+    pub fn frozen(&self) -> impl Iterator<Item = (BlockId, bool, &Term<VoidListener>)> {
+        let current = &self.current;
+        self.blocks
+            .iter()
+            .flat_map(|block| {
+                [
+                    (block.id, true, &block.header),
+                    (block.id, false, &block.output),
+                ]
+            })
+            .chain(
+                current
+                    .header
+                    .iter()
+                    .map(|header| (current.id, true, header)),
+            )
+    }
+
+    /// Mutable [`Timeline::frozen`].
+    pub fn frozen_mut(&mut self) -> impl Iterator<Item = (BlockId, bool, &mut Term<VoidListener>)> {
+        let current = &mut self.current;
+        self.blocks
+            .iter_mut()
+            .flat_map(|block| {
+                [
+                    (block.id, true, &mut block.header),
+                    (block.id, false, &mut block.output),
+                ]
+            })
+            .chain(
+                current
+                    .header
+                    .iter_mut()
+                    .map(|header| (current.id, true, header)),
+            )
+    }
+
     /// The block shown at the top of the view after a screen clear, if any.
     pub fn pinned(&self) -> Option<BlockId> {
         if self.current.pin_top {

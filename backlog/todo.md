@@ -13,7 +13,7 @@ _terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
-_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 6/18 tasks done
+_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 7/18 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -34,7 +34,7 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 | [x]  | [#77](https://github.com/marmotz/graphene-term/issues/77) | Command blocks: switch the PTY loop and rendering to the timeline | #76 |
 | [x]  | [#78](https://github.com/marmotz/graphene-term/issues/78) | Command blocks: start and end hooks for zsh, bash and fish | #74, #77 |
 | [x]  | [#79](https://github.com/marmotz/graphene-term/issues/79) | Command blocks: block and timeline scrolling, mouse routing | #77 |
-| [ ]  | [#80](https://github.com/marmotz/graphene-term/issues/80) | Command blocks: cross-block selection, block actions and copy | #79 |
+| [x]  | [#80](https://github.com/marmotz/graphene-term/issues/80) | Command blocks: cross-block selection, block actions and copy | #79 |
 
 ## Configuration file and themes  ·  [overview](features/config-themes/overview.md)
 

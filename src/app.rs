@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::term::{self, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
@@ -33,6 +32,7 @@ use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, Terminal, UserEvent};
 use crate::theme;
 use crate::timeline::{BlockId, Timeline};
+use crate::timeline_selection::{self, End, TimelineSelection};
 use crate::update::checker::Checker;
 use crate::view::{self, Anchor, RowSource, ScrollTarget, ViewRow};
 
@@ -65,8 +65,8 @@ struct Session {
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection of the live grid kept while its text is unchanged.
     selection_snapshot: Option<SelectionSnapshot>,
-    /// Grid holding the text selection: the live one or a frozen block's.
-    selection_source: Option<RowSource>,
+    /// Text selection over the timeline, set on the grids it covers.
+    selection: Option<TimelineSelection>,
     /// Block selected whole by a margin click or a block navigation, shown as a
     /// highlighted card instead of highlighted cells.
     selected_block: Option<BlockId>,
@@ -291,10 +291,8 @@ impl Session {
         if let Some(id) = self.selected_block {
             return block_actions::block_text(&timeline, id);
         }
-        match self.selection_source? {
-            RowSource::Live => selection::selected_text(&*term),
-            source => selection::selected_text(view::frozen_term(&timeline, source)?),
-        }
+        self.selection.as_ref()?;
+        timeline_selection::text(&*term, &timeline)
     }
 
     /// Writes the cleaned selection to the clipboard. Without selection, the shortcut is
@@ -399,46 +397,54 @@ impl Session {
     fn clear_selection(&mut self) {
         self.selection_snapshot = None;
         let had_block = self.selected_block.take().is_some();
-        let source = self.selection_source.take();
-        let mut term = self.terminal.term.lock();
-        let mut timeline = lock(&self.terminal.timeline);
-        let had_text =
-            source.is_some_and(|source| clear_source_selection(&mut term, &mut timeline, source));
+        let had_text = self.selection.take().is_some() && {
+            let mut term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            timeline_selection::clear(&mut *term, &mut timeline)
+        };
         if had_block || had_text {
             self.window.request_redraw();
         }
     }
 
-    /// After new PTY output: restores a live selection `Term` erased while its text was
-    /// redrawn unchanged, and clears it when the selected text really changed. Frozen
-    /// blocks never change.
+    /// After new PTY output, for a selection reaching the live grid (frozen blocks never
+    /// change): restores the live part erased while its text was redrawn unchanged, and
+    /// clears the whole selection when the selected live text really changed, or when the
+    /// live grid was detached into a block.
     fn validate_selection(&mut self) {
-        if self.selection_source != Some(RowSource::Live) {
-            return;
-        }
-        let Some(snapshot) = self.selection_snapshot.as_mut() else {
-            return;
+        let valid = {
+            let mut term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            match self.selection.as_ref() {
+                Some(selection) if selection.covers_live(&timeline) => {
+                    !selection.is_stale(&timeline)
+                        && self
+                            .selection_snapshot
+                            .as_mut()
+                            .is_none_or(|snapshot| snapshot.validate(&mut *term))
+                }
+                _ => true,
+            }
         };
-        if !snapshot.validate(&mut self.terminal.term.lock()) {
-            self.selection_snapshot = None;
-            self.selection_source = None;
+        if !valid {
+            self.clear_selection();
         }
     }
 
     /// Source, grid point and cell side under the mouse cursor. `term` and `timeline`
     /// are the locked terminal and timeline.
-    fn mouse_target(
-        &self,
-        term: &term::Term<EventProxy>,
-        timeline: &mut Timeline,
-    ) -> Option<(RowSource, Point, Side)> {
+    fn mouse_target(&self, term: &term::Term<EventProxy>, timeline: &mut Timeline) -> Option<End> {
         let rows = self.view_rows(term, timeline);
         let (column, row, side) = self.layout.point_at(
             self.mouse_position.x as f32,
             self.mouse_position.y as f32,
             &rows,
         );
-        view::point(&rows, row, column).map(|(source, point)| (source, point, side))
+        view::point(&rows, row, column).map(|(source, point)| End {
+            source,
+            point,
+            side,
+        })
     }
 
     /// Viewport cell (column, line) under the mouse cursor, clamped to the grid, as
@@ -447,7 +453,7 @@ impl Session {
     fn mouse_cell(&self) -> (usize, usize) {
         let term = self.terminal.term.lock();
         let mut timeline = lock(&self.terminal.timeline);
-        let Some((source, point, _)) = self.mouse_target(&term, &mut timeline) else {
+        let Some(End { source, point, .. }) = self.mouse_target(&term, &mut timeline) else {
             return (0, 0);
         };
         let last = term.screen_lines() as i32 - 1;
@@ -559,33 +565,20 @@ impl Session {
         }
         let mut term = self.terminal.term.lock();
         let mut timeline = lock(&self.terminal.timeline);
-        let Some((source, point, side)) = self.mouse_target(&term, &mut timeline) else {
+        let Some(at) = self.mouse_target(&term, &mut timeline) else {
             return;
         };
-        let clicks = self.click_tracker.click(point, Instant::now());
-        // A selection lives in one source for now: `Shift` extends it there only.
-        if let Some(previous) = self.selection_source.take()
-            && previous != source
-        {
-            clear_source_selection(&mut term, &mut timeline, previous);
-        }
-        let started = match source {
-            RowSource::Live => {
-                selection::start_selection(&mut *term, point, side, clicks, self.modifiers);
-                true
+        let clicks = self.click_tracker.click(at.point, Instant::now());
+        // `Shift` extends the existing selection, across blocks too.
+        match self.selection.as_mut() {
+            Some(selection) if self.modifiers.shift_key() => selection.update(at, &*term),
+            _ => {
+                let kind = selection::selection_type(clicks, self.modifiers);
+                self.selection = Some(TimelineSelection::new(kind, at, &timeline, &*term));
             }
-            source => match view::frozen_term_mut(&mut timeline, source) {
-                Some(frozen) => {
-                    selection::start_selection(frozen, point, side, clicks, self.modifiers);
-                    true
-                }
-                None => false,
-            },
-        };
-        if started {
-            self.selection_source = Some(source);
-            self.left_pressed = true;
         }
+        timeline_selection::apply(self.selection.as_ref(), &mut *term, &mut timeline);
+        self.left_pressed = true;
         self.window.request_redraw();
     }
 
@@ -596,14 +589,19 @@ impl Session {
         let text = {
             let mut term = self.terminal.term.lock();
             let mut timeline = lock(&self.terminal.timeline);
-            match self.selection_source {
-                Some(RowSource::Live) => {
-                    let text = selection::finish_selection(&mut *term);
-                    self.selection_snapshot = SelectionSnapshot::capture(&*term);
-                    text
+            match self.selection.as_ref() {
+                // A click without drag selects nothing.
+                Some(selection) if selection.is_empty(&timeline, &*term) => {
+                    self.selection = None;
+                    timeline_selection::clear(&mut *term, &mut timeline);
+                    None
                 }
-                Some(source) => view::frozen_term_mut(&mut timeline, source)
-                    .and_then(selection::finish_selection),
+                Some(selection) => {
+                    if selection.covers_live(&timeline) {
+                        self.selection_snapshot = SelectionSnapshot::capture(&*term);
+                    }
+                    timeline_selection::text(&*term, &timeline)
+                }
                 None => None,
             }
         };
@@ -632,29 +630,20 @@ impl Session {
         }
     }
 
-    /// Moves the selection end to the cell under the mouse cursor, kept in the source
-    /// where the selection started.
-    fn update_selection(&self) {
-        let Some(source) = self.selection_source else {
-            return;
-        };
+    /// Moves the selection end to the cell under the mouse cursor, in whichever block it
+    /// lies.
+    fn update_selection(&mut self) {
         let mut term = self.terminal.term.lock();
         let mut timeline = lock(&self.terminal.timeline);
-        let Some(pointer) = self.mouse_target(&term, &mut timeline) else {
+        let Some(at) = self.mouse_target(&term, &mut timeline) else {
             return;
         };
-        let Some((point, side)) = view::selection_end(&timeline, &*term, source, pointer) else {
+        let Some(selection) = self.selection.as_mut() else {
             return;
         };
-        let selection = match source {
-            RowSource::Live => term.selection.as_mut(),
-            source => view::frozen_term_mut(&mut timeline, source)
-                .and_then(|frozen| frozen.selection.as_mut()),
-        };
-        if let Some(selection) = selection {
-            selection.update(point, side);
-            self.window.request_redraw();
-        }
+        selection.update(at, &*term);
+        timeline_selection::apply(Some(selection), &mut *term, &mut timeline);
+        self.window.request_redraw();
     }
 
     /// Auto-scroll while dragging a selection past the top or bottom edge: once per
@@ -670,7 +659,7 @@ impl Session {
                 .vertical_overflow(self.mouse_position.y as f32, &rows);
             selection::auto_scroll_delta(overflow, *term.mode())
         };
-        if !self.left_pressed || delta == 0 || self.selection_source.is_none() {
+        if !self.left_pressed || delta == 0 || self.selection.is_none() {
             self.auto_scroll_deadline = None;
             return None;
         }
@@ -884,7 +873,7 @@ impl App {
             pointer: None,
             auto_scroll_deadline: None,
             selection_snapshot: None,
-            selection_source: None,
+            selection: None,
             selected_block: None,
             anchor: Cell::default(),
             config_banner: self.config_banner.clone(),
@@ -1036,19 +1025,6 @@ fn shown_rows(
     let rows = view::prepare(timeline, term, term.screen_lines(), &mut shown);
     anchor.set(shown);
     rows
-}
-
-/// Clears the text selection held by `source`. Returns whether there was one.
-fn clear_source_selection(
-    term: &mut term::Term<EventProxy>,
-    timeline: &mut Timeline,
-    source: RowSource,
-) -> bool {
-    match source {
-        RowSource::Live => term.selection.take().is_some(),
-        source => view::frozen_term_mut(timeline, source)
-            .is_some_and(|frozen| frozen.selection.take().is_some()),
-    }
 }
 
 /// Loads the configuration file and its theme. Errors are logged and reported by the

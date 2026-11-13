@@ -23,6 +23,7 @@ mod signals;
 mod terminal;
 mod theme;
 mod timeline;
+mod timeline_selection;
 mod update;
 mod view;
 
