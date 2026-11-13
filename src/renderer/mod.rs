@@ -430,12 +430,15 @@ mod tests {
         let frame = Frame {
             rows: vec![vec![cell(' '), cell('M'), cell(' ')]],
             decorations: Vec::new(),
+            cards: Vec::new(),
             row_tops: vec![0],
             block_colors: BlockColors {
                 success: WHITE,
                 failure: WHITE,
                 running: WHITE,
                 dim: WHITE,
+                card: WHITE,
+                card_selected: WHITE,
             },
             cursor: None,
             background: BLACK,
@@ -457,6 +460,48 @@ mod tests {
         assert!((0..SIZE).all(|x| !lit(x, cell_size.height as u32 + 1)));
         // Full coverage somewhere: the mask is tinted with the cell color.
         assert!(pixels.chunks(4).any(|px| px[0] == 255));
+    }
+
+    #[test]
+    fn rounded_card_leaves_its_corner_pixel_at_the_background() {
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let cell_size = renderer.cell_size();
+        let layout = GridLayout::new(SIZE, SIZE, cell_size, 0.0);
+        let frame = Frame {
+            rows: vec![vec![cell(' ')]],
+            decorations: Vec::new(),
+            cards: vec![crate::frame::Card {
+                rows: 0..1,
+                clipped_top: false,
+                status: None,
+                chevron: None,
+                selected: false,
+            }],
+            row_tops: vec![0],
+            block_colors: BlockColors {
+                success: WHITE,
+                failure: WHITE,
+                running: WHITE,
+                dim: WHITE,
+                card: WHITE,
+                card_selected: WHITE,
+            },
+            cursor: None,
+            background: BLACK,
+            banner: None,
+            lang: crate::i18n::Lang::En,
+        };
+        renderer.render(&frame, &layout).unwrap();
+        let pixels = renderer.read_pixels();
+        let red = |x: f32, y: f32| pixels[((y as u32 * SIZE + x as u32) * 4) as usize];
+        let left = layout.grid_left() - layout.card_pad;
+        // The top-left corner pixel is outside the rounded corner; the card middle is
+        // fully covered.
+        assert_eq!(red(left, 0.0), 0);
+        assert_eq!(red(left + 6.0, cell_size.height / 2.0), 255);
     }
 
     #[test]

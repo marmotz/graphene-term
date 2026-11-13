@@ -77,11 +77,11 @@ first output.
 | Shift+left click              | Extend the selection                            |
 | Shift+mouse                   | Select even when the app captures the mouse     |
 | Ctrl+Shift+C                  | Copy the selection to the clipboard             |
-| Left click in the gutter      | Select the command block of the row             |
+| Left click on a status stripe | Select the command block of the row             |
 | Ctrl+Shift+PageUp / PageDown  | Select the previous / next command block        |
 | Ctrl+Shift+Alt+C              | Copy the command of the selected or last block  |
 | Ctrl+Shift+Alt+O              | Copy the output of the selected or last block   |
-| Click on a block chevron      | Fold / unfold the output of the block           |
+| Click on a card's chevron     | Fold / unfold the output of the block           |
 | Click on "n lines hidden"     | Unfold the block                                |
 | Ctrl+Shift+F                  | Fold / unfold the selected or last block        |
 | Ctrl+Shift+Alt+F              | Fold all finished blocks / unfold them all      |

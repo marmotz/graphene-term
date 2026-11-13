@@ -149,13 +149,16 @@ RedrawRequested:
   only: a block selection and the copy actions still include the hidden rows.
 - The window holds, from the left: the padding, a margin of half a cell, half a cell of
   card padding, the grid, the card padding, then a right reserve (the padding, or the
-  chevron radius when larger), always reserved. Each block row gets a status bar in the
-  margin (green, red, yellow, or
-  `DimForeground` for `Success`, `Failure`, `Running`, `Unknown`), and the first row of
-  a block a 1 px separator in `DimForeground` across the grid. The first command row
-  of a finished block with output gets a chevron in the margin (`▾` unfolded, `▸`
-  folded) in the status color; the last command row of a folded block gets a dim
-  summary (`i18n::Msg::LinesHidden`) two columns after its last non-blank cell, cut at
+  chevron radius when larger), always reserved. The consecutive view rows of one block,
+  up to the cursor row, form a card (`frame::Card`): a rounded background (the
+  background blended 6 % toward the foreground, 14 % when selected) behind the grid and
+  its card padding, a status stripe in the margin (green, red, yellow, or
+  `DimForeground` for `Success`, `Failure`, `Running`, `Unknown`; none for the neutral
+  card of the active prompt), and, on a finished block with output whose first command
+  row is shown, a fold chevron on the card's top-right corner: a disc in the card color
+  with a triangle (right folded, down unfolded) in the status color. A card cut by the
+  view top keeps its top corners above the view. Half a line separates two cards. The
+  last command row of a folded block gets a dim summary (`i18n::Msg::LinesHidden`) two columns after its last non-blank cell, cut at
   the grid edge. Rows below the cursor get no mark. `GridLayout::hit` tells a margin
   pixel, a chevron disc, a gap between cards and a grid cell apart; a margin click
   selects the block, a gap click does nothing.
@@ -174,20 +177,21 @@ RedrawRequested:
 
 1. `Frame::capture` reads the grid lines given by `view::rows` (colors overrides,
    selection and cursor from `term.renderable_content()`) and produces one `FrameCell`
-   per visible cell, plus one `RowDecoration` (status bar, separator, chevron, hidden
-   rows summary) per row: character, final fg/bg (after DIM, INVERSE, HIDDEN, OSC overrides),
+   per visible cell, plus one `RowDecoration` (hidden rows summary) per row and the
+   block cards (`Frame::cards`, by `frame::marks`): character, final fg/bg (after DIM, INVERSE, HIDDEN, OSC overrides),
    bold/italic/underline/strikeout, wide-char spacer flag.
    The block cursor is baked into the cell colors; other shapes (beam, underline,
    hollow when unfocused) are returned separately.
 2. `scene::build` converts the frame into:
-    - `under` rects: cell backgrounds, consecutive same-color cells merged, default
-      background skipped (it is the clear color), then the block status bars (a quarter
-      of a cell wide, in the margin) and separators; rows are placed at
-      `GridLayout::row_top` of their view offset (`Frame::row_tops`);
-    - `over` rects: underline, strikeout, non-block cursor;
+    - `under` rects: the card backgrounds (radius a quarter of a cell height) and
+      status stripes (a sixth of a cell wide, at least 2 px, round ends), then the cell
+      backgrounds, consecutive same-color cells merged, default background skipped (it
+      is the clear color, so the card shows through); rows are placed at
+      `GridLayout::row_top` of their view offset (`Frame::row_tops`, in half-lines);
+    - `over` rects: underline, strikeout, the fold chevrons (disc and triangle, SDF
+      shapes of the rect pipeline), non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
-      anchored at the cell origin, plus the fold chevrons (in the margin) and
-      the fold summaries (one character per cell);
+      anchored at the cell origin, plus the fold summaries (one character per cell);
     - overlay glyph instances at pixel positions (banner).
 3. `Renderer::render` resolves the glyph instances through the glyph cache, uploads the
    newly rasterized glyphs, then draws in one pass: clear, `under` rects, glyphs,
@@ -229,7 +233,7 @@ is reset with the glyph cache, and the frame is resolved again.
 
 ### Mouse selection
 
-- `layout::point_at` converts the cursor pixel to a viewport cell and side (the gutter
+- `layout::point_at` converts the cursor pixel to a viewport cell and side (the margin
   clamps to the first column), then `view::point` to a grid point through the view
   rows (the view may be scrolled).
 - Left press: `ClickTracker` counts clicks (400 ms, same cell) and `selection::
@@ -250,7 +254,7 @@ is reset with the glyph cache, and the frame is resolved again.
   differs from the snapshot. Every place that clears the selection drops the snapshot.
 - Left and middle clicks are ignored when the application enabled mouse reporting,
   unless `Shift` is held (`selection::mouse_reserved`).
-- A left press in the gutter (`layout::hit` gives `Hit::Gutter`) is checked first and is
-  always Graphene's, even under mouse reporting: on a chevron row it toggles the fold,
-  on another block row it selects the block (see Command blocks), elsewhere it is
-  ignored. A left press on a fold summary unfolds its block instead of selecting.
+- A left press in the margin (`layout::hit` gives `Hit::Margin`, the status stripe) or
+  on a chevron disc (`Hit::Chevron`) is checked first and is always Graphene's, even
+  under mouse reporting: the chevron toggles the fold of a card that has one, the
+  margin selects the block of its row (see Command blocks), elsewhere it is ignored. A left press on a fold summary unfolds its block instead of selecting.

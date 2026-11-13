@@ -463,6 +463,12 @@ As implemented:
 - `BlockColors` gains `card` and `card_selected`: background blended toward the
   foreground by 6 % and 14 %. Status colors unchanged.
 
+As implemented: `frame::marks` returns the row decorations and the cards in one pass
+(`app.rs` uses it for the chevron press: the card starting on the pressed row must have
+a chevron). A card's chevron comes from its first command row, so a card whose command
+row is above the view has none, as before. `selected` is always `false` until the
+selected block lands (#73). `frame::blend` mixes the sRGB channels.
+
 ### Rect pipeline: `src/renderer/rects.rs`, `rect.wgsl`
 
 `RectInstance` gains `radius: f32` and `shape: u32` (0 rectangle, 1 triangle right,
@@ -494,6 +500,11 @@ Per card, in `under` (below cell backgrounds and glyphs):
 Cell backgrounds equal to the terminal background are already skipped, so the card
 shows behind them. The summary run and the cursor are unchanged, placed with
 `row_top`.
+
+As implemented: the stripe is centered in the margin; the chevron triangle is a box of
+`chevron_radius` side centered on the corner; the chevrons go in `over` before the
+cursor and the banner. A headless GPU test checks that a card's corner pixel keeps the
+background color.
 
 ### Mouse: `src/app.rs`
 

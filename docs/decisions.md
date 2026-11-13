@@ -50,6 +50,15 @@ of card padding left of the grid, the card padding and room for the fold chevron
 even when the shell sends no marks, so the first block never changes the column count:
 no reflow mid-session. The cost is about one and a half columns fewer for every user.
 
+## Cards replace the gutter marks
+
+The first rendering put a one-cell gutter bar, a 1 px separator over the grid and a font
+chevron (`▸` / `▾`) on the command row. With a real prompt (powerlevel10k) it read as
+console content, and the chevron glyph came from a fallback font, a few pixels wide,
+half under the status bar. Each block is now a card: a rounded background derived from
+the palette, a status stripe in the margin and a chevron drawn as SDF shapes (disc and
+triangle) in the rect pipeline, so it is crisp at any size and needs no font.
+
 ## Gaps between cards keep the PTY size
 
 Half a line separates two cards. The PTY size never changes: the gaps push the top rows

@@ -327,12 +327,10 @@ impl Session {
             let Some(id) = rows.get(row).and_then(|row| row.role.block()) else {
                 return false;
             };
-            let chevron = rows
+            let (_, cards) = frame::marks(&term, &rows, &shell);
+            let chevron = cards
                 .iter()
-                .zip(frame::decorations(&term, &rows, &shell))
-                .any(|(row, decoration)| {
-                    row.role.block() == Some(id) && decoration.chevron.is_some()
-                });
+                .any(|card| card.rows.start == row && card.chevron.is_some());
             if chevron {
                 shell.toggle_fold(id);
             }

@@ -3,6 +3,8 @@
 //! Building a [`Frame`] only requires the terminal lock for a short time; the
 //! renderer then works on this plain data.
 
+use std::ops::Range;
+
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
@@ -13,7 +15,7 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::banner::BannerLayout;
-use crate::blocks::{self, BlockId, RowRole, ShellState, Status};
+use crate::blocks::{self, BlockId, Phase, RowRole, ShellState, Status};
 use crate::i18n::Lang;
 use crate::palette::Palette;
 use crate::view::ViewRow;
@@ -56,17 +58,28 @@ pub enum Fold {
     Unfolded,
 }
 
-/// Command block marks of one row, drawn in the gutter and across the grid.
+/// Command block mark of one row, drawn after its content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RowDecoration {
-    /// Status bar of the block the row belongs to.
-    pub bar: Option<Status>,
-    /// The row is the first one of its block: a line is drawn at its top.
-    pub separator: bool,
-    /// Fold chevron, on the first command row of a finished block with output.
-    pub chevron: Option<Fold>,
     /// Output rows hidden below this row, the last command row of a folded block.
     pub summary: Option<usize>,
+}
+
+/// Card drawn behind the consecutive view rows of one block, up to the cursor row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Card {
+    /// View rows covered.
+    pub rows: Range<usize>,
+    /// The block continues above the view: the card's top corners stay off screen.
+    pub clipped_top: bool,
+    /// Status shown by the stripe and the chevron. `None` for the active prompt (the
+    /// current block while its prompt is drawn or its command typed): a neutral card.
+    pub status: Option<Status>,
+    /// Fold chevron on the card's top-right corner: a finished block with output whose
+    /// first command row is in the card.
+    pub chevron: Option<Fold>,
+    /// The block is the selected one.
+    pub selected: bool,
 }
 
 /// Column where the hidden-rows summary of a row starts: two columns after its last
@@ -85,18 +98,41 @@ pub struct BlockColors {
     pub success: Rgb,
     pub failure: Rgb,
     pub running: Rgb,
-    /// `Unknown` status and separators.
+    /// `Unknown` status, neutral chevrons and fold summaries.
     pub dim: Rgb,
+    /// Card background: the terminal background blended 6 % toward the foreground.
+    pub card: Rgb,
+    /// Background of the selected block's card: blended 14 %.
+    pub card_selected: Rgb,
+}
+
+/// Share of the foreground in a card background.
+const CARD_BLEND: f32 = 0.06;
+/// Share of the foreground in the selected card background.
+const CARD_SELECTED_BLEND: f32 = 0.14;
+
+/// `from` moved toward `to` by `amount` (0 to 1), per sRGB channel.
+pub fn blend(from: Rgb, to: Rgb, amount: f32) -> Rgb {
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * amount).round() as u8;
+    Rgb {
+        r: mix(from.r, to.r),
+        g: mix(from.g, to.g),
+        b: mix(from.b, to.b),
+    }
 }
 
 impl BlockColors {
     fn resolve(palette: &Palette, overrides: &Colors) -> Self {
         let named = |color| palette.resolve(Color::Named(color), overrides);
+        let background = named(NamedColor::Background);
+        let foreground = named(NamedColor::Foreground);
         Self {
             success: named(NamedColor::Green),
             failure: named(NamedColor::Red),
             running: named(NamedColor::Yellow),
             dim: named(NamedColor::DimForeground),
+            card: blend(background, foreground, CARD_BLEND),
+            card_selected: blend(background, foreground, CARD_SELECTED_BLEND),
         }
     }
 
@@ -116,6 +152,8 @@ pub struct Frame {
     pub rows: Vec<Vec<FrameCell>>,
     /// Block marks of each row of `rows`.
     pub decorations: Vec<RowDecoration>,
+    /// Block cards, top to bottom.
+    pub cards: Vec<Card>,
     /// Offset of each row of `rows` from the view top, in half-lines (see
     /// [`ViewRow::top`]).
     pub row_tops: Vec<u32>,
@@ -215,9 +253,11 @@ impl Frame {
             }),
         };
 
+        let (decorations, cards) = marks(term, view, shell);
         Self {
             rows,
-            decorations: decorations(term, view, shell),
+            decorations,
+            cards,
             row_tops: view.iter().map(|row| row.top).collect(),
             block_colors: BlockColors::resolve(palette, overrides),
             cursor,
@@ -243,9 +283,14 @@ impl FrameCell {
     }
 }
 
-/// Block marks of the rows of `view`. Rows below the cursor are not drawn by the shell
-/// yet, so they get none even though the index counts them in the last block.
-pub fn decorations<T>(term: &Term<T>, view: &[ViewRow], shell: &ShellState) -> Vec<RowDecoration> {
+/// Block marks of the rows of `view` and the cards behind them. Rows below the cursor
+/// are not drawn by the shell yet, so they get none even though the index counts them
+/// in the last block.
+pub fn marks<T>(
+    term: &Term<T>,
+    view: &[ViewRow],
+    shell: &ShellState,
+) -> (Vec<RowDecoration>, Vec<Card>) {
     let cursor_line = term.grid().cursor.point.line;
     // Row above the first view row, to know whether that row starts its block or its
     // command.
@@ -255,37 +300,58 @@ pub fn decorations<T>(term: &Term<T>, view: &[ViewRow], shell: &ShellState) -> V
         .and_then(|row| row.line)
         .filter(|line| *line > term.grid().topmost_line())
         .map(|line| (Some(line - 1), blocks::index(term, line - 1..line)[0]));
-    view.iter()
-        .map(|row| {
-            let Some(line) = row.line else {
-                previous = None;
-                return RowDecoration::default();
-            };
-            let block = row.role.block().filter(|_| line <= cursor_line);
-            let previous_block = previous.and_then(|(_, role)| role.block());
-            let separator = matches!(row.role, RowRole::Prompt(_) | RowRole::Input(_))
-                && block.is_some()
-                && previous_block != block;
-            let chevron = block
-                .filter(|id| shell.is_finished(*id))
-                .filter(|id| first_command_row(term, line, *id, previous))
-                .filter(|id| blocks::has_output(term, *id, line))
-                .map(|id| {
-                    if shell.is_folded(id) {
-                        Fold::Folded
-                    } else {
-                        Fold::Unfolded
-                    }
-                });
-            previous = Some((Some(line), row.role));
-            RowDecoration {
-                bar: block.map(|id| shell.block(id).map_or(Status::Unknown, |b| b.status)),
-                separator,
-                chevron,
-                summary: (block.is_some() && row.hidden > 0).then_some(row.hidden),
+    let above_view = previous.and_then(|(_, role)| role.block());
+    let mut decorations = Vec::with_capacity(view.len());
+    let mut cards: Vec<Card> = Vec::new();
+    // Block of the card the previous view row belongs to.
+    let mut card_block = None;
+    for (index, row) in view.iter().enumerate() {
+        let Some(line) = row.line else {
+            previous = None;
+            card_block = None;
+            decorations.push(RowDecoration::default());
+            continue;
+        };
+        let block = row.role.block().filter(|_| line <= cursor_line);
+        let chevron = block
+            .filter(|id| shell.is_finished(*id))
+            .filter(|id| first_command_row(term, line, *id, previous))
+            .filter(|id| blocks::has_output(term, *id, line))
+            .map(|id| {
+                if shell.is_folded(id) {
+                    Fold::Folded
+                } else {
+                    Fold::Unfolded
+                }
+            });
+        previous = Some((Some(line), row.role));
+        decorations.push(RowDecoration {
+            summary: (block.is_some() && row.hidden > 0).then_some(row.hidden),
+        });
+        match (block, cards.last_mut()) {
+            (Some(id), Some(card)) if card_block == Some(id) => {
+                card.rows.end = index + 1;
+                card.chevron = card.chevron.or(chevron);
             }
-        })
-        .collect()
+            (Some(id), _) => cards.push(Card {
+                rows: index..index + 1,
+                clipped_top: index == 0 && above_view == Some(id),
+                status: card_status(shell, id),
+                chevron,
+                selected: false,
+            }),
+            (None, _) => {}
+        }
+        card_block = block;
+    }
+    (decorations, cards)
+}
+
+/// Status shown by the card of block `id`: none for the active prompt.
+fn card_status(shell: &ShellState, id: BlockId) -> Option<Status> {
+    let active_prompt =
+        shell.current() == Some(id) && matches!(shell.phase, Phase::Prompt | Phase::Input);
+    (!active_prompt).then(|| shell.block(id).map_or(Status::Unknown, |b| b.status))
 }
 
 /// Whether `line` holds the first command cell of block `id`: it has one, and the row
@@ -529,10 +595,21 @@ mod tests {
     fn rows_without_blocks_have_no_decoration() {
         let frame = capture(&term_with(b"hello\r\nworld"), &Palette::default(), true);
         assert_eq!(frame.decorations, vec![RowDecoration::default(); 3]);
+        assert!(frame.cards.is_empty());
+    }
+
+    fn card(rows: Range<usize>, status: Option<Status>, chevron: Option<Fold>) -> Card {
+        Card {
+            rows,
+            clipped_top: false,
+            status,
+            chevron,
+            selected: false,
+        }
     }
 
     #[test]
-    fn block_rows_are_decorated_up_to_the_cursor() {
+    fn cards_of_finished_failed_and_active_prompt_blocks_up_to_the_cursor() {
         let mut term = Term::new(Config::default(), &TermSize::new(10, 6), VoidListener);
         let frame = capture_blocks(
             &mut term,
@@ -540,37 +617,65 @@ mod tests {
              \x1b]133;A\x07$ \x1b]133;B\x07false\r\n\x1b]133;C\x07\x1b]133;D;1\x07\
              \x1b]133;A\x07$ \x1b]133;B\x07",
         );
-        let row = |bar, separator| RowDecoration {
-            bar,
-            separator,
-            ..RowDecoration::default()
-        };
         assert_eq!(
-            frame.decorations,
+            frame.cards,
             vec![
-                // A finished block with output: an unfolded chevron on its command row.
-                RowDecoration {
-                    chevron: Some(Fold::Unfolded),
-                    ..row(Some(Status::Success), true)
-                },
-                row(Some(Status::Success), false),
+                // A finished block with output: an unfolded chevron.
+                card(0..2, Some(Status::Success), Some(Fold::Unfolded)),
                 // No output: no chevron.
-                row(Some(Status::Failure(1)), true),
-                // The last prompt: no command ran yet. Below the cursor: nothing (the
-                // last blank row does not fit after the two gaps).
-                row(Some(Status::Unknown), true),
-                row(None, false),
+                card(2..3, Some(Status::Failure(1)), None),
+                // The active prompt: a neutral card. The blank row below the cursor
+                // gets none.
+                card(3..4, None, None),
             ]
         );
+        assert_eq!(frame.rows.len(), 5);
+        assert!(frame.decorations.iter().all(|d| d.summary.is_none()));
         let p = Palette::default();
         assert_eq!(frame.block_colors.success, p.indexed[2]);
         assert_eq!(frame.block_colors.failure, p.indexed[1]);
         assert_eq!(frame.block_colors.running, p.indexed[3]);
         assert_eq!(frame.block_colors.dim, p.named(NamedColor::DimForeground));
+        assert_eq!(
+            frame.block_colors.card,
+            blend(p.background, p.foreground, 0.06)
+        );
+        assert_eq!(
+            frame.block_colors.card_selected,
+            blend(p.background, p.foreground, 0.14)
+        );
     }
 
     #[test]
-    fn block_continuing_above_the_view_gets_no_separator() {
+    fn blend_moves_each_channel_toward_the_target() {
+        let black = Rgb { r: 0, g: 0, b: 0 };
+        let white = Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        };
+        assert_eq!(blend(black, white, 0.0), black);
+        assert_eq!(blend(black, white, 1.0), white);
+        assert_eq!(
+            blend(black, white, 0.06),
+            Rgb {
+                r: 15,
+                g: 15,
+                b: 15
+            }
+        );
+        assert_eq!(
+            blend(white, black, 0.14),
+            Rgb {
+                r: 219,
+                g: 219,
+                b: 219
+            }
+        );
+    }
+
+    #[test]
+    fn card_of_a_block_continuing_above_the_view_is_clipped() {
         let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
         let frame = capture_blocks(
             &mut term,
@@ -579,12 +684,19 @@ mod tests {
         );
         // Row "3" is the output of the first block, cut at the top of the view (three
         // rows: not taller than the window, so not folded); the gap above the prompt
-        // leaves room for two rows only.
+        // leaves room for two rows only. The command row is out of view: no chevron.
         assert_eq!(frame.rows.len(), 2);
         assert_eq!(row_text(&frame, 0), "3         ");
-        assert!(!frame.decorations[0].separator);
-        assert_eq!(frame.decorations[0].bar, Some(Status::Success));
-        assert!(frame.decorations[1].separator);
+        assert_eq!(
+            frame.cards,
+            vec![
+                Card {
+                    clipped_top: true,
+                    ..card(0..1, Some(Status::Success), None)
+                },
+                card(1..2, None, None),
+            ]
+        );
     }
 
     /// Feeds `bytes` to `term` and `shell` through the shell integration path.
@@ -615,30 +727,25 @@ mod tests {
              1\r\n2\r\n3\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
         );
         let frame = capture_shell(&term, &shell);
-        let chevrons: Vec<_> = frame.decorations.iter().map(|d| d.chevron).collect();
+        // The first block's card covers its prompt, command and output rows.
         assert_eq!(
-            chevrons,
-            [None, Some(Fold::Unfolded), None, None, None, None, None]
+            frame.cards[0],
+            card(0..6, Some(Status::Success), Some(Fold::Unfolded))
         );
         assert!(frame.decorations.iter().all(|d| d.summary.is_none()));
 
         shell.set_folded(BlockId(0), true);
         let frame = capture_shell(&term, &shell);
         assert_eq!(row_text(&frame, 3), "$         ");
-        let decorations: Vec<_> = frame
-            .decorations
-            .iter()
-            .map(|d| (d.chevron, d.summary))
-            .collect();
         assert_eq!(
-            decorations[..4],
+            frame.cards[..2],
             [
-                (None, None),
-                (Some(Fold::Folded), None),
-                (None, Some(3)),
-                (None, None)
+                card(0..3, Some(Status::Success), Some(Fold::Folded)),
+                card(3..4, None, None)
             ]
         );
+        let summaries: Vec<_> = frame.decorations.iter().map(|d| d.summary).collect();
+        assert_eq!(summaries[..4], [None, None, Some(3), None]);
     }
 
     #[test]
@@ -651,7 +758,8 @@ mod tests {
             "\x1b]133;A\x07$ \x1b]133;B\x07yes\r\n\x1b]133;C\x07y\r\ny\r\n",
         );
         let frame = capture_shell(&term, &shell);
-        assert!(frame.decorations.iter().all(|d| d.chevron.is_none()));
+        // Up to the cursor row, below the last output row.
+        assert_eq!(frame.cards, [card(0..4, Some(Status::Running), None)]);
     }
 
     #[test]
@@ -671,7 +779,13 @@ mod tests {
         assert_eq!(row_text(&frame, 0), "$ seq 4             ");
         assert_eq!(row_text(&frame, 1), "$                   ");
         assert_eq!(frame.decorations[0].summary, Some(4));
-        assert_eq!(frame.decorations[0].chevron, Some(Fold::Folded));
+        assert_eq!(
+            frame.cards,
+            [
+                card(0..1, Some(Status::Success), Some(Fold::Folded)),
+                card(1..2, None, None)
+            ]
+        );
         assert_eq!(frame.row_tops, [1, 4]);
         // The cursor is on the second visible row.
         assert_eq!(frame.rows[1][2].bg, Palette::default().cursor);
@@ -694,5 +808,6 @@ mod tests {
             "\x1b]133;A\x07$ \x1b]133;B\x07vim\r\n\x1b]133;C\x07\x1b[?1049hx",
         );
         assert_eq!(frame.decorations, vec![RowDecoration::default(); 3]);
+        assert!(frame.cards.is_empty());
     }
 }
