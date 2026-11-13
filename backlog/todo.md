@@ -13,7 +13,7 @@ _terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
-_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 10/11 tasks done
+_terminé — voir [technical.md](features/command-blocks/technical.md)_ — 11/11 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -27,7 +27,7 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 | [x]  | [#70](https://github.com/marmotz/graphene-term/issues/70) | Command blocks: rounded corners and vector shapes in the rect pipeline | — |
 | [x]  | [#71](https://github.com/marmotz/graphene-term/issues/71) | Command blocks: card layout and view geometry with gaps | — |
 | [x]  | [#72](https://github.com/marmotz/graphene-term/issues/72) | Command blocks: card frame and scene rendering | #70, #71 |
-| [ ]  | [#73](https://github.com/marmotz/graphene-term/issues/73) | Command blocks: selected block shown as a highlighted card | #72 |
+| [x]  | [#73](https://github.com/marmotz/graphene-term/issues/73) | Command blocks: selected block shown as a highlighted card | #72 |
 
 ## Configuration file and themes  ·  [overview](features/config-themes/overview.md)
 

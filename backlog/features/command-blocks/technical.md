@@ -466,8 +466,8 @@ As implemented:
 As implemented: `frame::marks` returns the row decorations and the cards in one pass
 (`app.rs` uses it for the chevron press: the card starting on the pressed row must have
 a chevron). A card's chevron comes from its first command row, so a card whose command
-row is above the view has none, as before. `selected` is always `false` until the
-selected block lands (#73). `frame::blend` mixes the sRGB channels.
+row is above the view has none, as before. `selected` is set by `Frame::capture` from
+`selected_block` (#73). `frame::blend` mixes the sRGB channels.
 
 ### Rect pipeline: `src/renderer/rects.rs`, `rect.wgsl`
 
@@ -518,6 +518,12 @@ background color.
   selection and when `validate_selection` drops the snapshot.
 - `mouse_point`, `mouse_cell` and `auto_scroll` map `y` through the view geometry
   built for the last frame (recomputed under the lock as today).
+
+As implemented (#73): "the selection is that block's selection" is checked by
+`block_actions::is_selected`, which compares the current selection range with the one
+`block_actions::select` builds for the block. A selection replaced or erased by the
+terminal (a `Shift` extension, a clear) therefore falls back to the cell highlight even
+before `validate_selection` drops `selected_block`.
 
 ### Consequences checked against the code
 

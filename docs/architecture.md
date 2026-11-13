@@ -166,7 +166,11 @@ RedrawRequested:
   start, otherwise the last finished block (`ShellState::is_finished`: any block but the
   one being drawn or run). A block selection is a `Simple` selection from the start of
   the command to the end of the block's last row, with a `SelectionSnapshot` and the
-  primary selection written, as after a mouse release. A margin click selects the
+  primary selection written, as after a mouse release. The session keeps that block as
+  `selected_block` (cleared by `clear_selection`, a new mouse selection or a dropped
+  snapshot); while the selection is still exactly that block's
+  (`block_actions::is_selected`), `Frame::capture` leaves its cells unhighlighted and
+  marks its card `selected` (`card_selected` color). A margin click selects the
   block of its row; `Ctrl+Shift+PageUp/PageDown` select the finished neighbour among
   `blocks::blocks_in_grid` (the last finished block on the first press) and scroll by
   `view::reveal` (through `view::grid_delta`) until its first row is visible. `Ctrl+Shift+Alt+C` / `O` copy the

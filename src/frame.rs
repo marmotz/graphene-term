@@ -15,6 +15,7 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::banner::BannerLayout;
+use crate::block_actions;
 use crate::blocks::{self, BlockId, Phase, RowRole, ShellState, Status};
 use crate::i18n::Lang;
 use crate::palette::Palette;
@@ -167,19 +168,22 @@ pub struct Frame {
 
 impl Frame {
     /// Captures the grid lines shown by `view` (see [`crate::view::rows`]), with the
-    /// block marks of `shell`.
+    /// block marks of `shell`. While the selection is the whole-block selection of
+    /// `selected_block`, its cells are not highlighted and its card is `selected`.
     pub fn capture<T: EventListener>(
         term: &Term<T>,
         view: &[ViewRow],
         shell: &ShellState,
         palette: &Palette,
         focused: bool,
+        selected_block: Option<BlockId>,
     ) -> Self {
+        let selected_block = selected_block.filter(|id| block_actions::is_selected(term, *id));
         let content = term.renderable_content();
         let overrides = content.colors;
         let columns = term.columns();
         let lines = view.len();
-        let selection = content.selection;
+        let selection = content.selection.filter(|_| selected_block.is_none());
         let grid = term.grid();
 
         let background = palette.resolve(Color::Named(NamedColor::Background), overrides);
@@ -253,7 +257,12 @@ impl Frame {
             }),
         };
 
-        let (decorations, cards) = marks(term, view, shell);
+        let (decorations, mut cards) = marks(term, view, shell);
+        if let Some(id) = selected_block {
+            for card in &mut cards {
+                card.selected = view[card.rows.start].role.block() == Some(id);
+            }
+        }
         Self {
             rows,
             decorations,
@@ -411,7 +420,7 @@ mod tests {
     fn capture(term: &Term<VoidListener>, palette: &Palette, focused: bool) -> Frame {
         let shell = ShellState::new();
         let rows = view::rows(term, &shell, term.grid().display_offset());
-        Frame::capture(term, &rows, &shell, palette, focused)
+        Frame::capture(term, &rows, &shell, palette, focused, None)
     }
 
     /// Feeds `bytes` through the shell integration path, then captures the viewport.
@@ -425,7 +434,7 @@ mod tests {
             bytes.as_bytes(),
         );
         let rows = view::rows(term, &shell, term.grid().display_offset());
-        Frame::capture(term, &rows, &shell, &Palette::default(), true)
+        Frame::capture(term, &rows, &shell, &Palette::default(), true, None)
     }
 
     fn row_text(frame: &Frame, line: usize) -> String {
@@ -712,7 +721,95 @@ mod tests {
 
     fn capture_shell(term: &Term<VoidListener>, shell: &ShellState) -> Frame {
         let rows = view::rows(term, shell, term.grid().display_offset());
-        Frame::capture(term, &rows, shell, &Palette::default(), true)
+        Frame::capture(term, &rows, shell, &Palette::default(), true, None)
+    }
+
+    const TWO_BLOCKS: &str = "\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07\
+         \x1b]133;A\x07$ \x1b]133;B\x07pwd\r\n\x1b]133;C\x07/\r\n\x1b]133;D;0\x07\
+         \x1b]133;A\x07$ ";
+
+    fn capture_selected(
+        term: &Term<VoidListener>,
+        shell: &ShellState,
+        selected_block: Option<BlockId>,
+    ) -> Frame {
+        let rows = view::rows(term, shell, term.grid().display_offset());
+        Frame::capture(
+            term,
+            &rows,
+            shell,
+            &Palette::default(),
+            true,
+            selected_block,
+        )
+    }
+
+    #[test]
+    fn block_selection_marks_the_card_and_leaves_the_cells_unhighlighted() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 8), VoidListener);
+        let mut shell = ShellState::new();
+        feed_blocks(&mut term, &mut shell, TWO_BLOCKS);
+        block_actions::select(&mut term, BlockId(0)).unwrap();
+        let frame = capture_selected(&term, &shell, Some(BlockId(0)));
+        let selected: Vec<_> = frame.cards.iter().map(|card| card.selected).collect();
+        assert_eq!(selected, [true, false, false]);
+        let p = Palette::default();
+        assert!(
+            frame.rows[..2]
+                .iter()
+                .flatten()
+                .all(|cell| cell.bg != p.selection_background)
+        );
+    }
+
+    #[test]
+    fn mouse_selection_over_a_block_still_highlights_its_cells() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 8), VoidListener);
+        let mut shell = ShellState::new();
+        feed_blocks(&mut term, &mut shell, TWO_BLOCKS);
+        let p = Palette::default();
+        // No selected block: the same rows selected by the mouse.
+        block_actions::select(&mut term, BlockId(0)).unwrap();
+        let frame = capture_selected(&term, &shell, None);
+        assert!(frame.cards.iter().all(|card| !card.selected));
+        // The block selection starts at the command, after "$ ".
+        assert_eq!(frame.rows[0][2].bg, p.selection_background);
+        assert_eq!(frame.rows[1][0].bg, p.selection_background);
+        // A selected block whose selection was replaced by another one.
+        select(&mut term, (0, 0), (0, 3));
+        let frame = capture_selected(&term, &shell, Some(BlockId(0)));
+        assert!(frame.cards.iter().all(|card| !card.selected));
+        assert_eq!(frame.rows[0][0].bg, p.selection_background);
+        assert_eq!(frame.rows[1][0].bg, p.background);
+    }
+
+    #[test]
+    fn selected_block_is_dropped_when_the_output_changes_its_rows() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 8), VoidListener);
+        let mut shell = ShellState::new();
+        feed_blocks(&mut term, &mut shell, TWO_BLOCKS);
+        block_actions::select(&mut term, BlockId(0)).unwrap();
+        // The screen is erased under the selection: the block selection is gone.
+        feed_blocks(&mut term, &mut shell, "\x1b[2J");
+        let frame = capture_selected(&term, &shell, Some(BlockId(0)));
+        assert!(frame.cards.iter().all(|card| !card.selected));
+        let p = Palette::default();
+        assert!(
+            frame
+                .rows
+                .iter()
+                .flatten()
+                .all(|cell| cell.bg != p.selection_background)
+        );
+    }
+
+    #[test]
+    fn selected_block_without_selection_marks_no_card() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 8), VoidListener);
+        let mut shell = ShellState::new();
+        feed_blocks(&mut term, &mut shell, TWO_BLOCKS);
+        let frame = capture_selected(&term, &shell, Some(BlockId(1)));
+        assert!(frame.cards.iter().all(|card| !card.selected));
     }
 
     #[test]

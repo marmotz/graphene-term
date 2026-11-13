@@ -18,7 +18,7 @@ use winit::window::{Window, WindowId};
 
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::block_actions::{self, Direction, Part};
-use crate::blocks;
+use crate::blocks::{self, BlockId};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{self, Frame, FrameBanner};
 use crate::i18n::{self, Lang, Msg};
@@ -64,6 +64,9 @@ struct Session {
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection kept while its text is unchanged.
     selection_snapshot: Option<SelectionSnapshot>,
+    /// Block selected whole by a margin click or a block navigation, shown as a
+    /// highlighted card instead of highlighted cells.
+    selected_block: Option<BlockId>,
     /// Configuration error banner; `None` once dismissed or without error.
     config_banner: Option<Banner>,
     /// Update banner: the newer release reported by the check thread.
@@ -261,7 +264,9 @@ impl Session {
                     .unwrap_or_else(PoisonError::into_inner);
                 block_actions::neighbour(&term, &shell, direction)
             };
-            let Some(bounds) = id.and_then(|id| block_actions::select(&mut term, id)) else {
+            let Some((id, bounds)) =
+                id.and_then(|id| Some((id, block_actions::select(&mut term, id)?)))
+            else {
                 return;
             };
             let delta = {
@@ -280,6 +285,7 @@ impl Session {
             if delta != 0 {
                 term.scroll_display(Scroll::Delta(delta));
             }
+            self.selected_block = Some(id);
             self.selection_snapshot = SelectionSnapshot::capture(&term);
             selection::selected_text(&term)
         };
@@ -307,6 +313,7 @@ impl Session {
             if block_actions::select(&mut term, id).is_none() {
                 return;
             }
+            self.selected_block = Some(id);
             self.selection_snapshot = SelectionSnapshot::capture(&term);
             selection::selected_text(&term)
         };
@@ -363,6 +370,7 @@ impl Session {
 
     fn clear_selection(&mut self) {
         self.selection_snapshot = None;
+        self.selected_block = None;
         let mut term = self.terminal.term.lock();
         if term.selection.take().is_some() {
             self.window.request_redraw();
@@ -377,6 +385,7 @@ impl Session {
         };
         if !snapshot.validate(&mut self.terminal.term.lock()) {
             self.selection_snapshot = None;
+            self.selected_block = None;
         }
     }
 
@@ -517,6 +526,7 @@ impl Session {
         let clicks = self.click_tracker.click(point, Instant::now());
         // The selection changes until the release: no text to keep meanwhile.
         self.selection_snapshot = None;
+        self.selected_block = None;
         selection::start_selection(&mut term, point, side, clicks, self.modifiers);
         self.left_pressed = true;
         self.window.request_redraw();
@@ -774,6 +784,7 @@ impl App {
             pointer: None,
             auto_scroll_deadline: None,
             selection_snapshot: None,
+            selected_block: None,
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),
             ignored_tag: None,
@@ -882,7 +893,14 @@ impl ApplicationHandler<UserEvent> for App {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner);
                     let rows = view::rows(&term, &shell, term.grid().display_offset());
-                    Frame::capture(&term, &rows, &shell, &session.palette, session.focused)
+                    Frame::capture(
+                        &term,
+                        &rows,
+                        &shell,
+                        &session.palette,
+                        session.focused,
+                        session.selected_block,
+                    )
                 };
                 frame.lang = session.lang;
                 frame.banner = session.shown_banner().map(|shown| FrameBanner {

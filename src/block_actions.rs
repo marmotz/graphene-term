@@ -64,6 +64,12 @@ pub fn neighbour<L>(term: &Term<L>, shell: &ShellState, direction: Direction) ->
 /// Returns its bounds, `None` (selection untouched) when none of its rows is left.
 pub fn select<L>(term: &mut Term<L>, id: BlockId) -> Option<BlockBounds> {
     let bounds = blocks::block_bounds(term, id)?;
+    term.selection = Some(block_selection(term, &bounds));
+    Some(bounds)
+}
+
+/// Selection of a whole block: from the start of its command to the end of its last row.
+fn block_selection<L>(term: &Term<L>, bounds: &BlockBounds) -> Selection {
     let last_line = if bounds.output.is_empty() {
         bounds.input_end.unwrap_or(bounds.input_start).line
     } else {
@@ -71,8 +77,17 @@ pub fn select<L>(term: &mut Term<L>, id: BlockId) -> Option<BlockBounds> {
     };
     let mut selection = Selection::new(SelectionType::Simple, bounds.input_start, Side::Left);
     selection.update(Point::new(last_line, term.last_column()), Side::Right);
-    term.selection = Some(selection);
-    Some(bounds)
+    selection
+}
+
+/// Whether the selection of `term` is exactly the one [`select`] makes for block `id`.
+pub fn is_selected<L>(term: &Term<L>, id: BlockId) -> bool {
+    let Some(range) = term.selection.as_ref().and_then(|s| s.to_range(term)) else {
+        return false;
+    };
+    blocks::block_bounds(term, id)
+        .and_then(|bounds| block_selection(term, &bounds).to_range(term))
+        .is_some_and(|expected| expected == range)
 }
 
 /// Cleaned text of one part of a block, `None` when that part is empty.
@@ -281,6 +296,20 @@ mod tests {
         assert_eq!(range.start, Point::new(Line(5), Column(2)));
         assert_eq!(range.end, Point::new(Line(5), Column(19)));
         assert_eq!(selected_text(&h.term).as_deref(), Some("three"));
+    }
+
+    #[test]
+    fn is_selected_only_for_the_exact_block_selection() {
+        let mut h = Harness::three_blocks();
+        assert!(!is_selected(&h.term, BlockId(1)));
+        select(&mut h.term, BlockId(1)).unwrap();
+        assert!(is_selected(&h.term, BlockId(1)));
+        assert!(!is_selected(&h.term, BlockId(0)));
+        assert!(!is_selected(&h.term, BlockId(42)));
+        // A selection inside the block is not the block selection.
+        let start = h.bounds(1).input_start;
+        h.select_at(start.line.0, start.column.0);
+        assert!(!is_selected(&h.term, BlockId(1)));
     }
 
     #[test]

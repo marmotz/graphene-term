@@ -83,7 +83,7 @@ fn term_for(fixture: &Fixture) -> Term<VoidListener> {
 fn capture(term: &Term<VoidListener>, palette: &Palette) -> Frame {
     let shell = ShellState::new();
     let rows = view_rows(term, &shell, term.grid().display_offset());
-    Frame::capture(term, &rows, &shell, palette, true)
+    Frame::capture(term, &rows, &shell, palette, true, None)
 }
 
 fn layout(cell: CellSize) -> GridLayout {
