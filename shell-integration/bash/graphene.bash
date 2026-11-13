@@ -3,8 +3,8 @@
 # Graphene starts bash with --posix and ENV pointing to this file: a POSIX mode
 # interactive shell reads $ENV and nothing else. This file turns POSIX mode off,
 # sources the usual startup files like a regular interactive bash, then makes the shell
-# emit OSC 133 marks around the prompt and the command. The user's dotfiles are never
-# modified.
+# tell Graphene when a command starts and ends. The prompt is never read, wrapped or
+# rebuilt, and the user's dotfiles are never modified.
 
 set +o posix
 if [[ -n ${GRAPHENE_BASH_ENV+set} ]]; then
@@ -13,6 +13,10 @@ if [[ -n ${GRAPHENE_BASH_ENV+set} ]]; then
 else
   unset ENV
 fi
+
+# The session token stays in a shell variable: commands run from the shell never see it.
+_graphene_token=${GRAPHENE_BLOCK_TOKEN-}
+unset GRAPHENE_BLOCK_TOKEN
 
 if shopt -q login_shell; then
   if [[ -r /etc/profile ]]; then
@@ -34,35 +38,47 @@ else
   fi
 fi
 
-_graphene_command_ran=0
-_graphene_ps1=
+if [[ -n $_graphene_token ]]; then
+  _graphene_command_ran=0
+  # HISTCMD at the prompt: it only moves when the command line is added to the history.
+  _graphene_histcmd=$HISTCMD
 
-# First PROMPT_COMMAND entry: reports the status of the command that just ended. Like
-# fish: no command end for an empty command line, nor before the first prompt.
-_graphene_prompt_start() {
-  local ret=$?
-  if ((_graphene_command_ran)); then
-    _graphene_command_ran=0
-    builtin printf '\e]133;D;%s\e\\' "$ret"
+  # First PROMPT_COMMAND entry: reports the status of the command that just ended. Like
+  # fish: no command end for an empty command line, nor before the first prompt.
+  _graphene_prompt() {
+    local ret=$?
+    if ((_graphene_command_ran)); then
+      _graphene_command_ran=0
+      builtin printf '\e]6973;%s;end;%s\e\\' "$_graphene_token" "$ret"
+    fi
+    _graphene_histcmd=$HISTCMD
+    return "$ret"
+  }
+
+  # Run by PS0 in a subshell: sends the command line, read back from the history. It is
+  # empty when the line was not added (history off, ignorespace, ignoredups), since the
+  # last entry is then an older command.
+  _graphene_start() {
+    local entry= encoded=
+    if [[ $HISTCMD != "$_graphene_histcmd" ]]; then
+      entry=$(HISTTIMEFORMAT= builtin history 1)
+      # "  42  command", or "  42* command" for an edited entry.
+      if [[ $entry =~ ^\ *[0-9]+\*?\ \ ?(.*)$ ]]; then
+        entry=${BASH_REMATCH[1]}
+      else
+        entry=
+      fi
+      encoded=$(builtin printf '%s' "$entry" | command base64 -w0 2>/dev/null)
+    fi
+    builtin printf '\e]6973;%s;start;%s\e\\' "$_graphene_token" "$encoded"
+  }
+
+  if [[ ${PROMPT_COMMAND@a} == *a* ]]; then
+    PROMPT_COMMAND=(_graphene_prompt "${PROMPT_COMMAND[@]}")
+  else
+    PROMPT_COMMAND="_graphene_prompt${PROMPT_COMMAND:+$'\n'$PROMPT_COMMAND}"
   fi
-  return "$ret"
-}
-
-# Last PROMPT_COMMAND entry: wraps PS1 again when a prompt command rebuilt it.
-_graphene_prompt_end() {
-  local ret=$?
-  if [[ $PS1 != "$_graphene_ps1" ]]; then
-    _graphene_ps1='\[\e]133;A\e\\\]'"$PS1"'\[\e]133;B\e\\\]'
-    PS1=$_graphene_ps1
-  fi
-  return "$ret"
-}
-
-if [[ ${PROMPT_COMMAND@a} == *a* ]]; then
-  PROMPT_COMMAND=(_graphene_prompt_start "${PROMPT_COMMAND[@]}" _graphene_prompt_end)
-else
-  PROMPT_COMMAND="_graphene_prompt_start${PROMPT_COMMAND:+$'\n'$PROMPT_COMMAND}"$'\n_graphene_prompt_end'
+  # PS0 is shown when a command line is read, empty ones excepted. The subscript of the
+  # unset array sets the flag as a side effect of the expansion and expands to nothing.
+  PS0="${PS0-}"'${_graphene_unset[_graphene_command_ran=1]-}$(_graphene_start)'
 fi
-# PS0 is shown when a command line is read, empty ones excepted. The subscript of the
-# unset array sets the flag as a side effect of the expansion and expands to nothing.
-PS0="${PS0-}"'${_graphene_unset[_graphene_command_ran=1]-}\e]133;C\e\\'

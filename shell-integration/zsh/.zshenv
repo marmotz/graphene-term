@@ -2,8 +2,8 @@
 #
 # Graphene starts zsh with ZDOTDIR pointing to this folder, so this file runs first.
 # It restores the user's ZDOTDIR, sources the user's .zshenv, then makes the
-# interactive shell emit OSC 133 marks around the prompt and the command. The user's
-# dotfiles are never modified.
+# interactive shell tell Graphene when a command starts and ends. The prompt is never
+# read, wrapped or rebuilt, and the user's dotfiles are never modified.
 
 if [[ -n ${GRAPHENE_ZDOTDIR+set} ]]; then
   ZDOTDIR=$GRAPHENE_ZDOTDIR
@@ -12,86 +12,37 @@ else
   unset ZDOTDIR
 fi
 
+# The session token stays in a shell variable: commands run from the shell never see it.
+typeset -g _graphene_token=${GRAPHENE_BLOCK_TOKEN-}
+unset GRAPHENE_BLOCK_TOKEN
+
 if [[ -f ${ZDOTDIR:-$HOME}/.zshenv ]]; then
   builtin source -- "${ZDOTDIR:-$HOME}/.zshenv"
 fi
 
-if [[ -o interactive ]]; then
-  # powerlevel10k rebuilds the prompt in a precmd hook that keeps moving itself after
-  # every other one, so the wrapping below never sticks. It emits the marks itself
-  # when asked to, as it does for kitty: ask it, then stay out of its way.
-  (( ${+__p9k_force_term_shell_integration} )) || typeset -gi __p9k_force_term_shell_integration=1
-
-  # Whether a loaded powerlevel10k emits the marks.
-  _graphene_p10k() {
-    (( ${+functions[_p9k_iterm2_precmd]} && __p9k_force_term_shell_integration == 1 ))
-  }
-
-  _graphene_unhook() {
-    precmd_functions=(${precmd_functions:#_graphene_precmd})
-    preexec_functions=(${preexec_functions:#_graphene_preexec})
-  }
-
+if [[ -o interactive && -n $_graphene_token ]]; then
   # Set by preexec: a command ran since the last prompt.
   typeset -gi _graphene_command_ran=0
-  typeset -g _graphene_ps1= _graphene_rps1=
 
-  # Wraps the prompts in marks. Prompt themes may rebuild them on every precmd: wrap
-  # them again when they changed since the last wrap. Returns 1 when nothing changed.
-  _graphene_wrap_prompts() {
-    local changed=1
-    if [[ $PS1 != "$_graphene_ps1" ]]; then
-      _graphene_ps1=$'%{\e]133;A\e\\%}'"$PS1"$'%{\e]133;B\e\\%}'
-      PS1=$_graphene_ps1
-      changed=0
-    fi
-    if [[ -n $RPS1 && $RPS1 != "$_graphene_rps1" ]]; then
-      _graphene_rps1=$'%{\e]133;P;k=r\e\\%}'"$RPS1"$'%{\e]133;B\e\\%}'
-      RPS1=$_graphene_rps1
-      changed=0
-    fi
-    return $changed
-  }
-
+  # Like fish: no command end for an empty command line, nor before the first prompt.
   _graphene_precmd() {
     local ret=$?
-    if _graphene_p10k; then
-      _graphene_unhook
-      return $ret
-    fi
-    # Like fish: no command end for an empty command line, nor before the first prompt.
     if (( _graphene_command_ran )); then
       _graphene_command_ran=0
-      builtin print -rn -- $'\e]133;D;'"$ret"$'\e\\'
+      builtin print -rn -- $'\e]6973;'"$_graphene_token;end;$ret"$'\e\\'
     fi
-    _graphene_wrap_prompts
-    # Run after the hooks added later by the user's configuration, so their prompt
-    # changes are wrapped too. zsh calls a copy of the array: this takes effect from
-    # the next prompt.
-    precmd_functions=(${precmd_functions:#_graphene_precmd} _graphene_precmd)
     return $ret
   }
 
+  # $1 is the command line as typed, empty when the history is off.
   _graphene_preexec() {
-    if _graphene_p10k; then
-      _graphene_unhook
-      return
-    fi
     _graphene_command_ran=1
-    builtin print -rn -- $'\e]133;C\e\\'
-  }
-
-  # On the first prompt, a precmd hook added after this one may have rebuilt the prompt
-  # after it was wrapped: wrap it and redraw it once the line editor starts. A widget
-  # defined later by the user's configuration replaces this one.
-  _graphene_line_init() {
-    if ! _graphene_p10k && _graphene_wrap_prompts; then
-      zle reset-prompt
-    fi
+    local encoded
+    encoded=$(builtin print -rn -- "$1" | command base64 -w0 2>/dev/null)
+    builtin print -rn -- $'\e]6973;'"$_graphene_token;start;$encoded"$'\e\\'
   }
 
   typeset -ga precmd_functions preexec_functions
   precmd_functions+=(_graphene_precmd)
   preexec_functions+=(_graphene_preexec)
-  zle -N zle-line-init _graphene_line_init
 fi

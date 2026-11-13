@@ -13,10 +13,6 @@ mod input;
 mod layout;
 mod mouse;
 mod opener;
-// The OSC 133 scanner only reads the marks of the current shell scripts in their tests,
-// until the scripts send the block signals (#78).
-#[cfg(test)]
-mod osc133;
 mod palette;
 mod perf;
 mod pty;

@@ -26,7 +26,6 @@ src/
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
   timeline.rs      command blocks: finished blocks frozen in their own Term, current block (pure)
-  osc133.rs        OSC 133 scanner, test-only: reads the marks of the shell scripts in their tests
   block_actions.rs target block, block navigation, copied block / command / output (pure)
   view.rs          view rows over the timeline: source grid and line of each row, caps,
                    block and timeline scrolls, mouse point mapping (pure)
@@ -128,8 +127,13 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
   neutral card. The frozen rows are capped at the scrollback size, the oldest blocks
   dropped whole. Frozen blocks are reflowed for new columns only when the view shows
   them (`Timeline::reflow`, from `view::prepare`).
-- The session token (`Terminal::token`, 32 random hex characters) is the one the
-  scanner expects in the signals; the shell hooks receive it with the injection.
+- The session token (32 random hex characters, made by `Terminal::spawn`) is the one
+  the scanner expects in the signals. `shell_integration::prepare` passes it to the
+  shell in `GRAPHENE_BLOCK_TOKEN`; each script moves it into a non-exported shell
+  variable and unsets the environment variable, so commands run from the shell never
+  see it. The hooks (zsh `preexec` / `precmd`, bash `PS0` / first `PROMPT_COMMAND`
+  entry, fish `fish_preexec` / `fish_postexec`) send `start` with the base64 command
+  line and `end` with the status; they never read, wrap or rebuild the prompt.
 - `view::rows(timeline, live, lines)` lists the view rows: the source each one takes
   its cells from (`RowSource::{Header, Output, Live, Summary}`), the line in that
   source, its block, its offset from the view top in half-lines (`top`) and whether a

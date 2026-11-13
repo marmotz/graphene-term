@@ -1,10 +1,11 @@
-//! Shell integration: makes zsh, bash and fish emit OSC 133 marks without touching the
-//! user's dotfiles.
+//! Shell integration: makes zsh, bash and fish tell Graphene when a command starts and
+//! ends (the block signals of [`crate::signals`]) without touching the user's dotfiles.
 //!
 //! The scripts of `shell-integration/` are embedded in the binary, written at startup
 //! to a private runtime folder, and injected into the spawned shell through its startup
 //! mechanism: `ZDOTDIR` for zsh, `--posix` + `ENV` for bash, `XDG_DATA_DIRS` for fish.
-//! Each script restores the variable it came through before loading the user's files.
+//! Each script restores the variable it came through before loading the user's files,
+//! and moves the session token from [`TOKEN_VAR`] into a shell variable.
 
 use std::ffi::OsStr;
 use std::fs::{self, DirBuilder};
@@ -17,6 +18,9 @@ use log::warn;
 
 /// Opt-out variable: `0` starts the shell without integration.
 pub const OPT_OUT_VAR: &str = "GRAPHENE_SHELL_INTEGRATION";
+
+/// Variable carrying the session token to the hooks, which unset it.
+pub const TOKEN_VAR: &str = "GRAPHENE_BLOCK_TOKEN";
 
 /// zsh entry point, relative to the integration root.
 const ZSH_DIR: &str = "zsh";
@@ -53,7 +57,8 @@ pub struct Injection {
 
 /// Returns how to start the user's shell with the integration, or `None` to start it as
 /// usual: opted out, `$SHELL` unset or not zsh / bash / fish, or scripts not writable.
-pub fn prepare() -> Option<Injection> {
+/// `token` is the session token the hooks put in their signals.
+pub fn prepare(token: &str) -> Option<Injection> {
     let var = |name: &str| std::env::var(name).ok();
     if !enabled(var(OPT_OUT_VAR).as_deref()) {
         return None;
@@ -64,7 +69,7 @@ pub fn prepare() -> Option<Injection> {
         &std::env::temp_dir(),
         uid(),
     );
-    let injection = injection(&shell, &root, var)?;
+    let injection = injection(&shell, &root, token, var)?;
     // Written once per process: every shell spawned afterwards reuses the folder.
     static INSTALLED: OnceLock<bool> = OnceLock::new();
     let installed = *INSTALLED.get_or_init(|| match install(&root) {
@@ -95,9 +100,14 @@ fn root_dir(runtime_dir: Option<&str>, temp_dir: &Path, uid: u32) -> PathBuf {
     base.join("shell-integration")
 }
 
-/// Injection for `shell` (a path or a name), reading the current environment through
-/// `var`. `None` for a shell without integration.
-fn injection(shell: &str, root: &Path, var: impl Fn(&str) -> Option<String>) -> Option<Injection> {
+/// Injection for `shell` (a path or a name) with the session `token`, reading the
+/// current environment through `var`. `None` for a shell without integration.
+fn injection(
+    shell: &str,
+    root: &Path,
+    token: &str,
+    var: impl Fn(&str) -> Option<String>,
+) -> Option<Injection> {
     let name = Path::new(shell).file_name().and_then(OsStr::to_str)?;
     let path = |relative: &str| root.join(relative).to_string_lossy().into_owned();
     let mut args = Vec::new();
@@ -130,6 +140,7 @@ fn injection(shell: &str, root: &Path, var: impl Fn(&str) -> Option<String>) -> 
         }
         _ => return None,
     }
+    env.push((TOKEN_VAR.to_owned(), token.to_owned()));
     Some(Injection {
         program: shell.to_owned(),
         args,
@@ -229,6 +240,7 @@ mod tests {
     }
 
     const ROOT: &str = "/run/user/1000/graphene/shell-integration";
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
     fn opt_out_only_on_zero() {
@@ -254,17 +266,21 @@ mod tests {
 
     #[test]
     fn zsh_through_zdotdir() {
-        let inj = injection("/usr/bin/zsh", Path::new(ROOT), vars(&[])).unwrap();
+        let inj = injection("/usr/bin/zsh", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
         assert_eq!(inj.program, "/usr/bin/zsh");
         assert!(inj.args.is_empty());
         assert_eq!(
             env_of(&inj),
-            HashMap::from([("ZDOTDIR", "/run/user/1000/graphene/shell-integration/zsh")])
+            HashMap::from([
+                ("ZDOTDIR", "/run/user/1000/graphene/shell-integration/zsh"),
+                (TOKEN_VAR, TOKEN),
+            ])
         );
 
         let inj = injection(
             "zsh",
             Path::new(ROOT),
+            TOKEN,
             vars(&[("ZDOTDIR", "/home/me/.zsh")]),
         )
         .unwrap();
@@ -273,35 +289,48 @@ mod tests {
 
     #[test]
     fn bash_through_posix_env() {
-        let inj = injection("/bin/bash", Path::new(ROOT), vars(&[])).unwrap();
+        let inj = injection("/bin/bash", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
         assert_eq!(inj.args, ["--posix"]);
         assert_eq!(
             env_of(&inj),
-            HashMap::from([(
-                "ENV",
-                "/run/user/1000/graphene/shell-integration/bash/graphene.bash"
-            )])
+            HashMap::from([
+                (
+                    "ENV",
+                    "/run/user/1000/graphene/shell-integration/bash/graphene.bash"
+                ),
+                (TOKEN_VAR, TOKEN),
+            ])
         );
 
-        let inj = injection("bash", Path::new(ROOT), vars(&[("ENV", "/home/me/.shrc")])).unwrap();
+        let inj = injection(
+            "bash",
+            Path::new(ROOT),
+            TOKEN,
+            vars(&[("ENV", "/home/me/.shrc")]),
+        )
+        .unwrap();
         assert_eq!(env_of(&inj)["GRAPHENE_BASH_ENV"], "/home/me/.shrc");
     }
 
     #[test]
     fn fish_through_xdg_data_dirs() {
-        let inj = injection("/usr/bin/fish", Path::new(ROOT), vars(&[])).unwrap();
+        let inj = injection("/usr/bin/fish", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
         assert!(inj.args.is_empty());
         assert_eq!(
             env_of(&inj),
-            HashMap::from([(
-                "XDG_DATA_DIRS",
-                "/run/user/1000/graphene/shell-integration:/usr/local/share:/usr/share"
-            )])
+            HashMap::from([
+                (
+                    "XDG_DATA_DIRS",
+                    "/run/user/1000/graphene/shell-integration:/usr/local/share:/usr/share"
+                ),
+                (TOKEN_VAR, TOKEN),
+            ])
         );
 
         let inj = injection(
             "fish",
             Path::new(ROOT),
+            TOKEN,
             vars(&[("XDG_DATA_DIRS", "/opt/share")]),
         )
         .unwrap();
@@ -317,7 +346,7 @@ mod tests {
     fn other_shells_unchanged() {
         for shell in ["/bin/sh", "/usr/bin/nu", "/usr/bin/zsh-wrapper", "/", ""] {
             assert_eq!(
-                injection(shell, Path::new(ROOT), vars(&[])),
+                injection(shell, Path::new(ROOT), TOKEN, vars(&[])),
                 None,
                 "{shell}"
             );
@@ -367,17 +396,26 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::PermissionDenied);
     }
 
-    /// Runs real shells with the integration: one test per shell, skipped when the shell
+    /// Runs real shells with the integration: one test per case, skipped when the shell
     /// is not installed.
     mod shells {
         use super::*;
-        use crate::osc133::{Chunk, Mark, Scanner};
+        use crate::signals::{Chunk, Scanner, Signal};
         use alacritty_terminal::event::WindowSize;
         use alacritty_terminal::tty::{self, EventedReadWrite};
         use std::io::{Read, Write};
         use std::time::{Duration, Instant};
 
         const TIMEOUT: Duration = Duration::from_secs(10);
+
+        /// Invisible OSC the test configurations print before each prompt, so the
+        /// tests know when the shell waits for a command line.
+        const READY: &[u8] = b"\x1b]7777;ready\x1b\\";
+        const ZSH_READY: &str = "graphene_test_ready() { print -rn -- $'\\e]7777;ready\\e\\\\' }\n\
+                                 precmd_functions+=(graphene_test_ready)\n";
+        const BASH_READY: &str =
+            "PROMPT_COMMAND+=$'\\n'\"printf '\\\\e]7777;ready\\\\e\\\\\\\\'\"\n";
+        const FISH_READY: &str = "function graphene_test_ready --on-event fish_prompt; printf '\\e]7777;ready\\e\\\\'; end\n";
 
         fn find(shell: &str) -> Option<PathBuf> {
             std::env::var_os("PATH")
@@ -392,16 +430,23 @@ mod tests {
         struct Session {
             pty: tty::Pty,
             output: Vec<u8>,
-            marks: Vec<Mark>,
+            signals: Vec<Signal>,
             scanner: Scanner,
             /// Primary device attributes queries answered so far.
             answered: usize,
         }
 
+        /// Occurrences of `needle` in `haystack`.
+        fn count(haystack: &[u8], needle: &[u8]) -> usize {
+            haystack
+                .windows(needle.len())
+                .filter(|w| *w == needle)
+                .count()
+        }
+
         /// Primary device attributes queries (`CSI c`, `CSI 0 c`) in `output`.
         fn count_da1(output: &[u8]) -> usize {
-            output.windows(3).filter(|w| *w == b"\x1b[c").count()
-                + output.windows(4).filter(|w| *w == b"\x1b[0c").count()
+            count(output, b"\x1b[c") + count(output, b"\x1b[0c")
         }
 
         impl Drop for Session {
@@ -416,16 +461,14 @@ mod tests {
         }
 
         impl Session {
-            fn spawn(shell: &Path, home: &Path, extra_args: &[&str]) -> Self {
+            fn spawn(shell: &str, home: &Path) -> Self {
+                let path = find(shell).expect("shell present");
                 let root = home
                     .join("runtime")
                     .join("graphene")
                     .join("shell-integration");
                 install(&root).unwrap();
-                let mut injection = injection(shell.to_str().unwrap(), &root, vars(&[])).unwrap();
-                injection
-                    .args
-                    .extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+                let injection = injection(path.to_str().unwrap(), &root, TOKEN, vars(&[])).unwrap();
 
                 let home_str = home.to_string_lossy().into_owned();
                 let mut env: HashMap<String, String> = injection.env.into_iter().collect();
@@ -451,25 +494,38 @@ mod tests {
                     cell_width: 8,
                     cell_height: 16,
                 };
-                Self {
+                let mut session = Self {
                     pty: tty::new(&options, size, 0).unwrap(),
                     output: Vec::new(),
-                    marks: Vec::new(),
-                    scanner: Scanner::new(),
+                    signals: Vec::new(),
+                    scanner: Scanner::new(TOKEN),
                     answered: 0,
-                }
+                };
+                session.read_until("the first prompt", |s| s.prompts() >= 1);
+                session
             }
 
-            /// Reads the output until `done` holds for the marks, answering the primary
-            /// device attributes query fish waits for.
-            fn read_until(&mut self, what: &str, done: impl Fn(&[Mark]) -> bool) {
+            fn prompts(&self) -> usize {
+                count(&self.output, READY)
+            }
+
+            fn ends(&self) -> usize {
+                self.signals
+                    .iter()
+                    .filter(|signal| matches!(signal, Signal::End { .. }))
+                    .count()
+            }
+
+            /// Reads the output until `done` holds, answering the primary device
+            /// attributes query fish waits for.
+            fn read_until(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
                 let deadline = Instant::now() + TIMEOUT;
                 let mut buf = [0u8; 4096];
-                while !done(&self.marks) {
+                while !done(self) {
                     assert!(
                         Instant::now() < deadline,
-                        "timeout waiting for {what}: marks {:?}, output {:?}",
-                        self.marks,
+                        "timeout waiting for {what}: signals {:?}, output {:?}",
+                        self.signals,
                         String::from_utf8_lossy(&self.output)
                     );
                     match self.pty.reader().read(&mut buf) {
@@ -477,8 +533,8 @@ mod tests {
                         Ok(n) => {
                             let read = &buf[..n];
                             for chunk in self.scanner.split(read) {
-                                if let Chunk::Mark(mark) = chunk {
-                                    self.marks.push(mark);
+                                if let Chunk::Signal(signal) = chunk {
+                                    self.signals.push(signal);
                                 }
                             }
                             self.output.extend_from_slice(read);
@@ -514,87 +570,74 @@ mod tests {
 
             /// Writes `command` and waits for its command end and the next prompt.
             fn run(&mut self, command: &str) {
-                let ends = self.count(|mark| matches!(mark, Mark::CommandEnd(_)));
-                let prompts = self.count(|mark| mark == Mark::PromptStart);
+                let (ends, prompts) = (self.ends(), self.prompts());
                 self.write(&format!("{command}\r"));
-                self.read_until(command, |marks| {
-                    let count = |f: fn(Mark) -> bool| marks.iter().filter(|m| f(**m)).count();
-                    count(|mark| matches!(mark, Mark::CommandEnd(_))) > ends
-                        && count(|mark| mark == Mark::PromptStart) > prompts
-                });
+                self.read_until(command, |s| s.ends() > ends && s.prompts() > prompts);
             }
 
-            fn count(&self, f: impl Fn(Mark) -> bool) -> usize {
-                self.marks.iter().filter(|m| f(**m)).count()
+            /// Writes an empty command line and waits for the next prompt.
+            fn empty_line(&mut self) {
+                let prompts = self.prompts();
+                self.write("\r");
+                self.read_until("the prompt after an empty line", |s| s.prompts() > prompts);
             }
         }
 
-        /// Marks of the left prompt and the commands: hyperlinks dropped, and each right
-        /// prompt dropped with the prompt end that closes it.
-        fn command_marks(marks: &[Mark]) -> Vec<Mark> {
-            let mut kept = Vec::new();
-            let mut in_right_prompt = false;
-            for &mark in marks {
-                match mark {
-                    Mark::Hyperlink => {}
-                    Mark::RightPrompt => in_right_prompt = true,
-                    Mark::InputStart if in_right_prompt => in_right_prompt = false,
-                    mark => kept.push(mark),
-                }
+        fn start(command: &str) -> Signal {
+            Signal::Start {
+                command: command.to_owned(),
             }
-            kept
         }
 
-        /// Runs `true`, `false` then `probe`, checks the marks and that `probe` printed
-        /// `expected` (the user's rc files were sourced, the injection variables restored).
-        fn check(
-            shell: &str,
-            home: &Path,
-            extra_args: &[&str],
-            probe: &str,
-            expected: &str,
-        ) -> Session {
-            let path = find(shell).expect("shell present");
-            let mut session = Session::spawn(&path, home, extra_args);
-            session.read_until("the first prompt", |marks| {
-                marks.contains(&Mark::PromptStart)
-            });
+        fn end(status: i32) -> Signal {
+            Signal::End {
+                status: Some(status),
+            }
+        }
+
+        /// Runs `true`, an empty line, `false`, a command line holding `;` and quotes,
+        /// then `probe`; checks one start (with the command line) and one end (with the
+        /// status) per command, and that `probe` printed `expected`: the user's files
+        /// were sourced, the injection variables restored and the token kept out of
+        /// the environment.
+        fn check(shell: &str, home: &Path, probe: &str, expected: &str) -> Session {
+            let mut session = Session::spawn(shell, home);
             session.run("true");
+            session.empty_line();
             session.run("false");
+            session.run("echo 'a;b' \"c\"");
             session.run(probe);
 
-            use Mark::*;
-            let marks = command_marks(&session.marks);
             assert_eq!(
-                marks[..9],
+                session.signals,
                 [
-                    PromptStart,
-                    InputStart,
-                    OutputStart,
-                    CommandEnd(Some(0)),
-                    PromptStart,
-                    InputStart,
-                    OutputStart,
-                    CommandEnd(Some(1)),
-                    PromptStart,
+                    start("true"),
+                    end(0),
+                    start("false"),
+                    end(1),
+                    start("echo 'a;b' \"c\""),
+                    end(0),
+                    start(probe),
+                    end(0),
                 ],
                 "{shell}: {:?}",
-                session.marks
+                String::from_utf8_lossy(&session.output)
             );
             let output = String::from_utf8_lossy(&session.output);
             assert!(output.contains(expected), "{shell}: {output:?}");
             session
         }
 
-        const ZSH_PROBE: &str = "echo rc:${GRAPHENE_TEST_RC}:${ZDOTDIR}:${GRAPHENE_ZDOTDIR}:end";
-        const BASH_PROBE: &str = "echo rc:${GRAPHENE_TEST_RC}:${ENV}:${GRAPHENE_BASH_ENV}:$(set -o | grep -c 'posix *on'):end";
+        // `env | grep -c` counts the token variable in a command's environment.
+        const ZSH_PROBE: &str = "echo rc:${GRAPHENE_TEST_RC}:${ZDOTDIR}:${GRAPHENE_ZDOTDIR}:$(env | grep -c GRAPHENE_BLOCK_TOKEN):end";
+        const BASH_PROBE: &str = "echo rc:${GRAPHENE_TEST_RC}:${ENV}:${GRAPHENE_BASH_ENV}:$(set -o | grep -c 'posix *on'):$(env | grep -c GRAPHENE_BLOCK_TOKEN):end";
         // Quoted: in fish, an unset variable empties the whole unquoted word. System
         // vendor files (flatpak) may set XDG_DATA_DIRS again: only check that the
         // integration folder left it.
-        const FISH_PROBE: &str = "echo \"rc:$GRAPHENE_TEST_RC:\"(count (string match '*/runtime/graphene/*' -- $XDG_DATA_DIRS))\":$GRAPHENE_XDG_DATA_DIRS:end\"";
+        const FISH_PROBE: &str = "echo \"rc:$GRAPHENE_TEST_RC:\"(count (string match '*/runtime/graphene/*' -- $XDG_DATA_DIRS))\":$GRAPHENE_XDG_DATA_DIRS:\"(env | grep -c GRAPHENE_BLOCK_TOKEN)\":end\"";
 
         #[test]
-        fn zsh_marks_and_user_files() {
+        fn zsh_signals_and_user_files() {
             if find("zsh").is_none() {
                 eprintln!("zsh not installed, skipped");
                 return;
@@ -603,36 +646,47 @@ mod tests {
             fs::write(home.0.join(".zshenv"), "export GRAPHENE_TEST_ENV=yes\n").unwrap();
             fs::write(
                 home.0.join(".zshrc"),
-                "export GRAPHENE_TEST_RC=$GRAPHENE_TEST_ENV\nPS1='%# '\nRPS1='[r]'\n",
+                format!(
+                    "export GRAPHENE_TEST_RC=$GRAPHENE_TEST_ENV\nPS1='%# '\nRPS1='[r]'\n{ZSH_READY}"
+                ),
             )
             .unwrap();
-            let session = check("zsh", &home.0, &[], ZSH_PROBE, "rc:yes:::end");
-            assert!(session.marks.contains(&Mark::RightPrompt));
+            check("zsh", &home.0, ZSH_PROBE, "rc:yes:::0:end");
         }
 
+        /// zsh prints its `PROMPT_SP` mark after an output without a final newline
+        /// before running the precmd hooks: the mark stays in the command's output,
+        /// before the end signal.
         #[test]
-        fn zsh_wraps_a_prompt_rebuilt_by_a_later_hook() {
+        fn zsh_prompt_sp_mark_before_the_end() {
             if find("zsh").is_none() {
                 eprintln!("zsh not installed, skipped");
                 return;
             }
-            let home = TempDir::new("zsh-theme");
-            fs::write(
-                home.0.join(".zshrc"),
-                "export GRAPHENE_TEST_RC=yes\n\
-                 theme() { PS1='theme%# ' }\n\
-                 precmd_functions+=(theme)\n",
-            )
-            .unwrap();
-            check("zsh", &home.0, &[], ZSH_PROBE, "rc:yes:::end");
+            let home = TempDir::new("zsh-prompt-sp");
+            fs::write(home.0.join(".zshrc"), format!("PS1='%# '\n{ZSH_READY}")).unwrap();
+            let mut session = Session::spawn("zsh", &home.0);
+            let from = session.output.len();
+            session.run("printf nonl");
+            let output = &session.output[from..];
+            let end = format!("\x1b]6973;{TOKEN};end;0");
+            let end_at = output
+                .windows(end.len())
+                .position(|w| w == end.as_bytes())
+                .expect("end signal");
+            let mark_at = output
+                .windows(b"nonl\x1b[1m\x1b[7m%".len())
+                .position(|w| w == b"nonl\x1b[1m\x1b[7m%")
+                .expect("PROMPT_SP mark");
+            assert!(mark_at < end_at, "{:?}", String::from_utf8_lossy(output));
         }
 
         const P10K_THEME: &str = "/usr/share/zsh-theme-powerlevel10k/powerlevel10k.zsh-theme";
 
-        /// powerlevel10k rebuilds the prompt after every other precmd hook: it is asked
-        /// to emit the marks itself, and the script's own hooks step aside.
+        /// powerlevel10k rebuilds the prompt and emits its own OSC 133 marks: the hooks
+        /// do not depend on the prompt, so the signals are unchanged.
         #[test]
-        fn zsh_powerlevel10k_emits_the_marks() {
+        fn zsh_powerlevel10k_signals() {
             if find("zsh").is_none() || !Path::new(P10K_THEME).is_file() {
                 eprintln!("zsh or powerlevel10k not installed, skipped");
                 return;
@@ -647,19 +701,16 @@ mod tests {
                      POWERLEVEL9K_DISABLE_GITSTATUS=true\n\
                      POWERLEVEL9K_LEFT_PROMPT_ELEMENTS=(dir)\n\
                      POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS=(status)\n\
-                     source {P10K_THEME}\n"
+                     source {P10K_THEME}\n\
+                     {ZSH_READY}"
                 ),
             )
             .unwrap();
-            let session = check("zsh", &home.0, &[], ZSH_PROBE, "rc:yes:::end");
-            // One output start per command: the script's preexec stepped aside.
-            let starts = session.count(|mark| mark == Mark::OutputStart);
-            let ends = session.count(|mark| matches!(mark, Mark::CommandEnd(_)));
-            assert_eq!(starts, ends, "{:?}", session.marks);
+            check("zsh", &home.0, ZSH_PROBE, "rc:yes:::0:end");
         }
 
         #[test]
-        fn bash_marks_and_user_files() {
+        fn bash_signals_and_user_files() {
             if find("bash").is_none() {
                 eprintln!("bash not installed, skipped");
                 return;
@@ -667,97 +718,66 @@ mod tests {
             let home = TempDir::new("bash");
             fs::write(
                 home.0.join(".bashrc"),
-                "export GRAPHENE_TEST_RC=yes\nPS1='$ '\nPROMPT_COMMAND='PS1=\"pc\\$ \"'\n",
+                format!(
+                    "export GRAPHENE_TEST_RC=yes\nPS1='$ '\nPROMPT_COMMAND='PS1=\"pc\\$ \"'\n{BASH_READY}"
+                ),
             )
             .unwrap();
             // POSIX mode is off once the integration ran.
-            check("bash", &home.0, &[], BASH_PROBE, "rc:yes:::0:end");
+            check("bash", &home.0, BASH_PROBE, "rc:yes:::0:0:end");
         }
 
+        /// A command line left out of the history (leading space with `ignorespace`,
+        /// history off) starts with an empty command line, not an older entry.
         #[test]
-        fn bash_no_command_end_for_an_empty_line() {
+        fn bash_command_line_outside_the_history() {
             if find("bash").is_none() {
                 eprintln!("bash not installed, skipped");
                 return;
             }
-            let home = TempDir::new("bash-empty");
-            fs::write(home.0.join(".bashrc"), "PS1='$ '\n").unwrap();
-            let path = find("bash").unwrap();
-            let mut session = Session::spawn(&path, &home.0, &[]);
-            session.read_until("the first prompt", |marks| {
-                marks.contains(&Mark::PromptStart)
-            });
-            session.write("\r");
-            session.read_until("the second prompt", |marks| {
-                marks.iter().filter(|m| **m == Mark::PromptStart).count() == 2
-            });
+            let home = TempDir::new("bash-history");
+            fs::write(
+                home.0.join(".bashrc"),
+                format!("HISTCONTROL=ignorespace\nPS1='$ '\n{BASH_READY}"),
+            )
+            .unwrap();
+            let mut session = Session::spawn("bash", &home.0);
             session.run("true");
-            use Mark::*;
+            session.run(" false");
+            session.run("set +o history");
+            session.run("true");
             assert_eq!(
-                command_marks(&session.marks)[..6],
+                session.signals,
                 [
-                    PromptStart,
-                    InputStart,
-                    PromptStart,
-                    InputStart,
-                    OutputStart,
-                    CommandEnd(Some(0))
+                    start("true"),
+                    end(0),
+                    start(""),
+                    end(1),
+                    start("set +o history"),
+                    end(0),
+                    start(""),
+                    end(0),
                 ]
             );
         }
 
-        fn write_fish_config(home: &Path) {
-            let dir = home.join(".config").join("fish");
-            fs::create_dir_all(&dir).unwrap();
-            fs::write(
-                dir.join("config.fish"),
-                "set -gx GRAPHENE_TEST_RC yes\nfunction fish_prompt; echo -n '> '; end\n",
-            )
-            .unwrap();
-        }
-
         #[test]
-        fn fish_marks_and_user_files() {
+        fn fish_signals_and_user_files() {
             if find("fish").is_none() {
                 eprintln!("fish not installed, skipped");
                 return;
             }
             let home = TempDir::new("fish");
-            write_fish_config(&home.0);
-            check("fish", &home.0, &[], FISH_PROBE, "rc:yes:0::end");
-        }
-
-        /// With the native marks switched off, the script emits all of them: the
-        /// fallback of a fish older than 4.0.
-        #[test]
-        fn fish_without_native_marks() {
-            let Some(fish) = find("fish") else {
-                eprintln!("fish not installed, skipped");
-                return;
-            };
-            // `mark-prompt` exists since fish 4.0.6.
-            let switchable = std::process::Command::new(fish)
-                .args([
-                    "--features",
-                    "no-mark-prompt",
-                    "-c",
-                    "status test-feature mark-prompt",
-                ])
-                .status()
-                .is_ok_and(|status| status.code() == Some(1));
-            if !switchable {
-                eprintln!("fish without the mark-prompt feature, skipped");
-                return;
-            }
-            let home = TempDir::new("fish-fallback");
-            write_fish_config(&home.0);
-            check(
-                "fish",
-                &home.0,
-                &["--features", "no-mark-prompt"],
-                FISH_PROBE,
-                "rc:yes:0::end",
-            );
+            let dir = home.0.join(".config").join("fish");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("config.fish"),
+                format!(
+                    "set -gx GRAPHENE_TEST_RC yes\nfunction fish_prompt; echo -n '> '; end\n{FISH_READY}"
+                ),
+            )
+            .unwrap();
+            check("fish", &home.0, FISH_PROBE, "rc:yes:0::0:end");
         }
     }
 }

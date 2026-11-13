@@ -287,13 +287,16 @@ fits under its cap and scrolls the rest.
 
 ## Known limits
 
-- zsh's `PROMPT_SP` mark after an output without a final newline lands in the next
-  block's header (to check; Graphene could hide it since the output grid's cursor
-  column tells it).
+- zsh's `PROMPT_SP` mark after an output without a final newline (`%` in reverse
+  video, then spaces up to the line end) is printed before the `precmd` hooks, so
+  before `end`: it stays at the end of the command's own output, not in the next
+  block's header (checked by `zsh_prompt_sp_mark_before_the_end`).
 - A command that moves the cursor above its first output row hits the top of its own
   grid instead of rewriting the command line, unlike a classic terminal.
-- bash with history turned off sends no command line: copying the command falls back to
-  the header text.
+- bash reads the command line back from its history: when the line is not added
+  (history off, `ignorespace`, `ignoredups`) the hook sends it empty, and copying the
+  command falls back to the header text. zsh sends `$1`, also empty with the history
+  off.
 - A remote shell over `ssh` produces one block until the local shell signals again.
 
 ## Tests

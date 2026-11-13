@@ -48,9 +48,6 @@ pub struct Terminal {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     /// The command blocks. Lock order: `term` first, then `timeline`.
     pub timeline: Arc<Mutex<Timeline>>,
-    /// Session token the shell hooks put in their block signals.
-    #[allow(dead_code)] // Passed to the shell hooks by the injection (#78).
-    pub token: String,
     sender: pty::Sender,
 }
 
@@ -62,8 +59,11 @@ impl Terminal {
             ("COLORTERM".to_owned(), "truecolor".to_owned()),
             ("TERM_PROGRAM".to_owned(), "graphene".to_owned()),
         ]);
+        // The hooks put this token in their block signals: a signal printed by a program
+        // carries another one.
+        let token = session_token();
         // zsh, bash and fish get the shell integration; other shells start as before.
-        let shell = shell_integration::prepare().map(|injection| {
+        let shell = shell_integration::prepare(&token).map(|injection| {
             env.extend(injection.env);
             tty::Shell::new(injection.program, injection.args)
         });
@@ -77,16 +77,14 @@ impl Terminal {
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
         let timeline = Arc::new(Mutex::new(Timeline::new(config.scrolling_history)));
         let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
-        let token = session_token();
 
-        let pty_loop = PtyLoop::new(term.clone(), timeline.clone(), token.clone(), proxy, pty)?;
+        let pty_loop = PtyLoop::new(term.clone(), timeline.clone(), token, proxy, pty)?;
         let sender = pty_loop.sender();
         pty_loop.spawn();
 
         Ok(Self {
             term,
             timeline,
-            token,
             sender,
         })
     }
