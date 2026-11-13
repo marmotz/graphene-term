@@ -386,40 +386,46 @@ impl Dimensions for Size {
     }
 }
 
+/// Test helpers shared with the view tests: a session fed through the scanner, the
+/// parser and the timeline, and the signals the hooks send.
 #[cfg(test)]
-mod tests {
+pub(crate) mod testing {
     use super::*;
     use alacritty_terminal::term::test::TermSize;
-    use alacritty_terminal::vte::ansi::{NamedColor, Processor, StdSyncHandler};
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use crate::signals::Scanner;
 
-    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
-    const COLUMNS: usize = 20;
-    const LINES: usize = 5;
+    pub const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+    pub const COLUMNS: usize = 20;
+    pub const LINES: usize = 5;
 
-    struct Session {
-        term: Term<VoidListener>,
-        timeline: Timeline,
+    pub struct Session {
+        pub term: Term<VoidListener>,
+        pub timeline: Timeline,
         scanner: Scanner,
         parser: Processor<StdSyncHandler>,
     }
 
     impl Session {
-        fn new(scrollback: usize) -> Self {
+        pub fn new(scrollback: usize) -> Self {
+            Self::sized(COLUMNS, LINES, scrollback)
+        }
+
+        pub fn sized(columns: usize, lines: usize, scrollback: usize) -> Self {
             let config = Config {
                 scrolling_history: scrollback,
                 ..Config::default()
             };
             Session {
-                term: Term::new(config, &TermSize::new(COLUMNS, LINES), VoidListener),
+                term: Term::new(config, &TermSize::new(columns, lines), VoidListener),
                 timeline: Timeline::new(scrollback),
                 scanner: Scanner::new(TOKEN),
                 parser: Processor::new(),
             }
         }
 
-        fn feed(&mut self, bytes: &str) {
+        pub fn feed(&mut self, bytes: &str) {
             let chunks: Vec<Chunk<'_>> = self.scanner.split(bytes.as_bytes()).collect();
             for chunk in chunks {
                 if let Chunk::Bytes(bytes) = chunk {
@@ -430,7 +436,7 @@ mod tests {
         }
 
         /// Prompt, typed command, its output lines, then its end.
-        fn command(&mut self, name: &str, output: &[&str], status: i32) {
+        pub fn command(&mut self, name: &str, output: &[&str], status: i32) {
             self.feed(&format!("$ {name}\r\n{}", start(name)));
             for line in output {
                 self.feed(&format!("{line}\r\n"));
@@ -438,16 +444,16 @@ mod tests {
             self.feed(&end(status));
         }
 
-        fn live(&self) -> Vec<String> {
+        pub fn live(&self) -> Vec<String> {
             texts(&self.term)
         }
     }
 
-    fn start(command: &str) -> String {
+    pub fn start(command: &str) -> String {
         format!("\x1b]6973;{TOKEN};start;{}\x07", base64(command.as_bytes()))
     }
 
-    fn base64(bytes: &[u8]) -> String {
+    pub fn base64(bytes: &[u8]) -> String {
         const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = String::new();
         for group in bytes.chunks(3) {
@@ -466,12 +472,12 @@ mod tests {
         out
     }
 
-    fn end(status: i32) -> String {
+    pub fn end(status: i32) -> String {
         format!("\x1b]6973;{TOKEN};end;{status}\x07")
     }
 
     /// Every row of `term`, history first, trailing spaces trimmed.
-    fn texts<L>(term: &Term<L>) -> Vec<String> {
+    pub fn texts<L>(term: &Term<L>) -> Vec<String> {
         let grid = term.grid();
         let top = -(grid.history_size() as i32);
         (top..grid.screen_lines() as i32)
@@ -485,6 +491,13 @@ mod tests {
             })
             .collect()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use super::*;
+    use alacritty_terminal::vte::ansi::NamedColor;
 
     #[test]
     fn content_rows_ends_at_the_last_text_or_the_cursor_past_column_zero() {

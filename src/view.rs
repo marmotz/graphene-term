@@ -18,6 +18,10 @@ use alacritty_terminal::term::{Term, TermMode};
 
 use crate::blocks::{self, BlockId, RowRole, ShellState};
 
+// The view over the timeline, used once rendering switches to it (#77).
+#[allow(dead_code)]
+pub mod timeline;
+
 /// One viewport row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewRow {

@@ -13,7 +13,7 @@ _terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
-_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 2/18 tasks done
+_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 3/18 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -30,7 +30,7 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 | [ ]  | [#73](https://github.com/marmotz/graphene-term/issues/73) | Command blocks: selected block shown as a highlighted card | #72 |
 | [x]  | [#74](https://github.com/marmotz/graphene-term/issues/74) | Command blocks: private OSC signals scanner | — |
 | [x]  | [#75](https://github.com/marmotz/graphene-term/issues/75) | Command blocks: timeline model with live grid and frozen blocks | #74 |
-| [ ]  | [#76](https://github.com/marmotz/graphene-term/issues/76) | Command blocks: view over the timeline with capped blocks | #75 |
+| [x]  | [#76](https://github.com/marmotz/graphene-term/issues/76) | Command blocks: view over the timeline with capped blocks | #75 |
 | [ ]  | [#77](https://github.com/marmotz/graphene-term/issues/77) | Command blocks: switch the PTY loop and rendering to the timeline | #76 |
 | [ ]  | [#78](https://github.com/marmotz/graphene-term/issues/78) | Command blocks: start and end hooks for zsh, bash and fish | #74, #77 |
 | [ ]  | [#79](https://github.com/marmotz/graphene-term/issues/79) | Command blocks: block and timeline scrolling, mouse routing | #77 |
