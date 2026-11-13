@@ -67,7 +67,7 @@ pub struct RowDecoration {
 }
 
 /// Card drawn behind the consecutive view rows of one block.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Card {
     /// View rows covered.
     pub rows: Range<usize>,
@@ -82,6 +82,19 @@ pub struct Card {
     pub chevron: Option<Fold>,
     /// The block is the selected one.
     pub selected: bool,
+    /// Scroll indicator of a block showing only part of its output.
+    pub scroll: Option<ScrollBar>,
+}
+
+/// Scroll indicator drawn on a card's right edge, beside its output rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollBar {
+    /// View rows of the block's output in the card: the track.
+    pub rows: Range<usize>,
+    /// Where the shown output rows start in the whole output, as a share of it (0 to 1).
+    pub start: f32,
+    /// Share of the whole output shown.
+    pub length: f32,
 }
 
 /// Column where the hidden-rows summary of a row starts: two columns after its last
@@ -382,11 +395,48 @@ pub fn marks<T>(
                     status: card_status(timeline, id),
                     chevron: chevron(timeline, id).filter(|_| !clipped_top),
                     selected: false,
+                    scroll: None,
                 });
             }
         }
     }
+    for card in &mut cards {
+        card.scroll = scroll_bar(live, timeline, view, card.rows.clone());
+    }
     (decorations, cards)
+}
+
+/// Scroll indicator of the card over the view rows `rows`: its block's output rows in
+/// the card, when the block shows only part of its output.
+fn scroll_bar<T>(
+    live: &Term<T>,
+    timeline: &Timeline,
+    view: &[ViewRow],
+    rows: Range<usize>,
+) -> Option<ScrollBar> {
+    let id = view[rows.start].block?;
+    let max = view::max_block_scroll(timeline, live, id, live.screen_lines());
+    if max == 0 {
+        return None;
+    }
+    let output = |row: &ViewRow| match row.source {
+        RowSource::Output(of) => of == id,
+        RowSource::Live => timeline.current().id == id,
+        RowSource::Header(_) | RowSource::Summary(_) => false,
+    };
+    let first = rows.clone().find(|&row| output(&view[row]))?;
+    let last = rows.clone().rev().find(|&row| output(&view[row]))?;
+    let (total, scroll) = match timeline.block(id) {
+        Some(block) => (block.output.screen_lines(), block.scroll),
+        None => (view::live_rows(live), timeline.current().scroll),
+    };
+    let shown = total - max;
+    let start = total - shown - scroll.min(max);
+    Some(ScrollBar {
+        rows: first..last + 1,
+        start: start as f32 / total as f32,
+        length: shown as f32 / total as f32,
+    })
 }
 
 /// Whether the card starting on view row `row` of `view` has a fold chevron.
@@ -656,6 +706,7 @@ mod tests {
             status,
             chevron,
             selected: false,
+            scroll: None,
         }
     }
 
@@ -760,17 +811,81 @@ mod tests {
         session.command("seq", &["1", "2", "3"], 0);
         session.feed("$ ");
         let frame = capture(&session, &Palette::default(), true);
-        // The block's header and first rows are above the view: no chevron.
+        // The block's header and first rows are above the view: no chevron. Capped at
+        // 3 rows, it shows its last 2 output rows of 3: a scroll indicator.
         assert_eq!(texts(&frame), ["2", "3", "$"]);
         assert_eq!(
             frame.cards,
             vec![
                 Card {
                     clipped_top: true,
+                    scroll: Some(ScrollBar {
+                        rows: 0..2,
+                        start: 1.0 / 3.0,
+                        length: 2.0 / 3.0,
+                    }),
                     ..card(0..2, Some(Status::Success), None)
                 },
                 card(2..3, None, None),
             ]
+        );
+    }
+
+    /// A finished `seq` printing 1 to 6 then a prompt, in a 10x6 session: capped at 5
+    /// rows, the block shows its header and its last 4 output rows of 6; with the
+    /// prompt's card below, its header is above the view.
+    fn tall_block() -> Session {
+        let mut session = Session::sized(10, 6, 100);
+        session.command("seq", &["1", "2", "3", "4", "5", "6"], 0);
+        session.feed("$ ");
+        session
+    }
+
+    #[test]
+    fn scroll_indicator_beside_the_output_of_a_capped_block() {
+        let mut session = tall_block();
+        let frame = capture(&session, &Palette::default(), true);
+        assert_eq!(texts(&frame), ["3", "4", "5", "6", "$"]);
+        let bar = ScrollBar {
+            rows: 0..4,
+            start: 2.0 / 6.0,
+            length: 4.0 / 6.0,
+        };
+        assert_eq!(frame.cards[0].scroll, Some(bar.clone()));
+        // The prompt's card does not scroll.
+        assert_eq!(frame.cards[1].scroll, None);
+
+        // Scrolled to its top, the thumb moves up.
+        let lines = session.term.screen_lines();
+        view::scroll_block(&mut session.timeline, &session.term, BlockId(0), lines, 5);
+        let frame = capture(&session, &Palette::default(), true);
+        assert_eq!(texts(&frame), ["1", "2", "3", "4", "$"]);
+        assert_eq!(frame.cards[0].scroll, Some(ScrollBar { start: 0.0, ..bar }));
+    }
+
+    #[test]
+    fn no_scroll_indicator_on_a_folded_block() {
+        let mut session = tall_block();
+        session.timeline.toggle_fold(BlockId(0));
+        let frame = capture(&session, &Palette::default(), true);
+        assert!(frame.cards.iter().all(|card| card.scroll.is_none()));
+    }
+
+    #[test]
+    fn scroll_indicator_on_the_live_output_of_a_tall_current_block() {
+        // No signal: one block holding the whole session, capped at 2 rows of 3 lines.
+        let frame = capture(
+            &session_with("1\r\n2\r\n3\r\n4\r\n5"),
+            &Palette::default(),
+            true,
+        );
+        assert_eq!(
+            frame.cards[0].scroll,
+            Some(ScrollBar {
+                rows: 0..2,
+                start: 3.0 / 5.0,
+                length: 2.0 / 5.0,
+            })
         );
     }
 

@@ -479,6 +479,7 @@ mod tests {
                 status: None,
                 chevron: None,
                 selected: false,
+                scroll: None,
             }],
             row_tops: vec![0],
             block_colors: BlockColors {

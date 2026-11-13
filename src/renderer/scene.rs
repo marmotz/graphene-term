@@ -4,7 +4,7 @@ use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use super::glyphs::GlyphKey;
 use super::rects::{RectInstance, Shape};
-use crate::frame::{self, Card, Fold, Frame};
+use crate::frame::{self, Card, Fold, Frame, ScrollBar};
 use crate::i18n::{self, Msg};
 use crate::layout::GridLayout;
 use crate::timeline::Status;
@@ -116,8 +116,35 @@ fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<Rec
                 .with_radius(stripe / 2.0),
             );
         }
+        if let Some(bar) = &card.scroll {
+            rects.push(scroll_thumb(frame, layout, bar, stripe, srgb_target));
+        }
     }
     rects
+}
+
+/// Scroll indicator of a card: a thin bar with round ends in the card's right padding,
+/// in the dim color, beside the output rows (the track), placed and sized after the
+/// share of the output shown. Never shorter than it is wide.
+fn scroll_thumb(
+    frame: &Frame,
+    layout: &GridLayout,
+    bar: &ScrollBar,
+    width: f32,
+    srgb_target: bool,
+) -> RectInstance {
+    let track_top = layout.row_top(frame.row_tops[bar.rows.start]);
+    let track_bottom = layout.row_top(frame.row_tops[bar.rows.end - 1] + 2);
+    let track = track_bottom - track_top;
+    let height = (bar.length * track).round().clamp(width, track);
+    let top = (track_top + (bar.start * track).round()).min(track_bottom - height);
+    let x = layout.grid_right() + ((layout.card_pad - width) / 2.0).max(0.0).round();
+    RectInstance::new(
+        [x, top],
+        [width, height],
+        gpu_color(frame.block_colors.dim, srgb_target),
+    )
+    .with_radius(width / 2.0)
 }
 
 /// Fold chevrons, drawn above the glyphs: a disc in the card color on the card's
@@ -319,7 +346,7 @@ mod tests {
     use super::*;
     use crate::banner::{Banner, BannerLayout};
     use crate::frame::{
-        BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration,
+        BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration, ScrollBar,
     };
     use crate::layout::CellSize;
     use crate::timeline::Status;
@@ -397,6 +424,7 @@ mod tests {
             status,
             chevron: None,
             selected: false,
+            scroll: None,
         }
     }
 
@@ -641,6 +669,54 @@ mod tests {
         );
         // The grid itself starts after the margin and the card padding.
         assert_eq!(placed(&scene.glyphs)[0], ([10.0, 0.0], 'a'));
+    }
+
+    #[test]
+    fn scroll_indicator_beside_the_output_rows_in_the_dim_color() {
+        let mut f = frame(vec![vec![cell('a')]; 4]);
+        f.row_tops = vec![0, 2, 4, 6];
+        f.cards = vec![Card {
+            // Output on rows 1 to 3 (pixels 20..80), the middle quarter shown.
+            scroll: Some(ScrollBar {
+                rows: 1..4,
+                start: 0.5,
+                length: 0.25,
+            }),
+            ..card(0..4, Some(Status::Success))
+        }];
+        let l = margin_layout();
+        let scene = build(&f, &l, false);
+        // Card, stripe, then the 2 px thumb centered in the 5 px right card padding:
+        // a quarter of the 60 px track, halfway down.
+        assert_eq!(scene.under.len(), 3);
+        assert_eq!(
+            shapes(&scene.under[2..]),
+            vec![(
+                [l.grid_right() + 2.0, 50.0],
+                [2.0, 15.0],
+                gpu_color(GREY, false),
+                1.0,
+                0
+            )]
+        );
+    }
+
+    #[test]
+    fn scroll_indicator_keeps_a_minimum_length_inside_its_track() {
+        let mut f = frame(vec![vec![cell('a')]; 4]);
+        f.row_tops = vec![0, 2, 4, 6];
+        f.cards = vec![Card {
+            scroll: Some(ScrollBar {
+                rows: 1..4,
+                start: 1.0,
+                length: 0.001,
+            }),
+            ..card(0..4, None)
+        }];
+        let scene = build(&f, &margin_layout(), false);
+        // No stripe on a neutral card: the thumb follows the card background.
+        let thumb = &scene.under[1];
+        assert_eq!((thumb.position[1], thumb.size[1]), (78.0, 2.0));
     }
 
     #[test]
