@@ -21,6 +21,9 @@ mod pty;
 mod renderer;
 mod selection;
 mod shell_integration;
+// Used once the PTY loop switches to the timeline (#77).
+#[allow(dead_code)]
+mod signals;
 mod terminal;
 mod theme;
 mod update;

@@ -13,7 +13,7 @@ _terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks
 
 ## Command blocks  ·  [overview](features/command-blocks/overview.md)
 
-_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 0/18 tasks done
+_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 1/18 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -28,7 +28,7 @@ _tâches créées — voir [technical.md](features/command-blocks/technical.md)_
 | [ ]  | [#71](https://github.com/marmotz/graphene-term/issues/71) | Command blocks: card layout and view geometry with gaps | — |
 | [ ]  | [#72](https://github.com/marmotz/graphene-term/issues/72) | Command blocks: card frame and scene rendering | #70, #71 |
 | [ ]  | [#73](https://github.com/marmotz/graphene-term/issues/73) | Command blocks: selected block shown as a highlighted card | #72 |
-| [ ]  | [#74](https://github.com/marmotz/graphene-term/issues/74) | Command blocks: private OSC signals scanner | — |
+| [x]  | [#74](https://github.com/marmotz/graphene-term/issues/74) | Command blocks: private OSC signals scanner | — |
 | [ ]  | [#75](https://github.com/marmotz/graphene-term/issues/75) | Command blocks: timeline model with live grid and frozen blocks | #74 |
 | [ ]  | [#76](https://github.com/marmotz/graphene-term/issues/76) | Command blocks: view over the timeline with capped blocks | #75 |
 | [ ]  | [#77](https://github.com/marmotz/graphene-term/issues/77) | Command blocks: switch the PTY loop and rendering to the timeline | #76 |
