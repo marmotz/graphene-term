@@ -25,7 +25,10 @@ mod shell_integration;
 #[allow(dead_code)]
 mod signals;
 mod terminal;
+// Used once the PTY loop switches to the timeline (#77).
 mod theme;
+#[allow(dead_code)]
+mod timeline;
 mod update;
 mod view;
 
