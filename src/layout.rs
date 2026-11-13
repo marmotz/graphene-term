@@ -49,7 +49,8 @@ pub enum Hit {
     Chevron { row: usize },
     /// In the gap between two cards.
     Gap,
-    /// Below the last view row: the blank space under the cards, or the bottom padding.
+    /// Below the last view row, right of the margin: the blank space under the cards, or
+    /// the bottom padding.
     Blank,
     /// A grid cell, with the half of the cell the pixel falls in, and what the view row
     /// shows: its source, the line in that source and its block (`None` on the
@@ -159,6 +160,12 @@ impl GridLayout {
         }
         match view.last() {
             Some(last) if y < self.row_top(last.top + 2) => {}
+            // The margin below the cards still belongs to the last row's block.
+            Some(_) if x < self.grid_left() => {
+                return Hit::Margin {
+                    row: view.len() - 1,
+                };
+            }
             _ => return Hit::Blank,
         }
         let (column, row, side) = self.point_at(x, y, view);
@@ -408,11 +415,17 @@ mod tests {
     #[test]
     fn hit_below_the_last_row_is_blank() {
         let l = layout();
-        // The gapped view ends at pixel row 108: blank below, margin included.
+        // The gapped view ends at pixel row 108: blank below, except the margin, which
+        // maps to the last row as a margin click selects its block.
         let view = gapped();
         assert_eq!(l.hit(100.0, 107.9, &view), cell(8, 3, Side::Left, &view));
         assert_eq!(l.hit(100.0, 108.0, &view), Hit::Blank);
-        assert_eq!(l.hit(0.0, 300.0, &view), Hit::Blank);
+        assert_eq!(
+            l.hit(0.0, 300.0, &view),
+            Hit::Margin {
+                row: view.len() - 1
+            }
+        );
         // The bottom padding of a full view.
         assert_eq!(l.hit(100.0, 408.0, &plain(20)), Hit::Blank);
         // An empty view is blank everywhere.
