@@ -391,7 +391,7 @@ right reserve.
 
 - `margin` = `round(cell.width / 2)`: holds the stripe; replaces `gutter`.
 - `card_pad` = `round(cell.width / 2)` on each side of the grid.
-- `chevron_radius` = `round(cell.height * 0.35)`. The chevron is centered on the
+- `chevron_radius` = `round(cell.height * 0.45)`. The chevron is centered on the
   card's top-right corner, so it needs `chevron_radius` free pixels right of the card:
   `right_reserve = max(padding, chevron_radius)`. With the default padding (8 px) and a
   14 px font, no extra column is lost.
@@ -502,7 +502,7 @@ shows behind them. The summary run and the cursor are unchanged, placed with
 `row_top`.
 
 As implemented: the stripe is centered in the margin; the chevron triangle is a box of
-`chevron_radius` side centered on the corner; the chevrons go in `over` before the
+`round(chevron_radius * 1.2)` side centered on the corner; the chevrons go in `over` before the
 cursor and the banner. A headless GPU test checks that a card's corner pixel keeps the
 background color.
 

@@ -68,7 +68,7 @@ impl GridLayout {
     pub fn new(width: u32, height: u32, cell: CellSize, padding: f32) -> Self {
         let margin = (cell.width / 2.0).round();
         let card_pad = (cell.width / 2.0).round();
-        let chevron_radius = (cell.height * 0.35).round();
+        let chevron_radius = (cell.height * 0.45).round();
         let right_reserve = padding.max(chevron_radius);
         let horizontal = width as f32 - padding - margin - 2.0 * card_pad - right_reserve;
         Self {
@@ -215,7 +215,7 @@ mod tests {
     /// 80 columns and 20 lines with 8 px of padding: 5 px of margin, 5 px of card
     /// padding on each side and 8 px of right reserve (the padding, larger than the
     /// 7 px chevron radius).
-    const WIDTH: u32 = 831;
+    const WIDTH: u32 = 832;
     const HEIGHT: u32 = 416;
 
     fn layout() -> GridLayout {
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!((l.columns, l.lines), (80, 20));
         assert_eq!(
             (l.margin, l.card_pad, l.chevron_radius, l.right_reserve),
-            (5.0, 5.0, 7.0, 8.0)
+            (5.0, 5.0, 9.0, 9.0)
         );
     }
 
@@ -264,10 +264,10 @@ mod tests {
     fn margin_card_padding_and_right_reserve_are_always_reserved() {
         // One pixel less loses a column.
         assert_eq!(GridLayout::new(WIDTH - 1, HEIGHT, CELL, 8.0).columns, 79);
-        // Without padding, the chevron radius is reserved on the right: 7 + 5 + 10.
-        let l = GridLayout::new(822, HEIGHT, CELL, 0.0);
-        assert_eq!((l.right_reserve, l.columns), (7.0, 80));
-        assert_eq!(GridLayout::new(821, HEIGHT, CELL, 0.0).columns, 79);
+        // Without padding, the chevron radius is reserved on the right: 9 + 5 + 10.
+        let l = GridLayout::new(824, HEIGHT, CELL, 0.0);
+        assert_eq!((l.right_reserve, l.columns), (9.0, 80));
+        assert_eq!(GridLayout::new(823, HEIGHT, CELL, 0.0).columns, 79);
     }
 
     #[test]
@@ -400,14 +400,14 @@ mod tests {
         let l = layout();
         let view = gapped();
         // Card corners: x = 818 + 5 = 823; block 0 at y = 18 (first view row), block 1
-        // at y = 68. Radius 7.
+        // at y = 68. Radius 9.
         assert_eq!(l.hit(823.0, 68.0, &view), Hit::Chevron { row: 2 });
         assert_eq!(l.hit(818.0, 64.0, &view), Hit::Chevron { row: 2 });
         assert_eq!(l.hit(829.0, 70.0, &view), Hit::Chevron { row: 2 });
         assert_eq!(l.hit(823.0, 18.0, &view), Hit::Chevron { row: 0 });
         // Outside the disc.
         assert!(matches!(
-            l.hit(831.0, 68.0, &view),
+            l.hit(833.0, 68.0, &view),
             Hit::Cell { row: 2, .. }
         ));
         assert!(matches!(

@@ -125,7 +125,7 @@ fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<Rec
 fn chevrons(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<RectInstance> {
     let radius = layout.chevron_radius;
     let center_x = layout.grid_right() + layout.card_pad;
-    let side = radius.round();
+    let side = (radius * 1.2).round();
     let mut rects = Vec::new();
     for card in &frame.cards {
         let Some(fold) = card.chevron else {
@@ -692,25 +692,25 @@ mod tests {
         let l = margin_layout();
         let scene = build(&f, &l, false);
         let rgb = |c: Rgb| gpu_color(c, false);
-        // Radius round(20 * 0.35) = 7, centered on the card's top-right corner; the
-        // triangle is a 7 px box in its middle.
+        // Radius round(20 * 0.45) = 9, centered on the card's top-right corner; the
+        // triangle is an 11 px box (round(9 * 1.2)) in its middle.
         let cx = l.grid_right() + 5.0;
         assert_eq!(
             shapes(&scene.over),
             vec![
-                ([cx - 7.0, -7.0], [14.0, 14.0], rgb(CARD), 7.0, 0),
+                ([cx - 9.0, -9.0], [18.0, 18.0], rgb(CARD), 9.0, 0),
                 (
-                    [cx - 3.5, -3.5],
-                    [7.0, 7.0],
+                    [cx - 5.5, -5.5],
+                    [11.0, 11.0],
                     rgb(RED),
                     0.0,
                     Shape::TriangleRight as u32
                 ),
-                ([cx - 7.0, 43.0], [14.0, 14.0], rgb(CARD_SELECTED), 7.0, 0),
+                ([cx - 9.0, 41.0], [18.0, 18.0], rgb(CARD_SELECTED), 9.0, 0),
                 // `Unknown`: the dim color.
                 (
-                    [cx - 3.5, 46.5],
-                    [7.0, 7.0],
+                    [cx - 5.5, 44.5],
+                    [11.0, 11.0],
                     rgb(GREY),
                     0.0,
                     Shape::TriangleDown as u32
