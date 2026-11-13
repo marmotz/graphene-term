@@ -17,6 +17,21 @@ if [[ -f ${ZDOTDIR:-$HOME}/.zshenv ]]; then
 fi
 
 if [[ -o interactive ]]; then
+  # powerlevel10k rebuilds the prompt in a precmd hook that keeps moving itself after
+  # every other one, so the wrapping below never sticks. It emits the marks itself
+  # when asked to, as it does for kitty: ask it, then stay out of its way.
+  (( ${+__p9k_force_term_shell_integration} )) || typeset -gi __p9k_force_term_shell_integration=1
+
+  # Whether a loaded powerlevel10k emits the marks.
+  _graphene_p10k() {
+    (( ${+functions[_p9k_iterm2_precmd]} && __p9k_force_term_shell_integration == 1 ))
+  }
+
+  _graphene_unhook() {
+    precmd_functions=(${precmd_functions:#_graphene_precmd})
+    preexec_functions=(${preexec_functions:#_graphene_preexec})
+  }
+
   # Set by preexec: a command ran since the last prompt.
   typeset -gi _graphene_command_ran=0
   typeset -g _graphene_ps1= _graphene_rps1=
@@ -40,6 +55,10 @@ if [[ -o interactive ]]; then
 
   _graphene_precmd() {
     local ret=$?
+    if _graphene_p10k; then
+      _graphene_unhook
+      return $ret
+    fi
     # Like fish: no command end for an empty command line, nor before the first prompt.
     if (( _graphene_command_ran )); then
       _graphene_command_ran=0
@@ -54,6 +73,10 @@ if [[ -o interactive ]]; then
   }
 
   _graphene_preexec() {
+    if _graphene_p10k; then
+      _graphene_unhook
+      return
+    fi
     _graphene_command_ran=1
     builtin print -rn -- $'\e]133;C\e\\'
   }
@@ -62,7 +85,7 @@ if [[ -o interactive ]]; then
   # after it was wrapped: wrap it and redraw it once the line editor starts. A widget
   # defined later by the user's configuration replaces this one.
   _graphene_line_init() {
-    if _graphene_wrap_prompts; then
+    if ! _graphene_p10k && _graphene_wrap_prompts; then
       zle reset-prompt
     fi
   }

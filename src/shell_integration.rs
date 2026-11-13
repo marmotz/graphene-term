@@ -627,6 +627,37 @@ mod tests {
             check("zsh", &home.0, &[], ZSH_PROBE, "rc:yes:::end");
         }
 
+        const P10K_THEME: &str = "/usr/share/zsh-theme-powerlevel10k/powerlevel10k.zsh-theme";
+
+        /// powerlevel10k rebuilds the prompt after every other precmd hook: it is asked
+        /// to emit the marks itself, and the script's own hooks step aside.
+        #[test]
+        fn zsh_powerlevel10k_emits_the_marks() {
+            if find("zsh").is_none() || !Path::new(P10K_THEME).is_file() {
+                eprintln!("zsh or powerlevel10k not installed, skipped");
+                return;
+            }
+            let home = TempDir::new("zsh-p10k");
+            fs::write(
+                home.0.join(".zshrc"),
+                format!(
+                    "export GRAPHENE_TEST_RC=yes\n\
+                     POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true\n\
+                     POWERLEVEL9K_INSTANT_PROMPT=off\n\
+                     POWERLEVEL9K_DISABLE_GITSTATUS=true\n\
+                     POWERLEVEL9K_LEFT_PROMPT_ELEMENTS=(dir)\n\
+                     POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS=(status)\n\
+                     source {P10K_THEME}\n"
+                ),
+            )
+            .unwrap();
+            let session = check("zsh", &home.0, &[], ZSH_PROBE, "rc:yes:::end");
+            // One output start per command: the script's preexec stepped aside.
+            let starts = session.count(|mark| mark == Mark::OutputStart);
+            let ends = session.count(|mark| matches!(mark, Mark::CommandEnd(_)));
+            assert_eq!(starts, ends, "{:?}", session.marks);
+        }
+
         #[test]
         fn bash_marks_and_user_files() {
             if find("bash").is_none() {
