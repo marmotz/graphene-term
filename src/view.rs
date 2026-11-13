@@ -4,8 +4,13 @@
 //! The view follows alacritty's `display_offset`: its bottom row is the bottom grid line
 //! of alacritty's viewport. Folding is a row filter over it: the output rows of folded
 //! blocks are skipped while the rows are collected upward from that line, and scroll
-//! deltas in visible rows are converted to grid lines ([`grid_delta`]). Without folds,
-//! the view is exactly alacritty's viewport.
+//! deltas in visible rows are converted to grid lines ([`grid_delta`]).
+//!
+//! The view height is counted in half-lines: a row takes two, and the first row of a
+//! block takes one more when a row of another block shows above it (the gap between two
+//! cards). Rows are whole, so the view may hold fewer rows than the screen; the leftover
+//! half-lines go to the top. Without blocks, or on the alternate screen, there is no gap
+//! and the view is exactly alacritty's viewport.
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
@@ -23,6 +28,11 @@ pub struct ViewRow {
     pub role: RowRole,
     /// Output rows of a folded block hidden right below this row.
     pub hidden: usize,
+    /// Offset of the row from the view top, in half-lines.
+    pub top: u32,
+    /// A gap of half a line separates the row from the row above: it starts a block
+    /// below a row of another block.
+    pub gap_before: bool,
 }
 
 impl ViewRow {
@@ -31,8 +41,30 @@ impl ViewRow {
             line: Some(line),
             role,
             hidden: 0,
+            top: 0,
+            gap_before: false,
         }
     }
+
+    /// Blank row padding the view below the content.
+    fn blank() -> Self {
+        Self {
+            line: None,
+            role: RowRole::None,
+            hidden: 0,
+            top: 0,
+            gap_before: false,
+        }
+    }
+}
+
+/// Half-lines taken by a row.
+const ROW_UNITS: u32 = 2;
+
+/// Whether a gap separates a row of role `lower` from the row of role `upper` above it:
+/// `lower` starts a block.
+fn gap_between(upper: RowRole, lower: RowRole) -> bool {
+    lower.block().is_some() && upper.block() != lower.block()
 }
 
 /// Bottom grid line of alacritty's viewport scrolled `display_offset` lines into the
@@ -113,53 +145,83 @@ fn role_below<L>(term: &Term<L>, line: Line, block: &mut Option<BlockId>) -> Row
 }
 
 /// Rows of the view, top to bottom, for the view scrolled `display_offset` lines into
-/// the history. Every row has [`RowRole::None`] on the alternate screen, or when no
-/// block is known (no shell integration): no row index is built then.
+/// the history, with their offset from the view top. Every row has [`RowRole::None`] on
+/// the alternate screen, or when no block is known (no shell integration): no row index
+/// is built then, and the view is alacritty's viewport.
 pub fn rows<L>(term: &Term<L>, shell: &ShellState, display_offset: usize) -> Vec<ViewRow> {
     let screen_lines = term.screen_lines();
     let bottom = bottom_line(term, display_offset);
-    let lines = bottom - (screen_lines as i32 - 1)..bottom + 1;
-    if let Some(folds) = Folds::new(term, shell) {
-        return folded_rows(term, &folds, bottom, screen_lines);
+    if !decorated(term, shell) {
+        let top = bottom.0 - (screen_lines as i32 - 1);
+        return (0..screen_lines)
+            .map(|index| ViewRow {
+                top: ROW_UNITS * index as u32,
+                ..ViewRow::shown(Line(top + index as i32), RowRole::None)
+            })
+            .collect();
     }
-    let roles = if decorated(term, shell) {
-        blocks::index(term, lines.clone())
-    } else {
-        vec![RowRole::None; screen_lines]
-    };
-    (lines.start.0..lines.end.0)
-        .zip(roles)
-        .map(|(line, role)| ViewRow::shown(Line(line), role))
-        .collect()
+    let folds = Folds::new(term, shell);
+    let budget = ROW_UNITS * screen_lines as u32;
+    let (rows, reached_top) = block_rows(term, folds.as_ref(), bottom, budget);
+    // Scrolled to the top of the history, rows cut at the top could never be reached:
+    // the view starts at the top instead, unless that cuts the cursor row shown at the
+    // bottom (a fresh screen, the rows below the cursor are blank).
+    if !reached_top && display_offset == term.grid().history_size() {
+        let (anchored, _) = block_rows(term, folds.as_ref(), term.grid().topmost_line(), budget);
+        let cursor = term.grid().cursor.point.line;
+        if cursor > bottom || anchored.iter().any(|row| row.line == Some(cursor)) {
+            return anchored;
+        }
+    }
+    rows
 }
 
-/// Rows of the view with folds: collected upward from `bottom`, skipping hidden rows; at
-/// the top of the history, completed downward from `bottom`, then padded with blank
-/// rows. The rows hidden below `bottom` are still counted on the row above them.
-fn folded_rows<L>(
+/// Rows of a view with blocks, within `budget` half-lines: collected upward from
+/// `bottom`, skipping the rows hidden by `folds`, until the next row does not fit; at the
+/// top of the history, completed downward from `bottom`, then padded with blank rows.
+/// The rows hidden below `bottom` are still counted on the row above them. Also tells
+/// whether the walk up reached the top of the history.
+fn block_rows<L>(
     term: &Term<L>,
-    folds: &Folds<'_>,
+    folds: Option<&Folds<'_>>,
     bottom: Line,
-    screen_lines: usize,
-) -> Vec<ViewRow> {
-    let mut up: Vec<ViewRow> = Vec::with_capacity(screen_lines);
+    budget: u32,
+) -> (Vec<ViewRow>, bool) {
+    let hides = |line, role| folds.is_some_and(|folds| folds.hides(line, role));
+    // Bottom to top.
+    let mut up: Vec<ViewRow> = Vec::new();
+    let mut used = 0;
     let mut hidden = 0;
     let mut bottom_role = RowRole::None;
+    // The budget stopped the walk before the top of the history.
+    let mut full = false;
     walk_up(term, bottom, |line, role| {
         if line == bottom {
             bottom_role = role;
         }
-        if folds.hides(line, role) {
+        if hides(line, role) {
             hidden += 1;
             return true;
+        }
+        let gap = up.last().is_some_and(|below| gap_between(role, below.role));
+        let cost = ROW_UNITS + u32::from(gap);
+        if used + cost > budget {
+            full = true;
+            return false;
+        }
+        used += cost;
+        if let Some(below) = up.last_mut() {
+            below.gap_before = gap;
         }
         up.push(ViewRow {
             hidden: std::mem::take(&mut hidden),
             ..ViewRow::shown(line, role)
         });
-        up.len() < screen_lines
+        full = used + ROW_UNITS > budget;
+        !full
     });
     let mut rows: Vec<ViewRow> = up.into_iter().rev().collect();
+    let reached_top = !full;
 
     // Below `bottom`: the rest of a hidden run, then the rows completing a view that
     // reached the top of the history.
@@ -167,27 +229,42 @@ fn folded_rows<L>(
     let mut line = bottom + 1;
     while line <= term.grid().bottommost_line() {
         let role = role_below(term, line, &mut block);
-        if folds.hides(line, role) {
+        if hides(line, role) {
             if let Some(last) = rows.last_mut() {
                 last.hidden += 1;
             }
-        } else if rows.len() < screen_lines {
-            rows.push(ViewRow::shown(line, role));
         } else {
-            break;
+            let gap = rows
+                .last()
+                .is_some_and(|above| gap_between(above.role, role));
+            let cost = ROW_UNITS + u32::from(gap);
+            if full || used + cost > budget {
+                full = true;
+                break;
+            }
+            used += cost;
+            rows.push(ViewRow {
+                gap_before: gap,
+                ..ViewRow::shown(line, role)
+            });
         }
         line += 1;
     }
 
-    rows.resize(
-        screen_lines.max(rows.len()),
-        ViewRow {
-            line: None,
-            role: RowRole::None,
-            hidden: 0,
-        },
-    );
-    rows
+    // Blank rows only when the content ran out.
+    while !full && used + ROW_UNITS <= budget {
+        used += ROW_UNITS;
+        rows.push(ViewRow::blank());
+    }
+
+    // The leftover half-lines go to the top.
+    let mut top = budget - used;
+    for row in &mut rows {
+        top += u32::from(row.gap_before);
+        row.top = top;
+        top += ROW_UNITS;
+    }
+    (rows, reached_top)
 }
 
 /// `Scroll::Delta` lines (positive into the history) for a scroll of `view_delta`
@@ -238,7 +315,8 @@ pub fn grid_delta<L>(
 
 /// `Scroll::Delta` lines (positive into the history) that bring grid `line` into the
 /// view scrolled `display_offset` lines into the history: 0 when it is shown (or
-/// hidden by a fold), otherwise the smallest scroll putting it on the top or bottom row.
+/// hidden by a fold), otherwise the smallest scroll putting it on the top or bottom row
+/// (the top row, or the second one when a gap would otherwise push it out).
 pub fn reveal<L>(term: &Term<L>, shell: &ShellState, display_offset: usize, line: Line) -> i32 {
     let bottom = bottom_line(term, display_offset);
     if line > bottom {
@@ -260,7 +338,21 @@ pub fn reveal<L>(term: &Term<L>, shell: &ShellState, display_offset: usize, line
             .count(),
         None => (top.0 - line.0) as usize,
     };
-    grid_delta(term, shell, display_offset, shown as i32)
+    // The gaps of the new view may leave fewer rows above its bottom: one more row up
+    // until `line` shows, or the top of the history is reached.
+    let history = term.grid().history_size() as i32;
+    let mut shown = shown as i32;
+    loop {
+        let delta = grid_delta(term, shell, display_offset, shown);
+        let offset = (display_offset as i32 + delta).clamp(0, history);
+        let top = rows(term, shell, offset as usize)
+            .iter()
+            .find_map(|row| row.line);
+        if offset == history || top.is_none_or(|top| line >= top) {
+            return delta;
+        }
+        shown += 1;
+    }
 }
 
 /// Grid point of the cell at `column` on view row `line_index`, clamped to the last row
@@ -330,6 +422,11 @@ mod tests {
             .collect()
     }
 
+    /// Offset from the view top of each row, in half-lines, and whether a gap is above.
+    fn tops(rows: &[ViewRow]) -> Vec<(u32, bool)> {
+        rows.iter().map(|row| (row.top, row.gap_before)).collect()
+    }
+
     fn lines(rows: &[ViewRow]) -> Vec<i32> {
         rows.iter()
             .map(|row| row.line.expect("grid line").0)
@@ -344,6 +441,8 @@ mod tests {
         let rows = rows(&term, &shell, 0);
         assert_eq!(lines(&rows), [0, 1, 2]);
         assert!(rows.iter().all(|row| row.role == RowRole::None));
+        // No gap: exactly the viewport.
+        assert_eq!(tops(&rows), [(0, false), (2, false), (4, false)]);
 
         term.scroll_display(Scroll::Delta(2));
         let offset = term.grid().display_offset();
@@ -378,10 +477,93 @@ mod tests {
         let mut shell = ShellState::new();
         feed(&mut term, &mut shell, &format!("{A}$ {B}vim\r\n"));
         feed(&mut term, &mut shell, &format!("{C}\x1b[?1049h"));
-        assert!(
-            rows(&term, &shell, 0)
-                .iter()
-                .all(|row| row.role == RowRole::None)
+        let rows = rows(&term, &shell, 0);
+        assert!(rows.iter().all(|row| row.role == RowRole::None));
+        assert_eq!(tops(&rows), [(0, false), (2, false), (4, false)]);
+    }
+
+    #[test]
+    fn a_gap_starts_a_block_below_another_one() {
+        let (a, b) = (RowRole::Output(BlockId(0)), RowRole::Prompt(BlockId(1)));
+        assert!(gap_between(a, b));
+        assert!(gap_between(RowRole::None, RowRole::Prompt(BlockId(0))));
+        assert!(!gap_between(b, RowRole::Output(BlockId(1))));
+        assert!(!gap_between(a, RowRole::None));
+        assert!(!gap_between(RowRole::None, RowRole::None));
+    }
+
+    #[test]
+    fn no_gap_inside_one_block() {
+        let mut term = new_term(4);
+        let mut shell = ShellState::new();
+        command(&mut term, &mut shell, "a", 3);
+        // Grid lines 0 to 3: "a1" to "a3", then the cursor row, all in block 0.
+        let rows = rows(&term, &shell, 0);
+        assert_eq!(texts(&term, &rows), ["a1", "a2", "a3", ""]);
+        assert_eq!(
+            tops(&rows),
+            [(0, false), (2, false), (4, false), (6, false)]
+        );
+    }
+
+    #[test]
+    fn a_fresh_screen_starts_at_the_top() {
+        let mut term = new_term(6);
+        let mut shell = ShellState::new();
+        command(&mut term, &mut shell, "a", 1);
+        command(&mut term, &mut shell, "b", 0);
+        feed(&mut term, &mut shell, &format!("{A}$ "));
+        assert_eq!(term.grid().history_size(), 0);
+        // Grid lines 0 to 5: "$ a", "a1", "$ b", "$", two blank rows below the cursor.
+        // From the bottom, the gaps would cut "$ a", out of reach without a history:
+        // the view starts at the top and cuts a blank row instead.
+        let rows = rows(&term, &shell, 0);
+        assert_eq!(texts(&term, &rows), ["$ a", "a1", "$ b", "$", ""]);
+        assert_eq!(
+            tops(&rows),
+            [(0, false), (2, false), (5, true), (8, true), (10, false)]
+        );
+    }
+
+    #[test]
+    fn the_top_of_the_history_stays_reachable() {
+        let (term, shell) = three_blocks();
+        // Scrolled to the top (8 lines of history), from the bottom line "a3" the gap
+        // would not cut anything: "$ a" is the top grid line.
+        assert_eq!(lines(&rows(&term, &shell, 8)), [-8, -7, -6, -5]);
+        // A view that would cut the top of the history but show the cursor row keeps
+        // its bottom: the cursor row comes first.
+        let mut term = new_term(3);
+        let mut shell = ShellState::new();
+        command(&mut term, &mut shell, "a", 1);
+        feed(&mut term, &mut shell, &format!("{A}$ "));
+        // Grid lines 0 to 2: "$ a", "a1", "$", no history.
+        assert_eq!(texts(&term, &rows(&term, &shell, 0)), ["a1", "$"]);
+    }
+
+    #[test]
+    fn several_card_boundaries_take_half_a_line_each() {
+        let mut term = new_term(8);
+        let mut shell = ShellState::new();
+        for name in ["a", "b", "c"] {
+            command(&mut term, &mut shell, name, 1);
+        }
+        feed(&mut term, &mut shell, &format!("{A}$ "));
+        // Grid lines 0 to 7: "$ a", "a1", "$ b", "b1", "$ c", "c1", "$", the cursor row
+        // below. From the bottom: 2 + 2 + 3 + 2 + 3 + 2 = 14 half-lines out of 16; "a1"
+        // would take 3 more. The 2 left go to the top.
+        let rows = rows(&term, &shell, 0);
+        assert_eq!(texts(&term, &rows), ["$ b", "b1", "$ c", "c1", "$", ""]);
+        assert_eq!(
+            tops(&rows),
+            [
+                (2, false),
+                (4, false),
+                (7, true),
+                (9, false),
+                (12, true),
+                (14, false)
+            ]
         );
     }
 
@@ -410,10 +592,20 @@ mod tests {
     }
 
     #[test]
-    fn no_fold_keeps_the_plain_viewport() {
+    fn the_view_bottom_follows_the_viewport_and_gaps_push_rows_out() {
         let (term, shell) = three_blocks();
-        assert_eq!(lines(&rows(&term, &shell, 0)), [0, 1, 2, 3]);
-        assert_eq!(lines(&rows(&term, &shell, 5)), [-5, -4, -3, -2]);
+        // "$" (2), a gap and "c3" (3), "c2" (2): "c1" does not fit in the 8 half-lines,
+        // the one left goes to the top.
+        let rows = rows(&term, &shell, 0);
+        assert_eq!(lines(&rows), [1, 2, 3]);
+        assert_eq!(tops(&rows), [(1, false), (3, false), (6, true)]);
+        // "b2", "b1", "$ b" (6), then "a3" would need a gap: 2 half-lines left at the
+        // top.
+        let rows = super::rows(&term, &shell, 5);
+        assert_eq!(lines(&rows), [-4, -3, -2]);
+        assert_eq!(tops(&rows), [(2, false), (4, false), (6, false)]);
+        // Without a gap, as many rows as the screen.
+        assert_eq!(lines(&super::rows(&term, &shell, 1)), [-1, 0, 1, 2]);
     }
 
     #[test]
@@ -421,13 +613,10 @@ mod tests {
         let (term, mut shell) = three_blocks();
         shell.set_folded(BlockId(2), true);
         let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["b1", "b2", "$ c", "$"]);
-        assert_eq!(rows[2].hidden, 3);
-        assert!(
-            rows.iter()
-                .enumerate()
-                .all(|(i, r)| i == 2 || r.hidden == 0)
-        );
+        assert_eq!(texts(&term, &rows), ["b2", "$ c", "$"]);
+        assert_eq!(rows.iter().map(|r| r.hidden).collect::<Vec<_>>(), [0, 3, 0]);
+        // Folds and gaps together: the 8 half-lines are used up, nothing left.
+        assert_eq!(tops(&rows), [(0, false), (3, true), (6, true)]);
     }
 
     #[test]
@@ -436,11 +625,9 @@ mod tests {
         shell.set_folded(BlockId(1), true);
         shell.set_folded(BlockId(2), true);
         let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["a3", "$ b", "$ c", "$"]);
-        assert_eq!(
-            rows.iter().map(|r| r.hidden).collect::<Vec<_>>(),
-            [0, 2, 3, 0]
-        );
+        assert_eq!(texts(&term, &rows), ["$ b", "$ c", "$"]);
+        assert_eq!(rows.iter().map(|r| r.hidden).collect::<Vec<_>>(), [2, 3, 0]);
+        assert_eq!(tops(&rows), [(0, false), (3, true), (6, true)]);
     }
 
     #[test]
@@ -449,16 +636,17 @@ mod tests {
         for id in 0..3 {
             shell.set_folded(BlockId(id), true);
         }
-        // All blocks folded: four visible rows in the whole grid.
+        // All blocks folded: four visible rows in the whole grid, three fit with the
+        // gaps.
         let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["$ a", "$ b", "$ c", "$"]);
+        assert_eq!(texts(&term, &rows), ["$ b", "$ c", "$"]);
 
         // Scrolled to the top of the history: the bottom grid line is hidden, the rows
-        // below it complete the view.
+        // below it complete the view, the hidden rows below "$ c" still counted.
         let rows = super::rows(&term, &shell, 8);
-        assert_eq!(texts(&term, &rows), ["$ a", "$ b", "$ c", "$"]);
-        assert_eq!(rows[0].hidden, 3);
-        assert_eq!(rows[1].hidden, 2);
+        assert_eq!(texts(&term, &rows), ["$ a", "$ b", "$ c"]);
+        assert_eq!(rows.iter().map(|r| r.hidden).collect::<Vec<_>>(), [3, 2, 3]);
+        assert_eq!(tops(&rows), [(0, false), (3, true), (6, true)]);
     }
 
     #[test]
@@ -469,20 +657,22 @@ mod tests {
         feed(&mut term, &mut shell, &format!("{A}$ "));
         shell.set_folded(BlockId(0), true);
         let rows = rows(&term, &shell, 0);
-        assert_eq!(texts(&term, &rows), ["$ a", "$", "~", "~"]);
+        assert_eq!(texts(&term, &rows), ["$ a", "$", "~"]);
         assert_eq!(rows[0].hidden, 6);
         assert_eq!(rows[2].role, RowRole::None);
+        // The padding row takes no gap; the half-line left goes to the top.
+        assert_eq!(tops(&rows), [(1, false), (4, true), (6, false)]);
     }
 
     #[test]
     fn rows_hidden_below_the_bottom_line_are_counted() {
         let (term, mut shell) = three_blocks();
-        shell.set_folded(BlockId(0), true);
-        // Bottom grid line -5 is "a3", hidden: the view ends on "$ a", whose count
-        // includes the hidden rows below the bottom line.
-        let rows = rows(&term, &shell, 5);
-        assert_eq!(texts(&term, &rows), ["$ a", "$ b", "b1", "b2"]);
-        assert_eq!(rows[0].hidden, 3);
+        shell.set_folded(BlockId(2), true);
+        // Bottom grid line 1 is "c2", hidden: the view ends on "$ c", whose count
+        // includes "c3", hidden below the bottom line.
+        let rows = rows(&term, &shell, 2);
+        assert_eq!(texts(&term, &rows), ["b1", "b2", "$ c"]);
+        assert_eq!(rows[2].hidden, 3);
     }
 
     #[test]
@@ -526,25 +716,38 @@ mod tests {
     #[test]
     fn reveal_scrolls_the_least_to_show_a_line() {
         let (term, shell) = three_blocks();
-        // Visible: no scroll.
-        assert_eq!(reveal(&term, &shell, 0, Line(0)), 0);
+        // Visible (the view shows lines 1 to 3): no scroll.
+        assert_eq!(reveal(&term, &shell, 0, Line(1)), 0);
         assert_eq!(reveal(&term, &shell, 0, Line(3)), 0);
         // Above the view: up, the line on the top row.
-        assert_eq!(reveal(&term, &shell, 0, Line(-4)), 4);
-        assert_eq!(reveal(&term, &shell, 2, Line(-4)), 2);
+        assert_eq!(reveal(&term, &shell, 0, Line(0)), 1);
+        assert_eq!(reveal(&term, &shell, 0, Line(-4)), 5);
+        assert_eq!(reveal(&term, &shell, 2, Line(-4)), 3);
         // Below the view: down, the line on the bottom row.
         assert_eq!(reveal(&term, &shell, 5, Line(0)), -2);
+    }
+
+    #[test]
+    fn reveal_scrolls_one_more_row_when_a_gap_comes_in() {
+        let (term, shell) = three_blocks();
+        // Lines -1 to 2 shown without a gap. One row up, "b2" would come in with a gap
+        // and push "$ c" out: one more row.
+        assert_eq!(lines(&rows(&term, &shell, 1)), [-1, 0, 1, 2]);
+        assert_eq!(lines(&rows(&term, &shell, 2)), [-1, 0, 1]);
+        let delta = reveal(&term, &shell, 1, Line(-2));
+        assert_eq!(delta, 2);
+        assert_eq!(lines(&rows(&term, &shell, 3)), [-2, -1, 0]);
     }
 
     #[test]
     fn reveal_counts_visible_rows_across_a_fold() {
         let (term, mut shell) = three_blocks();
         shell.set_folded(BlockId(1), true);
-        // View: "c1", "c2", "c3", "$". Block 1's prompt (-4) is two visible rows above
-        // the top row ("$ c", then "$ b").
-        assert_eq!(lines(&rows(&term, &shell, 0)), [0, 1, 2, 3]);
+        // View: "c2", "c3", "$". Block 1's prompt (-4) is three visible rows above the
+        // top row ("c1", "$ c", then "$ b").
+        assert_eq!(lines(&rows(&term, &shell, 0)), [1, 2, 3]);
         let delta = reveal(&term, &shell, 0, Line(-4));
-        assert_eq!(delta, grid_delta(&term, &shell, 0, 2));
+        assert_eq!(delta, grid_delta(&term, &shell, 0, 3));
         assert_eq!(texts(&term, &rows(&term, &shell, delta as usize))[0], "$ b");
     }
 
@@ -558,11 +761,7 @@ mod tests {
         // Clamped to the last row.
         assert_eq!(point(&rows, 9, 1), Point::new(Line(0), Column(1)));
         // A padding row maps to the last row showing a grid line.
-        rows.push(ViewRow {
-            line: None,
-            role: RowRole::None,
-            hidden: 0,
-        });
+        rows.push(ViewRow::blank());
         assert_eq!(point(&rows, 3, 2), Point::new(Line(0), Column(2)));
     }
 }

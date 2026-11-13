@@ -35,7 +35,7 @@ src/
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
-  layout.rs        pixels <-> grid geometry, gutter, hit-testing
+  layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
   update/
@@ -123,36 +123,47 @@ RedrawRequested:
   `blocks::block_bounds(term, id)` gives the first row, the command cells and the
   output rows of a block.
 - `view::rows(term, shell, display_offset)` lists the view rows: the grid line each
-  one shows, its `RowRole`, and the folded rows hidden right below it. Rows have no
-  role on the alternate screen or while no block is known, and then no row index is
-  built. `Frame::capture` and the mouse (`view::point`) both go through these rows.
+  one shows, its `RowRole`, the folded rows hidden right below it, its offset from the
+  view top in half-lines (`top`) and whether a gap is above it (`gap_before`). Rows have
+  no role on the alternate screen or while no block is known, and then no row index is
+  built. `Frame::capture` and the mouse (`GridLayout::hit` / `point_at`, then
+  `view::point`) both go through these rows.
+- The view height is a budget of `2 * screen_lines` half-lines: a row takes 2, the
+  first row of a block 1 more when a row of another block shows above it (the gap
+  between two cards). Whole rows only, the leftover at the top. At the top of the
+  history, when rows would be cut there, the view starts from the top grid line instead
+  (unless that cuts the cursor row shown at the bottom). Without blocks, no gap: the
+  plain viewport.
 - Folding (`BlockInfo::folded`) is a row filter over alacritty's `display_offset`: the
   view starts from the bottom grid line of alacritty's viewport and collects rows
   upward, skipping the output rows of folded blocks above the cursor; at the top of the
   history it completes downward, then pads with blank rows (`ViewRow::line` is `None`).
-  Without any fold, the view is exactly alacritty's viewport. Scrolls in visible rows
-  (mouse wheel, `Shift+PageUp/PageDown` with a page of `screen_lines` visible rows,
-  selection auto-scroll) go through `view::grid_delta`, which adds the hidden rows
+  Scrolls in visible rows (mouse wheel, `Shift+PageUp/PageDown` with a page of the
+  current view's row count, selection auto-scroll) go through `view::grid_delta`, which adds the hidden rows
   crossed; `Shift+Home/End` are unchanged.
 - A block is folded automatically on `D` when its output has more rows than the
   window. `Ctrl+Shift+F` toggles the fold of the target block; `Ctrl+Shift+Alt+F` folds
-  every finished block when any is unfolded, otherwise unfolds them all. A gutter click
-  on the chevron row toggles the fold, a click on the summary unfolds. Folding is visual
+  every finished block when any is unfolded, otherwise unfolds them all. A click on the
+  chevron disc (`Hit::Chevron`, on the card's top-right corner) toggles the fold, a
+  click on the summary unfolds. Folding is visual
   only: a block selection and the copy actions still include the hidden rows.
-- The grid is drawn right of a gutter one cell wide (`GridLayout::gutter`), always
-  reserved. Each block row gets a status bar there (green, red, yellow, or
+- The window holds, from the left: the padding, a margin of half a cell, half a cell of
+  card padding, the grid, the card padding, then a right reserve (the padding, or the
+  chevron radius when larger), always reserved. Each block row gets a status bar in the
+  margin (green, red, yellow, or
   `DimForeground` for `Success`, `Failure`, `Running`, `Unknown`), and the first row of
   a block a 1 px separator in `DimForeground` across the grid. The first command row
-  of a finished block with output gets a chevron in the gutter (`▾` unfolded, `▸`
+  of a finished block with output gets a chevron in the margin (`▾` unfolded, `▸`
   folded) in the status color; the last command row of a folded block gets a dim
   summary (`i18n::Msg::LinesHidden`) two columns after its last non-blank cell, cut at
-  the grid edge. Rows below the cursor get no mark. `GridLayout::hit` tells a gutter
-  pixel from a grid cell.
+  the grid edge. Rows below the cursor get no mark. `GridLayout::hit` tells a margin
+  pixel, a chevron disc, a gap between cards and a grid cell apart; a margin click
+  selects the block, a gap click does nothing.
 - Block actions (`block_actions`): the target block is the one holding the selection
   start, otherwise the last finished block (`ShellState::is_finished`: any block but the
   one being drawn or run). A block selection is a `Simple` selection from the start of
   the command to the end of the block's last row, with a `SelectionSnapshot` and the
-  primary selection written, as after a mouse release. A gutter click selects the
+  primary selection written, as after a mouse release. A margin click selects the
   block of its row; `Ctrl+Shift+PageUp/PageDown` select the finished neighbour among
   `blocks::blocks_in_grid` (the last finished block on the first press) and scroll by
   `view::reveal` (through `view::grid_delta`) until its first row is visible. `Ctrl+Shift+Alt+C` / `O` copy the
@@ -171,10 +182,11 @@ RedrawRequested:
 2. `scene::build` converts the frame into:
     - `under` rects: cell backgrounds, consecutive same-color cells merged, default
       background skipped (it is the clear color), then the block status bars (a quarter
-      of a cell wide, in the gutter) and separators;
+      of a cell wide, in the margin) and separators; rows are placed at
+      `GridLayout::row_top` of their view offset (`Frame::row_tops`);
     - `over` rects: underline, strikeout, non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
-      anchored at the cell origin, plus the fold chevrons (at the gutter origin) and
+      anchored at the cell origin, plus the fold chevrons (in the margin) and
       the fold summaries (one character per cell);
     - overlay glyph instances at pixel positions (banner).
 3. `Renderer::render` resolves the glyph instances through the glyph cache, uploads the

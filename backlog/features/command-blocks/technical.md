@@ -422,6 +422,24 @@ right reserve.
 - `point(rows, row_index, column)` unchanged; the row index now comes from `y` through
   the view geometry.
 
+As implemented:
+
+- The leftover can be 2 half-lines when the next row up would need a gap (cost 3).
+- Scrolled to the top of the history (`display_offset == history_size`), a view whose
+  walk up stops before the top grid line would leave rows out of reach (a fresh screen
+  with blank rows below the cursor, or the top of a long history): it is rebuilt from
+  the top grid line downward, unless that cuts the cursor row shown at the bottom.
+- `reveal` checks the new view and scrolls one more row while a gap coming in pushes
+  the line out.
+- `GridLayout` keeps `cell_x(column)`, `grid_right()` and `row_top(units)` instead of
+  `cell_origin`; `Frame` gains `row_tops` now (the cards come with the frame task).
+  In a gap, `point_at` maps to the row below. The chevron hit area is the disc on the
+  top-right corner of every card start (a block row below a row of another block, or
+  the first view row); the app toggles the fold only when that block has a chevron,
+  otherwise the press goes on as a cell press.
+- `mouse_cell` (mouse reporting) returns the alacritty viewport line of the grid line
+  under the cursor, so the gaps never shift the reported cells.
+
 ### Frame: `src/frame.rs`
 
 - `RowDecoration` keeps `summary` only. `bar`, `separator` and `chevron` move to cards.

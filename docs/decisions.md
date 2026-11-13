@@ -42,12 +42,22 @@ cells carry no tag; a row with no tag belongs to the block above it. The links f
 must ignore the `graphene-block` scheme. The right prompt has its own tag kind so it is
 never taken for the command start.
 
-## Gutter always reserved
+## Card space always reserved
 
-The command block marks (status bar, fold chevron) are drawn in a gutter one
-cell wide, left of the grid. It is reserved from the start, even when the shell sends
-no marks, so the first block never changes the column count: no reflow mid-session.
-The cost is one column fewer for every user.
+The command blocks are drawn as cards: a margin for the status stripe and half a cell
+of card padding left of the grid, the card padding and room for the fold chevron
+(on the card's top-right corner) right of it. This space is reserved from the start,
+even when the shell sends no marks, so the first block never changes the column count:
+no reflow mid-session. The cost is about one and a half columns fewer for every user.
+
+## Gaps between cards keep the PTY size
+
+Half a line separates two cards. The PTY size never changes: the gaps push the top rows
+of the view out, reachable by scrolling, rather than shrinking the PTY per block (which
+would reflow and redraw full-screen programs). The view is laid out in half-lines with
+whole rows only, the leftover at the top; at the top of the history it starts from the
+top grid line, so no row is ever out of reach (unless that would cut the cursor row
+shown at the bottom of a screen with no history yet).
 
 ## Folding as a row filter over `display_offset`
 

@@ -88,11 +88,9 @@ fn capture(term: &Term<VoidListener>, palette: &Palette) -> Frame {
 
 fn layout(cell: CellSize) -> GridLayout {
     GridLayout {
-        cell,
-        padding: PADDING,
-        gutter: cell.width,
         columns: COLUMNS,
         lines: LINES,
+        ..GridLayout::new(0, 0, cell, PADDING)
     }
 }
 

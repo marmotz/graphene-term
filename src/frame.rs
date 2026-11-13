@@ -116,6 +116,9 @@ pub struct Frame {
     pub rows: Vec<Vec<FrameCell>>,
     /// Block marks of each row of `rows`.
     pub decorations: Vec<RowDecoration>,
+    /// Offset of each row of `rows` from the view top, in half-lines (see
+    /// [`ViewRow::top`]).
+    pub row_tops: Vec<u32>,
     pub block_colors: BlockColors,
     pub cursor: Option<FrameCursor>,
     pub background: Rgb,
@@ -215,6 +218,7 @@ impl Frame {
         Self {
             rows,
             decorations: decorations(term, view, shell),
+            row_tops: view.iter().map(|row| row.top).collect(),
             block_colors: BlockColors::resolve(palette, overrides),
             cursor,
             background,
@@ -552,9 +556,9 @@ mod tests {
                 row(Some(Status::Success), false),
                 // No output: no chevron.
                 row(Some(Status::Failure(1)), true),
-                // The last prompt: no command ran yet. Below the cursor: nothing.
+                // The last prompt: no command ran yet. Below the cursor: nothing (the
+                // last blank row does not fit after the two gaps).
                 row(Some(Status::Unknown), true),
-                row(None, false),
                 row(None, false),
             ]
         );
@@ -573,12 +577,14 @@ mod tests {
             "\x1b]133;A\x07$ \x1b]133;B\x07seq\r\n\x1b]133;C\x07\
              1\r\n2\r\n3\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
         );
-        // Rows "2", "3" are the output of the first block, cut at the top of the view
-        // (three rows: not taller than the window, so not folded).
-        assert_eq!(row_text(&frame, 0), "2         ");
+        // Row "3" is the output of the first block, cut at the top of the view (three
+        // rows: not taller than the window, so not folded); the gap above the prompt
+        // leaves room for two rows only.
+        assert_eq!(frame.rows.len(), 2);
+        assert_eq!(row_text(&frame, 0), "3         ");
         assert!(!frame.decorations[0].separator);
         assert_eq!(frame.decorations[0].bar, Some(Status::Success));
-        assert!(frame.decorations[2].separator);
+        assert!(frame.decorations[1].separator);
     }
 
     /// Feeds `bytes` to `term` and `shell` through the shell integration path.
@@ -612,16 +618,7 @@ mod tests {
         let chevrons: Vec<_> = frame.decorations.iter().map(|d| d.chevron).collect();
         assert_eq!(
             chevrons,
-            [
-                None,
-                Some(Fold::Unfolded),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None
-            ]
+            [None, Some(Fold::Unfolded), None, None, None, None, None]
         );
         assert!(frame.decorations.iter().all(|d| d.summary.is_none()));
 
@@ -669,13 +666,13 @@ mod tests {
         );
         assert!(shell.is_folded(BlockId(0)));
         let frame = capture_shell(&term, &shell);
-        // Two visible rows, padded with blank rows.
+        // Two visible rows; a blank row would not fit after the gap.
+        assert_eq!(frame.rows.len(), 2);
         assert_eq!(row_text(&frame, 0), "$ seq 4             ");
         assert_eq!(row_text(&frame, 1), "$                   ");
-        assert_eq!(row_text(&frame, 2), " ".repeat(20));
         assert_eq!(frame.decorations[0].summary, Some(4));
         assert_eq!(frame.decorations[0].chevron, Some(Fold::Folded));
-        assert_eq!(frame.decorations[2], RowDecoration::default());
+        assert_eq!(frame.row_tops, [1, 4]);
         // The cursor is on the second visible row.
         assert_eq!(frame.rows[1][2].bg, Palette::default().cursor);
     }

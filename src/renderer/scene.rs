@@ -84,6 +84,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     let grid_width = layout.columns as f32 * cell.width;
 
     for (line, cells) in frame.rows.iter().enumerate() {
+        let y = layout.row_top(frame.row_tops[line]);
         // Backgrounds: merge consecutive cells with the same non-default color.
         let mut column = 0;
         while column < cells.len() {
@@ -93,7 +94,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                 column += 1;
             }
             if bg != frame.background {
-                let (x, y) = layout.cell_origin(start, line);
+                let x = layout.cell_x(start);
                 under.push(RectInstance::new(
                     [x, y],
                     [(column - start) as f32 * cell.width, cell.height],
@@ -103,12 +104,12 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         }
 
         // Command block marks, over the backgrounds and below the glyphs: the status bar
-        // in the gutter, the separator at the top of the block's first row.
+        // in the margin, the separator at the top of the block's first row.
         let decoration = frame.decorations.get(line).copied().unwrap_or_default();
-        let (grid_x, y) = layout.cell_origin(0, line);
+        let grid_x = layout.grid_left();
         if let Some(status) = decoration.bar {
             under.push(RectInstance::new(
-                [grid_x - layout.gutter, y],
+                [layout.padding, y],
                 [bar_width, cell.height],
                 gpu_color(frame.block_colors.status(status), srgb_target),
             ));
@@ -120,12 +121,12 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                 gpu_color(frame.block_colors.dim, srgb_target),
             ));
         }
-        // Fold chevron in the gutter, in the status color; hidden-rows summary in dim
+        // Fold chevron in the margin, in the status color; hidden-rows summary in dim
         // text after the row's content, cut at the grid edge.
         if let Some(fold) = decoration.chevron {
             let status = decoration.bar.unwrap_or(crate::blocks::Status::Unknown);
             glyphs.push(GlyphInstance {
-                origin: [grid_x - layout.gutter, y],
+                origin: [layout.padding, y],
                 key: plain(match fold {
                     Fold::Folded => CHEVRON_FOLDED,
                     Fold::Unfolded => CHEVRON_UNFOLDED,
@@ -139,7 +140,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             let color = gpu_color(frame.block_colors.dim, srgb_target);
             for (column, c) in (start..cells.len()).zip(label.chars()) {
                 if c != ' ' {
-                    let (x, y) = layout.cell_origin(column, line);
+                    let x = layout.cell_x(column);
                     glyphs.push(GlyphInstance {
                         origin: [x, y],
                         key: plain(c),
@@ -151,7 +152,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
 
         // Decorations.
         for (column, c) in cells.iter().enumerate() {
-            let (x, y) = layout.cell_origin(column, line);
+            let x = layout.cell_x(column);
             let color = gpu_color(c.fg, srgb_target);
             if c.underline {
                 over.push(RectInstance::new(
@@ -175,7 +176,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             if c.spacer || c.c == ' ' {
                 continue;
             }
-            let (x, y) = layout.cell_origin(column, line);
+            let x = layout.cell_x(column);
             glyphs.push(GlyphInstance {
                 origin: [x, y],
                 key: GlyphKey {
@@ -189,7 +190,10 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     }
 
     if let Some(cursor) = frame.cursor {
-        let (x, y) = layout.cell_origin(cursor.column, cursor.line);
+        let (x, y) = (
+            layout.cell_x(cursor.column),
+            layout.row_top(frame.row_tops[cursor.line]),
+        );
         let color = gpu_color(cursor.color, srgb_target);
         let beam = (cell.width / 8.0).round().max(2.0);
         let rect = |position: [f32; 2], size: [f32; 2]| RectInstance::new(position, size, color);
@@ -277,8 +281,9 @@ mod tests {
         }
     }
 
-    /// 10 x 20 px cells, no padding, the one-cell gutter left of the grid.
-    fn gutter_layout() -> GridLayout {
+    /// 10 x 20 px cells, no padding: the grid starts after the 5 px margin and the 5 px
+    /// card padding.
+    fn margin_layout() -> GridLayout {
         GridLayout::new(
             100,
             100,
@@ -293,8 +298,9 @@ mod tests {
     /// Same cells, with the grid at the origin.
     fn layout() -> GridLayout {
         GridLayout {
-            gutter: 0.0,
-            ..gutter_layout()
+            margin: 0.0,
+            card_pad: 0.0,
+            ..margin_layout()
         }
     }
 
@@ -313,6 +319,7 @@ mod tests {
     fn frame(rows: Vec<Vec<FrameCell>>) -> Frame {
         Frame {
             decorations: vec![RowDecoration::default(); rows.len()],
+            row_tops: (0..rows.len() as u32).map(|row| 2 * row).collect(),
             block_colors: BlockColors {
                 success: GREEN,
                 failure: RED,
@@ -348,6 +355,27 @@ mod tests {
     /// (origin, character) of each glyph of `glyphs`.
     fn placed(glyphs: &[GlyphInstance]) -> Vec<([f32; 2], char)> {
         glyphs.iter().map(|g| (g.origin, g.key.c)).collect()
+    }
+
+    #[test]
+    fn rows_are_placed_at_their_view_offset() {
+        let mut f = frame(vec![vec![cell('a')], vec![cell('b')], vec![cell('c')]]);
+        // One leftover half-line at the top, a gap before the last row.
+        f.row_tops = vec![1, 3, 6];
+        f.rows[2][0].bg = RED;
+        f.cursor = Some(FrameCursor {
+            column: 0,
+            line: 2,
+            shape: CursorShape::Beam,
+            color: RED,
+        });
+        let scene = build(&f, &layout(), false);
+        assert_eq!(
+            placed(&scene.glyphs),
+            vec![([0.0, 10.0], 'a'), ([0.0, 30.0], 'b'), ([0.0, 60.0], 'c')]
+        );
+        assert_eq!(scene.under[0].position, [0.0, 60.0]);
+        assert_eq!(scene.over[0].position, [0.0, 60.0]);
     }
 
     #[test]
@@ -480,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn block_rows_get_a_status_bar_in_the_gutter() {
+    fn block_rows_get_a_status_bar_in_the_margin() {
         let mut f = frame(vec![vec![cell('a')]; 5]);
         let statuses = [
             None,
@@ -492,10 +520,10 @@ mod tests {
         for (decoration, bar) in f.decorations.iter_mut().zip(statuses) {
             decoration.bar = bar;
         }
-        let l = gutter_layout();
+        let l = margin_layout();
         let scene = build(&f, &l, false);
         let rgb = |c: Rgb| gpu_color(c, false);
-        // A quarter of a cell wide, full row height, at the gutter's left edge.
+        // A quarter of a cell wide, full row height, at the margin's left edge.
         let bars: Vec<_> = scene
             .under
             .iter()
@@ -510,7 +538,7 @@ mod tests {
                 ([0.0, 80.0], [3.0, 20.0], rgb(GREY)),
             ]
         );
-        // The grid itself starts after the gutter.
+        // The grid itself starts after the margin and the card padding.
         assert_eq!(placed(&scene.glyphs)[0], ([10.0, 0.0], 'a'));
     }
 
@@ -518,7 +546,7 @@ mod tests {
     fn first_block_row_gets_a_separator_across_the_grid() {
         let mut f = frame(vec![vec![cell('a')]; 2]);
         f.decorations[1].separator = true;
-        let l = gutter_layout();
+        let l = margin_layout();
         let scene = build(&f, &l, false);
         assert_eq!(scene.under.len(), 1);
         let separator = scene.under[0];
@@ -547,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn chevron_in_the_gutter_and_summary_after_the_row_content() {
+    fn chevron_in_the_margin_and_summary_after_the_row_content() {
         let mut frame = frame(vec![
             vec![
                 cell('$'),
@@ -566,7 +594,7 @@ mod tests {
             summary: Some(12),
         };
         frame.decorations[1].chevron = Some(Fold::Unfolded);
-        let scene = build(&frame, &gutter_layout(), false);
+        let scene = build(&frame, &margin_layout(), false);
         let red = gpu_color(RED, false);
         let grey = gpu_color(GREY, false);
 

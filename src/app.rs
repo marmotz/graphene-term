@@ -4,7 +4,7 @@ use std::sync::{Arc, PoisonError};
 use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::term::{self, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
@@ -160,6 +160,13 @@ impl Session {
         self.window.request_redraw();
     }
 
+    /// Rows scrolled by a page: the rows of the current view, fewer than the screen
+    /// lines when gaps separate cards.
+    fn page_rows(&self) -> i32 {
+        let term = self.terminal.term.lock();
+        self.view_rows(&term).len() as i32
+    }
+
     /// Scrolls by `rows` visible rows (positive into the history), folded rows skipped.
     fn scroll_view(&self, rows: i32) {
         let mut term = self.terminal.term.lock();
@@ -279,35 +286,24 @@ impl Session {
         self.block_selected(text);
     }
 
-    /// Left press in the gutter on viewport row `line`: toggles the fold on a chevron
-    /// row, selects the block of any other block row, ignored outside blocks.
-    fn gutter_press(&mut self, line: usize) {
+    /// Left press in the margin on view row `row`: selects the block of a block row,
+    /// ignored outside blocks.
+    fn margin_press(&mut self, row: usize) {
         let text = {
             let mut term = self.terminal.term.lock();
-            let (id, chevron) = {
-                let mut shell = self
+            let id = {
+                let shell = self
                     .terminal
                     .shell
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 let rows = view::rows(&term, &shell, term.grid().display_offset());
-                let line = line.min(rows.len().saturating_sub(1));
-                let Some(id) = rows.get(line).and_then(|row| row.role.block()) else {
+                let row = row.min(rows.len().saturating_sub(1));
+                let Some(id) = rows.get(row).and_then(|row| row.role.block()) else {
                     return;
                 };
-                let chevron = frame::decorations(&term, &rows[line..=line], &shell)[0]
-                    .chevron
-                    .is_some();
-                if chevron {
-                    shell.toggle_fold(id);
-                }
-                (id, chevron)
+                id
             };
-            if chevron {
-                drop(term);
-                self.window.request_redraw();
-                return;
-            }
             if block_actions::select(&mut term, id).is_none() {
                 return;
             }
@@ -315,6 +311,47 @@ impl Session {
             selection::selected_text(&term)
         };
         self.block_selected(text);
+    }
+
+    /// Left press on the chevron disc of the card starting on view row `row`: toggles
+    /// the fold of its block when it has a chevron. Returns whether it had one.
+    fn chevron_press(&mut self, row: usize) -> bool {
+        let toggled = {
+            let term = self.terminal.term.lock();
+            let mut shell = self
+                .terminal
+                .shell
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let rows = view::rows(&term, &shell, term.grid().display_offset());
+            let Some(id) = rows.get(row).and_then(|row| row.role.block()) else {
+                return false;
+            };
+            let chevron = rows
+                .iter()
+                .zip(frame::decorations(&term, &rows, &shell))
+                .any(|(row, decoration)| {
+                    row.role.block() == Some(id) && decoration.chevron.is_some()
+                });
+            if chevron {
+                shell.toggle_fold(id);
+            }
+            chevron
+        };
+        if toggled {
+            self.window.request_redraw();
+        }
+        toggled
+    }
+
+    /// View rows shown for `term`, the locked `self.terminal.term`.
+    fn view_rows(&self, term: &term::Term<EventProxy>) -> Vec<view::ViewRow> {
+        let shell = self
+            .terminal
+            .shell
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        view::rows(term, &shell, term.grid().display_offset())
     }
 
     /// After a block selection: redraws and writes the primary selection, as a mouse
@@ -348,26 +385,24 @@ impl Session {
     /// Grid point and cell side under the mouse cursor. `term` is the locked
     /// `self.terminal.term`.
     fn mouse_point(&self, term: &term::Term<EventProxy>) -> (Point, Side) {
-        let (column, line, side) = self
-            .layout
-            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
-        let rows = {
-            let shell = self
-                .terminal
-                .shell
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            view::rows(term, &shell, term.grid().display_offset())
-        };
-        (view::point(&rows, line, column), side)
+        let rows = self.view_rows(term);
+        let (column, row, side) = self.layout.point_at(
+            self.mouse_position.x as f32,
+            self.mouse_position.y as f32,
+            &rows,
+        );
+        (view::point(&rows, row, column), side)
     }
 
-    /// Viewport cell (column, line) under the mouse cursor, clamped to the grid.
+    /// Viewport cell (column, line) under the mouse cursor, clamped to the grid, as
+    /// reported to the application: the line of alacritty's viewport showing the grid
+    /// line under the cursor.
     fn mouse_cell(&self) -> (usize, usize) {
-        let (column, line, _) = self
-            .layout
-            .point_at(self.mouse_position.x as f32, self.mouse_position.y as f32);
-        (column, line)
+        let term = self.terminal.term.lock();
+        let (point, _) = self.mouse_point(&term);
+        let line = point.line.0 + term.grid().display_offset() as i32;
+        let last = term.screen_lines() as i32 - 1;
+        (point.column.0, line.clamp(0, last) as usize)
     }
 
     fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
@@ -384,14 +419,27 @@ impl Session {
         if button == mouse::Button::Left && self.banner_press() {
             return;
         }
-        // The gutter is outside the application's grid: always Graphene's.
-        if button == mouse::Button::Left
-            && let Hit::Gutter { line } = self
-                .layout
-                .hit(self.mouse_position.x as f32, self.mouse_position.y as f32)
-        {
-            self.gutter_press(line);
-            return;
+        // The margin, the chevrons and the gaps are outside the application's grid:
+        // always Graphene's.
+        if button == mouse::Button::Left {
+            let hit = {
+                let term = self.terminal.term.lock();
+                let rows = self.view_rows(&term);
+                self.layout.hit(
+                    self.mouse_position.x as f32,
+                    self.mouse_position.y as f32,
+                    &rows,
+                )
+            };
+            match hit {
+                Hit::Margin { row } => {
+                    self.margin_press(row);
+                    return;
+                }
+                Hit::Chevron { row } if self.chevron_press(row) => return,
+                Hit::Gap => return,
+                Hit::Chevron { .. } | Hit::Cell { .. } => {}
+            }
         }
         let mode = self.mode();
         if selection::mouse_reserved(mode, self.modifiers) {
@@ -425,7 +473,6 @@ impl Session {
     /// Left press on the hidden-rows summary of a folded block: unfolds it. Returns
     /// whether the press was on a summary.
     fn summary_press(&mut self) -> bool {
-        let (column, line) = self.mouse_cell();
         let unfolded = {
             let term = self.terminal.term.lock();
             let mut shell = self
@@ -434,8 +481,13 @@ impl Session {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             let rows = view::rows(&term, &shell, term.grid().display_offset());
+            let (column, row, _) = self.layout.point_at(
+                self.mouse_position.x as f32,
+                self.mouse_position.y as f32,
+                &rows,
+            );
             let hit = rows
-                .get(line)
+                .get(row)
                 .filter(|row| row.hidden > 0)
                 .and_then(|row| Some((row.line?, row.role.block()?, row.hidden)))
                 .filter(|(grid_line, _, hidden)| {
@@ -515,7 +567,10 @@ impl Session {
     /// edge row. Returns when the next step is due, `None` when auto-scroll is idle.
     fn auto_scroll(&mut self, now: Instant) -> Option<Instant> {
         let mut term = self.terminal.term.lock();
-        let overflow = self.layout.vertical_overflow(self.mouse_position.y as f32);
+        let rows = self.view_rows(&term);
+        let overflow = self
+            .layout
+            .vertical_overflow(self.mouse_position.y as f32, &rows);
         let delta = selection::auto_scroll_delta(overflow, *term.mode());
         if !self.left_pressed || delta == 0 || term.selection.is_none() {
             self.auto_scroll_deadline = None;
@@ -564,8 +619,8 @@ impl Session {
         match action {
             Action::Copy => self.copy(),
             Action::Paste => self.paste(),
-            Action::ScrollPageUp => self.scroll_view(self.layout.lines as i32),
-            Action::ScrollPageDown => self.scroll_view(-(self.layout.lines as i32)),
+            Action::ScrollPageUp => self.scroll_view(self.page_rows()),
+            Action::ScrollPageDown => self.scroll_view(-self.page_rows()),
             Action::ScrollToTop => self.scroll_display(Scroll::Top),
             Action::ScrollToBottom => self.scroll_display(Scroll::Bottom),
             Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),

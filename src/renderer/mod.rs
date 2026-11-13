@@ -430,6 +430,7 @@ mod tests {
         let frame = Frame {
             rows: vec![vec![cell(' '), cell('M'), cell(' ')]],
             decorations: Vec::new(),
+            row_tops: vec![0],
             block_colors: BlockColors {
                 success: WHITE,
                 failure: WHITE,
@@ -449,16 +450,10 @@ mod tests {
             .filter(|&x| (0..SIZE).any(|y| lit(x, y)))
             .collect();
         let (first, last) = (lit_columns[0], *lit_columns.last().unwrap());
-        // Only the 'M' of the second cell is drawn, inside that cell, after the
-        // one-cell gutter (one pixel of antialiasing slack on each side).
-        assert!(
-            first as f32 >= 2.0 * cell_size.width - 1.0,
-            "{lit_columns:?}"
-        );
-        assert!(
-            last as f32 <= 3.0 * cell_size.width + 1.0,
-            "{lit_columns:?}"
-        );
+        // Only the 'M' of the second cell is drawn, inside that cell, after the margin
+        // and the card padding (one pixel of antialiasing slack on each side).
+        assert!(first as f32 >= layout.cell_x(1) - 1.0, "{lit_columns:?}");
+        assert!(last as f32 <= layout.cell_x(2) + 1.0, "{lit_columns:?}");
         assert!((0..SIZE).all(|x| !lit(x, cell_size.height as u32 + 1)));
         // Full coverage somewhere: the mask is tinted with the cell color.
         assert!(pixels.chunks(4).any(|px| px[0] == 255));
