@@ -286,6 +286,143 @@ bar on the matching edge and gives the remaining area to the panes.
   (color-scheme value to `Appearance`, path filter and debounce); checked manually:
   edit `config.toml` in vim and with `sed -i`, switch the system appearance.
 
+## Window startup and transparency
+
+Added after the first tasks were created (see "Window startup and transparency" in
+[overview.md](overview.md)). Unlike the sections above, this part is written against
+the code after #14, #15 and #18: `src/config.rs`, `src/theme.rs` and the error banner
+exist.
+
+### Alternatives considered
+
+| Topic | Options | Retained |
+|---|---|---|
+| Where to store the last window | `config.toml` / a state file | State file `window.json` in the state directory, next to `update.json` ([update/state.rs:28](../../../src/update/state.rs)): `config.toml` is the user's file and is only written on first launch. |
+| Size remembered while maximized | `inner_size()` at close / last size seen while not maximized | Last size seen while not maximized: winit 0.30 has no "restore size" getter, and `inner_size()` of a maximized window is the screen size, which would reopen as a huge unmaximized window. |
+| Transparent cells | Default background only / every cell background | Default background only (decided): explicit backgrounds (vim status line, htop), the selection and the cursor stay opaque, as in kitty and Alacritty. |
+| Changing opacity live | Window always created transparent / transparent only when opacity < 1 at launch | Always transparent (decided): winit only honours `with_transparent` at creation on X11 (`Window::set_transparent` is a no-op there, [winit window.rs:929-944](https://github.com/rust-windowing/winit/blob/v0.30.13/src/window.rs)), so this is the only way the opacity can be hot reloaded. At 1.0 every pixel is opaque and the result looks as today. |
+| Surface alpha mode | `caps.alpha_modes[0]` (today) / `PreMultiplied` | `PreMultiplied` when the surface offers it, else `Inherit`, else the first mode with a logged warning that transparency is unavailable. |
+
+### Configuration: `src/config.rs`, `config.default.toml`
+
+Two new keys in `[window]`, read by `Reader::read_section_key`
+([config.rs:426-434](../../../src/config.rs)) like the existing ones:
+
+```toml
+[window]
+startup_mode = "default"     # "default", "maximized", "remember"
+background_opacity = 1.0     # 0.0 (transparent) to 1.0 (opaque)
+```
+
+- `WindowConfig` ([config.rs:159](../../../src/config.rs)) gains
+  `startup_mode: StartupMode` (`Default`, `Maximized`, `Remember`, deserialized from
+  the lowercase names) and `background_opacity: f32`.
+- `background_opacity`: a non-finite value is `Checked::Invalid`; a value outside
+  `0.0..=1.0` is `Checked::Clamped`, as `font.size` does
+  ([config.rs:419-424](../../../src/config.rs)).
+- `config.default.toml` documents both keys in its `# [window]` block
+  ([config.default.toml:16-21](../../../config.default.toml)); the existing test
+  "uncommented default file parses to `Config::default()`" keeps it in sync.
+- `width`/`height` are described as "initial size when `startup_mode` is `default`, or
+  `remember` with nothing remembered yet".
+
+### Remembered window: new module `src/window_state.rs`
+
+- The state directory lookup of [update/state.rs:29-43](../../../src/update/state.rs)
+  (`$XDG_STATE_HOME`, else `$HOME/.local/state`, then `graphene/`) moves to a shared
+  `state_dir()` (in `config.rs`, next to `config_dir()`), used by both files. The
+  existing `path_prefers_xdg_state_home` / `path_falls_back_to_home` tests move with
+  it.
+- `WindowState { width: u32, height: u32, maximized: bool }`, serialized with
+  `serde_json` to `window.json`, in logical pixels. `load` / `save` follow
+  `update::state::State` ([update/state.rs:48-80](../../../src/update/state.rs)): a
+  missing file gives `None`, an unreadable or corrupt one is logged and gives `None`,
+  writes go through a temporary file renamed over it, so two instances closing
+  together never leave a partial file. The last instance closed wins.
+- A loaded state with a zero width or height is ignored.
+
+### Window creation: `src/app.rs`
+
+`App::create_session` ([app.rs:451-458](../../../src/app.rs)) picks the initial
+attributes from a pure function, so it can be unit tested:
+
+```rust
+fn initial_window(config: &WindowConfig, remembered: Option<WindowState>) -> (LogicalSize<u32>, bool)
+```
+
+- `Default`: `(width, height)` from the config, not maximized.
+- `Maximized`: config size (used when the user unmaximizes), maximized.
+- `Remember`: the remembered size and `maximized` flag; with no remembered state, the
+  same result as `Default`. `window.json` is only read in this mode.
+
+The attributes get `.with_inner_size(size).with_maximized(maximized)` and, for every
+mode, `.with_transparent(true)`.
+
+### Saving the window: `src/app.rs`
+
+- `Session` gains `restore_size: LogicalSize<u32>`, initialised to the initial size.
+- On `WindowEvent::Resized` ([app.rs:561](../../../src/app.rs)), when
+  `!window.is_maximized()`, `restore_size` becomes the new inner size divided by the
+  scale factor.
+- On `WindowEvent::CloseRequested` ([app.rs:560](../../../src/app.rs)), before
+  `event_loop.exit()`: `WindowState { restore_size, maximized: window.is_maximized() }`
+  is saved. It is saved whatever the startup mode, so switching to `remember` later
+  restores the last window right away. A write failure is only logged.
+- The position is not saved (overview decision).
+
+### Transparency: `src/renderer/`
+
+- Surface: `Renderer::new` ([renderer/mod.rs:61-67](../../../src/renderer/mod.rs))
+  replaces `alpha_mode: caps.alpha_modes[0]` with the choice above. `Renderer` stores
+  whether transparency is available.
+- `Renderer` gains `background_opacity: f32`, set by `Renderer::new` and by
+  `Renderer::set_background_opacity`, and passed to the scene builder.
+- Scene: only the clear color carries the opacity. `Scene::clear`
+  ([scene.rs:215](../../../src/renderer/scene.rs)) becomes the premultiplied
+  `[r * a, g * a, b * a, a]` of `gpu_color(frame.background)`, in the target's color
+  space. Cells whose background equals `frame.background` already produce no rect
+  ([scene.rs:107](../../../src/renderer/scene.rs)), so they show the translucent clear
+  color; every other rect (explicit backgrounds, selection, cursor, decorations,
+  banner) keeps alpha 1.0 and stays opaque.
+- Blending needs no change: rects ([rects.rs:101](../../../src/renderer/rects.rs)) and
+  glyphon text both use `BlendState::ALPHA_BLENDING`, whose alpha channel computes
+  `src_a + dst_a * (1 - src_a)` and whose color channel `src * src_a + dst * (1 -
+  src_a)`, which is the correct premultiplied result over a premultiplied destination.
+- When transparency is unavailable, the opacity is ignored (the clear alpha stays 1.0)
+  and a warning is logged once.
+
+### Hot reload
+
+- `background_opacity`: `Session::apply_config` (added by #19) calls
+  `renderer.set_background_opacity` and requests a redraw. If this task lands before
+  #19, it only reads the value at startup and #19 picks it up with the other settings.
+- `startup_mode`, like `width`/`height`, only affects windows created after the
+  change.
+
+### Consequences checked against the code
+
+- `Scene::clear` keeps alpha 1.0 at the default opacity, so
+  `default_background_produces_no_rect` ([scene.rs:273-276](../../../src/renderer/scene.rs))
+  still holds.
+- The update state tests in [update/state.rs](../../../src/update/state.rs) that cover
+  the directory lookup move to the shared `state_dir()`; `update.json` keeps its path.
+- With an always-transparent window, the compositor blends the window even at 1.0:
+  accepted (decided) for hot reload.
+- On X11 with no compositor, alpha is ignored: the background is drawn opaque, the
+  terminal stays usable.
+
+### Tests
+
+- `config.rs`: both keys read; unknown `startup_mode` keeps the previous value with an
+  error; `background_opacity` clamped below 0 and above 1 with an error, `NaN`
+  invalid; the default file test covers the new commented keys.
+- `window_state.rs`: round trip; missing, corrupt and zero-size files give `None`.
+- `app.rs`: `initial_window` for each mode, and `Remember` with no state.
+- `scene.rs`: clear color premultiplied by the opacity, in both linear and sRGB
+  targets; an explicit cell background, the selection and the banner keep alpha 1.0.
+- Manual: Wayland (KDE, GNOME) and X11 with a compositor; opacity 0.8 then 1.0 by hot
+  reload; `remember` after closing maximized, then after closing unmaximized.
+
 ## Découpage en tâches d'implémentation
 
 | Issue | Task | Depends on |
@@ -299,3 +436,5 @@ bar on the matching edge and gives the remaining area to the panes.
 | [#19](https://github.com/marmotz/graphene-term/issues/19) | Hot reload of the configuration and themes | #14, #15, #16 |
 | [#20](https://github.com/marmotz/graphene-term/issues/20) | Follow the system light/dark appearance | #15, #19 |
 | [#21](https://github.com/marmotz/graphene-term/issues/21) | Language, tab bar position and UI colors | #13, #15, #19, feature tabs-splits-palette |
+| [#62](https://github.com/marmotz/graphene-term/issues/62) | Window startup mode (default, maximized, remember) | #14 |
+| [#63](https://github.com/marmotz/graphene-term/issues/63) | Transparent background | #14 (interacts with #19, not blocking) |

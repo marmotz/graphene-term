@@ -51,6 +51,22 @@ configuration at all.
 - **Keyboard shortcuts**: any action can be bound to a key, and any default shortcut
   can be disabled so the key goes to the shell.
 
+### Window startup and transparency
+
+Added after the first tasks were created (#13 to #21); designed in the "Window startup
+and transparency" section of [technical.md](technical.md).
+
+- **Startup mode**: a window setting with three values:
+  - `default`: the window opens at the initial size in pixels from the configuration;
+  - `maximized`: the window opens maximized;
+  - `remember`: the window reopens with the size and the maximized state of the last
+    window closed. The position is not remembered (not possible on Wayland). With no
+    previous window on record, it falls back to `default`.
+- **Transparency**: a background opacity setting, from 0.0 (fully transparent) to 1.0
+  (opaque, the default). It applies to the terminal background only: text stays
+  opaque, and the UI drawn by Graphene Term (tab bar, command palette, banners) stays
+  opaque to remain readable. No background blur.
+
 ### Themes
 
 - A theme sets the terminal palette (16 ANSI colors, foreground, background, cursor),

@@ -342,6 +342,180 @@ New `Action`s in `action_for` ([input.rs:21-46](../../../src/input.rs)), with a
   `A, B, C, D;0` then `A, B, C, D;1`. The user's rc files must still be sourced (marker
   variable set in a temporary `HOME`).
 
+## Card rendering (redesign)
+
+The first rendering (#10, #12) put a one-cell gutter mark, a 1 px separator over the
+grid and a font chevron on the command row. Tried with a real powerlevel10k prompt, it
+read as console content, and the chevron glyph (`▸`, from a fallback font, under a
+status bar of the same color) was a few pixels wide. The overview now asks for cards.
+This section supersedes, for rendering only, the bar / separator / chevron parts of
+"Layout: gutter", "Frame and rendering" and "Mouse" above. Shell state, row index,
+folding, selection and copy are unchanged.
+
+### Starting point
+
+- Rows are evenly spaced: `GridLayout::cell_origin` is `padding + line * cell.height`
+  ([layout.rs:59-64](../../../src/layout.rs)), and `point_at`, `hit` and
+  `vertical_overflow` invert that ([layout.rs:72-110](../../../src/layout.rs)).
+- `view::rows` collects exactly `screen_lines` rows upward from the viewport bottom,
+  skipping folded rows, then completes downward and pads
+  ([view.rs:118-188](../../../src/view.rs)).
+- Decorations are per row: `RowDecoration { bar, separator, chevron, summary }`
+  ([frame.rs:61-70](../../../src/frame.rs)), drawn by `scene::build` as a gutter rect,
+  a 1 px rect and a glyph ([scene.rs:107-151](../../../src/renderer/scene.rs)).
+- The rect pipeline draws plain axis-aligned quads with alpha blending, no corner
+  radius and no shape ([rect.wgsl](../../../src/renderer/rect.wgsl),
+  [rects.rs:12-18, 101](../../../src/renderer/rects.rs)).
+- A block selection is an ordinary `Simple` selection, highlighted cell by cell by
+  `Frame::capture` ([frame.rs:141-161](../../../src/frame.rs)); the app keeps no
+  "selected block" ([app.rs:284-327](../../../src/app.rs)).
+- Default window padding is 8 logical pixels and may be set to 0
+  ([config.rs:255, 428-430](../../../src/config.rs)).
+
+### Alternatives considered
+
+| Topic | Options | Retained |
+|---|---|---|
+| Gaps vs fixed PTY size | Shrink the PTY when cards add gaps / keep the PTY size and push rows into the history | Keep the PTY size (user decision): the gaps push the top rows above the view, reachable by scrolling. Resizing the PTY per block would reflow and redraw full-screen programs. |
+| Leftover height at the top | Partial top row, clipped / whole rows only, blank leftover | Whole rows (user decision): integer layout in half-lines, exact mouse mapping, no scissor. |
+| Vertical unit | Pixels / half-lines | Half-lines: a row is 2 units, a gap 1, so `view` stays pure and integer; pixels only in `layout`. |
+| Rounded corners and chevron | Icon font embedded / SDF shapes in the rect shader | SDF in the rect shader (user decision): crisp at any size, no font dependency, antialiased. |
+| Horizontal inner padding | None / half a cell each side | Half a cell (user decision): text never touches the rounded corners. Columns are fixed once at layout time. |
+| Card colors | New theme keys / derived from the palette | Derived (user decision): blend of background and foreground, overridable later by config-themes. |
+| Selected block highlight | Cell highlight / card accent | Card accent (overview), with the cell highlight skipped for a block selection only. |
+
+### Layout: `src/layout.rs`
+
+From the left: `padding`, margin (status stripe), card padding, grid, card padding,
+right reserve.
+
+- `margin` = `round(cell.width / 2)`: holds the stripe; replaces `gutter`.
+- `card_pad` = `round(cell.width / 2)` on each side of the grid.
+- `chevron_radius` = `round(cell.height * 0.35)`. The chevron is centered on the
+  card's top-right corner, so it needs `chevron_radius` free pixels right of the card:
+  `right_reserve = max(padding, chevron_radius)`. With the default padding (8 px) and a
+  14 px font, no extra column is lost.
+- `columns = fit(width - padding - margin - 2 * card_pad - right_reserve)`. Always
+  reserved, with or without blocks, alternate screen included: the column count never
+  changes mid-session.
+- `grid_left() = padding + margin + card_pad`.
+- `lines` (PTY lines) unchanged: `fit(height)` in whole rows.
+- Vertical placement moves out of `GridLayout`: `row_top(units) = padding + units *
+  cell.height / 2`, where `units` comes from the view (below). `point_at`, `hit` and
+  `vertical_overflow` take the view geometry (`&[ViewRow]`) to map `y` to a view row.
+- `Hit` gains `Margin { row }` (replaces `Gutter`), `Chevron { row }` (inside the
+  chevron circle), `Gap` (between cards: ignored) and keeps `Cell`.
+
+### View: `src/view.rs`
+
+- `ViewRow` gains `top: u32`, its offset from the view top in half-lines, and
+  `gap_before: bool`.
+- `rows` takes a height budget of `2 * screen_lines` half-lines instead of a row count.
+  Walking up from the viewport bottom (folds still skipped), each row costs 2 units, and
+  a block's first row costs 1 more when a row of another block (or a blank row) shows
+  above it. The walk stops when the next row does not fit; the leftover units (0 or 1,
+  2 only when padding is needed) go to the top. `top` is assigned after the walk.
+- On the alternate screen or without blocks: no gap, so exactly today's viewport.
+- `grid_delta` and `reveal` keep their contract in grid lines. A page
+  (`Shift+PageUp/PageDown`) becomes "the number of rows of the current view", which is
+  `screen_lines` without blocks.
+- `point(rows, row_index, column)` unchanged; the row index now comes from `y` through
+  the view geometry.
+
+### Frame: `src/frame.rs`
+
+- `RowDecoration` keeps `summary` only. `bar`, `separator` and `chevron` move to cards.
+- `Frame` gains `cards: Vec<Card>` and `row_tops: Vec<u32>` (from the view):
+
+  ```rust
+  pub struct Card {
+      pub rows: Range<usize>,       // view rows covered
+      pub clipped_top: bool,        // the block continues above the view
+      pub status: Option<Status>,   // None: active prompt, neutral
+      pub chevron: Option<Fold>,    // finished block with output
+      pub selected: bool,
+  }
+  ```
+
+  A card covers the consecutive view rows of one block up to the cursor row (as the bar
+  does today). The active prompt card (current block, phase `Prompt` / `Input`) has
+  `status: None`.
+- `Frame::capture` takes `selected_block: Option<BlockId>`. When the selection is that
+  block's selection, its cells are not highlighted and its card gets `selected`.
+- `BlockColors` gains `card` and `card_selected`: background blended toward the
+  foreground by 6 % and 14 %. Status colors unchanged.
+
+### Rect pipeline: `src/renderer/rects.rs`, `rect.wgsl`
+
+`RectInstance` gains `radius: f32` and `shape: u32` (0 rectangle, 1 triangle right,
+2 triangle down), padded to keep `Pod`. The fragment shader computes a signed distance
+from the local pixel position (passed from the vertex shader): rounded box for shape 0,
+triangle for 1 and 2. Coverage is `clamp(0.5 - d, 0, 1)` times the color alpha (1 px
+antialiasing). A rect with `radius: 0, shape: 0` renders as today, so cell backgrounds,
+cursor and underlines are unaffected.
+
+### Scene: `src/renderer/scene.rs`
+
+Per card, in `under` (below cell backgrounds and glyphs):
+
+1. Card background: from `grid_left - card_pad` to `grid_right + card_pad`, rows'
+   `top..bottom`, `radius = round(cell.height / 4)`, color `card` or `card_selected`.
+   A card clipped at the top starts `radius` above the view so its top corners stay
+   off screen.
+2. Status stripe: in the margin, `round(cell.width / 6)` wide (at least 2 px), full card
+   height, rounded ends, status color; none for a neutral card.
+3. Chevron (in `over`, above the glyphs): a disc of `chevron_radius` in the card color,
+   centered on the card's top-right corner, then a triangle (shape 1 folded, 2
+   unfolded) of about half its size, in the status color, or the dim color for a
+   neutral or `Unknown` status.
+
+Cell backgrounds equal to the terminal background are already skipped, so the card
+shows behind them. The summary run and the cursor are unchanged, placed with
+`row_top`.
+
+### Mouse: `src/app.rs`
+
+- `mouse_press` uses `layout.hit(x, y, &view)`:
+  - `Chevron`: toggle the fold (replaces the chevron-row test in `gutter_press`);
+  - `Margin`: select the block, as `gutter_press` does today;
+  - `Gap`: nothing;
+  - `Cell`: unchanged (summary click, selection, mouse reporting).
+- `Session` gains `selected_block: Option<BlockId>`, set by a margin click and
+  `PreviousBlock` / `NextBlock`, cleared by `clear_selection`, by any new mouse
+  selection and when `validate_selection` drops the snapshot.
+- `mouse_point`, `mouse_cell` and `auto_scroll` map `y` through the view geometry
+  built for the last frame (recomputed under the lock as today).
+
+### Consequences checked against the code
+
+- About one more column lost than with the one-cell gutter (`margin + 2 * card_pad` ≈
+  1.5 cells, plus `right_reserve - padding` when the padding is smaller than the
+  chevron radius).
+- Fewer rows visible at once when blocks are shown: one half-line per card boundary.
+  The PTY size never changes.
+- `RowDecoration` loses three fields: frame and scene tests about bar, separator and
+  chevron are rewritten on `cards`.
+- `GridLayout::hit` / `point_at` / `vertical_overflow` change signature; their callers
+  are `mouse_press`, `mouse_point`, `mouse_cell` and `auto_scroll` in `app.rs`.
+- Mouse reporting to applications uses `mouse_cell`: on the alternate screen the view
+  has no gap, so reported cells are unchanged.
+- The banner draws over the grid and is unaffected.
+
+### Tests
+
+- `layout.rs`: column count with margin, card padding and right reserve; `grid_left`;
+  `hit` for margin, chevron disc, gap and cell with a view containing gaps.
+- `view.rs`: budget in half-lines with 0, 1 and several card boundaries; leftover at
+  the top; no gap without blocks or on the alternate screen; folds and gaps together.
+- `frame.rs`: cards for finished, failed, running and active-prompt blocks; card clipped
+  at the top; chevron only on finished blocks with output; block selection marks the
+  card and leaves the cells unhighlighted, a mouse selection still highlights them.
+- `scene.rs`: card background, stripe and chevron instances (positions, radius, shape,
+  colors); no card on a frame without blocks.
+- `renderer/mod.rs` (headless GPU, skipped without adapter): a rounded card leaves its
+  corner pixel at the background color; a triangle chevron lights pixels inside its
+  disc only.
+
 ## Découpage en tâches d'implémentation
 
 | Order | Issue | Task | Depends on |
@@ -353,3 +527,12 @@ New `Action`s in `action_for` ([input.rs:21-46](../../../src/input.rs)), with a
 | 3 | [#10](https://github.com/marmotz/graphene-term/issues/10) | Gutter, view rows and block decorations | #9 |
 | 4 | [#11](https://github.com/marmotz/graphene-term/issues/11) | Block selection, navigation and copy actions | #10 |
 | 5 | [#12](https://github.com/marmotz/graphene-term/issues/12) | Folding, chevron, summary and auto-fold | #11 |
+
+Card rendering redesign:
+
+| Order | Issue | Task | Depends on |
+|---|---|---|---|
+| 6 | [#70](https://github.com/marmotz/graphene-term/issues/70) | Rounded corners and vector shapes in the rect pipeline | - |
+| 6 | [#71](https://github.com/marmotz/graphene-term/issues/71) | Card layout and view geometry with gaps | - |
+| 7 | [#72](https://github.com/marmotz/graphene-term/issues/72) | Card frame and scene rendering | #70, #71 |
+| 8 | [#73](https://github.com/marmotz/graphene-term/issues/73) | Selected block shown as a highlighted card | #72 |

@@ -1,6 +1,6 @@
 # Command blocks
 
-**Statut** : terminé — voir [technical.md](technical.md)
+**Statut** : tâches créées — voir [technical.md](technical.md)
 
 ## Contexte
 
@@ -33,20 +33,34 @@ keeping full compatibility with shells and full-screen programs.
 
 ### Display
 
-- Discreet rendering: a thin separator line between blocks, and a mark in the left
-  margin colored by the exit status (success / failure). Text stays in place.
-- The left margin is always reserved, even without shell integration, so the number of
-  columns never changes mid-session.
-- A running command shows a "running" mark; its partial output can already be
+- Blocks are drawn as cards, as Graphene UI around the terminal text rather than marks
+  over it. This replaces the first rendering (a separator line over the grid and a
+  one-cell mark), judged too close to console content once tried.
+- A card holds its prompt, command and output. It has a background slightly tinted
+  from the terminal background and rounded corners, with no border.
+- Cards are separated by a gap of about half a line. The view stays anchored at the
+  bottom (the prompt always visible): the gaps push the top of the screen into the
+  history, so slightly fewer lines show at once. The shell keeps a fixed number of
+  lines, nothing is lost.
+- The left margin shows only a status stripe beside each card, colored by the exit
+  status (success / failure / running). It is always reserved, even without shell
+  integration, so the number of columns never changes mid-session.
+- The active prompt (nothing run yet) sits in a neutral card, with no status color; it
+  turns "running" when the command starts.
+- A running command shows a "running" stripe; its partial output can already be
   selected, copied and folded.
-- Full-screen programs (alternate screen: vim, htop, less) are outside blocks: no block
-  marking while they run. Once they exit, the block holds the command and whatever
-  remains in the main history.
+- Without shell integration: no cards, the terminal renders as a classic one.
+- Full-screen programs (alternate screen: vim, htop, less) are outside blocks: no card
+  and no gap while they run, same number of columns (the margin stays reserved, empty).
+  Once they exit, the block holds the command and whatever remains in the main history.
 
 ### Selecting a block
 
-- Clicking the margin mark selects the whole block (from the command, prompt
-  excluded). Margin clicks stay Graphene's even when an application captures the mouse.
+- Clicking the status stripe in the margin selects the whole block (from the command,
+  prompt excluded). Margin clicks stay Graphene's even when an application captures
+  the mouse.
+- A selected block is shown by highlighting its card (accent), not by highlighting its
+  text like a classic selection. What gets copied is unchanged.
 - Keyboard shortcuts move to the previous / next block and select the current one.
   `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` keep this meaning at the prompt too.
   `Ctrl+Shift+Up` / `Ctrl+Shift+Down` were first chosen, then given to pane focus by
@@ -64,8 +78,9 @@ keeping full compatibility with shells and full-screen programs.
 
 - A folded block keeps its command line visible, followed by a summary such as
   "342 lines hidden". A click on the summary, the chevron or a shortcut unfolds it.
-- A chevron in the margin, on the command line, folds / unfolds the block with the
-  mouse; the rest of the mark selects.
+- A chevron sits on the top-right corner of the card, straddling its top edge in the
+  gap above, so it never covers text nor takes a column. It is always visible on a
+  finished block with output, folded or not, and folds / unfolds the block on click.
 - Actions: fold / unfold one block, fold / unfold all blocks at once.
 - Long outputs fold automatically when the command ends, when they are taller than the
   window. The threshold becomes configurable with the configuration feature.
