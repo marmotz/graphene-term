@@ -57,7 +57,10 @@ compatibility with shells, prompt themes and full-screen programs is kept.
 - A block is never taller than the window (later: its pane). When its content is
   taller, the content scrolls inside the block; its prompt and command stay fixed at
   the top of the block, only the output scrolls.
-- Mouse wheel over a block that can scroll scrolls its content, and stops at its ends.
+- Mouse wheel over a block that can scroll scrolls its content, and stops at its top
+  end. Scrolling it brings the whole block into view, so its prompt and command are
+  never cut by the top of the window; once its output is at its bottom end, scrolling
+  down moves the timeline back toward the prompt.
   Over a block that cannot scroll, over a gap or around the blocks, it scrolls the
   timeline.
 - While a command runs, its block follows the new output, unless the user scrolled

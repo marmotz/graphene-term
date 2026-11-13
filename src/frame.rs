@@ -855,12 +855,20 @@ mod tests {
         // The prompt's card does not scroll.
         assert_eq!(frame.cards[1].scroll, None);
 
-        // Scrolled to its top, the thumb moves up.
+        // Scrolled to its top, the whole block is revealed, its command back at the
+        // top, and the thumb moves up beside the output rows.
         let lines = session.term.screen_lines();
         view::scroll_block(&mut session.timeline, &session.term, BlockId(0), lines, 5);
         let frame = capture(&session, &Palette::default(), true);
-        assert_eq!(texts(&frame), ["1", "2", "3", "4", "$"]);
-        assert_eq!(frame.cards[0].scroll, Some(ScrollBar { start: 0.0, ..bar }));
+        assert_eq!(texts(&frame), ["$ seq", "1", "2", "3", "4"]);
+        assert_eq!(
+            frame.cards[0].scroll,
+            Some(ScrollBar {
+                rows: 1..5,
+                start: 0.0,
+                ..bar
+            })
+        );
     }
 
     #[test]

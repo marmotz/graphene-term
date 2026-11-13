@@ -430,8 +430,28 @@ pub fn can_scroll<L>(timeline: &Timeline, live: &Term<L>, id: BlockId, lines: us
 }
 
 /// Scrolls the output of block `id` by `delta` rows (positive shows older rows),
-/// stopping at its ends. Returns the rows actually scrolled.
+/// stopping at its ends, and reveals the whole block: a capped block anchored at the
+/// bottom has its header cut by the view top, and scrolling its output must not leave
+/// the command out of sight. Scrolling down once the output is at its bottom end moves
+/// the timeline instead, back to the blocks below. Returns the rows of output actually
+/// scrolled.
 pub fn scroll_block<L>(
+    timeline: &mut Timeline,
+    live: &Term<L>,
+    id: BlockId,
+    lines: usize,
+    delta: isize,
+) -> isize {
+    let scrolled = scroll_output(timeline, live, id, lines, delta);
+    if delta < 0 && scrolled == 0 {
+        scroll_timeline(timeline, live, lines, delta * ROW_UNITS as isize);
+    } else {
+        reveal(timeline, live, lines, id);
+    }
+    scrolled
+}
+
+fn scroll_output<L>(
     timeline: &mut Timeline,
     live: &Term<L>,
     id: BlockId,
@@ -715,7 +735,7 @@ mod tests {
         assert_eq!(scroll_block(timeline, live, id, 5, 10), 5);
         assert_eq!(timeline.block(id).unwrap().scroll, 7);
         let rows = rows_of(&session, 5);
-        assert_eq!(view(&session, &rows), ["a1", "a2", "a3", "$"]);
+        assert_eq!(view(&session, &rows), ["$ a", "a1", "a2", "a3"]);
         let (timeline, live) = (&mut session.timeline, &session.term);
         assert_eq!(scroll_block(timeline, live, id, 5, -20), -7);
         assert_eq!(scroll_block(timeline, live, id, 5, -1), 0);
@@ -724,6 +744,37 @@ mod tests {
         let (timeline, live) = (&mut session.timeline, &session.term);
         assert!(!can_scroll(timeline, live, BlockId(0), 5));
         assert_eq!(scroll_block(timeline, live, BlockId(0), 5, 1), 0);
+    }
+
+    #[test]
+    fn scrolling_a_capped_block_reveals_its_header() {
+        let mut session = session(&[("a", 10)]);
+        let id = BlockId(0);
+        // At rest the prompt card below pushes the capped block up: its header is cut.
+        let rows = rows_of(&session, 5);
+        assert!(!rows.iter().any(|row| row.source == RowSource::Header(id)));
+        // At the top end of its output, a wheel step up still brings the command back.
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        scroll_block(timeline, live, id, 5, 7);
+        assert_eq!(scroll_block(timeline, live, id, 5, 1), 0);
+        timeline.scroll = 0;
+        scroll_block(timeline, live, id, 5, 1);
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows), ["$ a", "a1", "a2", "a3"]);
+        // Scrolling down as well: the header stays in sight.
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        scroll_block(timeline, live, id, 5, -3);
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows), ["$ a", "a4", "a5", "a6"]);
+        // At the bottom end of its output, scrolling down goes back to the prompt.
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        scroll_block(timeline, live, id, 5, -4);
+        assert_eq!(timeline.block(id).unwrap().scroll, 0);
+        assert!(timeline.scroll > 0);
+        scroll_block(timeline, live, id, 5, -10);
+        assert_eq!(timeline.scroll, 0);
+        let rows = rows_of(&session, 5);
+        assert_eq!(view(&session, &rows).last().map(String::as_str), Some("$"));
     }
 
     #[test]

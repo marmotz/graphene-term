@@ -242,7 +242,9 @@ fits under its cap and scrolls the rest.
 `Hit` gains the block: `Cell { block: RowSource, line, column, side }`.
 
 - **Wheel** ([app.rs:663](../../../src/app.rs)): over a block whose output can scroll,
-  scroll `block.scroll` and stop at its ends; otherwise (short block, gap, margin,
+  scroll `block.scroll`, stop at its top end and reveal the whole block (its header
+  would otherwise stay cut by the view top when the block is anchored at the bottom);
+  at the bottom end of its output, scroll the timeline down instead; otherwise (short block, gap, margin,
   blank rows) scroll `timeline.scroll`. Over the live output with an application
   capturing the mouse, the wheel is reported to it as today.
 - **Mouse reporting**: only over the live output rows (or the whole window on the

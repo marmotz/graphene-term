@@ -151,7 +151,9 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
   them all. A click on the chevron disc (`Hit::Chevron`) toggles the fold, a click on
   the summary label unfolds. Nothing is folded automatically.
 - The wheel (unless an application captures it) scrolls the output of the block under
-  the pointer when it shows only part of it (`view::can_scroll`), stopping at its ends;
+  the pointer when it shows only part of it (`view::can_scroll`), revealing the whole
+  block (`view::reveal`) so its header is never cut by the view top; at the bottom end
+  of its output, scrolling down moves the timeline instead;
   elsewhere (short block, gap, margin, chevron, blank space below the cards) it scrolls
   the timeline (`mouse::wheel_target`). `Shift+PageUp/PageDown` scroll the selected
   block by a page when it can scroll, otherwise the timeline (`view::page_target`);
