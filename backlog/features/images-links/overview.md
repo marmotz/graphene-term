@@ -62,7 +62,8 @@ shells and full-screen programs.
 - Depends on [mouse-reporting](../mouse-reporting/overview.md): the `Ctrl` + click
   override only matters once clicks are reported to applications.
 - Depends on [command-blocks](../command-blocks/overview.md): the image sequences are
-  read through the own PTY loop that feature builds, and the internal `graphene-block`
-  hyperlinks it puts on prompt and command cells are never shown or opened as links.
+  read through the own PTY loop that feature builds. Since the command-blocks rework,
+  each block holds its own grid: links and images are looked up in the block under the
+  pointer.
 - Shares the link opening helper with
   [update-notification](../update-notification/overview.md).

@@ -384,7 +384,7 @@ mod tests {
     use alacritty_terminal::vte::ansi::Rgb;
 
     use super::*;
-    use crate::frame::FrameCell;
+    use crate::frame::{BlockColors, FrameCell};
 
     const SIZE: u32 = 64;
     const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -429,9 +429,21 @@ mod tests {
         let layout = GridLayout::new(SIZE, SIZE, cell_size, 0.0);
         let frame = Frame {
             rows: vec![vec![cell(' '), cell('M'), cell(' ')]],
+            decorations: Vec::new(),
+            cards: Vec::new(),
+            row_tops: vec![0],
+            block_colors: BlockColors {
+                success: WHITE,
+                failure: WHITE,
+                running: WHITE,
+                dim: WHITE,
+                card: WHITE,
+                card_selected: WHITE,
+            },
             cursor: None,
             background: BLACK,
             banner: None,
+            lang: crate::i18n::Lang::En,
         };
         renderer.render(&frame, &layout).unwrap();
         let pixels = renderer.read_pixels();
@@ -441,16 +453,56 @@ mod tests {
             .filter(|&x| (0..SIZE).any(|y| lit(x, y)))
             .collect();
         let (first, last) = (lit_columns[0], *lit_columns.last().unwrap());
-        // Only the 'M' of the second cell is drawn, inside that cell (one pixel of
-        // antialiasing slack on each side).
-        assert!(first as f32 >= cell_size.width - 1.0, "{lit_columns:?}");
-        assert!(
-            last as f32 <= 2.0 * cell_size.width + 1.0,
-            "{lit_columns:?}"
-        );
+        // Only the 'M' of the second cell is drawn, inside that cell, after the margin
+        // and the card padding (one pixel of antialiasing slack on each side).
+        assert!(first as f32 >= layout.cell_x(1) - 1.0, "{lit_columns:?}");
+        assert!(last as f32 <= layout.cell_x(2) + 1.0, "{lit_columns:?}");
         assert!((0..SIZE).all(|x| !lit(x, cell_size.height as u32 + 1)));
         // Full coverage somewhere: the mask is tinted with the cell color.
         assert!(pixels.chunks(4).any(|px| px[0] == 255));
+    }
+
+    #[test]
+    fn rounded_card_leaves_its_corner_pixel_at_the_background() {
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let cell_size = renderer.cell_size();
+        let layout = GridLayout::new(SIZE, SIZE, cell_size, 0.0);
+        let frame = Frame {
+            rows: vec![vec![cell(' ')]],
+            decorations: Vec::new(),
+            cards: vec![crate::frame::Card {
+                rows: 0..1,
+                clipped_top: false,
+                status: None,
+                chevron: None,
+                selected: false,
+                scroll: None,
+            }],
+            row_tops: vec![0],
+            block_colors: BlockColors {
+                success: WHITE,
+                failure: WHITE,
+                running: WHITE,
+                dim: WHITE,
+                card: WHITE,
+                card_selected: WHITE,
+            },
+            cursor: None,
+            background: BLACK,
+            banner: None,
+            lang: crate::i18n::Lang::En,
+        };
+        renderer.render(&frame, &layout).unwrap();
+        let pixels = renderer.read_pixels();
+        let red = |x: f32, y: f32| pixels[((y as u32 * SIZE + x as u32) * 4) as usize];
+        let left = layout.grid_left() - layout.card_pad;
+        // The top-left corner pixel is outside the rounded corner; the card middle is
+        // fully covered.
+        assert_eq!(red(left, 0.0), 0);
+        assert_eq!(red(left + 6.0, cell_size.height / 2.0), 255);
     }
 
     #[test]

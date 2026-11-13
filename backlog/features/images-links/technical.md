@@ -172,9 +172,9 @@ Nothing runs while no visible animation exists.
 
 - `link_at(term, point) -> Option<Link { range, uri, explicit: bool }>`:
   1. OSC 8: `cell.hyperlink()`; the range extends left and right over adjacent cells
-     with the same hyperlink id (across wrapped lines). Hyperlinks whose scheme is
-     command blocks' `BLOCK_LINK_SCHEME` (`graphene-block`) are internal cell tags:
-     treated as no hyperlink, so URL detection still applies to those cells;
+     with the same hyperlink id (across wrapped lines). (The command-blocks rework drops
+     its internal `graphene-block` cell tags: no hyperlink needs to be filtered out
+     any more. `term` is the grid of the block under the pointer.);
   2. otherwise a `RegexSearch` over the logical line around `point`
      (`line_search_left/right`) with the URL pattern for `http`, `https`, `file` and
      `mailto`; trailing punctuation and unbalanced closing brackets are trimmed.

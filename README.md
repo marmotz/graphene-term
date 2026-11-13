@@ -32,6 +32,29 @@ newer release), and "×" hides it until the next launch.
 
 The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
+## Shell integration
+
+When `$SHELL` is zsh, bash or fish, Graphene loads a small integration script into the
+shell it starts, so the shell marks where each prompt, command and output starts (OSC
+133). Each command and its output then form a block: a colored bar in the left margin
+shows its status (green: success, red: failure, yellow: running), and a block can be
+selected, copied and folded (see [Shortcuts](#shortcuts)). An output taller than the
+window is folded when the command ends. Your dotfiles are not modified, and they are
+loaded as usual:
+
+- zsh: started with `ZDOTDIR` set to the integration folder, whose `.zshenv` restores
+  `ZDOTDIR` and sources yours;
+- bash: started with `--posix` and `ENV` set to the integration script, which turns
+  POSIX mode off and sources your startup files like a regular interactive bash;
+- fish: the integration folder is added to `XDG_DATA_DIRS`; fish 4.0 and later already
+  emit the marks, the script only adds the missing ones.
+
+The scripts are written to `$XDG_RUNTIME_DIR/graphene/shell-integration/` (a private
+folder of the system temporary directory when that variable is unset). Other shells,
+and shells started by hand inside Graphene, are left as they are. Set
+`GRAPHENE_SHELL_INTEGRATION=0` in Graphene's environment to start the shell without
+integration.
+
 ## Performance
 
 ```bash
@@ -54,12 +77,20 @@ first output.
 | Shift+left click              | Extend the selection                            |
 | Shift+mouse                   | Select even when the app captures the mouse     |
 | Ctrl+Shift+C                  | Copy the selection to the clipboard             |
+| Left click on a status stripe | Select the command block of the row             |
+| Ctrl+Shift+PageUp / PageDown  | Select the previous / next command block        |
+| Ctrl+Shift+Alt+C              | Copy the command of the selected or last block  |
+| Ctrl+Shift+Alt+O              | Copy the output of the selected or last block   |
+| Click on a card's chevron     | Fold / unfold the output of the block           |
+| Click on "n lines hidden"     | Unfold the block                                |
+| Ctrl+Shift+F                  | Fold / unfold the selected or last block        |
+| Ctrl+Shift+Alt+F              | Fold all finished blocks / unfold them all      |
 | Middle click                  | Paste the primary selection                     |
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)      |
-| Shift+PageUp / Shift+PageDown | Scroll the history                              |
+| Shift+PageUp / Shift+PageDown | Scroll the selected block, or the history       |
 | Shift+Home / Shift+End        | Top / bottom of the history                     |
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
-| Mouse wheel                   | Scroll history (arrow keys in full-screen apps) |
+| Mouse wheel                   | Scroll the block under the pointer, or history  |
 
 ## Documentation
 

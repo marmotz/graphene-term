@@ -55,10 +55,10 @@ The theme ("graphene night") is defined in `src/palette.rs`.
 |-------------------------------|--------------------------------------------------|
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)       |
 | Ctrl+Shift+C                  | Reserved for copy (no-op until selection exists) |
-| Shift+PageUp / Shift+PageDown | Scroll the history by a page                     |
-| Shift+Home / Shift+End        | Top / bottom of the history                      |
+| Shift+PageUp / Shift+PageDown | Scroll the selected block, or the timeline       |
+| Shift+Home / Shift+End        | Top / bottom of the timeline                     |
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                      |
-| Mouse wheel                   | History, or arrow keys in full-screen apps       |
+| Mouse wheel                   | Block under the pointer, or the timeline         |
 
 ## Tests
 

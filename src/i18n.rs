@@ -121,6 +121,9 @@ pub enum Msg {
     UpdateAvailable(String),
     OpenRelease,
     IgnoreVersion,
+    // Command blocks.
+    /// Summary of a folded block: its hidden output rows.
+    LinesHidden(usize),
 }
 
 /// Text of `msg` in `lang`.
@@ -192,6 +195,8 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::UpdateAvailable(tag) => return format!("Graphene {tag} is available").into(),
         Msg::OpenRelease => "Open release",
         Msg::IgnoreVersion => "Ignore this version",
+        Msg::LinesHidden(1) => "1 line hidden",
+        Msg::LinesHidden(rows) => return format!("{rows} lines hidden").into(),
     };
     Cow::Borrowed(text)
 }
@@ -257,6 +262,8 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::UpdateAvailable(tag) => return format!("Graphene {tag} est disponible").into(),
         Msg::OpenRelease => "Voir la version",
         Msg::IgnoreVersion => "Ignorer cette version",
+        Msg::LinesHidden(1) => "1 ligne masquée",
+        Msg::LinesHidden(rows) => return format!("{rows} lignes masquées").into(),
     };
     Cow::Borrowed(text)
 }
@@ -311,9 +318,10 @@ mod tests {
             Msg::UpdateAvailable(_) => 30,
             Msg::OpenRelease => 31,
             Msg::IgnoreVersion => 32,
+            Msg::LinesHidden(_) => 33,
         }
     }
-    const VARIANT_COUNT: usize = 33;
+    const VARIANT_COUNT: usize = 34;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -356,6 +364,8 @@ mod tests {
             Msg::UpdateAvailable("v0.2.0".into()),
             Msg::OpenRelease,
             Msg::IgnoreVersion,
+            Msg::LinesHidden(1),
+            Msg::LinesHidden(42),
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
@@ -391,6 +401,10 @@ mod tests {
     #[test]
     fn messages_with_values_include_them() {
         assert_eq!(text(Lang::En, &Msg::GoToTab(4)), "Go to tab 4");
+        assert_eq!(text(Lang::En, &Msg::LinesHidden(1)), "1 line hidden");
+        assert_eq!(text(Lang::En, &Msg::LinesHidden(12)), "12 lines hidden");
+        assert_eq!(text(Lang::Fr, &Msg::LinesHidden(1)), "1 ligne masquée");
+        assert_eq!(text(Lang::Fr, &Msg::LinesHidden(12)), "12 lignes masquées");
         assert_eq!(
             text(
                 Lang::Fr,

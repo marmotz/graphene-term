@@ -13,9 +13,70 @@ cost ~100 ms at startup (see `backlog/features/performance/technical.md`).
 
 A correct VT emulator is a large amount of work (escape sequences, alternate screen,
 scroll regions, wide chars, reflow on resize). `alacritty_terminal` provides it, plus
-the PTY and its I/O thread, and is battle-tested. We only depend on its public API (`Term`, `tty`, `event_loop`).
+the PTY, and is battle-tested. We only depend on its public API (`Term`, `tty`, `vte`).
 Graphene-specific features (blocks, input editor) will
 be layered on top.
+
+## Own PTY loop
+
+alacritty's `event_loop::EventLoop` parses whole read buffers, sometimes several reads
+at once, inside its own thread: the cursor position at a given byte of the stream is
+unknown. Command blocks need it (a block signal must be applied where the shell emitted
+it, and `vte` 0.15 drops unknown OSC without a callback). Graphene therefore runs its
+own PTY thread (`src/pty.rs`), a close copy of alacritty's loop on `polling`, whose
+parse step `pty::feed` can be split around signals. alacritty's `tty` module still spawns the
+shell and owns the PTY file descriptors. Poller keys `0` (read/write) and `1` (child
+event) mirror alacritty's unix `tty`, where they are `pub(crate)`.
+
+## One terminal per block: live grid and frozen blocks
+
+The first implementation cut one grid into blocks with the OSC 133 marks the shell
+puts around its prompt, and anchored them in the cells with internal hyperlinks.
+Prompt themes (powerlevel10k) rebuild the prompt and their own marks after every hook,
+so the blocks broke, and any cursor move up from a command could overwrite older
+blocks. Each block is now its own terminal: the session's `Term` is the live grid of
+the current block, detached into a frozen `Term<VoidListener>` when the shell signals
+that a command starts (the header: prompt and typed command) and ends (the output).
+One parser and one set of modes stay with the session (nothing to replay into a new
+`Term`), and frozen blocks keep alacritty's selection, copy and reflow. The only
+signals are two private OSC sequences carrying a session token (`start` with the
+command line, `end` with the status), so the 133 marks of fish, powerlevel10k, a remote
+shell or a printed file never matter. The prompt is never wrapped or parsed.
+
+## Card space always reserved
+
+The command blocks are drawn as cards: a margin for the status stripe and half a cell
+of card padding left of the grid, the card padding and room for the fold chevron
+(on the card's top-right corner) right of it. This space is reserved from the start,
+even when the shell sends no signal, so the first block never changes the column count:
+no reflow mid-session. The cost is about one and a half columns fewer for every user.
+
+## Cards replace the gutter marks
+
+The first rendering put a one-cell gutter bar, a 1 px separator over the grid and a font
+chevron (`▸` / `▾`) on the command row. With a real prompt (powerlevel10k) it read as
+console content, and the chevron glyph came from a fallback font, a few pixels wide,
+half under the status bar. Each block is now a card: a rounded background derived from
+the palette, a status stripe in the margin and a chevron drawn as SDF shapes (disc and
+triangle) in the rect pipeline, so it is crisp at any size and needs no font.
+
+## Gaps between cards keep the PTY size
+
+Half a line separates two cards. The PTY size never changes: the gaps push the top rows
+of the view out, reachable by scrolling, rather than shrinking the PTY per block (which
+would reflow and redraw full-screen programs). The view is laid out in half-lines with
+whole rows only; a block is capped one line short of the view, so the gap above it
+always fits and a capped block is always shown whole.
+
+## Scroll positions owned by Graphene
+
+The view spans several grids, and a block shows at most a view height (its header
+pinned, its output scrolled), which is not alacritty's viewport. The scroll positions
+are Graphene's: one for the timeline (half-lines from its bottom) and one per block
+(output rows hidden below). The live grid stays at `display_offset` 0. When scrolled
+up, the timeline offset grows by what was added below (`view::follow`), so the view
+stays still while output arrives, which alacritty used to do for its viewport. Folding
+a block replaces its output with one summary row; the grids are untouched.
 
 ## Own glyph pipeline on `cosmic-text` (glyphon dropped)
 
@@ -62,8 +123,9 @@ text renderer unaware of the cursor. Non-block shapes are drawn as rects over th
   debug level, clipboard copy is unaffected.
 - Word separators are alacritty's defaults without `:`, so a URL or `host:port` is one
   word on double-click.
-- When the application enabled mouse reporting, left and middle clicks are reserved
-  for it; `Shift` forces a local selection.
+- When the application enabled mouse reporting, left and middle clicks over its rows
+  (the live grid, the whole window on the alternate screen) are reserved for it;
+  `Shift` forces a local selection. Over frozen blocks the mouse stays Graphene's.
 - Keystrokes sent to the shell and pastes clear the selection; app shortcuts keep it.
 - Program output clears the selection only when the selected text really changes. `Term`
   clears it on erase sequences even when the same text is redrawn (prompt redraws,

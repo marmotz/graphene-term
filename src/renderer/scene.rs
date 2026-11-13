@@ -3,9 +3,19 @@
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use super::glyphs::GlyphKey;
-use super::rects::RectInstance;
-use crate::frame::Frame;
+use super::rects::{RectInstance, Shape};
+use crate::frame::{self, Card, Fold, Frame, ScrollBar};
+use crate::i18n::{self, Msg};
 use crate::layout::GridLayout;
+use crate::timeline::Status;
+
+fn plain(c: char) -> GlyphKey {
+    GlyphKey {
+        c,
+        bold: false,
+        italic: false,
+    }
+}
 
 /// A glyph to draw: the character of one cell (or of the banner), anchored at the
 /// top-left corner of its cell. Spaces never produce one.
@@ -60,14 +70,137 @@ pub fn gpu_color(rgb: Rgb, srgb_target: bool) -> [f32; 4] {
     }
 }
 
+/// Top and bottom pixel edges of the rows of `card`, the top one unclipped.
+fn card_edges(frame: &Frame, layout: &GridLayout, card: &Card) -> (f32, f32) {
+    let top = layout.row_top(frame.row_tops[card.rows.start]);
+    let bottom = layout.row_top(frame.row_tops[card.rows.end - 1] + 2);
+    (top, bottom)
+}
+
+/// Card backgrounds and status stripes, drawn below the cell backgrounds.
+fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<RectInstance> {
+    let cell = layout.cell;
+    let radius = (cell.height / 4.0).round();
+    let stripe = (cell.width / 6.0).round().max(2.0);
+    let left = layout.grid_left() - layout.card_pad;
+    let width = layout.grid_right() + layout.card_pad - left;
+    let mut rects = Vec::new();
+    for card in &frame.cards {
+        let (mut top, bottom) = card_edges(frame, layout, card);
+        // A card cut by the view top keeps its rounded corners above it.
+        if card.clipped_top {
+            top -= radius;
+        }
+        let color = if card.selected {
+            frame.block_colors.card_selected
+        } else {
+            frame.block_colors.card
+        };
+        rects.push(
+            RectInstance::new(
+                [left, top],
+                [width, bottom - top],
+                gpu_color(color, srgb_target),
+            )
+            .with_radius(radius),
+        );
+        if let Some(status) = card.status {
+            // Centered in the margin, with round ends.
+            let x = layout.padding + ((layout.margin - stripe) / 2.0).max(0.0).round();
+            rects.push(
+                RectInstance::new(
+                    [x, top],
+                    [stripe, bottom - top],
+                    gpu_color(frame.block_colors.status(status), srgb_target),
+                )
+                .with_radius(stripe / 2.0),
+            );
+        }
+        if let Some(bar) = &card.scroll {
+            rects.push(scroll_thumb(frame, layout, bar, stripe, srgb_target));
+        }
+    }
+    rects
+}
+
+/// Scroll indicator of a card: a thin bar with round ends in the card's right padding,
+/// in the dim color, beside the output rows (the track), placed and sized after the
+/// share of the output shown. Never shorter than it is wide.
+fn scroll_thumb(
+    frame: &Frame,
+    layout: &GridLayout,
+    bar: &ScrollBar,
+    width: f32,
+    srgb_target: bool,
+) -> RectInstance {
+    let track_top = layout.row_top(frame.row_tops[bar.rows.start]);
+    let track_bottom = layout.row_top(frame.row_tops[bar.rows.end - 1] + 2);
+    let track = track_bottom - track_top;
+    let height = (bar.length * track).round().clamp(width, track);
+    let top = (track_top + (bar.start * track).round()).min(track_bottom - height);
+    let x = layout.grid_right() + ((layout.card_pad - width) / 2.0).max(0.0).round();
+    RectInstance::new(
+        [x, top],
+        [width, height],
+        gpu_color(frame.block_colors.dim, srgb_target),
+    )
+    .with_radius(width / 2.0)
+}
+
+/// Fold chevrons, drawn above the glyphs: a disc in the card color on the card's
+/// top-right corner, then a triangle in the status color.
+fn chevrons(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<RectInstance> {
+    let radius = layout.chevron_radius;
+    let center_x = layout.grid_right() + layout.card_pad;
+    let side = (radius * 1.2).round();
+    let mut rects = Vec::new();
+    for card in &frame.cards {
+        let Some(fold) = card.chevron else {
+            continue;
+        };
+        let (center_y, _) = card_edges(frame, layout, card);
+        let disc = if card.selected {
+            frame.block_colors.card_selected
+        } else {
+            frame.block_colors.card
+        };
+        rects.push(
+            RectInstance::new(
+                [center_x - radius, center_y - radius],
+                [2.0 * radius, 2.0 * radius],
+                gpu_color(disc, srgb_target),
+            )
+            .with_radius(radius),
+        );
+        let color = match card.status {
+            None | Some(Status::Unknown) => frame.block_colors.dim,
+            Some(status) => frame.block_colors.status(status),
+        };
+        let shape = match fold {
+            Fold::Folded => Shape::TriangleRight,
+            Fold::Unfolded => Shape::TriangleDown,
+        };
+        rects.push(
+            RectInstance::new(
+                [center_x - side / 2.0, center_y - side / 2.0],
+                [side, side],
+                gpu_color(color, srgb_target),
+            )
+            .with_shape(shape),
+        );
+    }
+    rects
+}
+
 pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     let cell = layout.cell;
     let thickness = (cell.height / 16.0).round().max(1.0);
-    let mut under = Vec::new();
+    let mut under = cards_under(frame, layout, srgb_target);
     let mut over = Vec::new();
     let mut glyphs = Vec::new();
 
     for (line, cells) in frame.rows.iter().enumerate() {
+        let y = layout.row_top(frame.row_tops[line]);
         // Backgrounds: merge consecutive cells with the same non-default color.
         let mut column = 0;
         while column < cells.len() {
@@ -77,32 +210,50 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                 column += 1;
             }
             if bg != frame.background {
-                let (x, y) = layout.cell_origin(start, line);
-                under.push(RectInstance {
-                    position: [x, y],
-                    size: [(column - start) as f32 * cell.width, cell.height],
-                    color: gpu_color(bg, srgb_target),
-                });
+                let x = layout.cell_x(start);
+                under.push(RectInstance::new(
+                    [x, y],
+                    [(column - start) as f32 * cell.width, cell.height],
+                    gpu_color(bg, srgb_target),
+                ));
+            }
+        }
+
+        // Hidden-rows summary in dim text after the row's content, cut at the grid edge.
+        let decoration = frame.decorations.get(line).copied().unwrap_or_default();
+        if let Some(hidden) = decoration.summary {
+            let label = i18n::text(frame.lang, &Msg::LinesHidden(hidden));
+            let start = frame::summary_column(cells.iter().map(|c| c.c == ' ' && !c.spacer));
+            let color = gpu_color(frame.block_colors.dim, srgb_target);
+            for (column, c) in (start..cells.len()).zip(label.chars()) {
+                if c != ' ' {
+                    let x = layout.cell_x(column);
+                    glyphs.push(GlyphInstance {
+                        origin: [x, y],
+                        key: plain(c),
+                        color,
+                    });
+                }
             }
         }
 
         // Decorations.
         for (column, c) in cells.iter().enumerate() {
-            let (x, y) = layout.cell_origin(column, line);
+            let x = layout.cell_x(column);
             let color = gpu_color(c.fg, srgb_target);
             if c.underline {
-                over.push(RectInstance {
-                    position: [x, y + cell.height - 2.0 * thickness],
-                    size: [cell.width, thickness],
+                over.push(RectInstance::new(
+                    [x, y + cell.height - 2.0 * thickness],
+                    [cell.width, thickness],
                     color,
-                });
+                ));
             }
             if c.strikeout {
-                over.push(RectInstance {
-                    position: [x, y + (cell.height - thickness) / 2.0],
-                    size: [cell.width, thickness],
+                over.push(RectInstance::new(
+                    [x, y + (cell.height - thickness) / 2.0],
+                    [cell.width, thickness],
                     color,
-                });
+                ));
             }
         }
 
@@ -112,7 +263,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             if c.spacer || c.c == ' ' {
                 continue;
             }
-            let (x, y) = layout.cell_origin(column, line);
+            let x = layout.cell_x(column);
             glyphs.push(GlyphInstance {
                 origin: [x, y],
                 key: GlyphKey {
@@ -125,15 +276,16 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         }
     }
 
+    over.extend(chevrons(frame, layout, srgb_target));
+
     if let Some(cursor) = frame.cursor {
-        let (x, y) = layout.cell_origin(cursor.column, cursor.line);
+        let (x, y) = (
+            layout.cell_x(cursor.column),
+            layout.row_top(frame.row_tops[cursor.line]),
+        );
         let color = gpu_color(cursor.color, srgb_target);
         let beam = (cell.width / 8.0).round().max(2.0);
-        let rect = |position: [f32; 2], size: [f32; 2]| RectInstance {
-            position,
-            size,
-            color,
-        };
+        let rect = |position: [f32; 2], size: [f32; 2]| RectInstance::new(position, size, color);
         match cursor.shape {
             CursorShape::Beam => over.push(rect([x, y], [beam, cell.height])),
             CursorShape::Underline => {
@@ -160,11 +312,11 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     let mut overlay = Vec::new();
     if let Some(banner) = &frame.banner {
         let rect = banner.layout.rect;
-        over.push(RectInstance {
-            position: [rect.x, rect.y],
-            size: [rect.width, rect.height],
-            color: gpu_color(banner.background, srgb_target),
-        });
+        over.push(RectInstance::new(
+            [rect.x, rect.y],
+            [rect.width, rect.height],
+            gpu_color(banner.background, srgb_target),
+        ));
         let color = gpu_color(banner.text, srgb_target);
         for placed in &banner.layout.texts {
             let characters = placed.text.chars().enumerate().filter(|(_, c)| *c != ' ');
@@ -193,8 +345,11 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
 mod tests {
     use super::*;
     use crate::banner::{Banner, BannerLayout};
-    use crate::frame::{FrameBanner, FrameCell, FrameCursor};
+    use crate::frame::{
+        BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration, ScrollBar,
+    };
     use crate::layout::CellSize;
+    use crate::timeline::Status;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
     const FG: Rgb = Rgb {
@@ -217,7 +372,9 @@ mod tests {
         }
     }
 
-    fn layout() -> GridLayout {
+    /// 10 x 20 px cells, no padding: the grid starts after the 5 px margin and the 5 px
+    /// card padding.
+    fn margin_layout() -> GridLayout {
         GridLayout::new(
             100,
             100,
@@ -229,12 +386,66 @@ mod tests {
         )
     }
 
+    /// Same cells, with the grid at the origin.
+    fn layout() -> GridLayout {
+        GridLayout {
+            margin: 0.0,
+            card_pad: 0.0,
+            ..margin_layout()
+        }
+    }
+
+    const GREEN: Rgb = Rgb { r: 0, g: 255, b: 0 };
+    const YELLOW: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 0,
+    };
+    const GREY: Rgb = Rgb {
+        r: 128,
+        g: 128,
+        b: 128,
+    };
+    const CARD: Rgb = Rgb {
+        r: 15,
+        g: 15,
+        b: 15,
+    };
+    const CARD_SELECTED: Rgb = Rgb {
+        r: 36,
+        g: 36,
+        b: 36,
+    };
+
+    fn card(rows: std::ops::Range<usize>, status: Option<Status>) -> Card {
+        Card {
+            rows,
+            clipped_top: false,
+            status,
+            chevron: None,
+            selected: false,
+            scroll: None,
+        }
+    }
+
     fn frame(rows: Vec<Vec<FrameCell>>) -> Frame {
         Frame {
+            decorations: vec![RowDecoration::default(); rows.len()],
+            cards: Vec::new(),
+            row_tops: (0..rows.len() as u32).map(|row| 2 * row).collect(),
+            block_colors: BlockColors {
+                success: GREEN,
+                failure: RED,
+                running: YELLOW,
+                dim: GREY,
+                card: CARD,
+                card_selected: CARD_SELECTED,
+            },
             rows,
             cursor: None,
             background: BG,
             banner: None,
+            lang: crate::i18n::Lang::En,
         }
     }
 
@@ -259,6 +470,27 @@ mod tests {
     /// (origin, character) of each glyph of `glyphs`.
     fn placed(glyphs: &[GlyphInstance]) -> Vec<([f32; 2], char)> {
         glyphs.iter().map(|g| (g.origin, g.key.c)).collect()
+    }
+
+    #[test]
+    fn rows_are_placed_at_their_view_offset() {
+        let mut f = frame(vec![vec![cell('a')], vec![cell('b')], vec![cell('c')]]);
+        // One leftover half-line at the top, a gap before the last row.
+        f.row_tops = vec![1, 3, 6];
+        f.rows[2][0].bg = RED;
+        f.cursor = Some(FrameCursor {
+            column: 0,
+            line: 2,
+            shape: CursorShape::Beam,
+            color: RED,
+        });
+        let scene = build(&f, &layout(), false);
+        assert_eq!(
+            placed(&scene.glyphs),
+            vec![([0.0, 10.0], 'a'), ([0.0, 30.0], 'b'), ([0.0, 60.0], 'c')]
+        );
+        assert_eq!(scene.under[0].position, [0.0, 60.0]);
+        assert_eq!(scene.over[0].position, [0.0, 60.0]);
     }
 
     #[test]
@@ -390,6 +622,181 @@ mod tests {
         assert!(scene.glyphs.is_empty());
     }
 
+    /// (position, size, color, radius, shape) of a rect.
+    type Drawn = ([f32; 2], [f32; 2], [f32; 4], f32, u32);
+
+    fn shapes(rects: &[RectInstance]) -> Vec<Drawn> {
+        rects
+            .iter()
+            .map(|r| (r.position, r.size, r.color, r.radius, r.shape))
+            .collect()
+    }
+
+    #[test]
+    fn no_card_without_blocks() {
+        let scene = build(&frame(vec![vec![cell('a')]; 3]), &margin_layout(), false);
+        assert!(scene.under.is_empty());
+        assert!(scene.over.is_empty());
+    }
+
+    #[test]
+    fn card_background_and_status_stripe_below_the_cells() {
+        let mut f = frame(vec![vec![cell('a')]; 5]);
+        // A gap before the second card: rows at half-lines 0, 2 | 5, 7, 9.
+        f.row_tops = vec![0, 2, 5, 7, 9];
+        f.rows[3][0].bg = RED;
+        f.cards = vec![
+            card(0..2, Some(Status::Success)),
+            card(2..5, Some(Status::Failure(2))),
+        ];
+        let l = margin_layout();
+        let scene = build(&f, &l, false);
+        let rgb = |c: Rgb| gpu_color(c, false);
+        // Cards from the margin edge (5 px) to the grid right edge plus the card
+        // padding, radius a quarter of the cell height. Stripes 2 px wide (a sixth of
+        // the cell width, at least 2), centered in the 5 px margin, round ends.
+        let width = l.grid_right() + 5.0 - 5.0;
+        assert_eq!(
+            shapes(&scene.under),
+            vec![
+                ([5.0, 0.0], [width, 40.0], rgb(CARD), 5.0, 0),
+                ([2.0, 0.0], [2.0, 40.0], rgb(GREEN), 1.0, 0),
+                ([5.0, 50.0], [width, 60.0], rgb(CARD), 5.0, 0),
+                ([2.0, 50.0], [2.0, 60.0], rgb(RED), 1.0, 0),
+                // The cell background comes after the cards.
+                ([10.0, 70.0], [10.0, 20.0], rgb(RED), 0.0, 0),
+            ]
+        );
+        // The grid itself starts after the margin and the card padding.
+        assert_eq!(placed(&scene.glyphs)[0], ([10.0, 0.0], 'a'));
+    }
+
+    #[test]
+    fn scroll_indicator_beside_the_output_rows_in_the_dim_color() {
+        let mut f = frame(vec![vec![cell('a')]; 4]);
+        f.row_tops = vec![0, 2, 4, 6];
+        f.cards = vec![Card {
+            // Output on rows 1 to 3 (pixels 20..80), the middle quarter shown.
+            scroll: Some(ScrollBar {
+                rows: 1..4,
+                start: 0.5,
+                length: 0.25,
+            }),
+            ..card(0..4, Some(Status::Success))
+        }];
+        let l = margin_layout();
+        let scene = build(&f, &l, false);
+        // Card, stripe, then the 2 px thumb centered in the 5 px right card padding:
+        // a quarter of the 60 px track, halfway down.
+        assert_eq!(scene.under.len(), 3);
+        assert_eq!(
+            shapes(&scene.under[2..]),
+            vec![(
+                [l.grid_right() + 2.0, 50.0],
+                [2.0, 15.0],
+                gpu_color(GREY, false),
+                1.0,
+                0
+            )]
+        );
+    }
+
+    #[test]
+    fn scroll_indicator_keeps_a_minimum_length_inside_its_track() {
+        let mut f = frame(vec![vec![cell('a')]; 4]);
+        f.row_tops = vec![0, 2, 4, 6];
+        f.cards = vec![Card {
+            scroll: Some(ScrollBar {
+                rows: 1..4,
+                start: 1.0,
+                length: 0.001,
+            }),
+            ..card(0..4, None)
+        }];
+        let scene = build(&f, &margin_layout(), false);
+        // No stripe on a neutral card: the thumb follows the card background.
+        let thumb = &scene.under[1];
+        assert_eq!((thumb.position[1], thumb.size[1]), (78.0, 2.0));
+    }
+
+    #[test]
+    fn neutral_card_has_no_stripe_and_a_selected_card_is_brighter() {
+        let mut f = frame(vec![vec![cell('a')]; 2]);
+        f.cards = vec![card(0..1, None), card(1..2, Some(Status::Running))];
+        f.cards[1].selected = true;
+        let scene = build(&f, &margin_layout(), false);
+        let colors: Vec<_> = scene.under.iter().map(|r| r.color).collect();
+        assert_eq!(
+            colors,
+            [
+                gpu_color(CARD, false),
+                gpu_color(CARD_SELECTED, false),
+                gpu_color(YELLOW, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn card_clipped_at_the_top_starts_above_the_view() {
+        let mut f = frame(vec![vec![cell('a')]; 2]);
+        f.cards = vec![Card {
+            clipped_top: true,
+            ..card(0..2, Some(Status::Success))
+        }];
+        let scene = build(&f, &margin_layout(), false);
+        // Background and stripe start one radius (5 px) above the first row.
+        assert_eq!(scene.under[0].position[1], -5.0);
+        assert_eq!(scene.under[0].size[1], 45.0);
+        assert_eq!(scene.under[1].position[1], -5.0);
+    }
+
+    #[test]
+    fn chevron_disc_and_triangle_on_the_card_corner_above_the_glyphs() {
+        let mut f = frame(vec![vec![cell('a')]; 4]);
+        f.row_tops = vec![0, 2, 5, 7];
+        f.cards = vec![
+            Card {
+                chevron: Some(Fold::Folded),
+                ..card(0..2, Some(Status::Failure(1)))
+            },
+            Card {
+                chevron: Some(Fold::Unfolded),
+                selected: true,
+                ..card(2..4, Some(Status::Unknown))
+            },
+        ];
+        let l = margin_layout();
+        let scene = build(&f, &l, false);
+        let rgb = |c: Rgb| gpu_color(c, false);
+        // Radius round(20 * 0.45) = 9, centered on the card's top-right corner; the
+        // triangle is an 11 px box (round(9 * 1.2)) in its middle.
+        let cx = l.grid_right() + 5.0;
+        assert_eq!(
+            shapes(&scene.over),
+            vec![
+                ([cx - 9.0, -9.0], [18.0, 18.0], rgb(CARD), 9.0, 0),
+                (
+                    [cx - 5.5, -5.5],
+                    [11.0, 11.0],
+                    rgb(RED),
+                    0.0,
+                    Shape::TriangleRight as u32
+                ),
+                ([cx - 9.0, 41.0], [18.0, 18.0], rgb(CARD_SELECTED), 9.0, 0),
+                // `Unknown`: the dim color.
+                (
+                    [cx - 5.5, 44.5],
+                    [11.0, 11.0],
+                    rgb(GREY),
+                    0.0,
+                    Shape::TriangleDown as u32
+                ),
+            ]
+        );
+        // No glyph is drawn for the chevrons.
+        assert_eq!(scene.glyphs.len(), 4);
+    }
+
     #[test]
     fn srgb_target_linearizes() {
         let c = gpu_color(
@@ -403,5 +810,60 @@ mod tests {
         assert!((c[0] - 0.2158).abs() < 0.001);
         assert_eq!(c[1], 1.0);
         assert_eq!(c[2], 0.0);
+    }
+
+    fn placed_refs(glyphs: &[&GlyphInstance]) -> Vec<([f32; 2], char)> {
+        glyphs.iter().map(|g| (g.origin, g.key.c)).collect()
+    }
+
+    #[test]
+    fn summary_after_the_row_content() {
+        let mut frame = frame(vec![
+            vec![
+                cell('$'),
+                cell(' '),
+                cell('l'),
+                cell('s'),
+                cell(' '),
+                cell(' '),
+            ],
+            vec![cell('$'); 6],
+        ]);
+        frame.decorations[0].summary = Some(12);
+        let scene = build(&frame, &margin_layout(), false);
+        let grey = gpu_color(GREY, false);
+        // "12 lines hidden" from column 5 (two after "ls"), cut at the grid edge (6
+        // columns): only "1" fits.
+        let summary: Vec<_> = scene
+            .glyphs
+            .iter()
+            .filter(|g| g.color == grey && g.origin[1] == 0.0)
+            .collect();
+        assert_eq!(placed_refs(&summary), [([10.0 + 5.0 * 10.0, 0.0], '1')]);
+    }
+
+    #[test]
+    fn summary_is_translated() {
+        let mut row = vec![cell(' '); 31];
+        row[0] = cell('$');
+        let mut frame = frame(vec![row]);
+        frame.decorations[0].summary = Some(1);
+        frame.lang = crate::i18n::Lang::Fr;
+        let layout = GridLayout::new(
+            400,
+            100,
+            CellSize {
+                width: 10.0,
+                height: 20.0,
+            },
+            0.0,
+        );
+        let scene = build(&frame, &layout, false);
+        let grey = gpu_color(GREY, false);
+        let summary: Vec<_> = scene.glyphs.iter().filter(|g| g.color == grey).collect();
+        let text: String = summary.iter().map(|g| g.key.c).collect();
+        // Spaces draw no glyph.
+        assert_eq!(text, "1lignemasquée");
+        assert_eq!(summary[0].origin, [10.0 + 2.0 * 10.0, 0.0]);
     }
 }

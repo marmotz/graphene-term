@@ -49,6 +49,9 @@ compatibility with shells and full-screen programs.
 ## Dépend de
 
 - [command-blocks](../command-blocks/overview.md): relies on the same OSC 133 shell
-  integration to know where the prompt and the input are.
+  integration to know where the prompt and the input are. **To revisit**: the
+  command-blocks rework drops the prompt marks (each block becomes its own terminal,
+  the shell only signals command start and end), so this feature needs another way to
+  locate the input.
 - [selection-copy](../selection-copy/overview.md): input selection builds on the
   existing selection mechanism.

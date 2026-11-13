@@ -15,15 +15,29 @@ pub enum Action {
     FontSizeIncrease,
     FontSizeDecrease,
     FontSizeReset,
+    PreviousBlock,
+    NextBlock,
+    CopyCommand,
+    CopyOutput,
+    ToggleFold,
+    ToggleFoldAll,
 }
 
 /// Returns the application action bound to a key combination, if any.
 pub fn action_for(key: &Key, mods: ModifiersState) -> Option<Action> {
     let ctrl_shift = mods.control_key() && mods.shift_key() && !mods.alt_key();
+    let ctrl_shift_alt = mods.control_key() && mods.shift_key() && mods.alt_key();
     match key {
+        Key::Character(c) if ctrl_shift_alt => match c.to_lowercase().as_str() {
+            "c" => Some(Action::CopyCommand),
+            "o" => Some(Action::CopyOutput),
+            "f" => Some(Action::ToggleFoldAll),
+            _ => None,
+        },
         Key::Character(c) if ctrl_shift => match c.to_lowercase().as_str() {
             "c" => Some(Action::Copy),
             "v" => Some(Action::Paste),
+            "f" => Some(Action::ToggleFold),
             _ => None,
         },
         Key::Character(c) if mods.control_key() && !mods.alt_key() => match c.as_str() {
@@ -37,6 +51,14 @@ pub fn action_for(key: &Key, mods: ModifiersState) -> Option<Action> {
         Key::Named(NamedKey::PageUp) if mods == ModifiersState::SHIFT => Some(Action::ScrollPageUp),
         Key::Named(NamedKey::PageDown) if mods == ModifiersState::SHIFT => {
             Some(Action::ScrollPageDown)
+        }
+        Key::Named(NamedKey::PageUp) if mods == ModifiersState::CONTROL | ModifiersState::SHIFT => {
+            Some(Action::PreviousBlock)
+        }
+        Key::Named(NamedKey::PageDown)
+            if mods == ModifiersState::CONTROL | ModifiersState::SHIFT =>
+        {
+            Some(Action::NextBlock)
         }
         Key::Named(NamedKey::Home) if mods == ModifiersState::SHIFT => Some(Action::ScrollToTop),
         Key::Named(NamedKey::End) if mods == ModifiersState::SHIFT => Some(Action::ScrollToBottom),
@@ -280,6 +302,38 @@ mod tests {
             action_for(&ch("="), ModifiersState::CONTROL),
             Some(Action::FontSizeIncrease)
         );
+    }
+
+    #[test]
+    fn block_actions() {
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let csa = cs | ModifiersState::ALT;
+        assert_eq!(
+            action_for(&named(NamedKey::PageUp), cs),
+            Some(Action::PreviousBlock)
+        );
+        assert_eq!(
+            action_for(&named(NamedKey::PageDown), cs),
+            Some(Action::NextBlock)
+        );
+        assert_eq!(action_for(&ch("C"), csa), Some(Action::CopyCommand));
+        assert_eq!(action_for(&ch("c"), csa), Some(Action::CopyCommand));
+        assert_eq!(action_for(&ch("O"), csa), Some(Action::CopyOutput));
+        assert_eq!(action_for(&ch("F"), cs), Some(Action::ToggleFold));
+        assert_eq!(action_for(&ch("f"), cs), Some(Action::ToggleFold));
+        assert_eq!(action_for(&ch("F"), csa), Some(Action::ToggleFoldAll));
+        // Ctrl+F alone stays with the shell.
+        assert_eq!(action_for(&ch("f"), ModifiersState::CONTROL), None);
+        // Plain Ctrl+Shift+C/V unchanged.
+        assert_eq!(action_for(&ch("C"), cs), Some(Action::Copy));
+        assert_eq!(action_for(&ch("V"), cs), Some(Action::Paste));
+        assert_eq!(action_for(&ch("V"), csa), None);
+        // Ctrl+PageUp and Ctrl+Shift+Arrow stay with the shell.
+        assert_eq!(
+            action_for(&named(NamedKey::PageUp), ModifiersState::CONTROL),
+            None
+        );
+        assert_eq!(action_for(&named(NamedKey::ArrowUp), cs), None);
     }
 
     #[test]

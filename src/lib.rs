@@ -3,6 +3,7 @@
 
 mod app;
 mod banner;
+mod block_actions;
 #[cfg(test)]
 mod build_version;
 mod config;
@@ -14,11 +15,17 @@ mod mouse;
 mod opener;
 mod palette;
 mod perf;
+mod pty;
 mod renderer;
 mod selection;
+mod shell_integration;
+mod signals;
 mod terminal;
 mod theme;
+mod timeline;
+mod timeline_selection;
 mod update;
+mod view;
 
 /// Version of this build, computed by `build.rs`.
 pub const VERSION: &str = env!("GRAPHENE_VERSION");
@@ -39,6 +46,10 @@ pub mod bench {
     pub use crate::frame::Frame;
     pub use crate::layout::{CellSize, GridLayout};
     pub use crate::palette::Palette;
+    pub use crate::pty::process;
     pub use crate::renderer::scene;
     pub use crate::renderer::{GlyphKey, Glyphs, Headless};
+    pub use crate::signals::Scanner;
+    pub use crate::timeline::Timeline;
+    pub use crate::view::{rows as view_rows, scroll_block};
 }
