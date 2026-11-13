@@ -94,11 +94,11 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             }
             if bg != frame.background {
                 let (x, y) = layout.cell_origin(start, line);
-                under.push(RectInstance {
-                    position: [x, y],
-                    size: [(column - start) as f32 * cell.width, cell.height],
-                    color: gpu_color(bg, srgb_target),
-                });
+                under.push(RectInstance::new(
+                    [x, y],
+                    [(column - start) as f32 * cell.width, cell.height],
+                    gpu_color(bg, srgb_target),
+                ));
             }
         }
 
@@ -107,18 +107,18 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         let decoration = frame.decorations.get(line).copied().unwrap_or_default();
         let (grid_x, y) = layout.cell_origin(0, line);
         if let Some(status) = decoration.bar {
-            under.push(RectInstance {
-                position: [grid_x - layout.gutter, y],
-                size: [bar_width, cell.height],
-                color: gpu_color(frame.block_colors.status(status), srgb_target),
-            });
+            under.push(RectInstance::new(
+                [grid_x - layout.gutter, y],
+                [bar_width, cell.height],
+                gpu_color(frame.block_colors.status(status), srgb_target),
+            ));
         }
         if decoration.separator {
-            under.push(RectInstance {
-                position: [grid_x, y],
-                size: [grid_width, 1.0],
-                color: gpu_color(frame.block_colors.dim, srgb_target),
-            });
+            under.push(RectInstance::new(
+                [grid_x, y],
+                [grid_width, 1.0],
+                gpu_color(frame.block_colors.dim, srgb_target),
+            ));
         }
         // Fold chevron in the gutter, in the status color; hidden-rows summary in dim
         // text after the row's content, cut at the grid edge.
@@ -154,18 +154,18 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
             let (x, y) = layout.cell_origin(column, line);
             let color = gpu_color(c.fg, srgb_target);
             if c.underline {
-                over.push(RectInstance {
-                    position: [x, y + cell.height - 2.0 * thickness],
-                    size: [cell.width, thickness],
+                over.push(RectInstance::new(
+                    [x, y + cell.height - 2.0 * thickness],
+                    [cell.width, thickness],
                     color,
-                });
+                ));
             }
             if c.strikeout {
-                over.push(RectInstance {
-                    position: [x, y + (cell.height - thickness) / 2.0],
-                    size: [cell.width, thickness],
+                over.push(RectInstance::new(
+                    [x, y + (cell.height - thickness) / 2.0],
+                    [cell.width, thickness],
                     color,
-                });
+                ));
             }
         }
 
@@ -192,11 +192,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         let (x, y) = layout.cell_origin(cursor.column, cursor.line);
         let color = gpu_color(cursor.color, srgb_target);
         let beam = (cell.width / 8.0).round().max(2.0);
-        let rect = |position: [f32; 2], size: [f32; 2]| RectInstance {
-            position,
-            size,
-            color,
-        };
+        let rect = |position: [f32; 2], size: [f32; 2]| RectInstance::new(position, size, color);
         match cursor.shape {
             CursorShape::Beam => over.push(rect([x, y], [beam, cell.height])),
             CursorShape::Underline => {
@@ -223,11 +219,11 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     let mut overlay = Vec::new();
     if let Some(banner) = &frame.banner {
         let rect = banner.layout.rect;
-        over.push(RectInstance {
-            position: [rect.x, rect.y],
-            size: [rect.width, rect.height],
-            color: gpu_color(banner.background, srgb_target),
-        });
+        over.push(RectInstance::new(
+            [rect.x, rect.y],
+            [rect.width, rect.height],
+            gpu_color(banner.background, srgb_target),
+        ));
         let color = gpu_color(banner.text, srgb_target);
         for placed in &banner.layout.texts {
             let characters = placed.text.chars().enumerate().filter(|(_, c)| *c != ' ');

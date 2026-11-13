@@ -453,6 +453,10 @@ from the local pixel position (passed from the vertex shader): rounded box for s
 triangle for 1 and 2. Coverage is `clamp(0.5 - d, 0, 1)` times the color alpha (1 px
 antialiasing). A rect with `radius: 0, shape: 0` renders as today, so cell backgrounds,
 cursor and underlines are unaffected.
+As implemented: `RectInstance::new` builds a plain rect, `with_radius` / `with_shape`
+(a `Shape` enum stored as `u32`) the others; a plain rect skips the distance in the
+shader and returns its color, so off-grid edges keep the rasterizer's full coverage
+instead of gaining half-pixel antialiasing.
 
 ### Scene: `src/renderer/scene.rs`
 
