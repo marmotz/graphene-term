@@ -1,13 +1,13 @@
 //! Update check state, shared by every Graphene instance: `update.json` in the state
 //! directory. Errors are only logged: a missing or unreadable file means "never checked".
 
-use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::Release;
+use crate::config;
 
 /// Name of the state file inside the state directory.
 pub const STATE_FILE: &str = "update.json";
@@ -25,21 +25,9 @@ pub struct State {
     pub ignored: Option<String>,
 }
 
-/// `$XDG_STATE_HOME/graphene/update.json`, else `$HOME/.local/state/graphene/update.json`.
+/// `update.json` in the state directory ([`config::state_dir`]).
 pub fn path() -> Option<PathBuf> {
-    path_from(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
-}
-
-fn path_from(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    // The XDG spec ignores an empty or relative `XDG_STATE_HOME`.
-    let xdg = xdg_state_home
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute());
-    let base = xdg.or_else(|| {
-        home.filter(|home| !home.is_empty())
-            .map(|home| PathBuf::from(home).join(".local").join("state"))
-    })?;
-    Some(base.join("graphene").join(STATE_FILE))
+    config::state_dir().map(|dir| dir.join(STATE_FILE))
 }
 
 impl State {
@@ -87,6 +75,8 @@ pub fn ignore(file: &Path, tag: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::*;
 
     struct TempDir(PathBuf);
@@ -106,27 +96,6 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
-    }
-
-    #[test]
-    fn path_prefers_xdg_state_home() {
-        assert_eq!(
-            path_from(Some("/xdg".into()), Some("/home/u".into())),
-            Some(PathBuf::from("/xdg/graphene/update.json"))
-        );
-    }
-
-    #[test]
-    fn path_falls_back_to_home() {
-        let expected = Some(PathBuf::from("/home/u/.local/state/graphene/update.json"));
-        assert_eq!(path_from(None, Some("/home/u".into())), expected);
-        assert_eq!(path_from(Some("".into()), Some("/home/u".into())), expected);
-        assert_eq!(
-            path_from(Some("relative".into()), Some("/home/u".into())),
-            expected
-        );
-        assert_eq!(path_from(None, None), None);
-        assert_eq!(path_from(None, Some("".into())), None);
     }
 
     #[test]

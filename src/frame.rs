@@ -207,13 +207,15 @@ pub struct Frame {
 impl Frame {
     /// Captures the rows shown by `view` (see [`crate::view::rows`]): frozen rows from
     /// their block's grid in `timeline`, live rows and the cursor from `live`, the
-    /// session's terminal. The card of `selected_block` is `selected`.
+    /// session's terminal. The card of `selected_block` is `selected`. A focused cursor
+    /// is hidden when `cursor_visible` is false (the hidden phase of a blink).
     pub fn capture<T: EventListener>(
         live: &Term<T>,
         timeline: &Timeline,
         view: &[ViewRow],
         palette: &Palette,
         focused: bool,
+        cursor_visible: bool,
         selected_block: Option<BlockId>,
     ) -> Self {
         let selected_block = selected_block.filter(|id| timeline.block(*id).is_some());
@@ -268,6 +270,8 @@ impl Frame {
         let mut shape = content.cursor.shape;
         if !focused && shape != CursorShape::Hidden {
             shape = CursorShape::HollowBlock;
+        } else if !cursor_visible {
+            shape = CursorShape::Hidden;
         }
 
         let cursor = match cursor_line {
@@ -646,6 +650,7 @@ mod tests {
             &rows,
             &Palette::default(),
             true,
+            true,
             selected_block,
         )
     }
@@ -658,6 +663,7 @@ mod tests {
             &rows,
             palette,
             focused,
+            true,
             None,
         )
     }
@@ -852,6 +858,48 @@ mod tests {
         let frame = capture(&session_with("\x1b[?25l"), &p, true);
         assert_eq!(frame.cursor, None);
         assert_eq!(frame.rows[0][0].bg, p.background);
+    }
+
+    fn capture_blink(session: &Session, focused: bool, cursor_visible: bool) -> Frame {
+        let rows = view_rows(session);
+        Frame::capture(
+            &session.term,
+            &session.timeline,
+            &rows,
+            &Palette::default(),
+            focused,
+            cursor_visible,
+            None,
+        )
+    }
+
+    #[test]
+    fn hidden_blink_phase_hides_the_cursor() {
+        let p = Palette::default();
+        let block = capture_blink(&session_with("ab"), true, false);
+        assert_eq!(block.cursor, None);
+        assert_eq!(block.rows[0][2].bg, p.background);
+
+        let beam = capture_blink(&session_with("ab\x1b[5 q"), true, false);
+        assert_eq!(beam.cursor, None);
+    }
+
+    #[test]
+    fn visible_blink_phase_draws_the_cursor() {
+        let beam = capture_blink(&session_with("ab\x1b[5 q"), true, true);
+        assert_eq!(
+            beam.cursor.expect("cursor visible").shape,
+            CursorShape::Beam
+        );
+    }
+
+    #[test]
+    fn unfocused_cursor_ignores_the_blink_phase() {
+        let frame = capture_blink(&session_with("ab"), false, false);
+        assert_eq!(
+            frame.cursor.expect("cursor visible").shape,
+            CursorShape::HollowBlock
+        );
     }
 
     fn select<L>(term: &mut Term<L>, start: (i32, usize), end: (i32, usize)) {

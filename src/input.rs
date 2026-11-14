@@ -1,7 +1,7 @@
 //! Translation of keyboard input into PTY bytes and application actions.
 
 use alacritty_terminal::term::TermMode;
-use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::i18n::{Direction, Msg};
 
@@ -135,6 +135,22 @@ impl Action {
         name.to_owned()
     }
 
+    /// The action of an [`Action::id`]: the palette's actions, the palette itself and
+    /// `go_to_tab_N` for any tab number from 1.
+    pub fn from_id(id: &str) -> Option<Action> {
+        if let Some(number) = id.strip_prefix("go_to_tab_") {
+            // `u8::from_str` accepts a leading `+`.
+            if !number.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            return number.parse().ok().filter(|&n| n > 0).map(Action::GoToTab);
+        }
+        Action::ALL
+            .into_iter()
+            .chain([Action::CommandPalette])
+            .find(|action| action.id() == id)
+    }
+
     /// Label of the action in the user's language.
     pub fn label(self) -> Msg {
         match self {
@@ -169,218 +185,6 @@ impl Action {
             Action::GoToTab(number) => Msg::GoToTab(usize::from(number)),
             Action::CommandPalette => Msg::CommandPalette,
         }
-    }
-}
-
-/// The default shortcut of `action` as shown in the command palette, `None` for an
-/// action without key. Kept in step with [`action_for`].
-pub fn shortcut_label(action: Action) -> Option<&'static str> {
-    let label = match action {
-        Action::Copy => "Ctrl+Shift+C",
-        Action::Paste => "Ctrl+Shift+V",
-        Action::ScrollPageUp => "Shift+PageUp",
-        Action::ScrollPageDown => "Shift+PageDown",
-        Action::ScrollToTop => "Shift+Home",
-        Action::ScrollToBottom => "Shift+End",
-        Action::FontSizeIncrease => "Ctrl+=",
-        Action::FontSizeDecrease => "Ctrl+-",
-        Action::FontSizeReset => "Ctrl+0",
-        Action::PreviousBlock => "Ctrl+Shift+PageUp",
-        Action::NextBlock => "Ctrl+Shift+PageDown",
-        Action::CopyCommand => "Ctrl+Shift+Alt+C",
-        Action::CopyOutput => "Ctrl+Shift+Alt+O",
-        Action::ToggleFold => "Ctrl+Shift+F",
-        Action::ToggleFoldAll => "Ctrl+Shift+Alt+F",
-        Action::SplitRight => "Ctrl+Shift+E",
-        Action::SplitDown => "Ctrl+Shift+O",
-        Action::ClosePane => "Ctrl+Shift+W",
-        Action::FocusPane(Direction::Left) => "Ctrl+Shift+Left",
-        Action::FocusPane(Direction::Right) => "Ctrl+Shift+Right",
-        Action::FocusPane(Direction::Up) => "Ctrl+Shift+Up",
-        Action::FocusPane(Direction::Down) => "Ctrl+Shift+Down",
-        Action::ResizePane(Direction::Left) => "Ctrl+Shift+Alt+Left",
-        Action::ResizePane(Direction::Right) => "Ctrl+Shift+Alt+Right",
-        Action::ResizePane(Direction::Up) => "Ctrl+Shift+Alt+Up",
-        Action::ResizePane(Direction::Down) => "Ctrl+Shift+Alt+Down",
-        Action::NextPane => "Ctrl+Shift+N",
-        Action::PreviousPane => "Ctrl+Shift+B",
-        Action::ToggleZoom => "Ctrl+Shift+Z",
-        Action::EqualisePanes | Action::DetachPane => return None,
-        Action::NewTab => "Ctrl+Shift+T",
-        Action::NextTab => "Ctrl+Tab",
-        Action::PreviousTab => "Ctrl+Shift+Tab",
-        Action::GoToTab(1) => "Alt+1",
-        Action::GoToTab(2) => "Alt+2",
-        Action::GoToTab(3) => "Alt+3",
-        Action::GoToTab(4) => "Alt+4",
-        Action::GoToTab(5) => "Alt+5",
-        Action::GoToTab(6) => "Alt+6",
-        Action::GoToTab(7) => "Alt+7",
-        Action::GoToTab(8) => "Alt+8",
-        Action::GoToTab(9) => "Alt+9",
-        Action::GoToTab(_) => return None,
-        Action::CommandPalette => "Ctrl+Shift+P",
-    };
-    Some(label)
-}
-
-/// Letter a shortcut is matched on: the character the key types when it is an ASCII
-/// letter, else the letter of the physical key, so shortcuts still work on layouts
-/// without Latin letters.
-fn shortcut_letter(key: &Key, physical: PhysicalKey) -> Option<char> {
-    if let Key::Character(c) = key {
-        let mut chars = c.chars();
-        if let (Some(ch), None) = (chars.next(), chars.next())
-            && ch.is_ascii_alphabetic()
-        {
-            return Some(ch.to_ascii_lowercase());
-        }
-    }
-    let PhysicalKey::Code(code) = physical else {
-        return None;
-    };
-    let letter = match code {
-        KeyCode::KeyA => 'a',
-        KeyCode::KeyB => 'b',
-        KeyCode::KeyC => 'c',
-        KeyCode::KeyD => 'd',
-        KeyCode::KeyE => 'e',
-        KeyCode::KeyF => 'f',
-        KeyCode::KeyG => 'g',
-        KeyCode::KeyH => 'h',
-        KeyCode::KeyI => 'i',
-        KeyCode::KeyJ => 'j',
-        KeyCode::KeyK => 'k',
-        KeyCode::KeyL => 'l',
-        KeyCode::KeyM => 'm',
-        KeyCode::KeyN => 'n',
-        KeyCode::KeyO => 'o',
-        KeyCode::KeyP => 'p',
-        KeyCode::KeyQ => 'q',
-        KeyCode::KeyR => 'r',
-        KeyCode::KeyS => 's',
-        KeyCode::KeyT => 't',
-        KeyCode::KeyU => 'u',
-        KeyCode::KeyV => 'v',
-        KeyCode::KeyW => 'w',
-        KeyCode::KeyX => 'x',
-        KeyCode::KeyY => 'y',
-        KeyCode::KeyZ => 'z',
-        _ => return None,
-    };
-    Some(letter)
-}
-
-/// Tab number of a digit key `1` to `9`, matched on the physical key so it works on
-/// layouts where the digits need Shift (AZERTY).
-fn tab_digit(physical: PhysicalKey) -> Option<u8> {
-    let PhysicalKey::Code(code) = physical else {
-        return None;
-    };
-    let digit = match code {
-        KeyCode::Digit1 => 1,
-        KeyCode::Digit2 => 2,
-        KeyCode::Digit3 => 3,
-        KeyCode::Digit4 => 4,
-        KeyCode::Digit5 => 5,
-        KeyCode::Digit6 => 6,
-        KeyCode::Digit7 => 7,
-        KeyCode::Digit8 => 8,
-        KeyCode::Digit9 => 9,
-        _ => return None,
-    };
-    Some(digit)
-}
-
-/// Direction of an arrow key.
-fn arrow_direction(key: &Key) -> Option<Direction> {
-    match key {
-        Key::Named(NamedKey::ArrowLeft) => Some(Direction::Left),
-        Key::Named(NamedKey::ArrowRight) => Some(Direction::Right),
-        Key::Named(NamedKey::ArrowUp) => Some(Direction::Up),
-        Key::Named(NamedKey::ArrowDown) => Some(Direction::Down),
-        _ => None,
-    }
-}
-
-/// Returns the application action bound to a key combination, if any. Letters are
-/// matched by the character they type (see [`shortcut_letter`] for the `physical`
-/// fallback), named keys by their logical value.
-pub fn action_for(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Option<Action> {
-    let ctrl_shift = mods.control_key() && mods.shift_key() && !mods.alt_key();
-    let ctrl_shift_alt = mods.control_key() && mods.shift_key() && mods.alt_key();
-    if mods == ModifiersState::ALT
-        && let Some(digit) = tab_digit(physical)
-    {
-        return Some(Action::GoToTab(digit));
-    }
-    if ctrl_shift_alt && let Some(direction) = arrow_direction(key) {
-        return Some(Action::ResizePane(direction));
-    }
-    if ctrl_shift && let Some(direction) = arrow_direction(key) {
-        return Some(Action::FocusPane(direction));
-    }
-    if ctrl_shift_alt && let Some(letter) = shortcut_letter(key, physical) {
-        return match letter {
-            'c' => Some(Action::CopyCommand),
-            'o' => Some(Action::CopyOutput),
-            'f' => Some(Action::ToggleFoldAll),
-            _ => None,
-        };
-    }
-    if ctrl_shift && let Some(letter) = shortcut_letter(key, physical) {
-        return match letter {
-            'c' => Some(Action::Copy),
-            'v' => Some(Action::Paste),
-            'f' => Some(Action::ToggleFold),
-            'e' => Some(Action::SplitRight),
-            'o' => Some(Action::SplitDown),
-            'w' => Some(Action::ClosePane),
-            'n' => Some(Action::NextPane),
-            'b' => Some(Action::PreviousPane),
-            'z' => Some(Action::ToggleZoom),
-            't' => Some(Action::NewTab),
-            'p' => Some(Action::CommandPalette),
-            _ => None,
-        };
-    }
-    // Other `Ctrl+Shift` characters stay with the shell.
-    if mods.control_key() && mods.shift_key() && matches!(key, Key::Character(_)) {
-        return None;
-    }
-    match key {
-        Key::Character(c) if mods.control_key() && !mods.alt_key() => match c.as_str() {
-            "=" | "+" => Some(Action::FontSizeIncrease),
-            "-" | "_" => Some(Action::FontSizeDecrease),
-            "0" if !mods.shift_key() => Some(Action::FontSizeReset),
-            _ => None,
-        },
-        Key::Named(NamedKey::Tab) if mods == ModifiersState::CONTROL => Some(Action::NextTab),
-        Key::Named(NamedKey::Tab) if mods == ModifiersState::CONTROL | ModifiersState::SHIFT => {
-            Some(Action::PreviousTab)
-        }
-        Key::Named(NamedKey::PageDown) if mods == ModifiersState::CONTROL => Some(Action::NextTab),
-        Key::Named(NamedKey::PageUp) if mods == ModifiersState::CONTROL => {
-            Some(Action::PreviousTab)
-        }
-        Key::Named(NamedKey::Paste) => Some(Action::Paste),
-        Key::Named(NamedKey::Copy) => Some(Action::Copy),
-        Key::Named(NamedKey::PageUp) if mods == ModifiersState::SHIFT => Some(Action::ScrollPageUp),
-        Key::Named(NamedKey::PageDown) if mods == ModifiersState::SHIFT => {
-            Some(Action::ScrollPageDown)
-        }
-        Key::Named(NamedKey::PageUp) if mods == ModifiersState::CONTROL | ModifiersState::SHIFT => {
-            Some(Action::PreviousBlock)
-        }
-        Key::Named(NamedKey::PageDown)
-            if mods == ModifiersState::CONTROL | ModifiersState::SHIFT =>
-        {
-            Some(Action::NextBlock)
-        }
-        Key::Named(NamedKey::Home) if mods == ModifiersState::SHIFT => Some(Action::ScrollToTop),
-        Key::Named(NamedKey::End) if mods == ModifiersState::SHIFT => Some(Action::ScrollToBottom),
-        Key::Named(NamedKey::Insert) if mods == ModifiersState::SHIFT => Some(Action::Paste),
-        _ => None,
     }
 }
 
@@ -532,93 +336,6 @@ mod tests {
 
     const NONE: ModifiersState = ModifiersState::empty();
 
-    /// No physical key information, as for synthetic events.
-    const UNIDENTIFIED: PhysicalKey =
-        PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-
-    fn action_for(key: &Key, mods: ModifiersState) -> Option<Action> {
-        super::action_for(key, UNIDENTIFIED, mods)
-    }
-
-    /// The key and modifiers a shortcut label names (`Ctrl+Shift+Left`, `Alt+3`).
-    fn parse_shortcut(label: &str) -> (Key, PhysicalKey, ModifiersState) {
-        let mut parts: Vec<&str> = label.split('+').collect();
-        // `Ctrl++` would split into empty parts; the labels use `Ctrl+=`.
-        let key = parts.pop().expect("a key");
-        let mut mods = NONE;
-        for part in parts {
-            mods |= match part {
-                "Ctrl" => ModifiersState::CONTROL,
-                "Shift" => ModifiersState::SHIFT,
-                "Alt" => ModifiersState::ALT,
-                other => panic!("unknown modifier {other} in {label}"),
-            };
-        }
-        let digits = [
-            KeyCode::Digit1,
-            KeyCode::Digit2,
-            KeyCode::Digit3,
-            KeyCode::Digit4,
-            KeyCode::Digit5,
-            KeyCode::Digit6,
-            KeyCode::Digit7,
-            KeyCode::Digit8,
-            KeyCode::Digit9,
-        ];
-        let named_key = |name| match name {
-            "Left" => Some(NamedKey::ArrowLeft),
-            "Right" => Some(NamedKey::ArrowRight),
-            "Up" => Some(NamedKey::ArrowUp),
-            "Down" => Some(NamedKey::ArrowDown),
-            "PageUp" => Some(NamedKey::PageUp),
-            "PageDown" => Some(NamedKey::PageDown),
-            "Home" => Some(NamedKey::Home),
-            "End" => Some(NamedKey::End),
-            "Tab" => Some(NamedKey::Tab),
-            _ => None,
-        };
-        if let Some(named_key) = named_key(key) {
-            return (named(named_key), UNIDENTIFIED, mods);
-        }
-        let physical = key
-            .parse::<usize>()
-            .ok()
-            .and_then(|digit| digits.get(digit.wrapping_sub(1)))
-            .map_or(UNIDENTIFIED, |&code| PhysicalKey::Code(code));
-        (ch(key), physical, mods)
-    }
-
-    #[test]
-    fn shortcut_labels_name_the_keys_of_their_action() {
-        let actions = Action::ALL
-            .into_iter()
-            .chain([Action::CommandPalette])
-            .chain((1..=9).map(Action::GoToTab));
-        for action in actions {
-            let Some(label) = shortcut_label(action) else {
-                assert!(
-                    matches!(action, Action::EqualisePanes | Action::DetachPane),
-                    "{action:?} has no label"
-                );
-                continue;
-            };
-            let (key, physical, mods) = parse_shortcut(label);
-            assert_eq!(
-                super::action_for(&key, physical, mods),
-                Some(action),
-                "{label}"
-            );
-        }
-        assert_eq!(shortcut_label(Action::GoToTab(10)), None);
-    }
-
-    #[test]
-    fn ctrl_shift_p_opens_the_command_palette() {
-        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        assert_eq!(action_for(&ch("P"), cs), Some(Action::CommandPalette));
-        assert_eq!(action_for(&ch("p"), cs), Some(Action::CommandPalette));
-    }
-
     #[test]
     fn action_ids_are_unique_snake_case() {
         let mut ids: Vec<String> = Action::ALL
@@ -640,6 +357,28 @@ mod tests {
         assert_eq!(Action::FocusPane(Direction::Left).id(), "focus_pane_left");
         assert_eq!(Action::GoToTab(3).id(), "go_to_tab_3");
         assert_eq!(Action::FontSizeReset.id(), "font_size_reset");
+    }
+
+    #[test]
+    fn from_id_is_the_inverse_of_id() {
+        let actions = Action::ALL
+            .into_iter()
+            .chain([Action::CommandPalette])
+            .chain((1..=12).map(Action::GoToTab));
+        for action in actions {
+            assert_eq!(Action::from_id(&action.id()), Some(action), "{action:?}");
+        }
+        for id in [
+            "quit",
+            "",
+            "Copy",
+            "go_to_tab_0",
+            "go_to_tab_+1",
+            "go_to_tab_",
+            "go_to_tab_256",
+        ] {
+            assert_eq!(Action::from_id(id), None, "{id}");
+        }
     }
 
     #[test]
@@ -732,187 +471,8 @@ mod tests {
     }
 
     #[test]
-    fn app_actions() {
+    fn ctrl_shift_letters_produce_control_codes() {
         let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        assert_eq!(action_for(&ch("C"), cs), Some(Action::Copy));
-        assert_eq!(action_for(&ch("V"), cs), Some(Action::Paste));
-        assert_eq!(action_for(&ch("c"), ModifiersState::CONTROL), None);
-        assert_eq!(
-            action_for(&named(NamedKey::PageUp), ModifiersState::SHIFT),
-            Some(Action::ScrollPageUp)
-        );
-        assert_eq!(action_for(&named(NamedKey::PageUp), NONE), None);
-        assert_eq!(
-            action_for(&ch("="), ModifiersState::CONTROL),
-            Some(Action::FontSizeIncrease)
-        );
-    }
-
-    #[test]
-    fn block_actions() {
-        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let csa = cs | ModifiersState::ALT;
-        assert_eq!(
-            action_for(&named(NamedKey::PageUp), cs),
-            Some(Action::PreviousBlock)
-        );
-        assert_eq!(
-            action_for(&named(NamedKey::PageDown), cs),
-            Some(Action::NextBlock)
-        );
-        assert_eq!(action_for(&ch("C"), csa), Some(Action::CopyCommand));
-        assert_eq!(action_for(&ch("c"), csa), Some(Action::CopyCommand));
-        assert_eq!(action_for(&ch("O"), csa), Some(Action::CopyOutput));
-        assert_eq!(action_for(&ch("F"), cs), Some(Action::ToggleFold));
-        assert_eq!(action_for(&ch("f"), cs), Some(Action::ToggleFold));
-        assert_eq!(action_for(&ch("F"), csa), Some(Action::ToggleFoldAll));
-        // Ctrl+F alone stays with the shell.
-        assert_eq!(action_for(&ch("f"), ModifiersState::CONTROL), None);
-        // Plain Ctrl+Shift+C/V unchanged.
-        assert_eq!(action_for(&ch("C"), cs), Some(Action::Copy));
-        assert_eq!(action_for(&ch("V"), cs), Some(Action::Paste));
-        assert_eq!(action_for(&ch("V"), csa), None);
-        // Alt+PageUp stays with the shell.
-        assert_eq!(
-            action_for(&named(NamedKey::PageUp), ModifiersState::ALT),
-            None
-        );
-    }
-
-    #[test]
-    fn pane_actions() {
-        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let csa = cs | ModifiersState::ALT;
-        for (letter, action) in [
-            ("E", Action::SplitRight),
-            ("O", Action::SplitDown),
-            ("W", Action::ClosePane),
-            ("N", Action::NextPane),
-            ("B", Action::PreviousPane),
-            ("Z", Action::ToggleZoom),
-        ] {
-            assert_eq!(action_for(&ch(letter), cs), Some(action), "{letter}");
-            assert_eq!(
-                action_for(&ch(&letter.to_lowercase()), cs),
-                Some(action),
-                "{letter}"
-            );
-            // Without Shift, the key stays with the shell.
-            assert_eq!(action_for(&ch(letter), ModifiersState::CONTROL), None);
-        }
-        for (key, direction) in [
-            (NamedKey::ArrowLeft, Direction::Left),
-            (NamedKey::ArrowRight, Direction::Right),
-            (NamedKey::ArrowUp, Direction::Up),
-            (NamedKey::ArrowDown, Direction::Down),
-        ] {
-            assert_eq!(
-                action_for(&named(key), cs),
-                Some(Action::FocusPane(direction))
-            );
-            assert_eq!(
-                action_for(&named(key), csa),
-                Some(Action::ResizePane(direction))
-            );
-            assert_eq!(action_for(&named(key), ModifiersState::CONTROL), None);
-        }
-        // Ctrl+Shift+Alt+O copies the output, Ctrl+Shift+O splits down.
-        assert_eq!(action_for(&ch("O"), csa), Some(Action::CopyOutput));
-    }
-
-    #[test]
-    fn tab_actions() {
-        let ctrl = ModifiersState::CONTROL;
-        let cs = ctrl | ModifiersState::SHIFT;
-        assert_eq!(action_for(&ch("T"), cs), Some(Action::NewTab));
-        assert_eq!(action_for(&ch("t"), cs), Some(Action::NewTab));
-        assert_eq!(
-            action_for(&named(NamedKey::Tab), ctrl),
-            Some(Action::NextTab)
-        );
-        assert_eq!(
-            action_for(&named(NamedKey::Tab), cs),
-            Some(Action::PreviousTab)
-        );
-        assert_eq!(
-            action_for(&named(NamedKey::PageDown), ctrl),
-            Some(Action::NextTab)
-        );
-        assert_eq!(
-            action_for(&named(NamedKey::PageUp), ctrl),
-            Some(Action::PreviousTab)
-        );
-        // Ctrl+Shift+PageUp/PageDown still move between blocks; Tab alone is the shell's.
-        assert_eq!(
-            action_for(&named(NamedKey::PageUp), cs),
-            Some(Action::PreviousBlock)
-        );
-        assert_eq!(action_for(&named(NamedKey::Tab), NONE), None);
-    }
-
-    #[test]
-    fn alt_digits_go_to_a_tab_by_their_physical_key() {
-        let alt = ModifiersState::ALT;
-        let codes = [
-            KeyCode::Digit1,
-            KeyCode::Digit2,
-            KeyCode::Digit3,
-            KeyCode::Digit4,
-            KeyCode::Digit5,
-            KeyCode::Digit6,
-            KeyCode::Digit7,
-            KeyCode::Digit8,
-            KeyCode::Digit9,
-        ];
-        for (number, code) in (1..=9).zip(codes) {
-            assert_eq!(
-                super::action_for(&ch(&number.to_string()), PhysicalKey::Code(code), alt),
-                Some(Action::GoToTab(number))
-            );
-        }
-        // AZERTY: the Digit1 key types `&` without Shift.
-        assert_eq!(
-            super::action_for(&ch("&"), PhysicalKey::Code(KeyCode::Digit1), alt),
-            Some(Action::GoToTab(1))
-        );
-        // Digit0, other modifiers and the logical digit alone are not tab shortcuts.
-        assert_eq!(
-            super::action_for(&ch("0"), PhysicalKey::Code(KeyCode::Digit0), alt),
-            None
-        );
-        assert_eq!(
-            super::action_for(
-                &ch("1"),
-                PhysicalKey::Code(KeyCode::Digit1),
-                alt | ModifiersState::CONTROL
-            ),
-            None
-        );
-        assert_eq!(action_for(&ch("1"), alt), None);
-    }
-
-    #[test]
-    fn letters_fall_back_on_the_physical_key() {
-        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let cyrillic = ch("У");
-        assert_eq!(
-            super::action_for(&cyrillic, PhysicalKey::Code(KeyCode::KeyE), cs),
-            Some(Action::SplitRight)
-        );
-        // The typed letter wins over its physical place (AZERTY: Z on the W key).
-        assert_eq!(
-            super::action_for(&ch("Z"), PhysicalKey::Code(KeyCode::KeyW), cs),
-            Some(Action::ToggleZoom)
-        );
-        assert_eq!(action_for(&cyrillic, cs), None);
-    }
-
-    #[test]
-    fn unmapped_ctrl_shift_letters_produce_control_codes() {
-        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        for letter in ["A", "D", "G", "X"] {
-            assert_eq!(action_for(&ch(letter), cs), None, "{letter}");
-        }
         let b = key_to_bytes(&ch("X"), None, cs, TermMode::empty());
         assert_eq!(b, Some(vec![0x18]));
     }

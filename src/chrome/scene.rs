@@ -192,7 +192,7 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
         ui.texts.push(UiTextItem {
             text: tab.title.clone(),
             x: tab.title_x,
-            y: bar.text_y,
+            y: tab.title_y,
             color: text,
             max_width: tab.title_width,
             font: UiFont::Chrome,
@@ -201,7 +201,7 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
         ui.texts.push(UiTextItem {
             text: CLOSE.to_owned(),
             x: (tab.close.x + tab.close.width / 4.0).round(),
-            y: bar.text_y,
+            y: tab.title_y,
             color: text,
             max_width: tab.close.width,
             font: UiFont::Chrome,
@@ -284,6 +284,7 @@ mod tests {
 
     use super::*;
     use crate::chrome::tab_bar::UiMetrics;
+    use crate::workspace::TabBarPosition;
     use crate::workspace::tree::{Axis, Branch, Divider};
 
     const BORDER: Rgb = Rgb { r: 1, g: 2, b: 3 };
@@ -401,7 +402,13 @@ mod tests {
             scale: 1.0,
         };
         let titles = ["one".to_owned(), "two".to_owned()];
-        TabBarLayout::new(1000.0, &titles, 1, metrics)
+        let window = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 600.0,
+        };
+        TabBarLayout::new(window, TabBarPosition::Top, &titles, 1, metrics)
     }
 
     #[test]
@@ -451,7 +458,7 @@ mod tests {
         );
         assert_eq!(ui.texts[2].x, bar.tabs[1].title_x);
         assert_eq!(ui.texts[2].max_width, bar.tabs[1].title_width);
-        assert!(ui.texts.iter().all(|t| t.y == bar.text_y));
+        assert!(ui.texts.iter().all(|t| t.y == bar.tabs[0].title_y));
     }
 
     #[test]
@@ -555,10 +562,10 @@ mod tests {
             palette_text: DIALOG_TEXT,
             ..tab_colors()
         };
-        let entry = |label: &str, action, shortcut| Entry {
+        let entry = |label: &str, action, shortcut: Option<&str>| Entry {
             command: Command::Action(action),
             label: label.to_owned(),
-            shortcut,
+            shortcut: shortcut.map(str::to_owned),
         };
         let mut palette = CommandPalette::new(
             vec![

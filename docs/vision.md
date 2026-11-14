@@ -36,7 +36,7 @@ Selected as the project's "modern" pillars:
 | Done    | Rich input editor                                                                    |
 | Done    | Tabs, splits, command palette                                                        |
 | Planned | Images and clickable links                                                           |
-| Planned | Configuration file and themes                                                        |
+| Done    | Configuration file and themes                                                        |
 | Planned | IME support                                                                          |
 
 ## Non-goals (for now)

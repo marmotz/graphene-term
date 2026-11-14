@@ -374,6 +374,13 @@ impl Timeline {
         self.current.pin_top = true;
     }
 
+    /// Changes the cap of the frozen rows, from a reloaded configuration: the oldest
+    /// blocks are dropped at once when it is lowered.
+    pub fn set_scrollback(&mut self, scrollback: usize) {
+        self.scrollback = scrollback;
+        self.evict();
+    }
+
     /// Drops the oldest blocks, whole, while the frozen rows exceed the scrollback.
     fn evict(&mut self) {
         let mut rows = self.frozen_rows();
@@ -867,6 +874,20 @@ mod tests {
         let ids: Vec<BlockId> = session.timeline.blocks().iter().map(|b| b.id).collect();
         assert_eq!(ids, [BlockId(1), BlockId(2), BlockId(3)]);
         assert!(session.timeline.frozen_rows() <= 10);
+    }
+
+    #[test]
+    fn lowering_the_scrollback_evicts_at_once() {
+        let mut session = Session::new(100);
+        for name in ["a", "b", "c", "d"] {
+            session.command(name, &["1", "2"], 0);
+        }
+        assert_eq!(session.timeline.blocks().len(), 4);
+
+        session.timeline.set_scrollback(6);
+
+        let ids: Vec<BlockId> = session.timeline.blocks().iter().map(|b| b.id).collect();
+        assert_eq!(ids, [BlockId(2), BlockId(3)]);
     }
 
     #[test]

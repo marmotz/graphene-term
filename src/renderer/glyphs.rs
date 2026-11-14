@@ -217,6 +217,13 @@ impl Glyphs {
         self.clear();
     }
 
+    /// Changes the font family (`None`: the system monospace font) and size: new
+    /// metrics, and every cached glyph is dropped.
+    pub fn set_font(&mut self, family: Option<String>, font_size: f32) {
+        self.family = resolve_family(self.font_system.db(), family);
+        self.set_font_size(font_size);
+    }
+
     /// Scales the interface font to a window of scale factor `scale`; the cache is
     /// dropped when its size changes.
     pub fn set_ui_scale(&mut self, scale: f32) {
@@ -525,6 +532,17 @@ mod tests {
         let large = glyphs.get(key('a')).unwrap();
         assert!(large.region.height > small.region.height);
         assert_eq!(glyphs.take_uploads().len(), 1);
+    }
+
+    #[test]
+    fn font_change_updates_the_family_and_metrics_and_clears_the_cache() {
+        let mut glyphs = Glyphs::new(Some("No Such Family".into()), FONT_SIZE);
+        glyphs.get(key('a')).unwrap();
+        let generation = glyphs.generation();
+        glyphs.set_font(None, FONT_SIZE * 2.0);
+        assert_eq!(glyphs.family, resolve_family(glyphs.font_system.db(), None));
+        assert_eq!(glyphs.cell_size().height, (FONT_SIZE * 2.0 * 1.3).ceil());
+        assert!(glyphs.generation() > generation);
     }
 
     #[test]

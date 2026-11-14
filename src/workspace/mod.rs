@@ -8,6 +8,7 @@ pub mod tree;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::config::TabPosition;
 use crate::i18n::Direction;
 use crate::layout::Rect;
 use crate::terminal::PaneId;
@@ -21,16 +22,53 @@ pub const DIVIDER_THICKNESS: f32 = 1.0;
 pub enum TabBarPosition {
     #[default]
     Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl From<TabPosition> for TabBarPosition {
+    fn from(position: TabPosition) -> Self {
+        match position {
+            TabPosition::Top => Self::Top,
+            TabPosition::Bottom => Self::Bottom,
+            TabPosition::Left => Self::Left,
+            TabPosition::Right => Self::Right,
+        }
+    }
 }
 
 impl TabBarPosition {
+    /// Whether the bar runs along a side of the window, its tabs stacked.
+    pub fn is_vertical(self) -> bool {
+        matches!(self, TabBarPosition::Left | TabBarPosition::Right)
+    }
+
     /// `window` without a tab bar `thickness` pixels thick on this edge.
     pub fn content_area(self, window: Rect, thickness: f32) -> Rect {
-        let thickness = thickness.clamp(0.0, window.height);
+        let across = if self.is_vertical() {
+            window.width
+        } else {
+            window.height
+        };
+        let thickness = thickness.clamp(0.0, across);
         match self {
             TabBarPosition::Top => Rect {
                 y: window.y + thickness,
                 height: window.height - thickness,
+                ..window
+            },
+            TabBarPosition::Bottom => Rect {
+                height: window.height - thickness,
+                ..window
+            },
+            TabBarPosition::Left => Rect {
+                x: window.x + thickness,
+                width: window.width - thickness,
+                ..window
+            },
+            TabBarPosition::Right => Rect {
+                width: window.width - thickness,
                 ..window
             },
         }
@@ -854,18 +892,48 @@ mod tests {
     }
 
     #[test]
-    fn tab_bar_area_is_taken_from_the_top() {
+    fn tab_bar_area_is_taken_from_its_edge() {
         let window = Rect::from_size(800, 600);
-        let area = TabBarPosition::Top.content_area(window, 30.0);
+        let area = |position: TabBarPosition| position.content_area(window, 30.0);
+        let rect = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        assert_eq!(area(TabBarPosition::Top), rect(0.0, 30.0, 800.0, 570.0));
+        assert_eq!(area(TabBarPosition::Bottom), rect(0.0, 0.0, 800.0, 570.0));
+        assert_eq!(area(TabBarPosition::Left), rect(30.0, 0.0, 770.0, 600.0));
+        assert_eq!(area(TabBarPosition::Right), rect(0.0, 0.0, 770.0, 600.0));
+        for position in [
+            TabBarPosition::Top,
+            TabBarPosition::Bottom,
+            TabBarPosition::Left,
+            TabBarPosition::Right,
+        ] {
+            assert_eq!(position.content_area(window, 0.0), window);
+        }
+        // A bar thicker than the window leaves an empty area, never a negative one.
+        let narrow = Rect::from_size(20, 600);
+        assert_eq!(TabBarPosition::Left.content_area(narrow, 30.0).width, 0.0);
+    }
+
+    #[test]
+    fn configured_position_maps_to_the_bar_edge() {
+        assert_eq!(TabBarPosition::from(TabPosition::Top), TabBarPosition::Top);
         assert_eq!(
-            area,
-            Rect {
-                x: 0.0,
-                y: 30.0,
-                width: 800.0,
-                height: 570.0
-            }
+            TabBarPosition::from(TabPosition::Bottom),
+            TabBarPosition::Bottom
         );
-        assert_eq!(TabBarPosition::Top.content_area(window, 0.0), window);
+        assert_eq!(
+            TabBarPosition::from(TabPosition::Left),
+            TabBarPosition::Left
+        );
+        assert_eq!(
+            TabBarPosition::from(TabPosition::Right),
+            TabBarPosition::Right
+        );
+        assert!(TabBarPosition::Left.is_vertical() && TabBarPosition::Right.is_vertical());
+        assert!(!TabBarPosition::Top.is_vertical() && !TabBarPosition::Bottom.is_vertical());
     }
 }
