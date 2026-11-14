@@ -18,6 +18,7 @@ use winit::window::{Window, WindowId};
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::block_actions::{Direction, Part};
 use crate::chrome;
+use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
@@ -62,6 +63,12 @@ enum Drag {
     Tab { index: usize, grab_offset: f32 },
 }
 
+/// A box over the whole window that takes the keyboard and the mouse while it is open.
+enum Overlay {
+    /// A close waiting for confirmation.
+    Confirm(ConfirmClose),
+}
+
 struct Session {
     window: Arc<Window>,
     /// Hands the events of new panes' terminals to the event loop.
@@ -72,6 +79,8 @@ struct Session {
     workspace: Workspace<Pane>,
     /// Mouse gesture in progress.
     drag: Option<Drag>,
+    /// Box open over the window, taking the keyboard and the mouse.
+    overlay: Option<Overlay>,
     palette: Palette,
     clipboard: Option<arboard::Clipboard>,
     focused: bool,
@@ -293,16 +302,81 @@ impl Session {
         }
     }
 
-    /// Closes every pane of tab `index`; the application exits with the last tab.
-    fn close_tab(&mut self, index: usize, event_loop: &ActiveEventLoop) {
-        let Some(tab) = self.workspace.tabs().get(index) else {
+    /// Asks to close `target`: at once when none of its panes runs a program other
+    /// than its shell, otherwise once the user confirms in a dialog.
+    fn request_close(&mut self, target: Target, event_loop: &ActiveEventLoop) {
+        let programs: Vec<_> = target
+            .panes(&self.workspace)
+            .into_iter()
+            .map(|id| {
+                self.workspace
+                    .pane(id)
+                    .and_then(|pane| pane.terminal.foreground_program())
+            })
+            .collect();
+        match ConfirmClose::request(target.clone(), programs) {
+            Some(confirm) => {
+                self.overlay = Some(Overlay::Confirm(confirm));
+                self.window.request_redraw();
+                self.update_pointer();
+            }
+            None => self.close(&target, event_loop),
+        }
+    }
+
+    /// Closes `target` without asking: the window, or each of its panes still open;
+    /// the application exits with the last pane.
+    fn close(&mut self, target: &Target, event_loop: &ActiveEventLoop) {
+        if *target == Target::Window {
+            event_loop.exit();
             return;
-        };
-        for id in tab.tree.leaves() {
+        }
+        for id in target.panes(&self.workspace) {
             if event_loop.exiting() {
                 return;
             }
             self.close_pane(id, event_loop);
+        }
+    }
+
+    /// The open dialog laid out in the window.
+    fn dialog_layout(&mut self) -> Option<DialogLayout> {
+        let Some(Overlay::Confirm(confirm)) = &self.overlay else {
+            return None;
+        };
+        let size = self.window.inner_size();
+        let metrics = self.ui_metrics();
+        let renderer = &mut self.renderer;
+        Some(DialogLayout::new(
+            confirm,
+            self.lang,
+            Rect::from_size(size.width, size.height),
+            metrics,
+            |text| renderer.ui_text_width(text),
+        ))
+    }
+
+    /// Applies the user's `answer` to the open dialog and closes it.
+    fn answer_dialog(&mut self, answer: Answer, event_loop: &ActiveEventLoop) {
+        let Some(Overlay::Confirm(confirm)) = self.overlay.take() else {
+            return;
+        };
+        self.window.request_redraw();
+        self.update_pointer();
+        if answer == Answer::Close {
+            self.close(&confirm.target, event_loop);
+        }
+    }
+
+    /// Handles a press while an overlay is open: a button of the dialog answers it,
+    /// anything else is ignored.
+    fn overlay_press(&mut self, button: mouse::Button, event_loop: &ActiveEventLoop) {
+        let (x, y) = self.mouse_pixel();
+        if button == mouse::Button::Left
+            && let Some(DialogHit::Button(answer)) =
+                self.dialog_layout().and_then(|layout| layout.hit(x, y))
+        {
+            self.answer_dialog(answer, event_loop);
         }
     }
 
@@ -326,7 +400,9 @@ impl Session {
             }
             (mouse::Button::Left, TabBarHit::Close(index))
             | (mouse::Button::Middle, TabBarHit::Tab(index) | TabBarHit::Close(index)) => {
-                self.close_tab(index, event_loop);
+                if let Some(target) = Target::tab(&self.workspace, index) {
+                    self.request_close(target, event_loop);
+                }
             }
             (mouse::Button::Left, TabBarHit::NewTab) => self.new_tab(),
             _ => {}
@@ -396,7 +472,10 @@ impl Session {
     /// Over a divider, or while dragging one, the resize arrows of its axis.
     fn update_pointer(&mut self) {
         let (x, y) = self.mouse_pixel();
-        if matches!(self.drag, Some(Drag::Tab { .. })) || y < self.tab_bar_height() {
+        if self.overlay.is_some()
+            || matches!(self.drag, Some(Drag::Tab { .. }))
+            || y < self.tab_bar_height()
+        {
             self.set_pointer(winit::window::CursorIcon::Default);
             return;
         }
@@ -484,8 +563,13 @@ impl Session {
         }
     }
 
-    /// A press goes to the first of: the banner, the tab bar, a divider, a pane.
+    /// A press goes to the first of: the overlay, the banner, the tab bar, a divider, a
+    /// pane. While an overlay is open, it takes every press.
     fn mouse_press(&mut self, button: mouse::Button, event_loop: &ActiveEventLoop) {
+        if self.overlay.is_some() {
+            self.overlay_press(button, event_loop);
+            return;
+        }
         if button == mouse::Button::Left && self.banner_press() {
             return;
         }
@@ -725,7 +809,7 @@ impl Session {
             Action::SplitDown => self.split(Axis::Vertical),
             Action::ClosePane => {
                 if let Some(id) = self.workspace.active_pane_id() {
-                    self.close_pane(id, event_loop);
+                    self.request_close(Target::Pane(id), event_loop);
                 }
             }
             Action::FocusPane(direction) => {
@@ -794,6 +878,13 @@ impl Session {
         default_font_size: f32,
         event_loop: &ActiveEventLoop,
     ) {
+        // While an overlay is open, keys go to it only.
+        if self.overlay.is_some() {
+            if let Some(answer) = dialog::answer_for(&event.logical_key) {
+                self.answer_dialog(answer, event_loop);
+            }
+            return;
+        }
         let modifiers = self.modifiers;
         let action = input::action_for(&event.logical_key, event.physical_key, modifiers);
         // With several panes, the pane focus wins over the editor's `Ctrl+Shift+Arrow`.
@@ -841,6 +932,9 @@ impl Session {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if self.overlay.is_some() {
+            return;
+        }
         let (position, modifiers) = (self.mouse_position, self.modifiers);
         if let Some(id) = self.pane_under_mouse()
             && let Some(pane) = self.workspace.pane_mut(id)
@@ -864,6 +958,13 @@ impl Session {
         if self.workspace.close_pane(id).is_err() {
             event_loop.exit();
             return;
+        }
+        // A dialog about panes that are all gone has nothing left to close.
+        if let Some(Overlay::Confirm(confirm)) = &self.overlay
+            && confirm.target != Target::Window
+            && confirm.target.panes(&self.workspace).is_empty()
+        {
+            self.overlay = None;
         }
         // The new active pane gets the focus-in; the closed one is gone.
         self.focus_changed(old);
@@ -957,8 +1058,10 @@ impl Session {
     }
 
     /// Draws every pane of the shown tab, inactive ones dimmed when it shows several,
-    /// then the dividers, the active pane border and the tab bar, then the banner.
+    /// then the dividers, the active pane border and the tab bar, then the banner, then
+    /// the open dialog.
     fn redraw(&mut self) {
+        let dialog = self.dialog_layout();
         let mut banner = self.shown_banner().map(|shown| FrameBanner {
             layout: self.banner_layout(&shown),
             background: self.palette.ui.banner_background,
@@ -1010,6 +1113,7 @@ impl Session {
             &layout,
             active,
             bar.as_ref(),
+            dialog.as_ref(),
             &self.palette.ui,
             self.renderer.is_srgb(),
         );
@@ -1126,6 +1230,7 @@ impl App {
             renderer,
             workspace,
             drag: None,
+            overlay: None,
             palette: self.palette.clone(),
             clipboard,
             focused: true,
@@ -1196,7 +1301,7 @@ impl ApplicationHandler<UserEvent> for App {
         };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => session.request_close(Target::Window, event_loop),
             WindowEvent::Resized(size) => {
                 session.renderer.resize(size.width, size.height);
                 session.relayout();

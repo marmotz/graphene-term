@@ -22,7 +22,6 @@ pub fn foreground_group(shell_pid: u32, tpgid: i32) -> Option<u32> {
 
 /// The name of the program running in the foreground of the shell's terminal, `None`
 /// when the shell itself is in the foreground or `/proc` cannot be read.
-#[allow(dead_code, reason = "read by the close confirmation task")]
 pub fn foreground_program(shell_pid: u32) -> Option<String> {
     let stat = fs::read_to_string(format!("/proc/{shell_pid}/stat")).ok()?;
     let group = foreground_group(shell_pid, parse_tpgid(&stat)?)?;

@@ -25,11 +25,14 @@ use ui_text::UiText;
 pub use ui_text::UiTextItem;
 
 /// The interface drawn over the panes (tab bar, dividers, active pane border): its
-/// rectangles, then its text over them.
+/// rectangles, then its text over them. The overlay (confirmation dialog) is drawn
+/// last, over everything else, the banner included.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UiLayer {
     pub rects: Vec<RectInstance>,
     pub texts: Vec<UiTextItem>,
+    pub overlay_rects: Vec<RectInstance>,
+    pub overlay_texts: Vec<UiTextItem>,
 }
 
 /// One pane to draw: its frame and the layout placing its grid in the window.
@@ -82,7 +85,10 @@ struct Prepared {
     /// Interface rects (tab bar, dividers, active pane border), over every pane; the
     /// interface text is the glyph group after the panes'.
     ui: Range<u32>,
-    /// Window overlay rects (banner), last; their glyphs are the last glyph group.
+    /// Banner rects, over the interface; their glyphs are the glyph group after the
+    /// interface text.
+    banner: Range<u32>,
+    /// Overlay rects (dialog), last; their glyphs are the last glyph group.
     overlay: Range<u32>,
 }
 
@@ -127,23 +133,28 @@ impl Layers {
             })
             .collect();
         let ui_rects = push(&ui.rects);
-        let overlay_rects: Vec<_> = scenes
+        let banner_rects: Vec<_> = scenes
             .iter()
             .flat_map(|scene| scene.overlay_rects.iter().copied())
             .collect();
-        let overlay = push(&overlay_rects);
+        let banner = push(&banner_rects);
+        let overlay = push(&ui.overlay_rects);
         self.rects.prepare(device, queue, screen, &rects);
 
-        let overlay_glyphs: Vec<GlyphInstance> = scenes
+        let banner_glyphs: Vec<GlyphInstance> = scenes
             .iter()
             .flat_map(|scene| scene.overlay.iter().copied())
             .collect();
         let mut ui_glyphs = Vec::new();
         self.ui_text
             .glyphs(&mut self.glyphs, &ui.texts, &mut ui_glyphs);
+        let mut overlay_glyphs = Vec::new();
+        self.ui_text
+            .glyphs(&mut self.glyphs, &ui.overlay_texts, &mut overlay_glyphs);
         let mut groups: Vec<&[GlyphInstance]> =
             scenes.iter().map(|scene| scene.glyphs.as_slice()).collect();
         groups.push(&ui_glyphs);
+        groups.push(&banner_glyphs);
         groups.push(&overlay_glyphs);
         self.cells
             .prepare(device, queue, screen, &mut self.glyphs, &groups);
@@ -153,14 +164,15 @@ impl Layers {
             screen,
             panes: prepared_panes,
             ui: ui_rects,
+            banner,
             overlay,
         }
     }
 
     /// Records the render pass drawing what [`Self::prepare`] uploaded into `view`:
     /// clear, then each pane clipped to its rectangle (`under` rects, grid glyphs,
-    /// `over` rects), then over the whole window the interface rects and text, and the
-    /// overlay rects and glyphs.
+    /// `over` rects), then over the whole window the interface rects and text, the
+    /// banner rects and glyphs, and the overlay rects and text.
     fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -197,8 +209,10 @@ impl Layers {
         pass.set_scissor_rect(0, 0, width, height);
         self.rects.render(&mut pass, prepared.ui.clone());
         self.cells.render(&mut pass, prepared.panes.len());
-        self.rects.render(&mut pass, prepared.overlay.clone());
+        self.rects.render(&mut pass, prepared.banner.clone());
         self.cells.render(&mut pass, prepared.panes.len() + 1);
+        self.rects.render(&mut pass, prepared.overlay.clone());
+        self.cells.render(&mut pass, prepared.panes.len() + 2);
     }
 }
 
@@ -330,6 +344,11 @@ impl Renderer {
     /// Line height of the interface font, in pixels.
     pub fn ui_line_height(&self) -> f32 {
         self.layers.glyphs.ui_line_height()
+    }
+
+    /// Width of `text` in the interface font, in pixels.
+    pub fn ui_text_width(&mut self, text: &str) -> f32 {
+        self.layers.glyphs.shape_ui(text).width
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -699,7 +718,7 @@ mod tests {
                 [SIZE as f32, 1.0],
                 [1.0; 4],
             )],
-            texts: Vec::new(),
+            ..UiLayer::default()
         };
         renderer
             .render_panes(
@@ -753,6 +772,7 @@ mod tests {
                 color: [1.0; 4],
                 max_width: 32.0,
             }],
+            ..UiLayer::default()
         };
         renderer
             .render_panes(
@@ -775,6 +795,56 @@ mod tests {
                 .all(|&(x, y)| x + 1 >= 32 && y + 1 >= 16 && (y as f32) <= 16.0 + line_height),
             "{lit:?}"
         );
+    }
+
+    #[test]
+    fn overlay_is_drawn_over_the_interface_with_its_own_text() {
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let layout = GridLayout::new(Rect::from_size(SIZE, SIZE), renderer.cell_size(), 0.0);
+        let frame = blank_frame(vec![vec![cell(' ')]]);
+        let text = |x: f32, color: [f32; 4]| UiTextItem {
+            text: "MM".to_owned(),
+            x,
+            y: 0.0,
+            color,
+            max_width: 32.0,
+        };
+        let half = SIZE as f32 / 2.0;
+        // White interface text in both halves; the overlay covers the left half in
+        // black and draws its own red text in the right half.
+        let ui = UiLayer {
+            texts: vec![text(0.0, [1.0; 4]), text(half, [1.0; 4])],
+            overlay_rects: vec![RectInstance::new(
+                [0.0, 0.0],
+                [half, SIZE as f32],
+                [0.0, 0.0, 0.0, 1.0],
+            )],
+            overlay_texts: vec![text(half, [1.0, 0.0, 0.0, 1.0])],
+            ..UiLayer::default()
+        };
+        renderer
+            .render_panes(
+                &[PaneFrame {
+                    frame: &frame,
+                    layout: &layout,
+                }],
+                &ui,
+            )
+            .unwrap();
+        let pixels = renderer.read_pixels();
+        let lit =
+            |x: u32, y: u32, channel: u32| pixels[((y * SIZE + x) * 4 + channel) as usize] > 0;
+        let left_lit = (0..SIZE)
+            .flat_map(|y| (0..half as u32).map(move |x| (x, y)))
+            .any(|(x, y)| lit(x, y, 0) || lit(x, y, 1));
+        assert!(!left_lit, "interface text shows through the overlay");
+        let right_red = (0..SIZE)
+            .flat_map(|y| (half as u32..SIZE).map(move |x| (x, y)))
+            .any(|(x, y)| lit(x, y, 0));
+        assert!(right_red, "overlay text not drawn");
     }
 
     #[test]

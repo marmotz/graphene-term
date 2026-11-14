@@ -40,7 +40,8 @@ src/
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
   chrome/
-    scene.rs       interface layer: tab bar, dividers, active pane border (pure)
+    dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
+    scene.rs       interface layer: tab bar, dividers, active pane border, dialog overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
@@ -90,7 +91,14 @@ Renderer::render(pane frames, interface rects)
   Lock order, everywhere: `Term` first, then `Timeline`.
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
-- When the shell exits, the event loop exits and the window closes.
+- When the shell of a pane exits, the pane closes, without confirmation; the last pane
+  closes its tab, the last tab closes the window.
+- Closing a pane (`ClosePane`), a tab (close button, middle click) or the window
+  (`CloseRequested`) goes through `Session::request_close`: when a targeted pane runs a
+  program other than its shell in the foreground (`Terminal::foreground_program`), a
+  `chrome::dialog::ConfirmClose` opens as the session overlay instead. While it is open
+  it takes every key (`Enter` closes, `Escape` cancels) and every mouse press (its
+  buttons); the wheel is ignored.
 - The PTY thread (`src/pty.rs`) is Graphene's own, with the structure of alacritty's
   `EventLoop`: one `polling::Poller` for the PTY, the child exit and the channel;
   `Msg::{Input, Resize, Shutdown}` sent through `pty::Sender` (mpsc + `poller.notify()`);
@@ -233,13 +241,16 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    interface layer (`UiLayer`: rects, then text items): the dividers (`ui.pane_border`)
    and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
    the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
-   there are several tabs. The panes area is the window minus the bar.
+   there are several tabs. The panes area is the window minus the bar. The open dialog
+   (`chrome::dialog::DialogLayout`, centered) goes to the overlay rects and texts of the
+   layer.
 4. `Renderer::render` builds the scene of each pane with its own `GridLayout`, resolves
    the glyph instances through the glyph cache (one group per pane, then the interface
-   text, then the overlay), uploads the newly rasterized glyphs, then draws in one pass:
-   clear; for each pane, clipped to its rect by a scissor, `under` rects, glyphs,
-   `over` rects; then over the whole window the interface rects, the interface text,
-   the overlay rects and the overlay glyphs. Colors are linearized when the surface
+   text, the banner, the overlay text), uploads the newly rasterized glyphs, then draws
+   in one pass: clear; for each pane, clipped to its rect by a scissor, `under` rects,
+   glyphs, `over` rects; then over the whole window the interface rects, the interface
+   text, the banner rects and glyphs, and the overlay rects and text, so the dialog
+   covers everything. Colors are linearized when the surface
    format is sRGB.
 
 The interface text (`renderer/ui_text.rs`) uses its own font: sans-serif at
@@ -253,8 +264,8 @@ marked `ui`.
 `Frame.banner` holds a `BannerLayout` (from `banner.rs`) and its theme colors
 (`ui.banner_background`, `ui.banner_text`). It covers the top of the window, over the
 grid (the grid does not move), in the frame of the active pane: its rect goes to the
-overlay rects and its text to the overlay glyphs (one character per cell width), drawn
-after every pane and the interface, unclipped. The layout gives the pixel rect of each action,
+scene's overlay rects and its text to its overlay glyphs (one character per cell
+width), drawn after every pane and the interface, unclipped, under the dialog. The layout gives the pixel rect of each action,
 and `Session::left_press` hit-tests the banner before starting a selection.
 
 The configuration error banner shows the first error of `config.toml` and the theme

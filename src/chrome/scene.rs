@@ -1,7 +1,9 @@
 //! Interface of the window (pure, no GPU access): the tab bar, the dividers between the
-//! panes of the shown tab and the border of its active pane. Dividers and border are
-//! only drawn while the tab shows several panes, the bar while there are several tabs.
+//! panes of the shown tab and the border of its active pane, and the confirmation
+//! dialog over everything. Dividers and border are only drawn while the tab shows
+//! several panes, the bar while there are several tabs.
 
+use super::dialog::DialogLayout;
 use super::tab_bar::TabBarLayout;
 use crate::layout::Rect;
 use crate::palette::UiColors;
@@ -19,23 +21,70 @@ const CLOSE: &str = "×";
 /// Thickness of the strokes of the `+` button, relative to the bar height.
 const PLUS_STROKE: f32 = 1.0 / 15.0;
 
+/// Thickness of the dialog border, in physical pixels.
+const DIALOG_BORDER: f32 = 1.0;
+
 /// The interface over the panes of `layout`: the pane rectangles (see [`panes`]), then
-/// the tab bar when `tab_bar` is given.
+/// the tab bar when `tab_bar` is given, and the `dialog` in the overlay.
 pub fn build(
     layout: &Layout,
     active: Option<PaneId>,
     tab_bar: Option<&TabBarLayout>,
+    dialog: Option<&DialogLayout>,
     colors: &UiColors,
     srgb_target: bool,
 ) -> UiLayer {
     let mut ui = UiLayer {
         rects: panes(layout, active, colors, srgb_target),
-        texts: Vec::new(),
+        ..UiLayer::default()
     };
     if let Some(bar) = tab_bar {
         tabs(bar, colors, srgb_target, &mut ui);
     }
+    if let Some(dialog) = dialog {
+        self::dialog(dialog, colors, srgb_target, &mut ui);
+    }
     ui
+}
+
+/// The dialog, in the overlay: its box and border, its title and message, then its
+/// buttons, the default one in the accent color.
+fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    let (background, text) = (color(colors.palette_background), color(colors.palette_text));
+    ui.overlay_rects.push(rect(dialog.rect, background));
+    ui.overlay_rects.extend(border(
+        dialog.rect,
+        DIALOG_BORDER,
+        color(colors.pane_border),
+    ));
+    for (line, y) in [
+        (&dialog.title, dialog.title_y),
+        (&dialog.message, dialog.message_y),
+    ] {
+        ui.overlay_texts.push(UiTextItem {
+            text: line.clone(),
+            x: dialog.text_x,
+            y,
+            color: text,
+            max_width: dialog.text_width,
+        });
+    }
+    for button in &dialog.buttons {
+        let (fill, label) = if button.default {
+            (color(colors.palette_match), background)
+        } else {
+            (color(colors.tab_bar_background), text)
+        };
+        ui.overlay_rects.push(rect(button.rect, fill));
+        ui.overlay_texts.push(UiTextItem {
+            text: button.label.clone(),
+            x: button.label_x,
+            y: dialog.label_y,
+            color: label,
+            max_width: button.rect.width,
+        });
+    }
 }
 
 /// The tab bar: its background, the shown tab's background, each title and close
@@ -204,7 +253,7 @@ mod tests {
         };
         assert!(panes(&layout, Some(PaneId(1)), &colors(), false).is_empty());
         assert_eq!(
-            build(&layout, Some(PaneId(1)), None, &colors(), false),
+            build(&layout, Some(PaneId(1)), None, None, &colors(), false),
             UiLayer::default()
         );
     }
@@ -273,7 +322,14 @@ mod tests {
             divider: 1.0,
         };
         let bar = bar();
-        let ui = build(&single, Some(PaneId(1)), Some(&bar), &tab_colors(), false);
+        let ui = build(
+            &single,
+            Some(PaneId(1)),
+            Some(&bar),
+            None,
+            &tab_colors(),
+            false,
+        );
         let color = |c| gpu_color(c, false);
         assert_eq!(ui.rects[0].position, [0.0, 0.0]);
         assert_eq!(ui.rects[0].size, [1000.0, bar.rect.height]);
@@ -315,10 +371,86 @@ mod tests {
             &two_columns(),
             Some(PaneId(1)),
             Some(&bar),
+            None,
             &tab_colors(),
             false,
         );
         assert_eq!(ui.rects[0].color, gpu_color(BORDER, false));
         assert_eq!(ui.rects[5].color, gpu_color(BAR, false));
+        assert!(ui.overlay_rects.is_empty() && ui.overlay_texts.is_empty());
+    }
+
+    const DIALOG_BACKGROUND: Rgb = Rgb { r: 50, g: 0, b: 0 };
+    const DIALOG_TEXT: Rgb = Rgb { r: 60, g: 0, b: 0 };
+
+    #[test]
+    fn dialog_is_drawn_in_the_overlay() {
+        use crate::chrome::dialog::{ConfirmClose, Target};
+        use crate::i18n::Lang;
+        let colors = UiColors {
+            palette_background: DIALOG_BACKGROUND,
+            palette_text: DIALOG_TEXT,
+            ..tab_colors()
+        };
+        let confirm = ConfirmClose {
+            target: Target::Window,
+            programs: vec!["vim".to_owned()],
+        };
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let dialog = DialogLayout::new(
+            &confirm,
+            Lang::En,
+            area(0.0, 0.0, 1000.0, 600.0),
+            metrics,
+            |t| t.chars().count() as f32 * 8.0,
+        );
+        let bar = bar();
+        let ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            Some(&bar),
+            Some(&dialog),
+            &colors,
+            false,
+        );
+        let color = |c| gpu_color(c, false);
+        // The interface is unchanged: the dialog only adds to the overlay.
+        let without = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            Some(&bar),
+            None,
+            &colors,
+            false,
+        );
+        assert_eq!((&ui.rects, &ui.texts), (&without.rects, &without.texts));
+        // Box, its 4 border sides, then the two buttons.
+        assert_eq!(ui.overlay_rects.len(), 7);
+        assert_eq!(ui.overlay_rects[0].position, [dialog.rect.x, dialog.rect.y]);
+        assert_eq!(ui.overlay_rects[0].color, color(DIALOG_BACKGROUND));
+        assert!(
+            ui.overlay_rects[1..5]
+                .iter()
+                .all(|r| r.color == color(BORDER))
+        );
+        assert_eq!(ui.overlay_rects[5].color, color(BAR));
+        assert_eq!(ui.overlay_rects[6].color, color(ACCENT));
+        let texts: Vec<(&str, [f32; 4])> = ui
+            .overlay_texts
+            .iter()
+            .map(|t| (t.text.as_str(), t.color))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("Close the window?", color(DIALOG_TEXT)),
+                ("vim is still running", color(DIALOG_TEXT)),
+                ("Cancel", color(DIALOG_TEXT)),
+                ("Close", color(DIALOG_BACKGROUND)),
+            ]
+        );
     }
 }

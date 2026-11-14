@@ -122,7 +122,6 @@ impl Terminal {
 
     /// The program running in the foreground of this terminal, `None` when it is the
     /// shell itself or it cannot be read.
-    #[allow(dead_code, reason = "used by the close confirmation task")]
     pub fn foreground_program(&self) -> Option<String> {
         process::foreground_program(self.shell_pid)
     }
