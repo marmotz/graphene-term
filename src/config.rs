@@ -324,7 +324,6 @@ pub struct Config {
     pub scrollback_lines: usize,
     pub cursor: CursorConfig,
     pub word_separators: String,
-    #[allow(dead_code, reason = "applied by the tab bar position task")]
     pub tab_position: TabPosition,
     pub theme: ThemeConfig,
     /// Valid `"keys" = "action"` pairs, applied on top of the default shortcuts by

@@ -57,9 +57,6 @@ use crate::workspace::{self, DIVIDER_THICKNESS, TabBarPosition, Workspace};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
-/// Edge of the window the tab bar sits on.
-const TAB_BAR: TabBarPosition = TabBarPosition::Top;
-
 /// Cells a pane grows by per resize shortcut.
 const RESIZE_STEP_CELLS: usize = 2;
 
@@ -153,6 +150,8 @@ struct Session {
     /// Tag the user just chose to ignore, forwarded to the update check thread.
     ignored_tag: Option<String>,
     lang: Lang,
+    /// Edge of the window the tab bar sits on.
+    tab_position: TabBarPosition,
     /// Shortcuts of the application actions.
     keybindings: Keybindings,
     /// Logs the first frame drawn after the shell's first output (`graphene::perf`).
@@ -207,10 +206,14 @@ impl Session {
         }
     }
 
-    /// Height of the tab bar, 0 while it is hidden.
-    fn tab_bar_height(&self) -> f32 {
+    /// Size of the tab bar across its edge, 0 while it is hidden.
+    fn tab_bar_thickness(&self) -> f32 {
         if tab_bar::shown(self.workspace.tabs().len()) {
-            self.ui_metrics(UiFont::Chrome).bar_height()
+            tab_bar::thickness(
+                self.tab_position,
+                self.window.inner_size().width as f32,
+                self.ui_metrics(UiFont::Chrome),
+            )
         } else {
             0.0
         }
@@ -229,8 +232,10 @@ impl Session {
                     .unwrap_or_else(|| DEFAULT_TITLE.to_owned())
             })
             .collect();
+        let size = self.window.inner_size();
         Some(TabBarLayout::new(
-            self.window.inner_size().width as f32,
+            Rect::from_size(size.width, size.height),
+            self.tab_position,
             &titles,
             self.workspace.active_index(),
             self.ui_metrics(UiFont::Chrome),
@@ -242,7 +247,9 @@ impl Session {
         let size = self.window.inner_size();
         let window = Rect::from_size(size.width, size.height);
         Geometry {
-            area: TAB_BAR.content_area(window, self.tab_bar_height()),
+            area: self
+                .tab_position
+                .content_area(window, self.tab_bar_thickness()),
             cell: self.renderer.cell_size(),
             divider: DIVIDER_THICKNESS,
         }
@@ -546,10 +553,11 @@ impl Session {
         match (button, hit) {
             (mouse::Button::Left, TabBarHit::Tab(index)) => {
                 self.change_tab(|workspace| workspace.select(index));
-                let (x, _) = self.mouse_pixel();
+                let (x, y) = self.mouse_pixel();
+                let tab = bar.tabs[index].rect;
                 self.drag = Some(Drag::Tab {
                     index,
-                    grab_offset: x - bar.tabs[index].rect.x,
+                    grab_offset: bar.along(x, y) - bar.along(tab.x, tab.y),
                 });
             }
             (mouse::Button::Left, TabBarHit::Close(index))
@@ -612,6 +620,7 @@ impl Session {
         self.palette = palette.clone();
         self.keybindings = Keybindings::new(&new.keybindings);
         self.lang = new.language.resolve(Lang::detect);
+        self.tab_position = new.tab_position.into();
         self.config_banner = banner;
         // A changed cursor style shows at once, visible.
         self.reset_blink();
@@ -711,7 +720,7 @@ impl Session {
         let (x, y) = self.mouse_pixel();
         if self.overlay.is_some()
             || matches!(self.drag, Some(Drag::Tab { .. }))
-            || y < self.tab_bar_height()
+            || !self.geometry().area.contains(x, y)
         {
             self.set_pointer(winit::window::CursorIcon::Default);
             return;
@@ -1064,8 +1073,8 @@ impl Session {
         {
             self.drag = None;
             if let Some(mut bar) = self.tab_bar() {
-                let (x, _) = self.mouse_pixel();
-                let to = bar.dragged(index, x - grab_offset);
+                let (x, y) = self.mouse_pixel();
+                let to = bar.dragged(index, bar.along(x, y) - grab_offset);
                 self.workspace.move_tab(index, to);
             }
             self.window.request_redraw();
@@ -1572,7 +1581,8 @@ impl Session {
             .collect();
         let mut bar = self.tab_bar();
         if let (Some(bar), Some(Drag::Tab { index, grab_offset })) = (bar.as_mut(), &self.drag) {
-            bar.dragged(*index, self.mouse_pixel().0 - grab_offset);
+            let (x, y) = self.mouse_pixel();
+            bar.dragged(*index, bar.along(x, y) - grab_offset);
         }
         let mut ui = chrome::scene::build(
             &layout,
@@ -1712,7 +1722,7 @@ impl App {
         let size = window.inner_size();
         // A single tab: no tab bar.
         let layout = GridLayout::new(
-            TAB_BAR.content_area(Rect::from_size(size.width, size.height), 0.0),
+            Rect::from_size(size.width, size.height),
             glyphs.cell_size(),
             self.config.window.padding * scale,
         );
@@ -1764,6 +1774,7 @@ impl App {
             update: UpdateBanner::default(),
             ignored_tag: None,
             lang: self.config.language.resolve(Lang::detect),
+            tab_position: self.config.tab_position.into(),
             keybindings: Keybindings::new(&self.config.keybindings),
             first_frame: perf::FirstFrame::default(),
             restore_size: initial_size,

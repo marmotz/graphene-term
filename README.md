@@ -130,7 +130,8 @@ Tabs and split panes:
 palette, which also lists the open tabs and panes. Type to filter (fuzzy, case
 sensitive only with an uppercase letter), `Up` / `Down` to choose, `Enter` to run,
 `Escape` to close; recently run actions come first. The tab bar shows once there are
-two tabs. Closing a pane, a tab or the window asks for confirmation while a program
+two tabs, on the edge set by `tabs.position` (`top`, `bottom`, `left` or `right`; on a
+side, the tabs are stacked). Closing a pane, a tab or the window asks for confirmation while a program
 other than the shell runs in it. With several panes in the tab, `Ctrl+Shift+Left /
 Right` moves the focus instead of extending the input selection.
 

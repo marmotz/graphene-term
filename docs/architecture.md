@@ -59,7 +59,7 @@ src/
                    block and timeline scrolls, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors and block marks
-  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
+  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG; `language` forces it) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
   input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection, selection replacement (pure)
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
@@ -394,7 +394,10 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    interface layer (`UiLayer`: rects, then text items): the dividers (`ui.pane_border`)
    and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
    the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
-   there are several tabs. The panes area is the window minus the bar. The open dialog
+   there are several tabs, on the edge of `tabs.position` (`TabBarPosition`): side by
+   side along the top or bottom edge, stacked in a bar `TAB_MAX_WIDTH` wide (at most a
+   third of the window) on the left or right. The panes area is the window minus the
+   bar (`TabBarPosition::content_area`); each grid is centred in its pane. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
    the window height) goes to the overlay rects and texts of the layer. The link
