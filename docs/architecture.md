@@ -34,11 +34,13 @@ src/
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
   graphics/
     mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
-                   StoreHandler (runs kitty commands, keeps their PTY replies, clears the
-                   image store on a full reset)
+                   StoreHandler (runs kitty commands, keeps their PTY replies, places the
+                   sixel images, clears the image store on a full reset)
     kitty.rs       kitty graphics protocol, still images: control keys, chunked transfer,
                    media (direct, file, temp file, shared memory), base64 / zlib / PNG /
                    raw decoding, transmit / put / query / delete, replies
+    sixel.rs       sixel decoder to RGBA: color registers (RGB / HLS), repeat, `$`, `-`,
+                   raster attributes, background from p2 (pure)
     sequence.rs    incremental splitter of the kitty and sixel sequences in the PTY stream (pure)
     store.rs       ImageStore: images (RGBA frames, generation), placements, 256 MiB budget
                    with oldest-first eviction, terminal-assigned ids (pure)
@@ -179,10 +181,10 @@ Renderer::render(pane frames, interface rects)
   through; for each image sequence, and after each full reset (`ESC c`), a synchronized
   update holding bytes is flushed and the `graphics::Handler` runs with the `Term` lock
   held: `graphics::StoreHandler` runs the kitty commands (`graphics::kitty::Kitty`)
-  against the grid and the pane's `ImageStore`, and clears the store on a full reset
-  (sixel sequences are still logged and dropped). The kitty replies it keeps are pushed to
+  against the grid and the pane's `ImageStore`, places the sixel images, and clears the
+  store on a full reset. The kitty replies it keeps are pushed to
   the `WriteQueue` after each parsed read. The cell pixel size given at spawn and on each
-  `Msg::Resize` sizes the kitty placements without `c` / `r`. The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
+  `Msg::Resize` sizes the kitty placements without `c` / `r` and the sixel images. The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
   into byte chunks, block signals and screen clears; each byte chunk is parsed by
   `pty::feed` (the single parse step), and each signal or clear is applied by
   `Timeline::apply` right after the bytes of its sequence, so the live grid holds
@@ -398,6 +400,20 @@ the 256 MiB store budget.
 - A command naming an image (`i` or `I`) gets `ESC _ G i=..,I=..,p=..;OK ESC \` or
   `CODE:message` (`EINVAL`, `ENOENT`, `ENODATA`, `EFBIG`, `EBADF`); `q=1` mutes `OK`,
   `q=2` mutes errors too. Animation commands (`a=f`, `a`, `c`, `d=f`) are ignored.
+
+Sixel (`graphics/sixel.rs`): the DCS body `<p1>;<p2>;<p3>q<data>` is decoded to RGBA with
+1024 color registers (the first 16 start with the VT340 palette), `#Pc;1;H;L;S` (HLS, DEC
+hue: 0 blue, 120 red, 240 green) and `#Pc;2;R;G;B` (percent) definitions, `!Pn` repeats,
+`$` (back to column 0) and `-` (next band of 6 rows). Pixels are square (the aspect
+ratio of `p1` and `"` is ignored, like xterm and foot). The image is as wide as the
+raster attributes (`"Pan;Pad;Ph;Pv`) or the columns reached, and as high as the raster
+or the painted rows; with `p2 = 1` unset pixels are transparent, otherwise they take
+color register 0 and a filled image without raster keeps whole bands. Sides are capped
+at 8192 px. `StoreHandler` stores each sixel as a new image (terminal-assigned id,
+placement 1), padded with transparent pixels to whole cells of the current cell size so
+it keeps its pixel size at the top-left of its box, and places it with
+`graphics::place`, cursor on the line below the image at its first column. An image no
+cell shows any more stays in the store until the budget evicts it.
 
 The pixels live in the pane's `ImageStore` as `Pixels` (immutable RGBA, a process-wide
 uid). `ImageRenderer` (`renderer/images.rs`) keys one texture on each uid: uploaded the

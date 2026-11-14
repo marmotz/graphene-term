@@ -36,7 +36,7 @@ const MAX_TRANSFER: usize = MAX_DATA / 3 * 4 + 4;
 pub const MAX_PLACEMENT: u32 = 0x00ff_ffff;
 
 /// Cell size used until the PTY loop is told the real one.
-const DEFAULT_CELL: (u32, u32) = (8, 16);
+pub const DEFAULT_CELL: (u32, u32) = (8, 16);
 
 /// Base64 as clients send it: padding optional.
 const BASE64: GeneralPurpose = GeneralPurpose::new(

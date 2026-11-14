@@ -143,7 +143,6 @@ pub enum CursorMove {
     /// After the image's last column, on its last row (kitty).
     After,
     /// On the line below the image, at its first column (sixel).
-    #[cfg_attr(not(test), allow(dead_code, reason = "used by the sixel handler"))]
     Below,
 }
 

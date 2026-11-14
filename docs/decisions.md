@@ -69,6 +69,19 @@ Replies are kept by the graphics handler and pushed to the PTY write queue after
 parsed read, so the handler needs no access to the loop's writer and stays testable on
 a plain `Term`.
 
+## Sixel: square pixels, images padded to whole cells
+
+Sixel encoders (libsixel `img2sixel`, `chafa`) target xterm, foot and mlterm, which draw
+square pixels: the VT340 aspect ratio of `p1` and of the raster attributes is ignored.
+The renderer scales an image to fit its box of cells, so a sixel image is padded with
+transparent pixels to whole cells of the cell size it is decoded with: it keeps its
+pixel size at the top-left of its cells instead of being stretched and centered. Unset
+pixels of a filled image (`p2` other than 1) take color register 0, the VT340
+background, rather than the theme background, which the PTY thread does not know. Each
+sixel is its own image: images that no cell shows any more are left to the store's
+budget, since scanning the grid and history after every sixel would cost more than it
+saves.
+
 ## One terminal per block: live grid and frozen blocks
 
 The first implementation cut one grid into blocks with the OSC 133 marks the shell
