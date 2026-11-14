@@ -44,13 +44,16 @@ if [[ -n $_graphene_token ]]; then
   _graphene_histcmd=$HISTCMD
 
   # First PROMPT_COMMAND entry: reports the status of the command that just ended. Like
-  # fish: no command end for an empty command line, nor before the first prompt.
+  # fish: no command end for an empty command line, nor before the first prompt. Then
+  # `prompt`: readline is about to read a command line, the rich input editor of
+  # Graphene may send its key sequences.
   _graphene_prompt() {
     local ret=$?
     if ((_graphene_command_ran)); then
       _graphene_command_ran=0
       builtin printf '\e]6973;%s;end;%s\e\\' "$_graphene_token" "$ret"
     fi
+    builtin printf '\e]6973;%s;prompt\e\\' "$_graphene_token"
     _graphene_histcmd=$HISTCMD
     return "$ret"
   }

@@ -29,6 +29,12 @@ if status is-interactive; and test -n "$__graphene_token"
         printf '\e]6973;%s;end;%s\e\\' $__graphene_token $status
     end
 
+    # The line editor is about to read a command line: the rich input editor of
+    # Graphene may send its key sequences.
+    function __graphene_prompt --on-event fish_prompt
+        printf '\e]6973;%s;prompt\e\\' $__graphene_token
+    end
+
     # Rich input editor: Graphene sends private sequences (CSI <code> u, code points
     # from the Unicode private use area) for the editor moves, mirrored from
     # src/input_editor.rs. Every move is passive: clamped at the buffer ends and never

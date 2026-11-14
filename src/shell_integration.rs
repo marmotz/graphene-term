@@ -441,7 +441,10 @@ mod tests {
         struct Session {
             pty: tty::Pty,
             output: Vec<u8>,
+            /// Block signals (`start`, `end`), in order.
             signals: Vec<Signal>,
+            /// `prompt` signals received.
+            prompt_signals: usize,
             scanner: Scanner,
             /// Primary device attributes queries answered so far.
             answered: usize,
@@ -509,6 +512,7 @@ mod tests {
                     pty: tty::new(&options, size, 0).unwrap(),
                     output: Vec::new(),
                     signals: Vec::new(),
+                    prompt_signals: 0,
                     scanner: Scanner::new(TOKEN),
                     answered: 0,
                 };
@@ -544,8 +548,10 @@ mod tests {
                         Ok(n) => {
                             let read = &buf[..n];
                             for chunk in self.scanner.split(read) {
-                                if let Chunk::Signal(signal) = chunk {
-                                    self.signals.push(signal);
+                                match chunk {
+                                    Chunk::Signal(Signal::Prompt) => self.prompt_signals += 1,
+                                    Chunk::Signal(signal) => self.signals.push(signal),
+                                    _ => {}
                                 }
                             }
                             self.output.extend_from_slice(read);
@@ -634,6 +640,10 @@ mod tests {
                 "{shell}: {:?}",
                 String::from_utf8_lossy(&session.output)
             );
+            // One `prompt` per prompt, the one after the empty line included.
+            session.read_until("the prompt signals", |s| s.prompt_signals >= s.prompts());
+            assert_eq!(session.prompt_signals, session.prompts(), "{shell}");
+            assert_eq!(session.prompts(), 6, "{shell}");
             let output = String::from_utf8_lossy(&session.output);
             assert!(output.contains(expected), "{shell}: {output:?}");
             session

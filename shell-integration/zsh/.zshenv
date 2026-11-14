@@ -25,12 +25,15 @@ if [[ -o interactive && -n $_graphene_token ]]; then
   typeset -gi _graphene_command_ran=0
 
   # Like fish: no command end for an empty command line, nor before the first prompt.
+  # Then `prompt`: the line editor is about to read a command line, the rich input
+  # editor of Graphene may send its key sequences.
   _graphene_precmd() {
     local ret=$?
     if (( _graphene_command_ran )); then
       _graphene_command_ran=0
       builtin print -rn -- $'\e]6973;'"$_graphene_token;end;$ret"$'\e\\'
     fi
+    builtin print -rn -- $'\e]6973;'"$_graphene_token;prompt"$'\e\\'
     return $ret
   }
 

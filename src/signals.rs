@@ -7,7 +7,11 @@
 //! ```text
 //! ESC ] 6973 ; <token> ; start ; <command line, base64> ST
 //! ESC ] 6973 ; <token> ; end ; <exit status> ST
+//! ESC ] 6973 ; <token> ; prompt ST
 //! ```
+//!
+//! `prompt` is sent before each prompt: the shell's line editor is about to read a
+//! command line, with Graphene's editor key bindings installed.
 //!
 //! `vte` drops unknown OSC without calling any handler, so the signals are found here,
 //! before the parser. The scanner is incremental (a sequence split across reads is
@@ -46,6 +50,8 @@ pub enum Signal {
     Start { command: String },
     /// The command ended, with its exit status when given.
     End { status: Option<i32> },
+    /// The shell is about to draw its prompt and read a command line.
+    Prompt,
 }
 
 /// A piece of the byte stream returned by [`Scanner::split`].
@@ -341,6 +347,7 @@ fn parse(rest: &[u8], overflowed: bool) -> Option<Signal> {
                 .and_then(|value| value.parse().ok());
             Some(Signal::End { status })
         }
+        b"prompt" if !overflowed => Some(Signal::Prompt),
         _ => None,
     }
 }
@@ -524,8 +531,17 @@ mod tests {
     }
 
     #[test]
+    fn prompt_signal() {
+        let stream = format!("\x1b]6973;{TOKEN};prompt\x1b\\$ \x1b]6973;{TOKEN};prompt;x\x07");
+        assert_eq!(
+            events(&[stream.as_bytes()]),
+            [Seen::Signal(Signal::Prompt), Seen::Signal(Signal::Prompt)]
+        );
+    }
+
+    #[test]
     fn unknown_kind_is_ignored() {
-        let stream = format!("\x1b]6973;{TOKEN};prompt;x\x07\x1b]6973;{TOKEN}\x07");
+        let stream = format!("\x1b]6973;{TOKEN};input;x\x07\x1b]6973;{TOKEN}\x07");
         assert!(events(&[stream.as_bytes()]).is_empty());
     }
 
