@@ -385,6 +385,7 @@ mod tests {
 
     use super::*;
     use crate::frame::{BlockColors, FrameCell};
+    use crate::layout::Rect;
 
     const SIZE: u32 = 64;
     const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -426,7 +427,7 @@ mod tests {
             return;
         };
         let cell_size = renderer.cell_size();
-        let layout = GridLayout::new(SIZE, SIZE, cell_size, 0.0);
+        let layout = GridLayout::new(Rect::from_size(SIZE, SIZE), cell_size, 0.0);
         let frame = Frame {
             rows: vec![vec![cell(' '), cell('M'), cell(' ')]],
             decorations: Vec::new(),
@@ -469,7 +470,7 @@ mod tests {
             return;
         };
         let cell_size = renderer.cell_size();
-        let layout = GridLayout::new(SIZE, SIZE, cell_size, 0.0);
+        let layout = GridLayout::new(Rect::from_size(SIZE, SIZE), cell_size, 0.0);
         let frame = Frame {
             rows: vec![vec![cell(' ')]],
             decorations: Vec::new(),

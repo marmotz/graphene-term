@@ -18,8 +18,8 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use graphene::bench::{
-    CellSize, Frame, GlyphKey, Glyphs, GridLayout, Headless, Palette, Scanner, Timeline, process,
-    scene, scroll_block, view_rows,
+    CellSize, Frame, GlyphKey, Glyphs, GridLayout, Headless, Palette, Rect, Scanner, Timeline,
+    process, scene, scroll_block, view_rows,
 };
 
 /// Terminal size of the recordings.
@@ -149,7 +149,7 @@ fn layout(cell: CellSize) -> GridLayout {
     GridLayout {
         columns: COLUMNS,
         lines: LINES,
-        ..GridLayout::new(0, 0, cell, PADDING)
+        ..GridLayout::new(Rect::from_size(0, 0), cell, PADDING)
     }
 }
 

@@ -23,7 +23,7 @@ use crate::frame::{self, Frame, FrameBanner};
 use crate::i18n::{self, Lang, Msg};
 use crate::input::{self, Action};
 use crate::input_editor::{self, EditorCommand};
-use crate::layout::{GridLayout, Hit};
+use crate::layout::{GridLayout, Hit, Rect};
 use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
@@ -130,8 +130,7 @@ impl Session {
         let size = self.window.inner_size();
         let scale = self.window.scale_factor() as f32;
         GridLayout::new(
-            size.width,
-            size.height,
+            Rect::from_size(size.width, size.height),
             self.renderer.cell_size(),
             self.padding * scale,
         )
@@ -961,8 +960,7 @@ impl App {
 
         let size = window.inner_size();
         let layout = GridLayout::new(
-            size.width,
-            size.height,
+            Rect::from_size(size.width, size.height),
             glyphs.cell_size(),
             self.config.window.padding * scale,
         );

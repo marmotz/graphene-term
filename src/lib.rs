@@ -46,7 +46,7 @@ pub fn start_perf_clock() {
 #[doc(hidden)]
 pub mod bench {
     pub use crate::frame::Frame;
-    pub use crate::layout::{CellSize, GridLayout};
+    pub use crate::layout::{CellSize, GridLayout, Rect};
     pub use crate::palette::Palette;
     pub use crate::pty::process;
     pub use crate::renderer::scene;

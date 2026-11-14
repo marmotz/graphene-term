@@ -106,7 +106,7 @@ fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<Rec
         );
         if let Some(status) = card.status {
             // Centered in the margin, with round ends.
-            let x = layout.padding + ((layout.margin - stripe) / 2.0).max(0.0).round();
+            let x = layout.content_left() + ((layout.margin - stripe) / 2.0).max(0.0).round();
             rects.push(
                 RectInstance::new(
                     [x, top],
@@ -348,7 +348,7 @@ mod tests {
     use crate::frame::{
         BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration, ScrollBar,
     };
-    use crate::layout::CellSize;
+    use crate::layout::{CellSize, Rect};
     use crate::timeline::Status;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -376,8 +376,7 @@ mod tests {
     /// card padding.
     fn margin_layout() -> GridLayout {
         GridLayout::new(
-            100,
-            100,
+            Rect::from_size(100, 100),
             CellSize {
                 width: 10.0,
                 height: 20.0,
@@ -850,8 +849,7 @@ mod tests {
         frame.decorations[0].summary = Some(1);
         frame.lang = crate::i18n::Lang::Fr;
         let layout = GridLayout::new(
-            400,
-            100,
+            Rect::from_size(400, 100),
             CellSize {
                 width: 10.0,
                 height: 20.0,
