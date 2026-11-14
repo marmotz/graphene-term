@@ -6,15 +6,47 @@
 //! to the shell's line editor. Distances are read from the grid, every edit is done by
 //! the shell.
 
-// Wired into the keyboard and mouse paths by the rich mode (issue #32).
-#![cfg_attr(not(test), allow(dead_code))]
-
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
-use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::{Term, TermMode};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+use crate::selection;
+use crate::timeline::Phase;
+
+/// Whether the rich input editor is active: the shell's line editor reads a command
+/// line with Graphene's key bindings (`prompt` signalled, no command running), the
+/// terminal is not on the alternate screen, and the mouse is not reserved for an
+/// application.
+pub fn rich_mode(phase: Phase, editing: bool, mode: TermMode, mods: ModifiersState) -> bool {
+    phase == Phase::Prompt
+        && editing
+        && !mode.contains(TermMode::ALT_SCREEN)
+        && !selection::mouse_reserved(mode, mods)
+}
+
+/// Editor command a key press runs at the prompt: `None` outside the rich mode, or when
+/// the key is not an editor shortcut, so the key follows the normal path.
+pub fn prompt_command(key: &Key, mods: ModifiersState, rich: bool) -> Option<EditorCommand> {
+    if rich {
+        editor_command(key, mods)
+    } else {
+        None
+    }
+}
+
+/// Bytes an editor command writes to the PTY. `None` for the selection commands
+/// (`Extend`, `SelectAll`), not handled yet: their key follows the normal path.
+pub fn command_bytes(command: EditorCommand) -> Option<&'static [u8]> {
+    match command {
+        EditorCommand::Move(motion) => Some(motion_bytes(motion)),
+        EditorCommand::InsertNewline => Some(Sequence::InsertNewline.bytes()),
+        EditorCommand::DeleteWord(direction) => Some(delete_word_bytes(direction)),
+        EditorCommand::Extend(_) | EditorCommand::SelectAll => None,
+    }
+}
 
 /// Direction of a motion or a word deletion: backward is left (or up), forward is right
 /// (or down).
@@ -190,14 +222,44 @@ pub fn char_moves(distance: isize) -> Vec<u8> {
 /// One per cell, wide-char spacers skipped; a line end without `WRAPLINE` counts as one
 /// `\n` and its trailing blank cells are ignored. Cells for which `skip` returns true
 /// (the right prompt) are not counted nor treated as line content.
+// Used by the selection replacement, outside tests.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn buffer_distance<T: EventListener>(
     term: &Term<T>,
     from: Point,
     to: Point,
     skip: impl Fn(Point, &Cell) -> bool,
 ) -> isize {
+    distance(term, from, to, &skip, None)
+}
+
+/// Moves writing which brings the shell cursor, at the grid point `cursor`, to the
+/// clicked point `click`: `CharLeft` or `CharRight` repeated over their buffer distance.
+///
+/// A click before `floor` (where the prompt starts) counts from `floor`. The blanks
+/// before the cursor on its line are typed text, so they count. A click past the end of
+/// the text gives too many moves, clamped by the shell at the buffer ends.
+pub fn click_moves<T: EventListener>(
+    term: &Term<T>,
+    cursor: Point,
+    click: Point,
+    floor: Option<Point>,
+) -> Vec<u8> {
+    let click = floor.map_or(click, |floor| click.max(floor));
+    char_moves(distance(term, cursor, click, &skip_none, Some(cursor)))
+}
+
+/// [`buffer_distance`], with the content of the line of `keep` reaching at least its
+/// column.
+fn distance<T: EventListener>(
+    term: &Term<T>,
+    from: Point,
+    to: Point,
+    skip: &impl Fn(Point, &Cell) -> bool,
+    keep: Option<Point>,
+) -> isize {
     if to < from {
-        return -buffer_distance(term, to, from, skip);
+        return -distance(term, to, from, skip, keep);
     }
     let grid = term.grid();
     let columns = grid.columns();
@@ -224,6 +286,10 @@ pub fn buffer_distance<T: EventListener>(
                     !ignored(point, cell) && cell.c != ' '
                 })
                 .map_or(0, |column| column + 1)
+                .max(
+                    keep.filter(|keep| keep.line == line)
+                        .map_or(0, |keep| keep.column.0),
+                )
         };
         let start = if line == from.line { from.column.0 } else { 0 };
         let end = if line == to.line {
@@ -499,6 +565,150 @@ mod tests {
         assert_eq!(
             buffer_distance(&term, point(0, 2), point(0, 9), skip_right_prompt),
             2
+        );
+    }
+
+    #[test]
+    fn rich_mode_needs_an_editing_prompt_on_the_main_screen() {
+        let empty = TermMode::empty();
+        assert!(rich_mode(Phase::Prompt, true, empty, NONE));
+        // No `prompt` signal: no integration, or the prompt not drawn yet.
+        assert!(!rich_mode(Phase::Prompt, false, empty, NONE));
+        assert!(!rich_mode(Phase::Running, true, empty, NONE));
+        assert!(!rich_mode(Phase::Running, false, empty, NONE));
+        assert!(!rich_mode(Phase::Prompt, true, TermMode::ALT_SCREEN, NONE));
+        // Mouse reserved for an application, unless `Shift` forces Graphene's.
+        assert!(!rich_mode(
+            Phase::Prompt,
+            true,
+            TermMode::MOUSE_REPORT_CLICK,
+            NONE
+        ));
+        assert!(rich_mode(
+            Phase::Prompt,
+            true,
+            TermMode::MOUSE_REPORT_CLICK,
+            SHIFT
+        ));
+    }
+
+    #[test]
+    fn prompt_commands_only_in_rich_mode() {
+        let home = named(NamedKey::Home);
+        assert_eq!(
+            prompt_command(&home, SHIFT, true),
+            Some(EditorCommand::Extend(Motion::Line(Backward)))
+        );
+        assert_eq!(prompt_command(&home, SHIFT, false), None);
+        assert_eq!(prompt_command(&home, NONE, false), None);
+        assert_eq!(prompt_command(&character("a"), CTRL, false), None);
+    }
+
+    #[test]
+    fn ctrl_a_still_sends_0x01_outside_rich_mode() {
+        let key = character("a");
+        assert_eq!(prompt_command(&key, CTRL, false), None);
+        // In rich mode it selects the input, not handled yet: the key goes on too.
+        let select_all = prompt_command(&key, CTRL, true).unwrap();
+        assert_eq!(command_bytes(select_all), None);
+        assert_eq!(
+            crate::input::key_to_bytes(&key, Some("a"), CTRL, TermMode::empty()).as_deref(),
+            Some(&[0x01][..])
+        );
+    }
+
+    #[test]
+    fn command_bytes_write_the_private_sequences() {
+        use EditorCommand::*;
+        assert_eq!(
+            command_bytes(Move(Motion::Word(Backward))),
+            Some(Sequence::WordLeft.bytes())
+        );
+        assert_eq!(
+            command_bytes(Move(Motion::Buffer(Forward))),
+            Some(Sequence::BufferEnd.bytes())
+        );
+        assert_eq!(
+            command_bytes(InsertNewline),
+            Some(Sequence::InsertNewline.bytes())
+        );
+        assert_eq!(
+            command_bytes(DeleteWord(Forward)),
+            Some(Sequence::DeleteWordRight.bytes())
+        );
+        assert_eq!(command_bytes(Extend(Motion::Char(Forward))), None);
+        assert_eq!(command_bytes(SelectAll), None);
+    }
+
+    #[test]
+    fn click_after_the_cursor_moves_right() {
+        // Cursor after "$ echo hello" at column 12, back at column 7 ("hello" start).
+        let term = term_with(20, 3, "$ echo hello\x1b[8G");
+        let cursor = term.grid().cursor.point;
+        assert_eq!(cursor, point(0, 7));
+        assert_eq!(
+            click_moves(&term, cursor, point(0, 10), Some(point(0, 0))),
+            repeat(Forward, 3)
+        );
+    }
+
+    #[test]
+    fn click_before_the_cursor_moves_left() {
+        let term = term_with(20, 3, "$ echo hello");
+        let cursor = term.grid().cursor.point;
+        assert_eq!(
+            click_moves(&term, cursor, point(0, 4), Some(point(0, 0))),
+            repeat(Backward, 8)
+        );
+        assert!(click_moves(&term, cursor, cursor, Some(point(0, 0))).is_empty());
+    }
+
+    #[test]
+    fn click_on_the_prompt_is_clamped_to_its_start() {
+        // Output above the prompt, which starts on line 1.
+        let term = term_with(20, 4, "motd\r\n$ ls");
+        let cursor = term.grid().cursor.point;
+        let floor = Some(point(1, 0));
+        // On the motd: counted from the prompt start.
+        assert_eq!(
+            click_moves(&term, cursor, point(0, 2), floor),
+            repeat(Backward, 4)
+        );
+        // On the prompt itself: moves back over it, the shell stops at the buffer start.
+        assert_eq!(
+            click_moves(&term, cursor, point(1, 1), floor),
+            repeat(Backward, 3)
+        );
+    }
+
+    #[test]
+    fn blanks_typed_before_the_cursor_count() {
+        // "ls  " typed: the cursor stands after two blanks.
+        let term = term_with(20, 3, "$ ls  ");
+        let cursor = term.grid().cursor.point;
+        assert_eq!(cursor, point(0, 6));
+        assert_eq!(
+            click_moves(&term, cursor, point(0, 2), None),
+            repeat(Backward, 4)
+        );
+    }
+
+    #[test]
+    fn click_on_a_line_below_counts_the_line_break() {
+        // Multi-line input "ab" then "cd", cursor at the end of "ab".
+        let term = term_with(10, 3, "$ ab\r\ncd\x1b[1;5H");
+        let cursor = term.grid().cursor.point;
+        assert_eq!(cursor, point(0, 4));
+        assert_eq!(
+            click_moves(&term, cursor, point(1, 1), None),
+            repeat(Forward, 2)
+        );
+        // Past the end of a line: its end, not the next line.
+        let term = term_with(10, 3, "$ ab\r\ncd\x1b[1;3H");
+        let cursor = term.grid().cursor.point;
+        assert_eq!(
+            click_moves(&term, cursor, point(0, 8), None),
+            repeat(Forward, 2)
         );
     }
 }

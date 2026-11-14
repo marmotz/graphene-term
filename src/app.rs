@@ -22,6 +22,7 @@ use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{self, Frame, FrameBanner};
 use crate::i18n::{self, Lang, Msg};
 use crate::input::{self, Action};
+use crate::input_editor::{self, EditorCommand};
 use crate::layout::{GridLayout, Hit};
 use crate::mouse;
 use crate::opener;
@@ -152,6 +153,24 @@ impl Session {
 
     fn mode(&self) -> TermMode {
         *self.terminal.term.lock().mode()
+    }
+
+    /// Whether the rich input editor is active (see [`input_editor::rich_mode`]).
+    fn rich_mode(&self) -> bool {
+        let term = self.terminal.term.lock();
+        let timeline = lock(&self.terminal.timeline);
+        let current = timeline.current();
+        input_editor::rich_mode(current.phase, current.editing, *term.mode(), self.modifiers)
+    }
+
+    /// Runs an editor command at the prompt: a move clears the selection; every command
+    /// writes its private sequence, which the shell binds.
+    fn run_editor_command(&mut self, command: EditorCommand, bytes: &'static [u8]) {
+        if matches!(command, EditorCommand::Move(_)) {
+            self.clear_selection();
+        }
+        self.scroll_to_bottom();
+        self.terminal.write(bytes);
     }
 
     /// Hand over a fold chevron, arrow while the application captures the mouse under
@@ -586,14 +605,34 @@ impl Session {
         if !std::mem::take(&mut self.left_pressed) {
             return;
         }
+        let mut moves = Vec::new();
         let text = {
             let mut term = self.terminal.term.lock();
             let mut timeline = lock(&self.terminal.timeline);
             match self.selection.as_ref() {
-                // A click without drag selects nothing.
+                // A click without drag selects nothing; in the input, it moves the shell
+                // cursor there.
                 Some(selection) if selection.is_empty(&timeline, &*term) => {
                     self.selection = None;
                     timeline_selection::clear(&mut *term, &mut timeline);
+                    let current = timeline.current();
+                    let rich = input_editor::rich_mode(
+                        current.phase,
+                        current.editing,
+                        *term.mode(),
+                        self.modifiers,
+                    );
+                    if rich
+                        && let Some(End {
+                            source: RowSource::Live,
+                            point,
+                            ..
+                        }) = self.mouse_target(&term, &mut timeline)
+                    {
+                        let floor = timeline.current().prompt_start(&*term);
+                        let cursor = term.grid().cursor.point;
+                        moves = input_editor::click_moves(&*term, cursor, point, floor);
+                    }
                     None
                 }
                 Some(selection) => {
@@ -606,6 +645,9 @@ impl Session {
             }
         };
         self.window.request_redraw();
+        if !moves.is_empty() {
+            self.terminal.write(moves);
+        }
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             self.set_primary(text);
         }
@@ -951,6 +993,16 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ModifiersChanged(modifiers) => session.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // At the prompt, editor shortcuts win over the app shortcuts
+                // (`Shift+Home/End`) and the key encoding.
+                let rich = session.rich_mode();
+                if let Some(command) =
+                    input_editor::prompt_command(&event.logical_key, session.modifiers, rich)
+                    && let Some(bytes) = input_editor::command_bytes(command)
+                {
+                    session.run_editor_command(command, bytes);
+                    return;
+                }
                 if let Some(action) = input::action_for(&event.logical_key, session.modifiers) {
                     session.run_action(action, default_font_size);
                     return;

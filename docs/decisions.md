@@ -168,3 +168,22 @@ and vi insert keymaps.
   `end-of-buffer` accept the autosuggestion at the end of the buffer, the only place
   it shows: they only run when the cursor is not there. Bound again before a prompt
   when gone (`fish_vi_key_bindings` erases bindings).
+
+## Input editor: rich mode at the prompt
+
+- The shell keeps the buffer: Graphene never knows its content. A click, a shortcut or
+  a selection becomes private sequences only (see above); every edit is the shell's.
+- The rich mode needs to know the shell's line editor is reading a command line with
+  Graphene's bindings. Since each block is its own terminal, the hooks no longer mark
+  the prompt, so they send one more signal, `prompt`, before each prompt (zsh
+  `precmd`, bash's first `PROMPT_COMMAND` entry, fish `fish_prompt`). The current block
+  is then `editing` until its command starts. Without the integration (shell started by
+  hand, `ssh`), no `prompt` comes: every key behaves as in a plain terminal.
+- Only distances are read from the grid (`input_editor::buffer_distance`): a click
+  writes as many `CharLeft` / `CharRight` as buffer characters lie between the cursor
+  and the click, in one PTY write. The shell clamps them at the buffer ends, so a click
+  on the prompt or past the end of the text lands on the nearest buffer end. Where the
+  prompt starts (the cursor when `prompt` came) bounds a click on the output above it.
+- The prompt and the input are not told apart in the grid (bash has no hook between
+  drawing the prompt and reading the line): a click on the prompt counts its
+  characters, all absorbed by the clamp.

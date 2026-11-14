@@ -92,6 +92,20 @@ first output.
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
 | Mouse wheel                   | Scroll the block under the pointer, or history  |
 
+At the shell prompt (zsh, bash or fish with the integration, not inside a running
+command or a full-screen application), the command line is edited like in an editor.
+The shell keeps the command line: Graphene sends it key sequences its integration
+script binds, and completion (`Tab`) and history (`Up` / `Down`) stay the shell's.
+
+| Keys at the prompt            | Action                                          |
+|-------------------------------|-------------------------------------------------|
+| Left click in the input       | Move the cursor there                           |
+| Ctrl+Left / Ctrl+Right        | Previous / next word                            |
+| Ctrl+Backspace / Ctrl+Delete  | Erase the word before / after the cursor        |
+| Home / End                    | Start / end of the line                         |
+| Ctrl+Home / Ctrl+End          | Start / end of a multi-line input               |
+| Shift+Enter                   | New line, without running the command           |
+
 ## Documentation
 
 - [Vision and roadmap](docs/vision.md)
