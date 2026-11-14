@@ -4,7 +4,7 @@
 //! the renderer then works on this plain data. Each view row takes its cells from its
 //! source: a frozen block's grid, or the session's live grid.
 
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
 use alacritty_terminal::event::EventListener;
@@ -557,6 +557,36 @@ fn is_selected(range: &SelectionRange, point: Point, flags: Flags) -> bool {
 pub const INACTIVE_PANE_DIM: f32 = 0.3;
 
 impl Frame {
+    /// Underlines the cells of `range` in the grid of `source`, the link under the
+    /// pointer. `view` is the view the frame was captured from.
+    pub fn underline_link(
+        &mut self,
+        view: &[ViewRow],
+        source: RowSource,
+        range: &RangeInclusive<Point>,
+    ) {
+        let (start, end) = (*range.start(), *range.end());
+        for (row, view_row) in self.rows.iter_mut().zip(view) {
+            let line = view_row.line;
+            if view_row.source != source || line < start.line || line > end.line {
+                continue;
+            }
+            let first = if line == start.line {
+                start.column.0
+            } else {
+                0
+            };
+            let last = if line == end.line {
+                end.column.0
+            } else {
+                usize::MAX
+            };
+            for cell in row.iter_mut().take(last.saturating_add(1)).skip(first) {
+                cell.underline = true;
+            }
+        }
+    }
+
     /// This frame with every color moved `factor` (0 to 1) toward the background: cell
     /// text and backgrounds, block marks and the cursor. The banner is left as is, and
     /// a factor of 0 changes nothing.
@@ -954,6 +984,41 @@ mod tests {
         session.command("false", &[], 1);
         session.feed("$ ");
         session
+    }
+
+    fn underlined(frame: &Frame) -> Vec<String> {
+        frame
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|c| if c.underline { 'u' } else { '.' })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_hovered_link_range_is_underlined_across_wrapped_rows() {
+        let session = session_with("ab https://x.y/z");
+        let rows = view_rows(&session);
+        let mut frame = capture(&session, &Palette::default(), true);
+        let range = Point::new(Line(0), Column(3))..=Point::new(Line(1), Column(5));
+        frame.underline_link(&rows, RowSource::Live, &range);
+        assert_eq!(underlined(&frame), ["...uuuuuuu", "uuuuuu...."]);
+    }
+
+    #[test]
+    fn the_hovered_link_only_underlines_its_own_source() {
+        let session = two_blocks();
+        let rows = view_rows(&session);
+        let mut frame = capture(&session, &Palette::default(), true);
+        let range = Point::new(Line(0), Column(0))..=Point::new(Line(0), Column(2));
+        frame.underline_link(&rows, RowSource::Output(BlockId(0)), &range);
+        assert_eq!(
+            underlined(&frame),
+            ["..........", "uuu.......", "..........", ".........."]
+        );
     }
 
     #[test]

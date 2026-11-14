@@ -1,5 +1,5 @@
 //! Opens a URI with the desktop's default handler (`xdg-open`). Shared by every feature
-//! that opens a link: the update banner and, later, terminal hyperlinks.
+//! that opens a link: the update banner and the terminal links.
 
 use std::process::Command;
 
@@ -18,6 +18,12 @@ pub fn open(uri: &str) {
     if let Err(error) = spawned {
         log::warn!("cannot start the xdg-open thread: {error}");
     }
+}
+
+/// Name of this machine, read from the kernel; `None` when it cannot be read.
+pub fn hostname() -> Option<String> {
+    let name = std::fs::read_to_string("/proc/sys/kernel/hostname").ok()?;
+    Some(name.trim().to_owned()).filter(|name| !name.is_empty())
 }
 
 /// The command opening `uri`. The URI is a single argument, never parsed by a shell.
@@ -40,5 +46,12 @@ mod tests {
         assert_eq!(command.get_program(), OsStr::new("xdg-open"));
         let args: Vec<&OsStr> = command.get_args().collect();
         assert_eq!(args, vec![OsStr::new(uri)]);
+    }
+
+    #[test]
+    fn hostname_is_read_without_its_newline() {
+        let name = hostname().expect("hostname");
+        assert!(!name.is_empty());
+        assert_eq!(name, name.trim());
     }
 }

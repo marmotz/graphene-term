@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
+use alacritty_terminal::index::Point;
 use alacritty_terminal::term::{Config as TermConfig, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
@@ -30,6 +31,7 @@ use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::input_editor;
 use crate::layout::{GridLayout, Hit, Rect};
+use crate::links::{self, Link};
 use crate::mouse;
 use crate::opener;
 use crate::palette::Palette;
@@ -40,6 +42,7 @@ use crate::selection;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
+use crate::view::RowSource;
 use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
 use crate::workspace::{self, DIVIDER_THICKNESS, TabBarPosition, Workspace};
 
@@ -65,6 +68,24 @@ enum Drag {
     /// Tab `index` of the bar being moved, grabbed `grab_offset` pixels right of its
     /// left edge.
     Tab { index: usize, grab_offset: f32 },
+}
+
+/// Grid cell under the mouse: its pane, the grid shown there and the point in it.
+type HoverCell = (PaneId, RowSource, Point);
+
+/// The link under the mouse, in the grid shown by `source` in the pane `pane`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HoveredLink {
+    pane: PaneId,
+    source: RowSource,
+    link: Link,
+}
+
+/// A left press on a link, waiting for its release to decide whether it opens.
+struct LinkPress {
+    pane: PaneId,
+    press: links::Press<(RowSource, Point)>,
+    link: Link,
 }
 
 /// A box over the whole window that takes the keyboard and the mouse while it is open.
@@ -96,6 +117,12 @@ struct Session {
     padding: f32,
     /// Last known cursor position, in physical pixels.
     mouse_position: PhysicalPosition<f64>,
+    /// Grid cell `hovered_link` was looked up for; `None` off the cells.
+    hovered_cell: Option<HoverCell>,
+    /// Link under the mouse, Graphene's or not (see [`Session::active_link`]).
+    hovered_link: Option<HoveredLink>,
+    /// Left press on a link, until its release.
+    link_press: Option<LinkPress>,
     /// Pointer shape last applied to the window; `None` before the first update.
     pointer: Option<winit::window::CursorIcon>,
     /// Title last applied to the window.
@@ -553,8 +580,8 @@ impl Session {
         }
     }
 
-    /// Hand over a fold chevron, arrow while the application captures the mouse under
-    /// the pointer, I-beam otherwise; the window is only updated when the shape changes.
+    /// Hand over a fold chevron or an active link, arrow while the application captures
+    /// the mouse under the pointer, I-beam otherwise; the window is only updated when the shape changes.
     /// Over a divider, or while dragging one, the resize arrows of its axis.
     fn update_pointer(&mut self) {
         let (x, y) = self.mouse_pixel();
@@ -586,9 +613,74 @@ impl Session {
             } else {
                 TermMode::empty()
             };
-            mouse::pointer_icon(captured, over_chevron)
+            let over_link = self
+                .active_link()
+                .is_some_and(|hovered| hovered.pane == pane.id);
+            mouse::pointer_icon(captured, over_chevron || over_link)
         };
         self.set_pointer(icon);
+    }
+
+    /// Looks the link under the mouse up again when the grid cell under it changed, or
+    /// always with `force` (the content may have changed). No link while an overlay is
+    /// open or a gesture is in progress. Redraws when the link changed.
+    fn update_hover(&mut self, force: bool) {
+        let cell = if self.overlay.is_some() || self.drag.is_some() {
+            None
+        } else {
+            let position = self.mouse_position;
+            self.pane_under_mouse().and_then(|id| {
+                let (source, point) = self.workspace.pane(id)?.cell_under(position)?;
+                Some((id, source, point))
+            })
+        };
+        if !force && cell == self.hovered_cell {
+            return;
+        }
+        self.hovered_cell = cell;
+        let hovered = cell.and_then(|(id, source, point)| {
+            let link = self.workspace.pane(id)?.link_at(source, point)?;
+            Some(HoveredLink {
+                pane: id,
+                source,
+                link,
+            })
+        });
+        if hovered != self.hovered_link {
+            self.hovered_link = hovered;
+            self.window.request_redraw();
+        }
+    }
+
+    /// The link under the mouse when it is Graphene's (see [`links::active`]): pointed
+    /// at, underlined and opened on a click.
+    fn active_link(&self) -> Option<&HoveredLink> {
+        let hovered = self.hovered_link.as_ref()?;
+        let pane = self.workspace.pane(hovered.pane)?;
+        links::active(pane.captures(hovered.source), self.modifiers).then_some(hovered)
+    }
+
+    /// End of a left press on a link: opens it when the click calls for it (see
+    /// [`links::click_opens`]) and it may be opened (see [`links::may_open`]).
+    fn release_link(&mut self, press: LinkPress) {
+        if self.pane_under_mouse() != Some(press.pane) {
+            return;
+        }
+        let Some(pane) = self.workspace.pane(press.pane) else {
+            return;
+        };
+        let Some(cell) = pane.cell_under(self.mouse_position) else {
+            return;
+        };
+        let same = pane.link_at(cell.0, cell.1).as_ref() == Some(&press.link);
+        if !links::click_opens(&press.press, &cell, same) {
+            return;
+        }
+        if links::may_open(&press.link, opener::hostname().as_deref()) {
+            opener::open(&press.link.uri);
+        } else {
+            log::warn!("not opening {}: a file on another host", press.link.uri);
+        }
     }
 
     /// Applies the pointer shape `icon` when it changed.
@@ -697,6 +789,19 @@ impl Session {
             return;
         };
         let (hit, _) = pane.pointer_hit(position);
+        let link = match hit {
+            Hit::Cell {
+                source,
+                line,
+                column,
+                ..
+            } if button == mouse::Button::Left => {
+                let point = Point::new(line, alacritty_terminal::index::Column(column));
+                pane.link_at(source, point)
+                    .map(|link| (source, point, link))
+            }
+            _ => None,
+        };
         // The margin, the chevrons and the gaps are outside the application's grid:
         // always Graphene's.
         if button == mouse::Button::Left {
@@ -712,7 +817,25 @@ impl Session {
         }
         let mode = pane.mode();
         // Only the live rows are the application's: elsewhere the mouse is Graphene's.
-        if selection::mouse_reserved(mode, modifiers) && pane.reports_at(&hit) {
+        let captured = selection::mouse_reserved(mode, modifiers) && pane.reports_at(&hit);
+        if captured
+            && modifiers.control_key()
+            && let Some((source, point, link)) = link
+        {
+            // `Ctrl` + press on a link: Graphene's, never reported; opened on release.
+            self.link_press = Some(LinkPress {
+                pane: target,
+                press: links::Press {
+                    cell: (source, point),
+                    clicks: 1,
+                    mods: modifiers,
+                    captured: true,
+                },
+                link,
+            });
+            return;
+        }
+        if captured {
             // The gesture belongs to the application; a click clears the selection.
             pane.clear_selection();
             let cell = pane.mouse_cell(position);
@@ -724,7 +847,21 @@ impl Session {
         match button {
             mouse::Button::Left => {
                 let id = pane.id;
-                if pane.left_press(position, modifiers, lang) {
+                let dragging = pane.left_press(position, modifiers, lang);
+                let clicks = pane.last_clicks();
+                // The selection starts as usual: the release tells whether it was a click
+                // on the link.
+                self.link_press = link.map(|(source, point, link)| LinkPress {
+                    pane: id,
+                    press: links::Press {
+                        cell: (source, point),
+                        clicks,
+                        mods: modifiers,
+                        captured: false,
+                    },
+                    link,
+                });
+                if dragging {
                     self.drag = Some(Drag::Selection {
                         pane: id,
                         auto_scroll_deadline: None,
@@ -736,7 +873,22 @@ impl Session {
         }
     }
 
+    /// Ends the gesture of `button`, then opens the link it was pressed on when the
+    /// press and release make a click on it.
     fn mouse_release(&mut self, button: mouse::Button) {
+        let link_press = match button {
+            mouse::Button::Left => self.link_press.take(),
+            _ => None,
+        };
+        self.release_gesture(button);
+        if let Some(press) = link_press {
+            self.release_link(press);
+        }
+        self.update_hover(false);
+        self.update_pointer();
+    }
+
+    fn release_gesture(&mut self, button: mouse::Button) {
         if button == mouse::Button::Left && matches!(self.drag, Some(Drag::Divider { .. })) {
             self.drag = None;
             self.update_pointer();
@@ -775,6 +927,7 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
+        self.update_hover(false);
         self.update_pointer();
         if matches!(self.drag, Some(Drag::Tab { .. })) {
             self.window.request_redraw();
@@ -1056,6 +1209,9 @@ impl Session {
         {
             pane.mouse_wheel(delta, position, modifiers);
         }
+        // Scrolling moves another cell under the mouse.
+        self.update_hover(false);
+        self.update_pointer();
     }
 
     /// Closes the pane `id`; the application exits with the last one.
@@ -1112,7 +1268,11 @@ impl Session {
                 if visible {
                     self.window.request_redraw();
                 }
-                if active {
+                let hovered = self.hovered_cell.is_some_and(|(pane, ..)| pane == id);
+                if hovered {
+                    self.update_hover(true);
+                }
+                if active || hovered {
                     self.update_pointer();
                 }
                 if title {
@@ -1191,6 +1351,7 @@ impl Session {
         let layout = self.shown_layout();
         let active = self.workspace.active_pane_id();
         let several = layout.panes.len() > 1;
+        let link = self.active_link();
         let mut frames = Vec::with_capacity(layout.panes.len());
         for &(id, _) in &layout.panes {
             let Some(pane) = self.workspace.pane(id) else {
@@ -1210,6 +1371,9 @@ impl Session {
                     pane.selected_block,
                 );
                 frame.attach_images(&graphics::lock(&pane.terminal.images));
+                if let Some(hovered) = link.filter(|hovered| hovered.pane == id) {
+                    frame.underline_link(&rows, hovered.source, &hovered.link.range);
+                }
                 frame
             };
             frame.lang = self.lang;
@@ -1362,6 +1526,9 @@ impl App {
             font_size: self.config.font.size,
             padding: self.config.window.padding,
             mouse_position: PhysicalPosition::default(),
+            hovered_cell: None,
+            hovered_link: None,
+            link_press: None,
             pointer: None,
             window_title: DEFAULT_TITLE.to_owned(),
             config_banner: self.config_banner.clone(),
@@ -1443,7 +1610,14 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 session.window.request_redraw();
             }
-            WindowEvent::ModifiersChanged(modifiers) => session.modifiers = modifiers.state(),
+            WindowEvent::ModifiersChanged(modifiers) => {
+                session.modifiers = modifiers.state();
+                // `Ctrl` makes a link active where the application captures the mouse.
+                if session.hovered_link.is_some() {
+                    session.update_pointer();
+                    session.window.request_redraw();
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 session.key_press(&event, default_font_size, event_loop);
             }

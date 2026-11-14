@@ -14,6 +14,7 @@ mod i18n;
 mod input;
 mod input_editor;
 mod layout;
+mod links;
 mod mouse;
 mod opener;
 mod palette;

@@ -33,6 +33,11 @@ impl ClickTracker {
         self.last = Some((point, now));
         self.count
     }
+
+    /// Rank of the last click in its series, 0 before the first click.
+    pub fn count(&self) -> u8 {
+        self.count
+    }
 }
 
 /// Selection kind for a click series: 1 = character (block with `Ctrl`), 2 = word, 3 = line.
@@ -232,6 +237,7 @@ mod tests {
             tracker.click(point(0, 0), t0 + Duration::from_millis(400)),
             3
         );
+        assert_eq!(tracker.count(), 3);
     }
 
     #[test]

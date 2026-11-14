@@ -291,3 +291,16 @@ for highlighting. Recently run actions are kept in a state file
 (`$XDG_STATE_HOME/graphene/palette-recent`), so they survive restarts and are shared by
 every window; tab and pane entries are not stored since they do not outlive the
 session.
+
+## Links: a simple click opens, `xdg-open`, local files only
+
+A simple click without movement on a link opens it, like in a browser: selecting
+inside a link stays possible by dragging, double or triple-clicking, or holding
+`Shift`, and a click is no less deliberate than `Ctrl` + click. Where the application
+captures the mouse the click is its own, so only `Ctrl` + click opens there and is
+never reported. Links open with `xdg-open` from a detached thread that waits for it,
+like the update banner: the desktop's handler for each scheme, no zombie. Detected
+URLs are limited to `http`, `https`, `file` and `mailto`; OSC 8 links, set on purpose
+by the application, open with any scheme, except a `file://` URI naming a host other
+than empty, `localhost` or this machine's (`/proc/sys/kernel/hostname`): the file
+would be looked up locally under a remote name, so it is refused and logged.

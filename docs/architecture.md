@@ -52,6 +52,7 @@ src/
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
+  links.rs         OSC 8 and detected URL under a point, hover / click / open rules (pure)
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
   chrome/
@@ -444,3 +445,27 @@ is reset with the glyph cache, and the frame is resolved again.
   on a chevron disc (`Hit::Chevron`) is checked first and is always Graphene's, even
   under mouse reporting: the chevron toggles the fold of a card that has one, the
   margin selects the block of its row (see Command blocks), elsewhere it is ignored. A left press on a fold summary unfolds its block instead of selecting.
+
+### Links
+
+- `links::link_at(term, point)` on the grid of the cell under the pointer (the live
+  grid, or the frozen header or output of a block, `Pane::link_at`): the OSC 8
+  hyperlink of the cell (`Cell::hyperlink`), extended over the adjacent cells with the
+  same id and URI across wrapped lines; otherwise a URL found by a `RegexSearch` over
+  the logical line (`line_search_left` / `line_search_right`) for `http`, `https`,
+  `file` and `mailto`, trailing punctuation and unbalanced `)` / `]` trimmed. A `Link`
+  carries its cell range, its URI and `explicit` (OSC 8).
+- Hover: `Session::update_hover` looks the link up again when the cell under the mouse
+  changes (`CursorMoved`, wheel, release) and always on a `Wakeup` of the hovered pane,
+  and keeps `hovered_link`; none while an overlay is open or a gesture is in progress.
+  The link is Graphene's (`Session::active_link`, `links::active`) except over rows
+  where the application captures the mouse (`Pane::captures`), where `Ctrl` must be
+  held. An active link turns the pointer into the hand and is underlined by
+  `Frame::underline_link` after the capture.
+- Click: a left press on a link records a `LinkPress` (cell, click rank, modifiers,
+  whether the application captured the mouse); the selection logic runs unchanged, so
+  drag, double and triple-click from a link select as before. Where the application
+  captures the mouse, a `Ctrl` + press on a link is consumed by Graphene (never
+  reported). The release opens the link when `links::click_opens` allows it (same
+  cell, same link, simple click without `Shift`, or the consumed `Ctrl` + click) and
+  `links::may_open` too, through `opener::open`.
