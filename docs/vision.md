@@ -34,7 +34,7 @@ Selected as the project's "modern" pillars:
 | Planned | Mouse reporting to applications                                                      |
 | Done    | Command blocks                                                                       |
 | Done    | Rich input editor                                                                    |
-| Planned | Tabs, splits, command palette                                                        |
+| Done    | Tabs, splits, command palette                                                        |
 | Planned | Images and clickable links                                                           |
 | Planned | Configuration file and themes                                                        |
 | Planned | IME support                                                                          |
