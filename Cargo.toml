@@ -41,7 +41,7 @@ png = "0.18.1"
 flate2 = "1.1.11"
 base64 = "0.22.1"
 wl-clipboard-rs = "0.9.5"
-x11rb = "0.13.2"
+x11rb = { version = "0.13.2", features = ["render"] }
 notify = "8.2.2"
 zbus = "6.3.0"
 futures-util = { version = "0.3.34", default-features = false }

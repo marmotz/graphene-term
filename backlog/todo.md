@@ -28,8 +28,8 @@ tâches créées — voir [technical.md](features/settings-screen/technical.md) 
 
 ### Transparent terminal background does not work ·  [overview](bugs/transparent-background/overview.md)
 
-tasks created — see [technical.md](bugs/transparent-background/technical.md) — 0/1 tasks done
+terminé — voir [technical.md](bugs/transparent-background/technical.md) — 1/1 tasks done
 
 | Done | Issue                                                     | Title                                       | Blocked by |
 |------|-----------------------------------------------------------|---------------------------------------------|------------|
-| [ ]  | [#92](https://github.com/marmotz/graphene-term/issues/92) | Fix transparent terminal background opacity | —          |
+| [x]  | [#92](https://github.com/marmotz/graphene-term/issues/92) | Fix transparent terminal background opacity | —          |
