@@ -3,7 +3,6 @@
 //! Every inner node splits its rectangle in two along one axis, at a ratio of the
 //! length left once the divider is taken out. Positions are rounded to whole cells
 //! when laid out, so the stored ratio survives window resizes without drifting.
-#![allow(dead_code, reason = "consumed by the workspace and pane tasks")]
 
 use crate::i18n::Direction;
 use crate::layout::{CellSize, Rect};

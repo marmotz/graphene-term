@@ -1,10 +1,11 @@
 //! Window and event handling.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use alacritty_terminal::event::Event as TermEvent;
-use alacritty_terminal::term::TermMode;
+use alacritty_terminal::term::{Config as TermConfig, TermMode};
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -33,13 +34,16 @@ use crate::selection;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
-use crate::workspace::tree::Geometry;
-use crate::workspace::{DIVIDER_THICKNESS, TabBarPosition, Workspace};
+use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
+use crate::workspace::{self, DIVIDER_THICKNESS, TabBarPosition, Workspace};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
 /// Edge of the window the tab bar sits on.
 const TAB_BAR: TabBarPosition = TabBarPosition::Top;
+
+/// Cells a pane grows by per resize shortcut.
+const RESIZE_STEP_CELLS: usize = 2;
 
 /// A mouse gesture in progress, decided by the press: moves and the release go to it.
 enum Drag {
@@ -50,10 +54,16 @@ enum Drag {
         /// When the next auto-scroll step is due, `None` while auto-scroll is idle.
         auto_scroll_deadline: Option<Instant>,
     },
+    /// A divider of the shown tab being moved.
+    Divider { node_path: NodePath, axis: Axis },
 }
 
 struct Session {
     window: Arc<Window>,
+    /// Hands the events of new panes' terminals to the event loop.
+    proxy: EventLoopProxy<UserEvent>,
+    /// Terminal settings new panes are spawned with.
+    term_config: TermConfig,
     renderer: Renderer,
     workspace: Workspace<Pane>,
     /// Mouse gesture in progress.
@@ -131,6 +141,79 @@ impl Session {
         }
     }
 
+    /// Layout of the shown tab.
+    fn shown_layout(&self) -> Layout {
+        self.workspace
+            .layout(self.workspace.active_index(), self.geometry())
+    }
+
+    /// The mouse position as a pixel, in physical pixels.
+    fn mouse_pixel(&self) -> (f32, f32) {
+        (self.mouse_position.x as f32, self.mouse_position.y as f32)
+    }
+
+    /// The pane of the shown tab under the mouse.
+    fn pane_under_mouse(&self) -> Option<PaneId> {
+        let (x, y) = self.mouse_pixel();
+        self.shown_layout().pane_at(x, y)
+    }
+
+    /// Gives the keyboard focus to the pane `id`.
+    fn focus_pane(&mut self, id: PaneId) {
+        let old = self.workspace.active_pane_id();
+        if self.workspace.focus(id) {
+            self.focus_changed(old);
+        }
+    }
+
+    /// After the active pane may have changed from `old`: reports the focus change to
+    /// both panes when they asked for it and the window has the focus, lays the tabs
+    /// out again (a focus change unzooms) and refreshes the title and the pointer.
+    fn focus_changed(&mut self, old: Option<PaneId>) {
+        let new = self.workspace.active_pane_id();
+        if old != new && self.focused {
+            for (id, focused) in [(old, false), (new, true)] {
+                if let Some(pane) = id.and_then(|id| self.workspace.pane(id))
+                    && let Some(bytes) = mouse::focus_report(focused, pane.mode())
+                {
+                    pane.terminal.write(bytes);
+                }
+            }
+        }
+        self.relayout();
+        self.refresh_title();
+        self.update_pointer();
+    }
+
+    /// Splits the active pane along `axis`; the new pane's shell starts in the active
+    /// pane's directory, else the home directory, and takes the focus.
+    fn split(&mut self, axis: Axis) {
+        let Some(active) = self.workspace.active_pane() else {
+            return;
+        };
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let cwd = workspace::start_dir(active.terminal.current_dir(), home);
+        // The new pane is laid out for real by `relayout` once it is in the tree.
+        let layout = active.layout;
+        let (proxy, config) = (self.proxy.clone(), self.term_config.clone());
+        let old = Some(active.id);
+        let spawn = |id| match Terminal::spawn(
+            EventProxy::new(proxy, id),
+            layout.window_size(),
+            config,
+            cwd,
+        ) {
+            Ok(terminal) => Some(Pane::new(id, terminal, layout)),
+            Err(error) => {
+                log::error!("cannot start a shell for the new pane: {error:#}");
+                None
+            }
+        };
+        if self.workspace.split(axis, self.geometry(), spawn).is_some() {
+            self.focus_changed(old);
+        }
+    }
+
     /// Lays out every tab, hidden ones included, so each shell keeps a correct size;
     /// only panes whose cell count changed resize their shell. The hidden panes of a
     /// zoomed tab keep their last size.
@@ -190,18 +273,32 @@ impl Session {
 
     /// Hand over a fold chevron, arrow while the application captures the mouse under
     /// the pointer, I-beam otherwise; the window is only updated when the shape changes.
+    /// Over a divider, or while dragging one, the resize arrows of its axis.
     fn update_pointer(&mut self) {
-        let Some(pane) = self.workspace.active_pane() else {
-            return;
+        let (x, y) = self.mouse_pixel();
+        let layout = self.shown_layout();
+        let divider = match &self.drag {
+            Some(Drag::Divider { axis, .. }) => Some(*axis),
+            _ => layout.divider_at(x, y).map(|divider| divider.axis),
         };
-        let (hit, over_chevron) = pane.pointer_hit(self.mouse_position);
-        let mode = pane.mode();
-        let captured = if mouse::reports_at(&hit, mode.contains(TermMode::ALT_SCREEN)) {
-            mode
+        let icon = if let Some(axis) = divider {
+            mouse::divider_icon(axis)
         } else {
-            TermMode::empty()
+            let id = layout
+                .pane_at(x, y)
+                .or_else(|| self.workspace.active_pane_id());
+            let Some(pane) = id.and_then(|id| self.workspace.pane(id)) else {
+                return;
+            };
+            let (hit, over_chevron) = pane.pointer_hit(self.mouse_position);
+            let mode = pane.mode();
+            let captured = if mouse::reports_at(&hit, mode.contains(TermMode::ALT_SCREEN)) {
+                mode
+            } else {
+                TermMode::empty()
+            };
+            mouse::pointer_icon(captured, over_chevron)
         };
-        let icon = mouse::pointer_icon(captured, over_chevron);
         if self.pointer != Some(icon) {
             self.window.set_cursor(icon);
             self.pointer = Some(icon);
@@ -257,8 +354,27 @@ impl Session {
         if button == mouse::Button::Left && self.banner_press() {
             return;
         }
+        let (x, y) = self.mouse_pixel();
+        let layout = self.shown_layout();
+        if button == mouse::Button::Left
+            && let Some(divider) = layout.divider_at(x, y)
+        {
+            self.drag = Some(Drag::Divider {
+                node_path: divider.node_path.clone(),
+                axis: divider.axis,
+            });
+            self.update_pointer();
+            return;
+        }
+        // A press in an inactive pane makes it active, then acts as in the active one.
+        let Some(target) = layout.pane_at(x, y) else {
+            return;
+        };
+        if self.workspace.active_pane_id() != Some(target) {
+            self.focus_pane(target);
+        }
         let (position, modifiers, lang) = (self.mouse_position, self.modifiers, self.lang);
-        let Some(pane) = self.workspace.active_pane_mut() else {
+        let Some(pane) = self.workspace.pane_mut(target) else {
             return;
         };
         let (hit, _) = pane.pointer_hit(position);
@@ -302,6 +418,11 @@ impl Session {
     }
 
     fn mouse_release(&mut self, button: mouse::Button) {
+        if button == mouse::Button::Left && matches!(self.drag, Some(Drag::Divider { .. })) {
+            self.drag = None;
+            self.update_pointer();
+            return;
+        }
         let (position, modifiers) = (self.mouse_position, self.modifiers);
         let Some(pane) = self.workspace.active_pane_mut() else {
             return;
@@ -323,6 +444,18 @@ impl Session {
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
         self.update_pointer();
+        if let Some(Drag::Divider { node_path, axis }) = &self.drag {
+            let along = match axis {
+                Axis::Horizontal => position.x,
+                Axis::Vertical => position.y,
+            } as f32;
+            let geometry = self.geometry();
+            let node_path = node_path.clone();
+            if self.workspace.set_divider(&node_path, along, geometry) {
+                self.relayout();
+            }
+            return;
+        }
         if let Some(Drag::Selection { pane: id, .. }) = self.drag
             && let Some(pane) = self.workspace.pane_mut(id)
             && !pane.app_mouse.active()
@@ -331,12 +464,15 @@ impl Session {
             return;
         }
         let modifiers = self.modifiers;
+        let over_active = self.pane_under_mouse() == self.workspace.active_pane_id();
         let Some(pane) = self.workspace.active_pane_mut() else {
             return;
         };
         // A gesture the application owns follows the pointer anywhere; a bare motion is
-        // only reported over the application's rows.
-        if !pane.app_mouse.active() && !pane.reports_at(&pane.pointer_hit(position).0) {
+        // only reported over the application's rows of the active pane.
+        if !pane.app_mouse.active()
+            && !(over_active && pane.reports_at(&pane.pointer_hit(position).0))
+        {
             return;
         }
         let cell = pane.mouse_cell(position);
@@ -410,8 +546,60 @@ impl Session {
         }
     }
 
-    fn run_action(&mut self, action: Action, default_font_size: f32) {
+    fn run_action(&mut self, action: Action, default_font_size: f32, event_loop: &ActiveEventLoop) {
         match action {
+            Action::SplitRight => self.split(Axis::Horizontal),
+            Action::SplitDown => self.split(Axis::Vertical),
+            Action::ClosePane => {
+                if let Some(id) = self.workspace.active_pane_id() {
+                    self.close_pane(id, event_loop);
+                }
+            }
+            Action::FocusPane(direction) => {
+                if let Some(id) = self.workspace.neighbour(direction, self.geometry()) {
+                    self.focus_pane(id);
+                }
+            }
+            Action::NextPane => {
+                if let Some(id) = self.workspace.next_pane() {
+                    self.focus_pane(id);
+                }
+            }
+            Action::PreviousPane => {
+                if let Some(id) = self.workspace.previous_pane() {
+                    self.focus_pane(id);
+                }
+            }
+            Action::ResizePane(direction) => {
+                let geometry = self.geometry();
+                if self
+                    .workspace
+                    .resize_active(direction, RESIZE_STEP_CELLS, geometry)
+                {
+                    self.relayout();
+                }
+            }
+            Action::ToggleZoom => {
+                if self.workspace.toggle_zoom() {
+                    self.relayout();
+                    self.update_pointer();
+                }
+            }
+            Action::EqualisePanes => {
+                if self.workspace.equalise() {
+                    self.relayout();
+                    self.update_pointer();
+                }
+            }
+            Action::DetachPane => {
+                if let Some(id) = self.workspace.active_pane_id()
+                    && self.workspace.detach(id)
+                {
+                    self.relayout();
+                    self.refresh_title();
+                    self.update_pointer();
+                }
+            }
             Action::Copy => self.copy(),
             Action::Paste => self.paste(),
             Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
@@ -427,8 +615,24 @@ impl Session {
         }
     }
 
-    fn key_press(&mut self, event: &KeyEvent, default_font_size: f32) {
+    fn key_press(
+        &mut self,
+        event: &KeyEvent,
+        default_font_size: f32,
+        event_loop: &ActiveEventLoop,
+    ) {
         let modifiers = self.modifiers;
+        let action = input::action_for(&event.logical_key, event.physical_key, modifiers);
+        // With several panes, the pane focus wins over the editor's `Ctrl+Shift+Arrow`.
+        if let Some(action @ Action::FocusPane(_)) = action
+            && self
+                .workspace
+                .active_tab()
+                .is_some_and(|tab| !tab.is_single())
+        {
+            self.run_action(action, default_font_size, event_loop);
+            return;
+        }
         let Some(pane) = self.workspace.active_pane_mut() else {
             return;
         };
@@ -443,8 +647,8 @@ impl Session {
             }
             return;
         }
-        if let Some(action) = input::action_for(&event.logical_key, modifiers) {
-            self.run_action(action, default_font_size);
+        if let Some(action) = action {
+            self.run_action(action, default_font_size, event_loop);
             return;
         }
         // At the prompt, typing over a selection in the input replaces it.
@@ -465,23 +669,29 @@ impl Session {
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
         let (position, modifiers) = (self.mouse_position, self.modifiers);
-        if let Some(pane) = self.workspace.active_pane_mut() {
+        if let Some(id) = self.pane_under_mouse()
+            && let Some(pane) = self.workspace.pane_mut(id)
+        {
             pane.mouse_wheel(delta, position, modifiers);
         }
     }
 
     /// Closes the pane `id`; the application exits with the last one.
     fn close_pane(&mut self, id: PaneId, event_loop: &ActiveEventLoop) {
-        if matches!(self.drag, Some(Drag::Selection { pane, .. }) if pane == id) {
-            self.drag = None;
+        // The closed pane's selection, and a divider of the tree it leaves, are dropped.
+        let shown_tab = self.workspace.tab_of(id) == Some(self.workspace.active_index());
+        match self.drag {
+            Some(Drag::Selection { pane, .. }) if pane == id => self.drag = None,
+            Some(Drag::Divider { .. }) if shown_tab => self.drag = None,
+            _ => {}
         }
+        let old = self.workspace.active_pane_id();
         if self.workspace.close_pane(id).is_err() {
             event_loop.exit();
             return;
         }
-        self.relayout();
-        self.refresh_title();
-        self.update_pointer();
+        // The new active pane gets the focus-in; the closed one is gone.
+        self.focus_changed(old);
     }
 
     /// Handles an event from the terminal of the pane `id`; events of a pane already
@@ -563,7 +773,6 @@ impl Session {
         }
     }
 
-    /// Draws the active pane of the shown tab.
     /// Draws every pane of the shown tab, inactive ones dimmed when it shows several,
     /// then the dividers and the active pane border, then the banner.
     fn redraw(&mut self) {
@@ -572,9 +781,7 @@ impl Session {
             background: self.palette.ui.banner_background,
             text: self.palette.ui.banner_text,
         });
-        let layout = self
-            .workspace
-            .layout(self.workspace.active_index(), self.geometry());
+        let layout = self.shown_layout();
         let active = self.workspace.active_pane_id();
         let several = layout.panes.len() > 1;
         let mut frames = Vec::with_capacity(layout.panes.len());
@@ -640,7 +847,17 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::FontSizeDecrease
         | Action::FontSizeReset
         | Action::CopyCommand
-        | Action::CopyOutput => {}
+        | Action::CopyOutput
+        | Action::SplitRight
+        | Action::SplitDown
+        | Action::ClosePane
+        | Action::FocusPane(_)
+        | Action::ResizePane(_)
+        | Action::NextPane
+        | Action::PreviousPane
+        | Action::ToggleZoom
+        | Action::EqualisePanes
+        | Action::DetachPane => {}
     }
 }
 
@@ -705,6 +922,8 @@ impl App {
 
         Ok(Session {
             window,
+            proxy: self.proxy.clone(),
+            term_config: self.config.term_config(),
             renderer,
             workspace,
             drag: None,
@@ -798,7 +1017,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ModifiersChanged(modifiers) => session.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                session.key_press(&event, default_font_size);
+                session.key_press(&event, default_font_size, event_loop);
             }
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),

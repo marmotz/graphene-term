@@ -2,19 +2,16 @@
 //!
 //! The workspace is generic over the pane type so its bookkeeping (which tab holds
 //! which pane, which is active, zoom) is tested without spawning shells.
-#![allow(
-    dead_code,
-    reason = "tab and split operations are wired by the shortcut and tab bar tasks"
-)]
 
 pub mod tree;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::i18n::Direction;
 use crate::layout::Rect;
 use crate::terminal::PaneId;
-use tree::{Axis, Geometry, Layout, Node};
+use tree::{Axis, Branch, Geometry, Layout, Node};
 
 /// Thickness of the divider between two panes, in physical pixels.
 pub const DIVIDER_THICKNESS: f32 = 1.0;
@@ -82,7 +79,7 @@ impl Tab {
     }
 
     /// Whether the tab holds a single pane.
-    fn is_single(&self) -> bool {
+    pub fn is_single(&self) -> bool {
         matches!(self.tree, Node::Leaf(_))
     }
 }
@@ -240,6 +237,7 @@ impl<P> Workspace<P> {
     }
 
     /// Shows tab `index`. `false` when there is no such tab.
+    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn select(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -249,6 +247,7 @@ impl<P> Workspace<P> {
     }
 
     /// Shows the tab after the shown one, wrapping to the first.
+    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn next(&mut self) {
         if !self.tabs.is_empty() {
             self.active = (self.active + 1) % self.tabs.len();
@@ -256,6 +255,7 @@ impl<P> Workspace<P> {
     }
 
     /// Shows the tab before the shown one, wrapping to the last.
+    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn previous(&mut self) {
         if !self.tabs.is_empty() {
             self.active = (self.active + self.tabs.len() - 1) % self.tabs.len();
@@ -264,6 +264,7 @@ impl<P> Workspace<P> {
 
     /// Moves tab `from` to index `to`; the shown tab stays shown. `false` when either
     /// index is out of range.
+    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
         if from >= self.tabs.len() || to >= self.tabs.len() {
             return false;
@@ -343,6 +344,58 @@ impl<P> Workspace<P> {
         Some(id)
     }
 
+    /// The pane next to the active one of the shown tab in `direction`, as the panes
+    /// are laid out without zoom.
+    pub fn neighbour(&self, direction: Direction, geometry: Geometry) -> Option<PaneId> {
+        let tab = self.active_tab()?;
+        tree::neighbour(tab.active, direction, &tab.tree.layout(geometry))
+    }
+
+    /// The pane after the active one of the shown tab, wrapping; `None` with a single
+    /// pane.
+    pub fn next_pane(&self) -> Option<PaneId> {
+        let tab = self.active_tab()?;
+        tab.tree.next(tab.active).filter(|&id| id != tab.active)
+    }
+
+    /// The pane before the active one of the shown tab, wrapping; `None` with a single
+    /// pane.
+    pub fn previous_pane(&self) -> Option<PaneId> {
+        let tab = self.active_tab()?;
+        tab.tree.previous(tab.active).filter(|&id| id != tab.active)
+    }
+
+    /// Grows the active pane of the shown tab by `step` cells toward `direction` (see
+    /// [`Node::resize`]). `false` when nothing moved, or while zoomed.
+    pub fn resize_active(&mut self, direction: Direction, step: usize, geometry: Geometry) -> bool {
+        match self.tabs.get_mut(self.active) {
+            Some(tab) if !tab.zoomed => tab.tree.resize(tab.active, direction, step, geometry),
+            _ => false,
+        }
+    }
+
+    /// Moves the divider of the split at `node_path` in the shown tab to the pixel
+    /// `position` along its axis (see [`Node::set_divider`]). `false` when nothing
+    /// moved.
+    pub fn set_divider(&mut self, node_path: &[Branch], position: f32, geometry: Geometry) -> bool {
+        self.tabs
+            .get_mut(self.active)
+            .is_some_and(|tab| tab.tree.set_divider(node_path, position, geometry))
+    }
+
+    /// Gives the panes of the shown tab equal shares (see [`Node::equalise`]) and
+    /// unzooms it. `false` with a single pane.
+    pub fn equalise(&mut self) -> bool {
+        match self.tabs.get_mut(self.active) {
+            Some(tab) if !tab.is_single() => {
+                tab.tree.equalise();
+                tab.zoomed = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Zooms the active pane of the shown tab to the whole tab, or back. `false` when
     /// the tab has a single pane, which has nothing to zoom over.
     pub fn toggle_zoom(&mut self) -> bool {
@@ -368,6 +421,12 @@ impl<P: TitleSource> Workspace<P> {
             pane.shell_name().as_deref(),
         )
     }
+}
+
+/// Directory a new pane's shell starts in: the one of the active pane's shell, else
+/// `home`.
+pub fn start_dir(active: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    active.or(home)
 }
 
 /// A tab title: the title set by the shell or a program, else the current directory
@@ -448,6 +507,91 @@ mod tests {
         }
         ws.select(0);
         ws
+    }
+
+    #[test]
+    fn neighbour_follows_the_layout_of_the_shown_tab() {
+        let ws = workspace(&[3]);
+        let panes = ws.tabs()[0].tree.leaves();
+        // The last pane split off is active, on the right.
+        assert_eq!(ws.active_pane_id(), Some(panes[2]));
+        assert_eq!(ws.neighbour(Direction::Left, geometry()), Some(panes[1]));
+        assert_eq!(ws.neighbour(Direction::Right, geometry()), None);
+        assert_eq!(ws.neighbour(Direction::Up, geometry()), None);
+    }
+
+    #[test]
+    fn neighbour_ignores_the_zoom() {
+        let mut ws = workspace(&[2]);
+        let panes = ws.tabs()[0].tree.leaves();
+        assert!(ws.toggle_zoom());
+        assert_eq!(ws.neighbour(Direction::Left, geometry()), Some(panes[0]));
+        // Focusing it unzooms the tab.
+        assert!(ws.focus(panes[0]));
+        assert!(!ws.tabs()[0].zoomed);
+    }
+
+    #[test]
+    fn next_and_previous_pane_wrap_and_skip_a_single_pane() {
+        let mut ws = workspace(&[3, 1]);
+        let panes = ws.tabs()[0].tree.leaves();
+        assert_eq!(ws.next_pane(), Some(panes[0]));
+        assert_eq!(ws.previous_pane(), Some(panes[1]));
+        ws.select(1);
+        assert_eq!(ws.next_pane(), None);
+        assert_eq!(ws.previous_pane(), None);
+    }
+
+    #[test]
+    fn resize_active_moves_the_divider_but_not_while_zoomed() {
+        let mut ws = workspace(&[2]);
+        let before = ws.layout(0, geometry());
+        assert!(ws.resize_active(Direction::Left, 2, geometry()));
+        let after = ws.layout(0, geometry());
+        let active = ws.active_pane_id().unwrap();
+        let width = |layout: &Layout| layout.rect_of(active).unwrap().width;
+        assert_eq!(width(&after), width(&before) + 20.0);
+        // Nothing to grow into on the right.
+        assert!(!ws.resize_active(Direction::Right, 2, geometry()));
+        assert!(ws.toggle_zoom());
+        assert!(!ws.resize_active(Direction::Left, 2, geometry()));
+    }
+
+    #[test]
+    fn set_divider_moves_the_split_of_the_shown_tab() {
+        let mut ws = workspace(&[2]);
+        let path = ws.layout(0, geometry()).dividers[0].node_path.clone();
+        assert!(ws.set_divider(&path, 200.0, geometry()));
+        let first = ws.tabs()[0].tree.leaves()[0];
+        assert_eq!(
+            ws.layout(0, geometry()).rect_of(first).unwrap().width,
+            200.0
+        );
+    }
+
+    #[test]
+    fn equalise_unzooms_and_refuses_a_single_pane() {
+        let mut ws = workspace(&[2, 1]);
+        let path = ws.layout(0, geometry()).dividers[0].node_path.clone();
+        ws.set_divider(&path, 200.0, geometry());
+        ws.toggle_zoom();
+        assert!(ws.equalise());
+        assert!(!ws.tabs()[0].zoomed);
+        let layout = ws.layout(0, geometry());
+        // Equal up to the rounding to whole cells.
+        let (a, b) = (layout.panes[0].1.width, layout.panes[1].1.width);
+        assert!((a - b).abs() < geometry().cell.width, "{a} vs {b}");
+        ws.select(1);
+        assert!(!ws.equalise());
+    }
+
+    #[test]
+    fn start_dir_prefers_the_active_pane_then_home() {
+        let cwd = PathBuf::from("/srv/project");
+        let home = PathBuf::from("/home/user");
+        assert_eq!(start_dir(Some(cwd.clone()), Some(home.clone())), Some(cwd));
+        assert_eq!(start_dir(None, Some(home.clone())), Some(home));
+        assert_eq!(start_dir(None, None), None);
     }
 
     #[test]

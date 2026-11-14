@@ -1,7 +1,9 @@
 //! Translation of keyboard input into PTY bytes and application actions.
 
 use alacritty_terminal::term::TermMode;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
+
+use crate::i18n::Direction;
 
 /// Actions handled by Graphene Term itself rather than forwarded to the shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,25 +23,124 @@ pub enum Action {
     CopyOutput,
     ToggleFold,
     ToggleFoldAll,
+    /// Splits the active pane, the new one on its right.
+    SplitRight,
+    /// Splits the active pane, the new one below it.
+    SplitDown,
+    ClosePane,
+    /// Gives the focus to the neighbour pane in a direction.
+    FocusPane(Direction),
+    /// Grows the active pane toward a direction.
+    ResizePane(Direction),
+    NextPane,
+    PreviousPane,
+    /// Zooms the active pane to the whole tab, or back.
+    ToggleZoom,
+    /// Gives every pane of the tab an equal share; no default key.
+    #[allow(dead_code, reason = "reached through the command palette")]
+    EqualisePanes,
+    /// Moves the active pane into a new tab; no default key.
+    #[allow(dead_code, reason = "reached through the command palette")]
+    DetachPane,
 }
 
-/// Returns the application action bound to a key combination, if any.
-pub fn action_for(key: &Key, mods: ModifiersState) -> Option<Action> {
+/// Letter a shortcut is matched on: the character the key types when it is an ASCII
+/// letter, else the letter of the physical key, so shortcuts still work on layouts
+/// without Latin letters.
+fn shortcut_letter(key: &Key, physical: PhysicalKey) -> Option<char> {
+    if let Key::Character(c) = key {
+        let mut chars = c.chars();
+        if let (Some(ch), None) = (chars.next(), chars.next())
+            && ch.is_ascii_alphabetic()
+        {
+            return Some(ch.to_ascii_lowercase());
+        }
+    }
+    let PhysicalKey::Code(code) = physical else {
+        return None;
+    };
+    let letter = match code {
+        KeyCode::KeyA => 'a',
+        KeyCode::KeyB => 'b',
+        KeyCode::KeyC => 'c',
+        KeyCode::KeyD => 'd',
+        KeyCode::KeyE => 'e',
+        KeyCode::KeyF => 'f',
+        KeyCode::KeyG => 'g',
+        KeyCode::KeyH => 'h',
+        KeyCode::KeyI => 'i',
+        KeyCode::KeyJ => 'j',
+        KeyCode::KeyK => 'k',
+        KeyCode::KeyL => 'l',
+        KeyCode::KeyM => 'm',
+        KeyCode::KeyN => 'n',
+        KeyCode::KeyO => 'o',
+        KeyCode::KeyP => 'p',
+        KeyCode::KeyQ => 'q',
+        KeyCode::KeyR => 'r',
+        KeyCode::KeyS => 's',
+        KeyCode::KeyT => 't',
+        KeyCode::KeyU => 'u',
+        KeyCode::KeyV => 'v',
+        KeyCode::KeyW => 'w',
+        KeyCode::KeyX => 'x',
+        KeyCode::KeyY => 'y',
+        KeyCode::KeyZ => 'z',
+        _ => return None,
+    };
+    Some(letter)
+}
+
+/// Direction of an arrow key.
+fn arrow_direction(key: &Key) -> Option<Direction> {
+    match key {
+        Key::Named(NamedKey::ArrowLeft) => Some(Direction::Left),
+        Key::Named(NamedKey::ArrowRight) => Some(Direction::Right),
+        Key::Named(NamedKey::ArrowUp) => Some(Direction::Up),
+        Key::Named(NamedKey::ArrowDown) => Some(Direction::Down),
+        _ => None,
+    }
+}
+
+/// Returns the application action bound to a key combination, if any. Letters are
+/// matched by the character they type (see [`shortcut_letter`] for the `physical`
+/// fallback), named keys by their logical value.
+pub fn action_for(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Option<Action> {
     let ctrl_shift = mods.control_key() && mods.shift_key() && !mods.alt_key();
     let ctrl_shift_alt = mods.control_key() && mods.shift_key() && mods.alt_key();
+    if ctrl_shift_alt && let Some(direction) = arrow_direction(key) {
+        return Some(Action::ResizePane(direction));
+    }
+    if ctrl_shift && let Some(direction) = arrow_direction(key) {
+        return Some(Action::FocusPane(direction));
+    }
+    if ctrl_shift_alt && let Some(letter) = shortcut_letter(key, physical) {
+        return match letter {
+            'c' => Some(Action::CopyCommand),
+            'o' => Some(Action::CopyOutput),
+            'f' => Some(Action::ToggleFoldAll),
+            _ => None,
+        };
+    }
+    if ctrl_shift && let Some(letter) = shortcut_letter(key, physical) {
+        return match letter {
+            'c' => Some(Action::Copy),
+            'v' => Some(Action::Paste),
+            'f' => Some(Action::ToggleFold),
+            'e' => Some(Action::SplitRight),
+            'o' => Some(Action::SplitDown),
+            'w' => Some(Action::ClosePane),
+            'n' => Some(Action::NextPane),
+            'b' => Some(Action::PreviousPane),
+            'z' => Some(Action::ToggleZoom),
+            _ => None,
+        };
+    }
+    // Other `Ctrl+Shift` characters stay with the shell.
+    if mods.control_key() && mods.shift_key() && matches!(key, Key::Character(_)) {
+        return None;
+    }
     match key {
-        Key::Character(c) if ctrl_shift_alt => match c.to_lowercase().as_str() {
-            "c" => Some(Action::CopyCommand),
-            "o" => Some(Action::CopyOutput),
-            "f" => Some(Action::ToggleFoldAll),
-            _ => None,
-        },
-        Key::Character(c) if ctrl_shift => match c.to_lowercase().as_str() {
-            "c" => Some(Action::Copy),
-            "v" => Some(Action::Paste),
-            "f" => Some(Action::ToggleFold),
-            _ => None,
-        },
         Key::Character(c) if mods.control_key() && !mods.alt_key() => match c.as_str() {
             "=" | "+" => Some(Action::FontSizeIncrease),
             "-" | "_" => Some(Action::FontSizeDecrease),
@@ -215,6 +316,14 @@ mod tests {
 
     const NONE: ModifiersState = ModifiersState::empty();
 
+    /// No physical key information, as for synthetic events.
+    const UNIDENTIFIED: PhysicalKey =
+        PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+
+    fn action_for(key: &Key, mods: ModifiersState) -> Option<Action> {
+        super::action_for(key, UNIDENTIFIED, mods)
+    }
+
     #[test]
     fn plain_text_is_forwarded() {
         let b = key_to_bytes(&ch("é"), Some("é"), NONE, TermMode::empty());
@@ -328,12 +437,78 @@ mod tests {
         assert_eq!(action_for(&ch("C"), cs), Some(Action::Copy));
         assert_eq!(action_for(&ch("V"), cs), Some(Action::Paste));
         assert_eq!(action_for(&ch("V"), csa), None);
-        // Ctrl+PageUp and Ctrl+Shift+Arrow stay with the shell.
+        // Ctrl+PageUp stays with the shell.
         assert_eq!(
             action_for(&named(NamedKey::PageUp), ModifiersState::CONTROL),
             None
         );
-        assert_eq!(action_for(&named(NamedKey::ArrowUp), cs), None);
+    }
+
+    #[test]
+    fn pane_actions() {
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let csa = cs | ModifiersState::ALT;
+        for (letter, action) in [
+            ("E", Action::SplitRight),
+            ("O", Action::SplitDown),
+            ("W", Action::ClosePane),
+            ("N", Action::NextPane),
+            ("B", Action::PreviousPane),
+            ("Z", Action::ToggleZoom),
+        ] {
+            assert_eq!(action_for(&ch(letter), cs), Some(action), "{letter}");
+            assert_eq!(
+                action_for(&ch(&letter.to_lowercase()), cs),
+                Some(action),
+                "{letter}"
+            );
+            // Without Shift, the key stays with the shell.
+            assert_eq!(action_for(&ch(letter), ModifiersState::CONTROL), None);
+        }
+        for (key, direction) in [
+            (NamedKey::ArrowLeft, Direction::Left),
+            (NamedKey::ArrowRight, Direction::Right),
+            (NamedKey::ArrowUp, Direction::Up),
+            (NamedKey::ArrowDown, Direction::Down),
+        ] {
+            assert_eq!(
+                action_for(&named(key), cs),
+                Some(Action::FocusPane(direction))
+            );
+            assert_eq!(
+                action_for(&named(key), csa),
+                Some(Action::ResizePane(direction))
+            );
+            assert_eq!(action_for(&named(key), ModifiersState::CONTROL), None);
+        }
+        // Ctrl+Shift+Alt+O copies the output, Ctrl+Shift+O splits down.
+        assert_eq!(action_for(&ch("O"), csa), Some(Action::CopyOutput));
+    }
+
+    #[test]
+    fn letters_fall_back_on_the_physical_key() {
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let cyrillic = ch("У");
+        assert_eq!(
+            super::action_for(&cyrillic, PhysicalKey::Code(KeyCode::KeyE), cs),
+            Some(Action::SplitRight)
+        );
+        // The typed letter wins over its physical place (AZERTY: Z on the W key).
+        assert_eq!(
+            super::action_for(&ch("Z"), PhysicalKey::Code(KeyCode::KeyW), cs),
+            Some(Action::ToggleZoom)
+        );
+        assert_eq!(action_for(&cyrillic, cs), None);
+    }
+
+    #[test]
+    fn unmapped_ctrl_shift_letters_produce_control_codes() {
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        for letter in ["A", "D", "G", "X"] {
+            assert_eq!(action_for(&ch(letter), cs), None, "{letter}");
+        }
+        let b = key_to_bytes(&ch("X"), None, cs, TermMode::empty());
+        assert_eq!(b, Some(vec![0x18]));
     }
 
     #[test]
