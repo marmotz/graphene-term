@@ -2,6 +2,7 @@
 //! internals. The `graphene` binary only calls [`run`].
 
 mod app;
+mod appearance;
 mod banner;
 mod block_actions;
 #[cfg(test)]

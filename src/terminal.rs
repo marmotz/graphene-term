@@ -35,6 +35,8 @@ pub enum UserEvent {
     Update(Option<crate::update::Release>),
     /// `config.toml` or a theme file changed on disk.
     ConfigChanged,
+    /// The system light/dark appearance, at startup and on each change.
+    Appearance(crate::appearance::Appearance),
 }
 
 /// Forwards the terminal events of one pane to the winit event loop.

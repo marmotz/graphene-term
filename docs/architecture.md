@@ -32,6 +32,7 @@ src/
   config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
   watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
+  appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
@@ -226,6 +227,16 @@ Renderer::render(pane frames, interface rects)
   `font.size` resets the zoom, see `reloaded_font_size`), the padding, the background
   opacity, the palette and the keybindings, then lays the panes out again. `width`,
   `height` and `startup_mode` only affect windows created afterwards.
+- The `appearance` thread (`src/appearance.rs`) follows the system light/dark
+  appearance: winit 0.30 does not report the theme on X11 or Wayland, so it reads
+  `color-scheme` from `org.freedesktop.portal.Settings` (`ReadOne`, else `Read` on older
+  portals) with zbus, then listens to `SettingChanged`. 2 is light; 1, 0 (no
+  preference), or no portal at all, dark. Each value is sent as
+  `UserEvent::Appearance`. `App::watch_appearance` starts it only once a configuration
+  sets both `theme.light` and `theme.dark` (at startup or by hot reload); at startup,
+  `app::run` waits up to 200 ms for the first value so the first window opens with the
+  right theme. `ThemeConfig::active` picks the theme to load; a new appearance goes
+  through `App::reload_config`, the hot reload path.
 
 ## Window startup
 

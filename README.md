@@ -17,7 +17,9 @@ uncomment a line to change it. See [config.default.toml](config.default.toml).
 
 Themes are set with `name` in the `[theme]` section. Eight are built in (see
 [themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,
-with the same format, and only needs the colors it changes.
+with the same format, and only needs the colors it changes. Setting both `light` and
+`dark` instead follows the system light/dark appearance (read from the XDG desktop
+portal; dark without portal), switching the theme as soon as it changes.
 
 `[window] startup_mode` opens new windows at the configured size (`"default"`),
 maximized (`"maximized"`), or at the size and maximized state of the last window closed

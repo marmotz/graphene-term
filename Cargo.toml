@@ -43,6 +43,8 @@ base64 = "0.22.1"
 wl-clipboard-rs = "0.9.5"
 x11rb = "0.13.2"
 notify = "8.2.2"
+zbus = "6.3.0"
+futures-util = { version = "0.3.34", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "rayon"] }

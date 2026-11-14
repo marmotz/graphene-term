@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 
+use crate::appearance::Appearance;
 use crate::keybindings;
 
 /// The fully commented default configuration, written on first launch.
@@ -279,10 +280,25 @@ pub struct UpdatesConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeConfig {
     pub name: String,
-    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
     pub light: Option<String>,
-    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
     pub dark: Option<String>,
+}
+
+impl ThemeConfig {
+    /// Whether the theme follows the system appearance: both `light` and `dark` are set.
+    pub fn follows_appearance(&self) -> bool {
+        self.light.is_some() && self.dark.is_some()
+    }
+
+    /// The theme to load: `light` or `dark` by `appearance` when both are set,
+    /// otherwise `name`.
+    pub fn active(&self, appearance: Appearance) -> &str {
+        match (&self.light, &self.dark, appearance) {
+            (Some(light), Some(_), Appearance::Light) => light,
+            (Some(_), Some(dark), Appearance::Dark) => dark,
+            _ => &self.name,
+        }
+    }
 }
 
 /// The user configuration. `Default` holds the built-in values, so a missing or empty
@@ -589,6 +605,35 @@ mod tests {
 
     fn parse(text: &str) -> (Config, Vec<ConfigError>) {
         Config::parse(text, &Config::default(), &file())
+    }
+
+    fn theme(light: Option<&str>, dark: Option<&str>) -> ThemeConfig {
+        ThemeConfig {
+            name: "gruvbox-dark".to_owned(),
+            light: light.map(str::to_owned),
+            dark: dark.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn light_and_dark_pick_the_theme_by_appearance() {
+        let theme = theme(Some("graphene-day"), Some("graphene-night"));
+        assert!(theme.follows_appearance());
+        assert_eq!(theme.active(Appearance::Light), "graphene-day");
+        assert_eq!(theme.active(Appearance::Dark), "graphene-night");
+    }
+
+    #[test]
+    fn without_both_light_and_dark_the_name_is_used() {
+        for theme in [
+            theme(None, None),
+            theme(Some("graphene-day"), None),
+            theme(None, Some("graphene-night")),
+        ] {
+            assert!(!theme.follows_appearance());
+            assert_eq!(theme.active(Appearance::Light), "gruvbox-dark");
+            assert_eq!(theme.active(Appearance::Dark), "gruvbox-dark");
+        }
     }
 
     /// `config.default.toml` with every commented setting enabled: lines starting with

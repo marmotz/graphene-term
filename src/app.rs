@@ -1,8 +1,8 @@
 //! Window and event handling.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::index::Point;
@@ -16,6 +16,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
+use crate::appearance::{self, Appearance};
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::block_actions::{Direction, Part};
 use crate::chrome;
@@ -61,6 +62,11 @@ const TAB_BAR: TabBarPosition = TabBarPosition::Top;
 
 /// Cells a pane grows by per resize shortcut.
 const RESIZE_STEP_CELLS: usize = 2;
+
+/// How long startup waits for the system appearance, so the first window opens with
+/// the right `light`/`dark` theme. Without answer, it opens with the dark one and
+/// switches when the answer comes.
+const APPEARANCE_STARTUP_WAIT: Duration = Duration::from_millis(200);
 
 /// A mouse gesture in progress, decided by the press: moves and the release go to it.
 enum Drag {
@@ -1669,6 +1675,10 @@ pub struct App {
     error: Option<anyhow::Error>,
     /// Banner reporting the errors of the configuration and theme files.
     config_banner: Option<Banner>,
+    /// System appearance, which picks the `light` or `dark` theme.
+    appearance: Appearance,
+    /// Whether the appearance thread runs: started once a configuration needs it.
+    appearance_watched: bool,
 }
 
 impl App {
@@ -1763,8 +1773,9 @@ impl App {
     /// them to the open window.
     fn reload_config(&mut self) {
         let (config, errors) = config::reload(&self.config);
-        let (config, palette, banner) = with_theme(config, errors);
+        let (config, palette, banner) = with_theme(config, errors, self.appearance);
         let old = std::mem::replace(&mut self.config, config);
+        self.watch_appearance();
         self.palette = palette;
         self.config_banner = banner.clone();
         if let Some(session) = self.session.as_mut() {
@@ -1772,6 +1783,36 @@ impl App {
             if old.updates != self.config.updates {
                 self.update_checker.apply(&self.config.updates);
             }
+        }
+    }
+
+    /// Starts the appearance thread when the configuration sets `light` and `dark` and it
+    /// does not run yet. The returned receiver gets the first appearance read, so the
+    /// first window can open with the right theme.
+    fn watch_appearance(&mut self) -> Option<mpsc::Receiver<Appearance>> {
+        if self.appearance_watched || !self.config.theme.follows_appearance() {
+            return None;
+        }
+        self.appearance_watched = true;
+        let proxy = self.proxy.clone();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        appearance::spawn(move |appearance| {
+            // Only the first value is waited for; a full or closed channel is fine.
+            let _ = sender.try_send(appearance);
+            // The event loop may already be closed during shutdown.
+            let _ = proxy.send_event(UserEvent::Appearance(appearance));
+        });
+        Some(receiver)
+    }
+
+    /// A new system appearance: the theme is loaded again when it depends on it.
+    fn set_appearance(&mut self, appearance: Appearance) {
+        if appearance == self.appearance {
+            return;
+        }
+        self.appearance = appearance;
+        if self.config.theme.follows_appearance() {
+            self.reload_config();
         }
     }
 
@@ -1814,8 +1855,10 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        if let UserEvent::ConfigChanged = event {
-            return self.reload_config();
+        match event {
+            UserEvent::ConfigChanged => return self.reload_config(),
+            UserEvent::Appearance(appearance) => return self.set_appearance(appearance),
+            UserEvent::Terminal(..) | UserEvent::Update(_) => {}
         }
         let Some(session) = self.session.as_mut() else {
             return;
@@ -1828,7 +1871,7 @@ impl ApplicationHandler<UserEvent> for App {
                 session.update.set(release);
                 session.window.request_redraw();
             }
-            UserEvent::ConfigChanged => {}
+            UserEvent::ConfigChanged | UserEvent::Appearance(_) => {}
         }
         session.flush_panes();
     }
@@ -1892,13 +1935,18 @@ impl ApplicationHandler<UserEvent> for App {
 /// returned banner.
 fn load_config() -> (Config, Palette, Option<Banner>) {
     let (config, errors) = config::load();
-    with_theme(config, errors)
+    with_theme(config, errors, Appearance::default())
 }
 
 /// Loads the theme of `config`; `errors`, those of the configuration file, and the
 /// theme's are logged and reported by the returned banner.
-fn with_theme(config: Config, mut errors: Vec<ConfigError>) -> (Config, Palette, Option<Banner>) {
-    let (palette, theme_errors) = theme::load(&config.theme.name, config::config_dir().as_deref());
+fn with_theme(
+    config: Config,
+    mut errors: Vec<ConfigError>,
+    appearance: Appearance,
+) -> (Config, Palette, Option<Banner>) {
+    let name = config.theme.active(appearance);
+    let (palette, theme_errors) = theme::load(name, config::config_dir().as_deref());
     errors.extend(theme_errors);
     for error in &errors {
         log::warn!("{error}");
@@ -1928,7 +1976,14 @@ pub fn run() -> anyhow::Result<()> {
         session: None,
         error: None,
         config_banner,
+        appearance: Appearance::default(),
+        appearance_watched: false,
     };
+    if let Some(first) = app.watch_appearance()
+        && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)
+    {
+        app.set_appearance(appearance);
+    }
     event_loop.run_app(&mut app)?;
     match app.error {
         Some(error) => Err(error),
@@ -1938,7 +1993,6 @@ pub fn run() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use super::*;
 
