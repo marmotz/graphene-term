@@ -29,7 +29,8 @@ src/
     mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback (pure)
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
-  config.rs        config.toml location, model, key-by-key parsing and validation
+  config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
+  window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
@@ -209,6 +210,18 @@ Renderer::render(pane frames, interface rects)
   `opener::open`, "×" hides the banner until a newer release, "Ignore this version"
   hides it and sends `Command::Ignore` to the thread, which writes `ignored` in
   `update.json` (written directly when the thread is not running).
+
+## Window startup
+
+- `App::create_session` sizes the window with `initial_window` (pure): the configured
+  `width`/`height` (`default`, and `maximized` which also maximizes it), or the size and
+  maximized state of `window.json` (`remember`; nothing remembered falls back to
+  `default`). `window.json` is only read in `remember` mode.
+- `Session.restore_size` is the last inner size seen while the window was not maximized,
+  in logical pixels: winit 0.30 has no getter for the restore size, and the inner size
+  of a maximized window is the screen. `ApplicationHandler::exiting` saves it with
+  `window.is_maximized()` to `window.json` whatever the mode, so every exit path (window
+  closed, last shell exited) is covered. The position is not saved.
 
 ## Command blocks
 

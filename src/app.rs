@@ -26,7 +26,7 @@ use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout,
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
-use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE, StartupMode, WindowConfig};
 use crate::cursor_blink::CursorBlink;
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
@@ -47,6 +47,7 @@ use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
 use crate::view::RowSource;
+use crate::window_state::{self, WindowState};
 use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
 use crate::workspace::{self, DIVIDER_THICKNESS, TabBarPosition, Workspace};
 
@@ -147,6 +148,9 @@ struct Session {
     keybindings: Keybindings,
     /// Logs the first frame drawn after the shell's first output (`graphene::perf`).
     first_frame: perf::FirstFrame,
+    /// Last inner size seen while the window was not maximized, in logical pixels:
+    /// winit has no getter for the size a maximized window is restored to.
+    restore_size: LogicalSize<u32>,
 }
 
 impl Session {
@@ -348,6 +352,23 @@ impl Session {
 
     /// Asks to close `target`: at once when none of its panes runs a program other
     /// than its shell, otherwise once the user confirms in a dialog.
+    /// Writes the window size and maximized state to `window.json`, whatever the startup
+    /// mode, so that switching to `remember` later restores the last window. A failure
+    /// is only logged. The position is not saved.
+    fn save_window_state(&self) {
+        let Some(file) = window_state::path() else {
+            return;
+        };
+        let state = WindowState {
+            width: self.restore_size.width,
+            height: self.restore_size.height,
+            maximized: self.window.is_maximized(),
+        };
+        if let Err(error) = state.save(&file) {
+            log::warn!("cannot write {}: {error}", file.display());
+        }
+    }
+
     fn request_close(&mut self, target: Target, event_loop: &ActiveEventLoop) {
         let programs: Vec<_> = target
             .panes(&self.workspace)
@@ -1563,6 +1584,22 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
 }
 
 /// The earlier of two optional deadlines.
+/// Size and maximized state of a new window, from `window.startup_mode`. `remembered`
+/// is the last window closed, only read in `remember` mode.
+fn initial_window(
+    config: &WindowConfig,
+    remembered: Option<WindowState>,
+) -> (LogicalSize<u32>, bool) {
+    let configured = LogicalSize::new(config.width, config.height);
+    match (config.startup_mode, remembered) {
+        (StartupMode::Default, _) | (StartupMode::Remember, None) => (configured, false),
+        (StartupMode::Maximized, _) => (configured, true),
+        (StartupMode::Remember, Some(state)) => {
+            (LogicalSize::new(state.width, state.height), state.maximized)
+        }
+    }
+}
+
 fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -1584,12 +1621,15 @@ pub struct App {
 
 impl App {
     fn create_session(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Session> {
+        let remembered = match self.config.window.startup_mode {
+            StartupMode::Remember => window_state::path().and_then(|file| WindowState::load(&file)),
+            StartupMode::Default | StartupMode::Maximized => None,
+        };
+        let (initial_size, maximized) = initial_window(&self.config.window, remembered);
         let attributes = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
-            .with_inner_size(LogicalSize::new(
-                self.config.window.width,
-                self.config.window.height,
-            ));
+            .with_inner_size(initial_size)
+            .with_maximized(maximized);
         let window = Arc::new(event_loop.create_window(attributes)?);
         perf::mark("window created");
 
@@ -1659,6 +1699,7 @@ impl App {
             lang: Lang::detect(),
             keybindings: Keybindings::new(&self.config.keybindings),
             first_frame: perf::FirstFrame::default(),
+            restore_size: initial_size,
         })
     }
 
@@ -1681,6 +1722,12 @@ impl ApplicationHandler<UserEvent> for App {
             Err(error) => return self.fail(event_loop, error),
         }
         self.update_checker.apply(&self.config.updates);
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(session) = &self.session {
+            session.save_window_state();
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -1719,6 +1766,9 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => session.request_close(Target::Window, event_loop),
             WindowEvent::Resized(size) => {
+                if !session.window.is_maximized() {
+                    session.restore_size = size.to_logical(session.window.scale_factor());
+                }
                 session.renderer.resize(size.width, size.height);
                 session.relayout();
             }
@@ -1811,5 +1861,62 @@ mod tests {
         assert_eq!(earliest(None, Some(later)), Some(later));
         assert_eq!(earliest(Some(now), None), Some(now));
         assert_eq!(earliest(None, None), None);
+    }
+
+    fn window_config(startup_mode: StartupMode) -> WindowConfig {
+        WindowConfig {
+            startup_mode,
+            width: 960,
+            height: 600,
+            padding: 8.0,
+        }
+    }
+
+    const REMEMBERED: WindowState = WindowState {
+        width: 1280,
+        height: 720,
+        maximized: true,
+    };
+
+    #[test]
+    fn default_mode_uses_the_configured_size() {
+        let config = window_config(StartupMode::Default);
+        let expected = (LogicalSize::new(960, 600), false);
+        assert_eq!(initial_window(&config, None), expected);
+        assert_eq!(initial_window(&config, Some(REMEMBERED)), expected);
+    }
+
+    #[test]
+    fn maximized_mode_keeps_the_configured_size_for_unmaximizing() {
+        let config = window_config(StartupMode::Maximized);
+        let expected = (LogicalSize::new(960, 600), true);
+        assert_eq!(initial_window(&config, None), expected);
+        assert_eq!(initial_window(&config, Some(REMEMBERED)), expected);
+    }
+
+    #[test]
+    fn remember_mode_restores_the_last_window() {
+        let config = window_config(StartupMode::Remember);
+        assert_eq!(
+            initial_window(&config, Some(REMEMBERED)),
+            (LogicalSize::new(1280, 720), true)
+        );
+        let unmaximized = WindowState {
+            maximized: false,
+            ..REMEMBERED
+        };
+        assert_eq!(
+            initial_window(&config, Some(unmaximized)),
+            (LogicalSize::new(1280, 720), false)
+        );
+    }
+
+    #[test]
+    fn remember_mode_without_state_is_the_default() {
+        let config = window_config(StartupMode::Remember);
+        assert_eq!(
+            initial_window(&config, None),
+            (LogicalSize::new(960, 600), false)
+        );
     }
 }

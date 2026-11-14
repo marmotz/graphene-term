@@ -19,6 +19,10 @@ Themes are set with `name` in the `[theme]` section. Eight are built in (see
 [themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,
 with the same format, and only needs the colors it changes.
 
+`[window] startup_mode` opens new windows at the configured size (`"default"`),
+maximized (`"maximized"`), or at the size and maximized state of the last window closed
+(`"remember"`, kept in `~/.local/state/graphene/window.json`).
+
 Errors in these files are logged and shown in a banner at the top of the window (click
 to hide it); the faulty settings keep their default value.
 

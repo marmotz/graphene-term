@@ -54,6 +54,24 @@ fn config_dir_from(xdg_config_home: Option<OsString>, home: Option<OsString>) ->
     Some(base.join("graphene"))
 }
 
+/// `$XDG_STATE_HOME/graphene`, else `$HOME/.local/state/graphene`: files written by
+/// Graphene itself (update check, last window), shared by every instance.
+pub fn state_dir() -> Option<PathBuf> {
+    state_dir_from(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
+}
+
+fn state_dir_from(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    // The XDG spec ignores an empty or relative `XDG_STATE_HOME`.
+    let xdg = xdg_state_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute());
+    let base = xdg.or_else(|| {
+        home.filter(|home| !home.is_empty())
+            .map(|home| PathBuf::from(home).join(".local").join("state"))
+    })?;
+    Some(base.join("graphene"))
+}
+
 /// Loads `config.toml` from the config directory. A missing file is created from
 /// [`DEFAULT_CONFIG`] (a write failure is only logged) and yields the default.
 pub fn load() -> (Config, Vec<ConfigError>) {
@@ -150,6 +168,19 @@ pub enum TabPosition {
     Right,
 }
 
+/// `window.startup_mode`: size and state of a new window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StartupMode {
+    /// The configured `width` and `height`.
+    #[default]
+    Default,
+    /// Maximized; the configured size is used when the user unmaximizes it.
+    Maximized,
+    /// The size and maximized state of the last window closed.
+    Remember,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FontConfig {
     /// `None` uses the system monospace font.
@@ -159,7 +190,9 @@ pub struct FontConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowConfig {
-    /// Initial size, in logical pixels.
+    pub startup_mode: StartupMode,
+    /// Initial size, in logical pixels, when `startup_mode` is `Default`, or `Remember`
+    /// with nothing remembered yet.
     pub width: u32,
     pub height: u32,
     /// Minimum padding around the grid, in logical pixels.
@@ -252,6 +285,7 @@ impl Default for Config {
                 size: DEFAULT_FONT_SIZE,
             },
             window: WindowConfig {
+                startup_mode: StartupMode::Default,
                 width: 960,
                 height: 600,
                 padding: 8.0,
@@ -425,6 +459,7 @@ impl Reader<'_> {
                     Checked::Clamped(clamped, format!("{size} is out of {MIN_FONT_SIZE}..={MAX_FONT_SIZE}, using {clamped}"))
                 }
             }),
+            ("window", "startup_mode") => self.set(value, path, &mut config.window.startup_mode, &previous.window.startup_mode, Checked::Valid),
             ("window", "width") => self.set(value, path, &mut config.window.width, &previous.window.width, positive_size),
             ("window", "height") => self.set(value, path, &mut config.window.height, &previous.window.height, positive_size),
             ("window", "padding") => self.set(value, path, &mut config.window.padding, &previous.window.padding, |padding: f32| {
@@ -558,6 +593,30 @@ mod tests {
     }
 
     #[test]
+    fn state_dir_prefers_xdg_state_home() {
+        assert_eq!(
+            state_dir_from(Some("/xdg".into()), Some("/home/u".into())),
+            Some(PathBuf::from("/xdg/graphene"))
+        );
+    }
+
+    #[test]
+    fn state_dir_falls_back_to_home() {
+        let expected = Some(PathBuf::from("/home/u/.local/state/graphene"));
+        assert_eq!(state_dir_from(None, Some("/home/u".into())), expected);
+        assert_eq!(
+            state_dir_from(Some("".into()), Some("/home/u".into())),
+            expected
+        );
+        assert_eq!(
+            state_dir_from(Some("relative".into()), Some("/home/u".into())),
+            expected
+        );
+        assert_eq!(state_dir_from(None, None), None);
+        assert_eq!(state_dir_from(None, Some("".into())), None);
+    }
+
+    #[test]
     fn empty_file_is_the_default() {
         assert_eq!(parse(""), (Config::default(), Vec::new()));
     }
@@ -587,6 +646,7 @@ family = "JetBrains Mono"
 size = 11.5
 
 [window]
+startup_mode = "remember"
 width = 1200
 height = 800
 padding = 4
@@ -628,6 +688,7 @@ interval = "2d"
                     size: 11.5,
                 },
                 window: WindowConfig {
+                    startup_mode: StartupMode::Remember,
                     width: 1200,
                     height: 800,
                     padding: 4.0,
@@ -688,6 +749,36 @@ interval = "2d"
                 (Some(4), "unknown key `font.sise`"),
                 (Some(6), "unknown key `nope`"),
             ]
+        );
+    }
+
+    #[test]
+    fn startup_mode_is_read() {
+        for (name, mode) in [
+            ("default", StartupMode::Default),
+            ("maximized", StartupMode::Maximized),
+            ("remember", StartupMode::Remember),
+        ] {
+            let text = format!("[window]\nstartup_mode = \"{name}\"\n");
+            let (config, errors) = parse(&text);
+            assert!(errors.is_empty());
+            assert_eq!(config.window.startup_mode, mode);
+        }
+    }
+
+    #[test]
+    fn unknown_startup_mode_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.window.startup_mode = StartupMode::Maximized;
+        let text = "[window]\nstartup_mode = \"fullscreen\"\n";
+        let (config, errors) = Config::parse(text, &previous, &file());
+        assert_eq!(config.window.startup_mode, StartupMode::Maximized);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, Some(2));
+        assert!(
+            errors[0]
+                .message
+                .starts_with("invalid value for `window.startup_mode`")
         );
     }
 

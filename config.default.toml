@@ -14,7 +14,11 @@
 # size = 14.0
 
 # [window]
-## Initial window size, in logical pixels.
+## Size of a new window: "default" (width and height below), "maximized", or
+## "remember" (the size and maximized state of the last window closed).
+# startup_mode = "default"
+## Initial size when startup_mode is "default", or "remember" with nothing remembered
+## yet, in logical pixels.
 # width = 960
 # height = 600
 ## Minimum space around the grid, in logical pixels.
