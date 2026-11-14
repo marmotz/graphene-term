@@ -159,3 +159,11 @@ commented out for now; once uncommented it runs only when the `AUR_SSH_PRIVATE_K
 repository secret is set. One-time setup: create an AUR account, add the public half of a dedicated SSH key to
 it, and store the private half in that secret. Install with `paru -S graphene-term-bin`
 (or `yay`).
+
+To build that package locally from a published release (needs `curl`, `jq`, `makepkg`),
+pass a tag, or nothing for the most recent release (pre-releases included):
+
+```bash
+scripts/build-arch-package.sh v0.1.0-dev.20261113205256
+sudo pacman -U dist/arch/graphene-term-bin-*.pkg.tar.zst
+```
