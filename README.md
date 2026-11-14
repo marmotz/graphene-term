@@ -100,7 +100,7 @@ script binds, and completion (`Tab`) and history (`Up` / `Down`) stay the shell'
 | Keys at the prompt            | Action                                          |
 |-------------------------------|-------------------------------------------------|
 | Left click in the input       | Move the cursor there                           |
-| Ctrl+Left / Ctrl+Right        | Previous / next word                            |
+| Ctrl+Left / Ctrl+Right        | Start of the previous / next word               |
 | Ctrl+Backspace / Ctrl+Delete  | Erase the word before / after the cursor        |
 | Home / End                    | Start / end of the line                         |
 | Ctrl+Home / Ctrl+End          | Start / end of a multi-line input               |

@@ -97,6 +97,15 @@ if [[ -n $_graphene_token ]]; then
     ((READLINE_POINT < ${#READLINE_LINE})) && READLINE_POINT=$((READLINE_POINT + 1))
     return 0
   }
+  # Start of the next word, as zsh's forward-word (readline's stops at the word end):
+  # skip the rest of the word, then the separators. Readline words are alphanumeric.
+  _graphene_word_right() {
+    local p=$READLINE_POINT n=${#READLINE_LINE}
+    while ((p < n)) && [[ ${READLINE_LINE:p:1} == [[:alnum:]] ]]; do ((p++)); done
+    while ((p < n)) && [[ ${READLINE_LINE:p:1} != [[:alnum:]] ]]; do ((p++)); done
+    READLINE_POINT=$p
+    return 0
+  }
   # Column of the cursor in its line: characters since the previous newline.
   _graphene_column() {
     local before=${READLINE_LINE:0:READLINE_POINT}
@@ -149,7 +158,7 @@ if [[ -n $_graphene_token ]]; then
       builtin bind -m "$_graphene_keymap" -x '"\e[59136u": _graphene_char_left'
       builtin bind -m "$_graphene_keymap" -x '"\e[59137u": _graphene_char_right'
       builtin bind -m "$_graphene_keymap" '"\e[59138u": backward-word'
-      builtin bind -m "$_graphene_keymap" '"\e[59139u": forward-word'
+      builtin bind -m "$_graphene_keymap" -x '"\e[59139u": _graphene_word_right'
       builtin bind -m "$_graphene_keymap" '"\e[59140u": backward-kill-word'
       builtin bind -m "$_graphene_keymap" '"\e[59141u": kill-word'
       builtin bind -m "$_graphene_keymap" -x '"\e[59142u": _graphene_line_start'

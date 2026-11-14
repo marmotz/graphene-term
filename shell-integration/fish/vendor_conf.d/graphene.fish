@@ -66,7 +66,9 @@ if status is-interactive; and test -n "$__graphene_token"
             bind -M $mode \e\[59136u $left
             bind -M $mode \e\[59137u $right
             bind -M $mode \e\[59138u backward-word
-            bind -M $mode \e\[59139u '__graphene_forward forward-word'
+            # forward-word stops at the word end: forward-word-vi reaches the start of
+            # the next word.
+            bind -M $mode \e\[59139u '__graphene_forward forward-word-vi'
             bind -M $mode \e\[59140u backward-kill-word
             bind -M $mode \e\[59141u '__graphene_forward kill-word'
             bind -M $mode \e\[59142u beginning-of-line

@@ -863,6 +863,20 @@ mod tests {
                     ],
                     "<one>\r\n<YQ>",
                 ),
+                // Word right: the start of the next word, the buffer end after the
+                // last one.
+                (
+                    vec![
+                        Text(PRINT),
+                        Text("ab cd"),
+                        Repeat(WordLeft, 2),
+                        Seq(WordRight),
+                        Text("X"),
+                        Seq(WordRight),
+                        Text("Y"),
+                    ],
+                    "<ab>\r\n<XcdY>",
+                ),
                 // Word end: inside a word it stops at its end, between words at the
                 // end of the next one.
                 (
