@@ -22,6 +22,8 @@ use alacritty_terminal::vte::ansi::Processor;
 use log::error;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
+use crate::graphics::sequence::{self, Splitter};
+use crate::graphics::{Handler, Image, LogHandler};
 use crate::signals::{Chunk, Scanner};
 use crate::timeline::Timeline;
 
@@ -96,6 +98,53 @@ pub fn process<L: EventListener>(
     }
 }
 
+/// Read path of the PTY output: cuts the image sequences out of `bytes` first, so an
+/// image payload is never seen by the block signal scanner; the VT bytes go through
+/// [`process`], and each image sequence or full reset reaches `graphics` right after the
+/// bytes before it are applied to `term`.
+pub fn handle_output<L: EventListener>(
+    splitter: &mut Splitter,
+    scanner: &mut Scanner,
+    processor: &mut Processor,
+    timeline: &mut Timeline,
+    graphics: &mut impl Handler,
+    term: &mut Term<L>,
+    bytes: &[u8],
+) {
+    for chunk in splitter.feed(bytes) {
+        match chunk {
+            sequence::Chunk::Vt(bytes) => process(scanner, processor, timeline, term, &bytes),
+            sequence::Chunk::Kitty(payload) => {
+                flush_sync(processor, timeline, term);
+                graphics.image(term, Image::Kitty(payload));
+            }
+            sequence::Chunk::Sixel(body) => {
+                flush_sync(processor, timeline, term);
+                graphics.image(term, Image::Sixel(body));
+            }
+            sequence::Chunk::Reset => {
+                flush_sync(processor, timeline, term);
+                graphics.reset(term);
+            }
+        }
+    }
+}
+
+/// Applies the bytes held by a synchronized update, so the cursor is where the next
+/// sequence belongs.
+fn flush_sync<L: EventListener>(
+    processor: &mut Processor,
+    timeline: &mut Timeline,
+    term: &mut Term<L>,
+) {
+    if processor.sync_bytes_count() > 0 {
+        processor.stop_sync(term);
+        // The flushed bytes may leave the alternate screen: release the signals held
+        // meanwhile.
+        timeline.apply(term, Chunk::Bytes(&[]));
+    }
+}
+
 /// Pending writes to the PTY, in order.
 #[derive(Default)]
 pub struct WriteQueue {
@@ -156,7 +205,9 @@ pub struct PtyLoop<T, L: EventListener> {
 struct State {
     writes: WriteQueue,
     processor: Processor,
+    splitter: Splitter,
     scanner: Scanner,
+    graphics: LogHandler,
 }
 
 impl<T, L> PtyLoop<T, L>
@@ -199,7 +250,9 @@ where
         let mut state = State {
             writes: WriteQueue::default(),
             processor: Processor::new(),
+            splitter: Splitter::new(),
             scanner: Scanner::new(&self.token),
+            graphics: LogHandler,
         };
         let mut buf = vec![0u8; READ_BUFFER_SIZE];
         let mode = PollMode::Level;
@@ -364,10 +417,12 @@ where
 
             // Lock order: `Term`, then `Timeline`.
             let mut timeline = self.timeline.lock().unwrap_or_else(PoisonError::into_inner);
-            process(
+            handle_output(
+                &mut state.splitter,
                 &mut state.scanner,
                 &mut state.processor,
                 &mut timeline,
+                &mut state.graphics,
                 term,
                 &buf[..unprocessed],
             );
@@ -483,6 +538,120 @@ mod tests {
         let (term, timeline) = process_in_reads(bytes, bytes.len());
         assert!(timeline.current().header.is_none());
         assert_eq!(texts(&term)[..2], ["$ ls", "out"]);
+    }
+
+    /// Records each graphics call with the screen and cursor at that time.
+    #[derive(Default)]
+    struct Recorder {
+        calls: Vec<(String, String, Point)>,
+    }
+
+    impl Handler for Recorder {
+        fn image<L: EventListener>(&mut self, term: &mut Term<L>, image: Image) {
+            let name = match image {
+                Image::Kitty(payload) => format!("kitty {}", String::from_utf8_lossy(&payload)),
+                Image::Sixel(body) => format!("sixel {}", String::from_utf8_lossy(&body)),
+            };
+            self.calls
+                .push((name, texts(term)[0].clone(), term.grid().cursor.point));
+        }
+
+        fn reset<L: EventListener>(&mut self, term: &mut Term<L>) {
+            self.calls.push((
+                "reset".to_owned(),
+                texts(term)[0].clone(),
+                term.grid().cursor.point,
+            ));
+        }
+    }
+
+    /// Feeds `bytes` to a fresh 20x5 session through `handle_output`, `split` bytes per
+    /// read.
+    fn handle_in_reads(bytes: &[u8], split: usize) -> (Term<VoidListener>, Timeline, Recorder) {
+        let mut term = term();
+        let mut timeline = Timeline::new(100);
+        let mut splitter = Splitter::new();
+        let mut scanner = Scanner::new(TOKEN);
+        let mut processor = Processor::new();
+        let mut recorder = Recorder::default();
+        for read in bytes.chunks(split) {
+            handle_output(
+                &mut splitter,
+                &mut scanner,
+                &mut processor,
+                &mut timeline,
+                &mut recorder,
+                &mut term,
+                read,
+            );
+        }
+        (term, timeline, recorder)
+    }
+
+    #[test]
+    fn handle_output_reaches_the_handler_after_the_text_of_a_synchronized_update() {
+        let bytes = b"\x1b[?2026hhello\x1b_Ga=T;AAAA\x1b\\world\x1b[?2026l";
+        for split in [1, 4, bytes.len()] {
+            let (term, _, recorder) = handle_in_reads(bytes, split);
+            assert_eq!(
+                recorder.calls,
+                [(
+                    "kitty a=T;AAAA".to_owned(),
+                    "hello".to_owned(),
+                    Point::new(Line(0), Column(5)),
+                )],
+                "split {split}"
+            );
+            assert_eq!(texts(&term)[0], "helloworld");
+        }
+    }
+
+    #[test]
+    fn handle_output_passes_sixel_and_reset_in_order() {
+        let bytes = b"ab\x1bPq#0~\x1b\\cd\x1bcef";
+        for split in [1, 3, bytes.len()] {
+            let (term, _, recorder) = handle_in_reads(bytes, split);
+            let calls: Vec<_> = recorder
+                .calls
+                .iter()
+                .map(|(name, text, _)| (name.as_str(), text.as_str()))
+                .collect();
+            assert_eq!(
+                calls,
+                [("sixel q#0~", "ab"), ("reset", "")],
+                "split {split}"
+            );
+            assert_eq!(texts(&term)[0], "ef");
+        }
+    }
+
+    #[test]
+    fn handle_output_keeps_block_signals_around_an_image() {
+        let bytes = format!(
+            "$ ls\r\n{}out\x1b_Gi=1;AA\x1b\\\r\n{}$ ",
+            start("ls"),
+            end(0)
+        );
+        for split in [1, 5, bytes.len()] {
+            let (_, timeline, recorder) = handle_in_reads(bytes.as_bytes(), split);
+            let block = &timeline.blocks()[0];
+            assert_eq!(block.command, "ls");
+            assert_eq!(texts(&block.output), ["out"], "split {split}");
+            assert_eq!(recorder.calls.len(), 1);
+        }
+    }
+
+    #[test]
+    fn handle_output_without_images_matches_process() {
+        let bytes = format!("$ ls\r\n{}out\r\n{}$ \x1b_Xapc\x1b\\", start("ls"), end(2));
+        let (handled, handled_timeline, recorder) = handle_in_reads(bytes.as_bytes(), 3);
+        let (processed, processed_timeline) = process_in_reads(&bytes, 3);
+        assert!(recorder.calls.is_empty());
+        assert_eq!(texts(&handled), texts(&processed));
+        assert_eq!(
+            handled_timeline.blocks()[0].status,
+            processed_timeline.blocks()[0].status
+        );
     }
 
     /// Accepts at most `chunk` bytes per call, then blocks after `budget` bytes.

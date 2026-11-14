@@ -9,6 +9,7 @@ mod build_version;
 mod chrome;
 mod config;
 mod frame;
+mod graphics;
 mod i18n;
 mod input;
 mod input_editor;

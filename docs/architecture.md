@@ -31,6 +31,9 @@ src/
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
+  graphics/
+    mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread
+    sequence.rs    incremental splitter of the kitty and sixel sequences in the PTY stream (pure)
   timeline.rs      command blocks: finished blocks frozen in their own Term, current block (pure)
   block_actions.rs target block, block navigation, copied block / command / output (pure)
   view.rs          view rows over the timeline: source grid and line of each row, caps,
@@ -72,7 +75,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `graphics/sequence`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
@@ -122,7 +125,9 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 UI thread (winit)                         PTY thread (pty::PtyLoop)
 -----------------                         -------------------------
 keyboard / mouse  --pty::Sender(Msg)-->   writes to PTY (WriteQueue)
-                                          reads PTY, signals::Scanner splits it,
+                                          reads PTY, graphics::sequence::Splitter
+                                          cuts the image sequences out,
+                                          signals::Scanner splits the VT bytes,
                                           pty::feed parses VT into Term,
                                           Timeline::apply handles each signal
 request_redraw   <--UserEvent::Terminal-- EventProxy::send_event(Wakeup, Title, ...)
@@ -152,7 +157,12 @@ Renderer::render(pane frames, interface rects)
   `Msg::{Input, Resize, Shutdown}` sent through `pty::Sender` (mpsc + `poller.notify()`);
   a `WriteQueue` resumed on partial writes; `EIO` on read ignored until the child exit
   event; synchronized updates flushed with `stop_sync` on their timeout. Each read goes
-  through `pty::process`: `signals::Scanner` (built with the session token) splits it
+  through `pty::handle_output`: `graphics::sequence::Splitter` first cuts the kitty
+  graphics commands (`ESC _ G ... ESC \`) and sixel images (DCS with final `q`) out of
+  the raw bytes, keeping its state across reads and passing every other APC / DCS
+  through; for each image sequence, and after each full reset (`ESC c`), a synchronized
+  update holding bytes is flushed and the `graphics::Handler` runs with the `Term` lock
+  held (a logging no-op until images are drawn). The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
   into byte chunks, block signals and screen clears; each byte chunk is parsed by
   `pty::feed` (the single parse step), and each signal or clear is applied by
   `Timeline::apply` right after the bytes of its sequence, so the live grid holds

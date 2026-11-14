@@ -28,6 +28,19 @@ parse step `pty::feed` can be split around signals. alacritty's `tty` module sti
 shell and owns the PTY file descriptors. Poller keys `0` (read/write) and `1` (child
 event) mirror alacritty's unix `tty`, where they are `pub(crate)`.
 
+## Image splitter before the block signal scanner
+
+`vte` 0.15 drops APC strings and `alacritty_terminal` only logs DCS, so kitty graphics and
+sixel never reach Graphene through the parser. `graphics::sequence::Splitter` cuts them
+out of the raw PTY bytes first, before `signals::Scanner`: an image payload (megabytes of
+base64 or sixel data) is never scanned for block signals, and the scanner sees the VT bytes
+around an image as one contiguous stream. Only `ESC _ G` and DCS with final byte `q` and no
+intermediate are extracted; other APC / DCS strings pass through byte for byte, so `vte`
+keeps its behaviour (DECRQSS `ESC P $ q` included). A payload over 256 MiB (the image store
+budget) is dropped up to its terminator; `ESC`, `CAN` or `SUB` inside a payload abort it,
+as in `vte`. `Term` reports no full reset, so the splitter flags `ESC c` in the passed
+bytes.
+
 ## One terminal per block: live grid and frozen blocks
 
 The first implementation cut one grid into blocks with the OSC 133 marks the shell
