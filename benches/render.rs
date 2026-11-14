@@ -142,7 +142,15 @@ fn session_for(fixture: &Fixture) -> Session {
 /// Frame of the view over the blocks of `session`.
 fn capture(session: &Session, palette: &Palette) -> Frame {
     let rows = view_rows(&session.timeline, &session.term, LINES);
-    Frame::capture(&session.term, &session.timeline, &rows, palette, true, None)
+    Frame::capture(
+        &session.term,
+        &session.timeline,
+        &rows,
+        palette,
+        true,
+        true,
+        None,
+    )
 }
 
 fn layout(cell: CellSize) -> GridLayout {

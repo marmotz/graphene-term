@@ -27,6 +27,7 @@
 # [cursor]
 ## "block", "beam" or "underline".
 # shape = "block"
+## Applications can still change both (DECSCUSR).
 # blinking = false
 
 # [selection]

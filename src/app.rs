@@ -27,6 +27,7 @@ use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::cursor_blink::CursorBlink;
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
 use crate::i18n::Lang;
@@ -114,6 +115,8 @@ struct Session {
     palette: Palette,
     clipboard: Option<arboard::Clipboard>,
     focused: bool,
+    /// Blink phase of the active pane's cursor.
+    cursor_blink: CursorBlink,
     modifiers: ModifiersState,
     font_size: f32,
     /// Minimum padding around the grid, in logical pixels.
@@ -577,6 +580,29 @@ impl Session {
         deadline
     }
 
+    /// Updates the blink phase of the active pane's cursor, and requests a redraw when
+    /// it toggled. Returns when the next toggle is due, `None` while the cursor does not
+    /// blink: its style does not ask for it, or the window does not have the focus.
+    fn blink(&mut self, now: Instant) -> Option<Instant> {
+        let blinking = self.focused
+            && self
+                .workspace
+                .active_pane()
+                .is_some_and(|pane| pane.terminal.term.lock().cursor_style().blinking);
+        let (changed, deadline) = self.cursor_blink.update(now, blinking);
+        if changed {
+            self.window.request_redraw();
+        }
+        deadline
+    }
+
+    /// Shows the cursor for a full blink interval: typing or pasting never hides it.
+    fn reset_blink(&mut self) {
+        if self.cursor_blink.reset(Instant::now()) {
+            self.window.request_redraw();
+        }
+    }
+
     fn flush_panes(&mut self) {
         let shown = self.workspace.active_tab().cloned();
         let mut redraw = false;
@@ -753,6 +779,7 @@ impl Session {
     }
 
     fn paste(&mut self) {
+        self.reset_blink();
         let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) else {
             return;
         };
@@ -1088,6 +1115,7 @@ impl Session {
     }
 
     fn paste_primary(&mut self) {
+        self.reset_blink();
         let Some(clipboard) = self.clipboard.as_mut() else {
             return;
         };
@@ -1196,6 +1224,7 @@ impl Session {
         default_font_size: f32,
         event_loop: &ActiveEventLoop,
     ) {
+        self.reset_blink();
         // While an overlay is open, keys go to it only.
         match &mut self.overlay {
             Some(Overlay::Confirm(_)) => {
@@ -1447,6 +1476,7 @@ impl Session {
                     &rows,
                     &self.palette,
                     self.focused && is_active,
+                    !is_active || self.cursor_blink.visible(),
                     pane.selected_block,
                 );
                 frame.attach_images(&graphics::lock(&pane.terminal.images));
@@ -1612,6 +1642,7 @@ impl App {
             palette: self.palette.clone(),
             clipboard,
             focused: true,
+            cursor_blink: CursorBlink::new(Instant::now()),
             modifiers: ModifiersState::empty(),
             font_size: self.config.font.size,
             padding: self.config.window.padding,
@@ -1656,6 +1687,7 @@ impl ApplicationHandler<UserEvent> for App {
         let deadline = self.session.as_mut().and_then(|session| {
             let now = Instant::now();
             let deadline = earliest(session.auto_scroll(now), session.animate(now));
+            let deadline = earliest(deadline, session.blink(now));
             session.flush_panes();
             deadline
         });

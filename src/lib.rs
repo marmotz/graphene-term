@@ -9,6 +9,7 @@ mod build_version;
 mod chrome;
 mod clipboard;
 mod config;
+mod cursor_blink;
 mod frame;
 mod graphics;
 mod i18n;

@@ -4,13 +4,13 @@
 
 ## Configuration file and themes ·  [overview](features/config-themes/overview.md)
 
-_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 5/11 tasks done
+_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 6/11 tasks done
 
 | Done | Issue                                                     | Title                                                      | Blocked by                   |
 |------|-----------------------------------------------------------|------------------------------------------------------------|------------------------------|
 | [x]  | [#13](https://github.com/marmotz/graphene-term/issues/13) | Config: centre the grid with the leftover pixels           | —                            |
 | [x]  | [#16](https://github.com/marmotz/graphene-term/issues/16) | Config: configurable keybindings                           | #14                          |
-| [ ]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking                                    | #14                          |
+| [x]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking                                    | #14                          |
 | [ ]  | [#19](https://github.com/marmotz/graphene-term/issues/19) | Config: hot reload of the configuration and themes         | #14, #15, #16                |
 | [ ]  | [#20](https://github.com/marmotz/graphene-term/issues/20) | Config: follow the system light/dark appearance            | #15, #19                     |
 | [ ]  | [#21](https://github.com/marmotz/graphene-term/issues/21) | Config: language, tab bar position and UI colors           | #13, #15, #19, #35, #40, #42 |

@@ -30,10 +30,15 @@ commented out, default values) is written there; a write failure is only logged.
 Parsing (`src/config.rs`) reads the file key by key: a missing key takes its default, an
 invalid value or an unknown key is logged with its line and ignored, a TOML syntax error
 ignores the whole file. Settings applied at startup: font family and size, padding,
-initial window size, scrollback, word separators, cursor shape, keybindings
+initial window size, scrollback, word separators, cursor shape and blinking, keybindings
 (`src/keybindings.rs`: default table, then the configured entries; an invalid key or
-action is reported like any invalid value). The other keys (`language`, `tabs`, `theme`,
-`cursor.blinking`) are read but not applied yet.
+action is reported like any invalid value). The other keys (`language`, `tabs`, `theme`)
+are read but not applied yet.
+
+The cursor blinks (`src/cursor_blink.rs`) when its style asks for it (`cursor.blinking`,
+or DECSCUSR from the application) and the window has the focus: the phase toggles every
+500 ms, `App::about_to_wait` waits until the next toggle, and a key press or a paste
+restarts the cycle on a visible phase.
 
 In `config.default.toml`, settings and section headers are commented with `# ` and
 documentation lines with `##`: a test uncomments the settings and checks that the result
