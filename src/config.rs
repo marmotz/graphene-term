@@ -15,6 +15,7 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 
 use crate::appearance::Appearance;
+use crate::i18n::Lang;
 use crate::keybindings;
 
 /// The fully commented default configuration, written on first launch.
@@ -168,6 +169,18 @@ pub enum Language {
     Fr,
 }
 
+impl Language {
+    /// Language of the interface: the forced one, or `detected` (the locale's) for
+    /// `auto`.
+    pub fn resolve(self, detected: impl FnOnce() -> Lang) -> Lang {
+        match self {
+            Language::Auto => detected(),
+            Language::En => Lang::En,
+            Language::Fr => Lang::Fr,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorShape {
@@ -305,7 +318,6 @@ impl ThemeConfig {
 /// file behaves like no configuration at all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    #[allow(dead_code, reason = "applied by the language task")]
     pub language: Language,
     pub font: FontConfig,
     pub window: WindowConfig,
@@ -601,6 +613,19 @@ mod tests {
 
     fn file() -> PathBuf {
         PathBuf::from("/home/user/.config/graphene/config.toml")
+    }
+
+    #[test]
+    fn auto_language_is_the_detected_one() {
+        assert_eq!(Language::Auto.resolve(|| Lang::Fr), Lang::Fr);
+        assert_eq!(Language::Auto.resolve(|| Lang::En), Lang::En);
+    }
+
+    #[test]
+    fn forced_language_ignores_the_locale() {
+        let detect = || panic!("the locale is not read for a forced language");
+        assert_eq!(Language::En.resolve(detect), Lang::En);
+        assert_eq!(Language::Fr.resolve(detect), Lang::Fr);
     }
 
     fn parse(text: &str) -> (Config, Vec<ConfigError>) {

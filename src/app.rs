@@ -611,6 +611,7 @@ impl Session {
             .set_background_opacity(new.window.background_opacity);
         self.palette = palette.clone();
         self.keybindings = Keybindings::new(&new.keybindings);
+        self.lang = new.language.resolve(Lang::detect);
         self.config_banner = banner;
         // A changed cursor style shows at once, visible.
         self.reset_blink();
@@ -1762,7 +1763,7 @@ impl App {
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),
             ignored_tag: None,
-            lang: Lang::detect(),
+            lang: self.config.language.resolve(Lang::detect),
             keybindings: Keybindings::new(&self.config.keybindings),
             first_frame: perf::FirstFrame::default(),
             restore_size: initial_size,
