@@ -28,6 +28,7 @@ mod timeline;
 mod timeline_selection;
 mod update;
 mod view;
+mod workspace;
 
 /// Version of this build, computed by `build.rs`.
 pub const VERSION: &str = env!("GRAPHENE_VERSION");
