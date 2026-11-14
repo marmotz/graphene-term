@@ -3,7 +3,7 @@
 use alacritty_terminal::term::TermMode;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
-use crate::i18n::Direction;
+use crate::i18n::{Direction, Msg};
 
 /// Actions handled by Graphene Term itself rather than forwarded to the shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,10 +37,8 @@ pub enum Action {
     /// Zooms the active pane to the whole tab, or back.
     ToggleZoom,
     /// Gives every pane of the tab an equal share; no default key.
-    #[allow(dead_code, reason = "reached through the command palette")]
     EqualisePanes,
     /// Moves the active pane into a new tab; no default key.
-    #[allow(dead_code, reason = "reached through the command palette")]
     DetachPane,
     /// Opens a tab after the last one.
     NewTab,
@@ -48,6 +46,182 @@ pub enum Action {
     PreviousTab,
     /// Shows the tab of this number, counted from 1.
     GoToTab(u8),
+    /// Opens the command palette.
+    CommandPalette,
+}
+
+impl Action {
+    /// Every action the command palette lists, in its default order. The tabs are
+    /// listed by the palette itself, so `GoToTab` is left out, and so is the palette.
+    pub const ALL: [Action; 34] = [
+        Action::NewTab,
+        Action::ClosePane,
+        Action::SplitRight,
+        Action::SplitDown,
+        Action::NextTab,
+        Action::PreviousTab,
+        Action::NextPane,
+        Action::PreviousPane,
+        Action::FocusPane(Direction::Left),
+        Action::FocusPane(Direction::Right),
+        Action::FocusPane(Direction::Up),
+        Action::FocusPane(Direction::Down),
+        Action::ResizePane(Direction::Left),
+        Action::ResizePane(Direction::Right),
+        Action::ResizePane(Direction::Up),
+        Action::ResizePane(Direction::Down),
+        Action::ToggleZoom,
+        Action::EqualisePanes,
+        Action::DetachPane,
+        Action::Copy,
+        Action::Paste,
+        Action::CopyCommand,
+        Action::CopyOutput,
+        Action::PreviousBlock,
+        Action::NextBlock,
+        Action::ToggleFold,
+        Action::ToggleFoldAll,
+        Action::ScrollPageUp,
+        Action::ScrollPageDown,
+        Action::ScrollToTop,
+        Action::ScrollToBottom,
+        Action::FontSizeIncrease,
+        Action::FontSizeDecrease,
+        Action::FontSizeReset,
+    ];
+
+    /// Stable name of the action: the snake_case of its variant, the direction or tab
+    /// number appended (`focus_pane_left`, `go_to_tab_3`). Stored in the palette's
+    /// recent file, and the name the keybindings use.
+    pub fn id(self) -> String {
+        let direction = |direction| match direction {
+            Direction::Left => "left",
+            Direction::Right => "right",
+            Direction::Up => "up",
+            Direction::Down => "down",
+        };
+        let name = match self {
+            Action::Copy => "copy",
+            Action::Paste => "paste",
+            Action::ScrollPageUp => "scroll_page_up",
+            Action::ScrollPageDown => "scroll_page_down",
+            Action::ScrollToTop => "scroll_to_top",
+            Action::ScrollToBottom => "scroll_to_bottom",
+            Action::FontSizeIncrease => "font_size_increase",
+            Action::FontSizeDecrease => "font_size_decrease",
+            Action::FontSizeReset => "font_size_reset",
+            Action::PreviousBlock => "previous_block",
+            Action::NextBlock => "next_block",
+            Action::CopyCommand => "copy_command",
+            Action::CopyOutput => "copy_output",
+            Action::ToggleFold => "toggle_fold",
+            Action::ToggleFoldAll => "toggle_fold_all",
+            Action::SplitRight => "split_right",
+            Action::SplitDown => "split_down",
+            Action::ClosePane => "close_pane",
+            Action::FocusPane(d) => return format!("focus_pane_{}", direction(d)),
+            Action::ResizePane(d) => return format!("resize_pane_{}", direction(d)),
+            Action::NextPane => "next_pane",
+            Action::PreviousPane => "previous_pane",
+            Action::ToggleZoom => "toggle_zoom",
+            Action::EqualisePanes => "equalise_panes",
+            Action::DetachPane => "detach_pane",
+            Action::NewTab => "new_tab",
+            Action::NextTab => "next_tab",
+            Action::PreviousTab => "previous_tab",
+            Action::GoToTab(number) => return format!("go_to_tab_{number}"),
+            Action::CommandPalette => "command_palette",
+        };
+        name.to_owned()
+    }
+
+    /// Label of the action in the user's language.
+    pub fn label(self) -> Msg {
+        match self {
+            Action::Copy => Msg::Copy,
+            Action::Paste => Msg::Paste,
+            Action::ScrollPageUp => Msg::ScrollPageUp,
+            Action::ScrollPageDown => Msg::ScrollPageDown,
+            Action::ScrollToTop => Msg::ScrollToTop,
+            Action::ScrollToBottom => Msg::ScrollToBottom,
+            Action::FontSizeIncrease => Msg::FontSizeIncrease,
+            Action::FontSizeDecrease => Msg::FontSizeDecrease,
+            Action::FontSizeReset => Msg::FontSizeReset,
+            Action::PreviousBlock => Msg::PreviousBlock,
+            Action::NextBlock => Msg::NextBlock,
+            Action::CopyCommand => Msg::CopyCommand,
+            Action::CopyOutput => Msg::CopyOutput,
+            Action::ToggleFold => Msg::ToggleFold,
+            Action::ToggleFoldAll => Msg::ToggleFoldAll,
+            Action::SplitRight => Msg::SplitRight,
+            Action::SplitDown => Msg::SplitDown,
+            Action::ClosePane => Msg::ClosePane,
+            Action::FocusPane(d) => Msg::FocusPane(d),
+            Action::ResizePane(d) => Msg::ResizePane(d),
+            Action::NextPane => Msg::NextPane,
+            Action::PreviousPane => Msg::PreviousPane,
+            Action::ToggleZoom => Msg::ToggleZoom,
+            Action::EqualisePanes => Msg::EqualisePanes,
+            Action::DetachPane => Msg::DetachPane,
+            Action::NewTab => Msg::NewTab,
+            Action::NextTab => Msg::NextTab,
+            Action::PreviousTab => Msg::PreviousTab,
+            Action::GoToTab(number) => Msg::GoToTab(usize::from(number)),
+            Action::CommandPalette => Msg::CommandPalette,
+        }
+    }
+}
+
+/// The default shortcut of `action` as shown in the command palette, `None` for an
+/// action without key. Kept in step with [`action_for`].
+pub fn shortcut_label(action: Action) -> Option<&'static str> {
+    let label = match action {
+        Action::Copy => "Ctrl+Shift+C",
+        Action::Paste => "Ctrl+Shift+V",
+        Action::ScrollPageUp => "Shift+PageUp",
+        Action::ScrollPageDown => "Shift+PageDown",
+        Action::ScrollToTop => "Shift+Home",
+        Action::ScrollToBottom => "Shift+End",
+        Action::FontSizeIncrease => "Ctrl+=",
+        Action::FontSizeDecrease => "Ctrl+-",
+        Action::FontSizeReset => "Ctrl+0",
+        Action::PreviousBlock => "Ctrl+Shift+PageUp",
+        Action::NextBlock => "Ctrl+Shift+PageDown",
+        Action::CopyCommand => "Ctrl+Shift+Alt+C",
+        Action::CopyOutput => "Ctrl+Shift+Alt+O",
+        Action::ToggleFold => "Ctrl+Shift+F",
+        Action::ToggleFoldAll => "Ctrl+Shift+Alt+F",
+        Action::SplitRight => "Ctrl+Shift+E",
+        Action::SplitDown => "Ctrl+Shift+O",
+        Action::ClosePane => "Ctrl+Shift+W",
+        Action::FocusPane(Direction::Left) => "Ctrl+Shift+Left",
+        Action::FocusPane(Direction::Right) => "Ctrl+Shift+Right",
+        Action::FocusPane(Direction::Up) => "Ctrl+Shift+Up",
+        Action::FocusPane(Direction::Down) => "Ctrl+Shift+Down",
+        Action::ResizePane(Direction::Left) => "Ctrl+Shift+Alt+Left",
+        Action::ResizePane(Direction::Right) => "Ctrl+Shift+Alt+Right",
+        Action::ResizePane(Direction::Up) => "Ctrl+Shift+Alt+Up",
+        Action::ResizePane(Direction::Down) => "Ctrl+Shift+Alt+Down",
+        Action::NextPane => "Ctrl+Shift+N",
+        Action::PreviousPane => "Ctrl+Shift+B",
+        Action::ToggleZoom => "Ctrl+Shift+Z",
+        Action::EqualisePanes | Action::DetachPane => return None,
+        Action::NewTab => "Ctrl+Shift+T",
+        Action::NextTab => "Ctrl+Tab",
+        Action::PreviousTab => "Ctrl+Shift+Tab",
+        Action::GoToTab(1) => "Alt+1",
+        Action::GoToTab(2) => "Alt+2",
+        Action::GoToTab(3) => "Alt+3",
+        Action::GoToTab(4) => "Alt+4",
+        Action::GoToTab(5) => "Alt+5",
+        Action::GoToTab(6) => "Alt+6",
+        Action::GoToTab(7) => "Alt+7",
+        Action::GoToTab(8) => "Alt+8",
+        Action::GoToTab(9) => "Alt+9",
+        Action::GoToTab(_) => return None,
+        Action::CommandPalette => "Ctrl+Shift+P",
+    };
+    Some(label)
 }
 
 /// Letter a shortcut is matched on: the character the key types when it is an ASCII
@@ -166,6 +340,7 @@ pub fn action_for(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Opt
             'b' => Some(Action::PreviousPane),
             'z' => Some(Action::ToggleZoom),
             't' => Some(Action::NewTab),
+            'p' => Some(Action::CommandPalette),
             _ => None,
         };
     }
@@ -363,6 +538,125 @@ mod tests {
 
     fn action_for(key: &Key, mods: ModifiersState) -> Option<Action> {
         super::action_for(key, UNIDENTIFIED, mods)
+    }
+
+    /// The key and modifiers a shortcut label names (`Ctrl+Shift+Left`, `Alt+3`).
+    fn parse_shortcut(label: &str) -> (Key, PhysicalKey, ModifiersState) {
+        let mut parts: Vec<&str> = label.split('+').collect();
+        // `Ctrl++` would split into empty parts; the labels use `Ctrl+=`.
+        let key = parts.pop().expect("a key");
+        let mut mods = NONE;
+        for part in parts {
+            mods |= match part {
+                "Ctrl" => ModifiersState::CONTROL,
+                "Shift" => ModifiersState::SHIFT,
+                "Alt" => ModifiersState::ALT,
+                other => panic!("unknown modifier {other} in {label}"),
+            };
+        }
+        let digits = [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
+        ];
+        let named_key = |name| match name {
+            "Left" => Some(NamedKey::ArrowLeft),
+            "Right" => Some(NamedKey::ArrowRight),
+            "Up" => Some(NamedKey::ArrowUp),
+            "Down" => Some(NamedKey::ArrowDown),
+            "PageUp" => Some(NamedKey::PageUp),
+            "PageDown" => Some(NamedKey::PageDown),
+            "Home" => Some(NamedKey::Home),
+            "End" => Some(NamedKey::End),
+            "Tab" => Some(NamedKey::Tab),
+            _ => None,
+        };
+        if let Some(named_key) = named_key(key) {
+            return (named(named_key), UNIDENTIFIED, mods);
+        }
+        let physical = key
+            .parse::<usize>()
+            .ok()
+            .and_then(|digit| digits.get(digit.wrapping_sub(1)))
+            .map_or(UNIDENTIFIED, |&code| PhysicalKey::Code(code));
+        (ch(key), physical, mods)
+    }
+
+    #[test]
+    fn shortcut_labels_name_the_keys_of_their_action() {
+        let actions = Action::ALL
+            .into_iter()
+            .chain([Action::CommandPalette])
+            .chain((1..=9).map(Action::GoToTab));
+        for action in actions {
+            let Some(label) = shortcut_label(action) else {
+                assert!(
+                    matches!(action, Action::EqualisePanes | Action::DetachPane),
+                    "{action:?} has no label"
+                );
+                continue;
+            };
+            let (key, physical, mods) = parse_shortcut(label);
+            assert_eq!(
+                super::action_for(&key, physical, mods),
+                Some(action),
+                "{label}"
+            );
+        }
+        assert_eq!(shortcut_label(Action::GoToTab(10)), None);
+    }
+
+    #[test]
+    fn ctrl_shift_p_opens_the_command_palette() {
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(action_for(&ch("P"), cs), Some(Action::CommandPalette));
+        assert_eq!(action_for(&ch("p"), cs), Some(Action::CommandPalette));
+    }
+
+    #[test]
+    fn action_ids_are_unique_snake_case() {
+        let mut ids: Vec<String> = Action::ALL
+            .into_iter()
+            .chain([Action::CommandPalette])
+            .chain((1..=9).map(Action::GoToTab))
+            .map(Action::id)
+            .collect();
+        assert!(
+            ids.iter().all(|id| id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')),
+            "{ids:?}"
+        );
+        let count = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), count);
+        assert_eq!(Action::FocusPane(Direction::Left).id(), "focus_pane_left");
+        assert_eq!(Action::GoToTab(3).id(), "go_to_tab_3");
+        assert_eq!(Action::FontSizeReset.id(), "font_size_reset");
+    }
+
+    #[test]
+    fn the_palette_lists_every_action_but_itself_and_the_tab_numbers() {
+        assert!(!Action::ALL.contains(&Action::CommandPalette));
+        assert!(!Action::ALL.iter().any(|a| matches!(a, Action::GoToTab(_))));
+        for (index, action) in Action::ALL.iter().enumerate() {
+            assert!(!Action::ALL[..index].contains(action), "{action:?} twice");
+        }
+        // Each label is a distinct text.
+        let mut labels: Vec<String> = Action::ALL
+            .into_iter()
+            .map(|a| crate::i18n::text(crate::i18n::Lang::En, &a.label()).into_owned())
+            .collect();
+        labels.sort();
+        labels.dedup();
+        assert_eq!(labels.len(), Action::ALL.len());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! Interface of the window (pure, no GPU access): the tab bar, the dividers between the
 //! panes of the shown tab and the border of its active pane, and the confirmation
-//! dialog over everything. Dividers and border are only drawn while the tab shows
+//! dialog or the command palette over everything. Dividers and border are only drawn while the tab shows
 //! several panes, the bar while there are several tabs.
 
+use super::command_palette::PaletteLayout;
 use super::dialog::DialogLayout;
 use super::tab_bar::TabBarLayout;
 use crate::layout::Rect;
@@ -24,13 +25,20 @@ const PLUS_STROKE: f32 = 1.0 / 15.0;
 /// Thickness of the dialog border, in physical pixels.
 const DIALOG_BORDER: f32 = 1.0;
 
+/// The box drawn over everything, laid out.
+#[derive(Debug, Clone, Copy)]
+pub enum Overlay<'a> {
+    Dialog(&'a DialogLayout),
+    Palette(&'a PaletteLayout),
+}
+
 /// The interface over the panes of `layout`: the pane rectangles (see [`panes`]), then
-/// the tab bar when `tab_bar` is given, and the `dialog` in the overlay.
+/// the tab bar when `tab_bar` is given, and the `overlay`.
 pub fn build(
     layout: &Layout,
     active: Option<PaneId>,
     tab_bar: Option<&TabBarLayout>,
-    dialog: Option<&DialogLayout>,
+    overlay: Option<Overlay<'_>>,
     colors: &UiColors,
     srgb_target: bool,
 ) -> UiLayer {
@@ -41,10 +49,63 @@ pub fn build(
     if let Some(bar) = tab_bar {
         tabs(bar, colors, srgb_target, &mut ui);
     }
-    if let Some(dialog) = dialog {
-        self::dialog(dialog, colors, srgb_target, &mut ui);
+    match overlay {
+        Some(Overlay::Dialog(layout)) => dialog(layout, colors, srgb_target, &mut ui),
+        Some(Overlay::Palette(layout)) => palette(layout, colors, srgb_target, &mut ui),
+        None => {}
     }
     ui
+}
+
+/// The command palette, in the overlay: its box and border, the search field and its
+/// text cursor, the selected row, then the texts: the query or its hint, and each row's
+/// label (matching characters in the accent color) and shortcut.
+fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    let text = color(colors.palette_text);
+    let dim = color(colors.tab_inactive_text);
+    ui.overlay_rects
+        .push(rect(palette.rect, color(colors.palette_background)));
+    ui.overlay_rects.extend(border(
+        palette.rect,
+        DIALOG_BORDER,
+        color(colors.pane_border),
+    ));
+    ui.overlay_rects
+        .push(rect(palette.input, color(colors.tab_bar_background)));
+    ui.overlay_rects.push(rect(palette.caret, text));
+    if let Some(row) = palette.rows.iter().find(|row| row.selected) {
+        ui.overlay_rects
+            .push(rect(row.rect, color(colors.tab_active_background)));
+    }
+    ui.overlay_texts.push(UiTextItem {
+        text: palette.input_text.clone(),
+        x: palette.text_x,
+        y: palette.input_text_y,
+        color: if palette.placeholder { dim } else { text },
+        max_width: palette.text_width,
+    });
+    let matching = color(colors.palette_match);
+    for row in &palette.rows {
+        for run in &row.runs {
+            ui.overlay_texts.push(UiTextItem {
+                text: run.text.clone(),
+                x: run.x,
+                y: row.text_y,
+                color: if run.highlighted { matching } else { text },
+                max_width: run.max_width,
+            });
+        }
+        if let Some((shortcut, x)) = &row.shortcut {
+            ui.overlay_texts.push(UiTextItem {
+                text: shortcut.clone(),
+                x: *x,
+                y: row.text_y,
+                color: dim,
+                max_width: row.rect.x + row.rect.width - x,
+            });
+        }
+    }
 }
 
 /// The dialog, in the overlay: its box and border, its title and message, then its
@@ -412,7 +473,7 @@ mod tests {
             &two_columns(),
             Some(PaneId(1)),
             Some(&bar),
-            Some(&dialog),
+            Some(Overlay::Dialog(&dialog)),
             &colors,
             false,
         );
@@ -452,5 +513,107 @@ mod tests {
                 ("Close", color(DIALOG_BACKGROUND)),
             ]
         );
+    }
+
+    #[test]
+    fn palette_is_drawn_in_the_overlay() {
+        use crate::chrome::command_palette::{Command, CommandPalette, Entry, PaletteLayout};
+        use crate::i18n::Lang;
+        use crate::input::Action;
+        use winit::keyboard::Key;
+        let colors = UiColors {
+            palette_background: DIALOG_BACKGROUND,
+            palette_text: DIALOG_TEXT,
+            ..tab_colors()
+        };
+        let entry = |label: &str, action, shortcut| Entry {
+            command: Command::Action(action),
+            label: label.to_owned(),
+            shortcut,
+        };
+        let mut palette = CommandPalette::new(
+            vec![
+                entry("Split right", Action::SplitRight, Some("Ctrl+Shift+E")),
+                entry("Split down", Action::SplitDown, None),
+            ],
+            Vec::new(),
+        );
+        palette.key(&Key::Character("s".into()), Some("s"));
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let layout = PaletteLayout::new(
+            &palette,
+            Lang::En,
+            area(0.0, 0.0, 1000.0, 600.0),
+            metrics,
+            |t| t.chars().count() as f32 * 8.0,
+        );
+        let ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            None,
+            Some(Overlay::Palette(&layout)),
+            &colors,
+            false,
+        );
+        let color = |c| gpu_color(c, false);
+        // Box, its 4 border sides, the search field, the text cursor, the selected row.
+        assert_eq!(ui.overlay_rects.len(), 8);
+        assert_eq!(ui.overlay_rects[0].color, color(DIALOG_BACKGROUND));
+        assert_eq!(ui.overlay_rects[5].color, color(BAR));
+        assert_eq!(ui.overlay_rects[6].color, color(DIALOG_TEXT));
+        assert_eq!(ui.overlay_rects[7].color, color(ACTIVE_TAB));
+        assert_eq!(
+            ui.overlay_rects[7].position,
+            [layout.rows[0].rect.x, layout.rows[0].rect.y]
+        );
+        let texts: Vec<(&str, [f32; 4])> = ui
+            .overlay_texts
+            .iter()
+            .map(|t| (t.text.as_str(), t.color))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("s", color(DIALOG_TEXT)),
+                ("S", color(ACCENT)),
+                ("plit right", color(DIALOG_TEXT)),
+                ("Ctrl+Shift+E", color(INACTIVE_TEXT)),
+                ("S", color(ACCENT)),
+                ("plit down", color(DIALOG_TEXT)),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_palette_query_shows_its_hint_dimmed() {
+        use crate::chrome::command_palette::{CommandPalette, PaletteLayout};
+        use crate::i18n::Lang;
+        let palette = CommandPalette::new(Vec::new(), Vec::new());
+        let layout = PaletteLayout::new(
+            &palette,
+            Lang::En,
+            area(0.0, 0.0, 1000.0, 600.0),
+            UiMetrics {
+                line_height: 18.0,
+                scale: 1.0,
+            },
+            |t| t.chars().count() as f32 * 8.0,
+        );
+        let ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            None,
+            Some(Overlay::Palette(&layout)),
+            &tab_colors(),
+            false,
+        );
+        assert_eq!(ui.overlay_texts.len(), 1);
+        assert_eq!(ui.overlay_texts[0].text, "Type a command, a tab or a pane");
+        assert_eq!(ui.overlay_texts[0].color, gpu_color(INACTIVE_TEXT, false));
+        // No row, so no selected row: box, border, field and cursor.
+        assert_eq!(ui.overlay_rects.len(), 7);
     }
 }

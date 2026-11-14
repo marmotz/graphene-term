@@ -18,6 +18,9 @@ use winit::window::{Window, WindowId};
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::block_actions::{Direction, Part};
 use crate::chrome;
+use crate::chrome::command_palette::{
+    self, Command, CommandPalette, Outcome, PaletteHit, PaletteLayout,
+};
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -67,6 +70,8 @@ enum Drag {
 enum Overlay {
     /// A close waiting for confirmation.
     Confirm(ConfirmClose),
+    /// The command palette.
+    Palette(CommandPalette),
 }
 
 struct Session {
@@ -368,15 +373,95 @@ impl Session {
         }
     }
 
-    /// Handles a press while an overlay is open: a button of the dialog answers it,
-    /// anything else is ignored.
-    fn overlay_press(&mut self, button: mouse::Button, event_loop: &ActiveEventLoop) {
+    /// Opens the command palette over the window, its recent actions read from the
+    /// recent file.
+    fn open_palette(&mut self) {
+        let recent = command_palette::recent_path()
+            .map(|path| command_palette::load_recent(&path))
+            .unwrap_or_default();
+        let entries = command_palette::entries(&self.workspace, self.lang);
+        self.overlay = Some(Overlay::Palette(CommandPalette::new(entries, recent)));
+        self.window.request_redraw();
+        self.update_pointer();
+    }
+
+    /// The open command palette laid out in the window.
+    fn palette_layout(&mut self) -> Option<PaletteLayout> {
+        let Some(Overlay::Palette(palette)) = &self.overlay else {
+            return None;
+        };
+        let size = self.window.inner_size();
+        let metrics = self.ui_metrics();
+        let renderer = &mut self.renderer;
+        Some(PaletteLayout::new(
+            palette,
+            self.lang,
+            Rect::from_size(size.width, size.height),
+            metrics,
+            |text| renderer.ui_text_width(text),
+        ))
+    }
+
+    /// Applies what a key or a click on the open palette asks: closes it, then runs the
+    /// chosen entry. An action run is remembered in the recent file.
+    fn palette_outcome(
+        &mut self,
+        outcome: Outcome,
+        default_font_size: f32,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let Some(Overlay::Palette(palette)) = self.overlay.take() else {
+            return;
+        };
+        self.window.request_redraw();
+        self.update_pointer();
+        let Outcome::Run(command) = outcome else {
+            return;
+        };
+        match command {
+            Command::Action(action) => {
+                if let Some(path) = command_palette::recent_path() {
+                    let recent = command_palette::remember(palette.recent(), action);
+                    if let Err(error) = command_palette::save_recent(&path, &recent) {
+                        log::warn!("cannot write {}: {error}", path.display());
+                    }
+                }
+                self.run_action(action, default_font_size, event_loop);
+            }
+            Command::Tab(index) => self.change_tab(|workspace| workspace.select(index)),
+            Command::Pane(id) => self.focus_pane(id),
+        }
+    }
+
+    /// Handles a press while an overlay is open: a button of the dialog answers it, a
+    /// row of the palette runs it and a press outside the palette closes it; anything
+    /// else is ignored.
+    fn overlay_press(
+        &mut self,
+        button: mouse::Button,
+        default_font_size: f32,
+        event_loop: &ActiveEventLoop,
+    ) {
         let (x, y) = self.mouse_pixel();
-        if button == mouse::Button::Left
-            && let Some(DialogHit::Button(answer)) =
-                self.dialog_layout().and_then(|layout| layout.hit(x, y))
-        {
-            self.answer_dialog(answer, event_loop);
+        if !matches!(self.overlay, Some(Overlay::Palette(_))) {
+            if button == mouse::Button::Left
+                && let Some(DialogHit::Button(answer)) =
+                    self.dialog_layout().and_then(|layout| layout.hit(x, y))
+            {
+                self.answer_dialog(answer, event_loop);
+            }
+            return;
+        }
+        let outcome = match self.palette_layout().and_then(|layout| layout.hit(x, y)) {
+            None => Some(Outcome::Close),
+            Some(PaletteHit::Row(index)) if button == mouse::Button::Left => match &self.overlay {
+                Some(Overlay::Palette(palette)) => palette.choose(index),
+                _ => None,
+            },
+            Some(_) => None,
+        };
+        if let Some(outcome) = outcome {
+            self.palette_outcome(outcome, default_font_size, event_loop);
         }
     }
 
@@ -552,22 +637,28 @@ impl Session {
         &mut self,
         state: ElementState,
         button: MouseButton,
+        default_font_size: f32,
         event_loop: &ActiveEventLoop,
     ) {
         let Some(button) = mouse::button_from(button) else {
             return;
         };
         match state {
-            ElementState::Pressed => self.mouse_press(button, event_loop),
+            ElementState::Pressed => self.mouse_press(button, default_font_size, event_loop),
             ElementState::Released => self.mouse_release(button),
         }
     }
 
     /// A press goes to the first of: the overlay, the banner, the tab bar, a divider, a
     /// pane. While an overlay is open, it takes every press.
-    fn mouse_press(&mut self, button: mouse::Button, event_loop: &ActiveEventLoop) {
+    fn mouse_press(
+        &mut self,
+        button: mouse::Button,
+        default_font_size: f32,
+        event_loop: &ActiveEventLoop,
+    ) {
         if self.overlay.is_some() {
-            self.overlay_press(button, event_loop);
+            self.overlay_press(button, default_font_size, event_loop);
             return;
         }
         if button == mouse::Button::Left && self.banner_press() {
@@ -793,6 +884,7 @@ impl Session {
     fn run_action(&mut self, action: Action, default_font_size: f32, event_loop: &ActiveEventLoop) {
         match action {
             Action::NewTab => self.new_tab(),
+            Action::CommandPalette => self.open_palette(),
             Action::NextTab => self.change_tab(|workspace| {
                 workspace.next();
                 true
@@ -879,11 +971,21 @@ impl Session {
         event_loop: &ActiveEventLoop,
     ) {
         // While an overlay is open, keys go to it only.
-        if self.overlay.is_some() {
-            if let Some(answer) = dialog::answer_for(&event.logical_key) {
-                self.answer_dialog(answer, event_loop);
+        match &mut self.overlay {
+            Some(Overlay::Confirm(_)) => {
+                if let Some(answer) = dialog::answer_for(&event.logical_key) {
+                    self.answer_dialog(answer, event_loop);
+                }
+                return;
             }
-            return;
+            Some(Overlay::Palette(palette)) => {
+                match palette.key(&event.logical_key, event.text.as_deref()) {
+                    Some(outcome) => self.palette_outcome(outcome, default_font_size, event_loop),
+                    None => self.window.request_redraw(),
+                }
+                return;
+            }
+            None => {}
         }
         let modifiers = self.modifiers;
         let action = input::action_for(&event.logical_key, event.physical_key, modifiers);
@@ -932,6 +1034,18 @@ impl Session {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if let Some(Overlay::Palette(palette)) = &mut self.overlay {
+            let rows = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(position) => {
+                    position.y as f32 / self.renderer.ui_line_height()
+                }
+            };
+            // Wheel up shows the rows above.
+            palette.scroll_by(-rows.round() as isize);
+            self.window.request_redraw();
+            return;
+        }
         if self.overlay.is_some() {
             return;
         }
@@ -1059,9 +1173,15 @@ impl Session {
 
     /// Draws every pane of the shown tab, inactive ones dimmed when it shows several,
     /// then the dividers, the active pane border and the tab bar, then the banner, then
-    /// the open dialog.
+    /// the open dialog or command palette.
     fn redraw(&mut self) {
         let dialog = self.dialog_layout();
+        let palette = self.palette_layout();
+        let overlay = match (&dialog, &palette) {
+            (Some(dialog), _) => Some(chrome::scene::Overlay::Dialog(dialog)),
+            (_, Some(palette)) => Some(chrome::scene::Overlay::Palette(palette)),
+            _ => None,
+        };
         let mut banner = self.shown_banner().map(|shown| FrameBanner {
             layout: self.banner_layout(&shown),
             background: self.palette.ui.banner_background,
@@ -1113,7 +1233,7 @@ impl Session {
             &layout,
             active,
             bar.as_ref(),
-            dialog.as_ref(),
+            overlay,
             &self.palette.ui,
             self.renderer.is_srgb(),
         );
@@ -1158,7 +1278,8 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::NewTab
         | Action::NextTab
         | Action::PreviousTab
-        | Action::GoToTab(_) => {}
+        | Action::GoToTab(_)
+        | Action::CommandPalette => {}
     }
 }
 
@@ -1326,7 +1447,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
             WindowEvent::MouseInput { state, button, .. } => {
-                session.mouse_input(state, button, event_loop);
+                session.mouse_input(state, button, default_font_size, event_loop);
                 if let Some(tag) = session.ignored_tag.take() {
                     self.update_checker.ignore(&tag);
                 }

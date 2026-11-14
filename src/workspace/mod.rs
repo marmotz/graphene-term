@@ -408,7 +408,12 @@ impl<P> Workspace<P> {
 impl<P: TitleSource> Workspace<P> {
     /// Title of tab `index`, from its active pane (see [`title_for`]).
     pub fn tab_title(&self, index: usize) -> Option<String> {
-        let pane = self.pane(self.tabs.get(index)?.active)?;
+        self.pane_title(self.tabs.get(index)?.active)
+    }
+
+    /// Title of the pane `id` (see [`title_for`]).
+    pub fn pane_title(&self, id: PaneId) -> Option<String> {
+        let pane = self.pane(id)?;
         let home = std::env::var_os("HOME").map(PathBuf::from);
         title_for(
             pane.osc_title(),
