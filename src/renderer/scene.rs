@@ -501,17 +501,20 @@ mod tests {
         }
     }
 
-    /// 10 x 20 px cells, no padding: the grid starts after the 5 px margin and the 5 px
-    /// card padding.
+    /// 10 x 20 px cells, no padding and no centring: the grid starts after the 5 px
+    /// margin and the 5 px card padding.
     fn margin_layout() -> GridLayout {
-        GridLayout::new(
-            Rect::from_size(100, 100),
-            CellSize {
-                width: 10.0,
-                height: 20.0,
-            },
-            0.0,
-        )
+        GridLayout {
+            origin: (0.0, 0.0),
+            ..GridLayout::new(
+                Rect::from_size(100, 100),
+                CellSize {
+                    width: 10.0,
+                    height: 20.0,
+                },
+                0.0,
+            )
+        }
     }
 
     /// Same cells, with the grid at the origin.
@@ -1077,6 +1080,7 @@ mod tests {
         let text: String = summary.iter().map(|g| g.key.c).collect();
         // Spaces draw no glyph.
         assert_eq!(text, "1lignemasquée");
-        assert_eq!(summary[0].origin, [10.0 + 2.0 * 10.0, 0.0]);
+        // 37 columns leave 6 px over: the grid is centred 3 px further right.
+        assert_eq!(summary[0].origin, [3.0 + 10.0 + 2.0 * 10.0, 0.0]);
     }
 }

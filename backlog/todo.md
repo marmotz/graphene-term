@@ -4,11 +4,11 @@
 
 ## Configuration file and themes ·  [overview](features/config-themes/overview.md)
 
-_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 3/11 tasks done
+_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 4/11 tasks done
 
 | Done | Issue                                                     | Title                                                      | Blocked by                   |
 |------|-----------------------------------------------------------|------------------------------------------------------------|------------------------------|
-| [ ]  | [#13](https://github.com/marmotz/graphene-term/issues/13) | Config: centre the grid with the leftover pixels           | —                            |
+| [x]  | [#13](https://github.com/marmotz/graphene-term/issues/13) | Config: centre the grid with the leftover pixels           | —                            |
 | [ ]  | [#16](https://github.com/marmotz/graphene-term/issues/16) | Config: configurable keybindings                           | #14                          |
 | [ ]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking                                    | #14                          |
 | [ ]  | [#19](https://github.com/marmotz/graphene-term/issues/19) | Config: hot reload of the configuration and themes         | #14, #15, #16                |
