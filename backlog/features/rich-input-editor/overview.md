@@ -36,9 +36,10 @@ compatibility with shells and full-screen programs.
     erase a word.
   - Lines: `Home` / `End` go to line start / end, `Ctrl+Home` / `Ctrl+End` go to the
     start / end of a multi-line input.
-  - Keyboard selection: `Shift+arrows`, `Ctrl+A` selects the whole input.
-    `Ctrl+Shift+arrows` are not used: they belong to pane focus
-    ([tabs-splits-palette](../tabs-splits-palette/overview.md)), at the prompt too.
+  - Keyboard selection: `Shift+arrows`, `Ctrl+Shift+Left` / `Ctrl+Shift+Right` extend
+    by a word, `Ctrl+A` selects the whole input. `Ctrl+Shift+Up/Down` are not used.
+    At the prompt this takes `Ctrl+Shift+Left/Right` from pane focus
+    ([tabs-splits-palette](../tabs-splits-palette/overview.md)).
 - **Copy**: an input selection is copied exactly like any other selection, with the
   behavior defined in [selection-copy](../selection-copy/overview.md).
 - **Shell features stay with the shell**: completion (`Tab`) and history (`Up` /

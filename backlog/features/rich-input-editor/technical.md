@@ -92,8 +92,8 @@ Unit-tested, no window or PTY access.
   with a direction.
 - `editor_command(key, mods) -> Option<EditorCommand>`: the v1 shortcut table of the
   overview (`Ctrl+Left/Right`, `Ctrl+Backspace/Delete`, `Home/End`, `Ctrl+Home/End`,
-  `Shift+` arrows, `Shift+Home/End`, `Ctrl+A`, `Shift+Enter`; never `Ctrl+Shift+`
-  arrows, which belong to pane focus in tabs-splits-palette). Keys not
+  `Shift+` arrows, `Ctrl+Shift+Left/Right` (extend by a word), `Shift+Home/End`,
+  `Ctrl+A`, `Shift+Enter`; `Ctrl+Shift+Up/Down` are not bound). Keys not
   in the table return `None` and follow the normal path (`Tab`, `Up/Down`, `Enter`,
   `Backspace` reach the shell unchanged).
 - `motion_bytes(motion) -> &[u8]` and `repeat(CharLeft | CharRight, n)`.

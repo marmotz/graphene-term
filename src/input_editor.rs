@@ -160,8 +160,8 @@ pub enum EditorCommand {
 /// Returns the editor command bound to a key combination at the prompt (v1 table).
 ///
 /// Every other key returns `None` and follows the normal path: `Tab`, `Up` / `Down`,
-/// `Enter` and `Backspace` reach the shell unchanged. `Ctrl+Shift+` arrows are not
-/// bound: they belong to pane focus, at the prompt too.
+/// `Enter` and `Backspace` reach the shell unchanged. `Ctrl+Shift+Left/Right` extend the
+/// selection by a word; `Ctrl+Shift+Up/Down` are not bound.
 pub fn editor_command(key: &Key, mods: ModifiersState) -> Option<EditorCommand> {
     use Direction::{Backward, Forward};
     use EditorCommand::{DeleteWord, Extend, InsertNewline, Move, SelectAll};
@@ -187,6 +187,8 @@ pub fn editor_command(key: &Key, mods: ModifiersState) -> Option<EditorCommand> 
                 (NamedKey::ArrowDown, SHIFT) => Extend(Motion::LineVertical(Forward)),
                 (NamedKey::Home, SHIFT) => Extend(Motion::Line(Backward)),
                 (NamedKey::End, SHIFT) => Extend(Motion::Line(Forward)),
+                (NamedKey::ArrowLeft, m) if m == CTRL | SHIFT => Extend(Motion::Word(Backward)),
+                (NamedKey::ArrowRight, m) if m == CTRL | SHIFT => Extend(Motion::Word(Forward)),
                 (NamedKey::Enter, SHIFT) => InsertNewline,
                 _ => return None,
             };
@@ -544,6 +546,16 @@ mod tests {
             ),
             (named(NamedKey::Home), SHIFT, Extend(Motion::Line(Backward))),
             (named(NamedKey::End), SHIFT, Extend(Motion::Line(Forward))),
+            (
+                named(NamedKey::ArrowLeft),
+                CTRL | SHIFT,
+                Extend(Motion::Word(Backward)),
+            ),
+            (
+                named(NamedKey::ArrowRight),
+                CTRL | SHIFT,
+                Extend(Motion::Word(Forward)),
+            ),
             (character("a"), CTRL, SelectAll),
             (character("A"), CTRL, SelectAll),
             (named(NamedKey::Enter), SHIFT, InsertNewline),
@@ -572,9 +584,6 @@ mod tests {
             (character("b"), CTRL),
             (character("a"), CTRL | SHIFT),
             (character("a"), CTRL | ALT),
-            // Pane focus owns Ctrl+Shift+arrows, at the prompt too.
-            (named(NamedKey::ArrowLeft), CTRL | SHIFT),
-            (named(NamedKey::ArrowRight), CTRL | SHIFT),
             (named(NamedKey::ArrowUp), CTRL | SHIFT),
             (named(NamedKey::ArrowDown), CTRL | SHIFT),
             (named(NamedKey::ArrowLeft), ALT),

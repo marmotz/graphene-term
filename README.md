@@ -107,13 +107,13 @@ script binds, and completion (`Tab`) and history (`Up` / `Down`) stay the shell'
 | Shift+Left / Shift+Right      | Extend the selection by a character             |
 | Shift+Up / Shift+Down         | Extend the selection by a line                  |
 | Shift+Home / Shift+End        | Extend the selection to the line start / end    |
+| Ctrl+Shift+Left / Right       | Extend the selection by a word                  |
 | Ctrl+A                        | Select the whole input                          |
 | Shift+Enter                   | New line, without running the command           |
 
 The input selection is an ordinary selection: `Ctrl+Shift+C` copies it and it fills the
 primary selection. Typing, `Backspace`, `Delete`, `Ctrl+Backspace` / `Ctrl+Delete` or
-`Shift+Enter` over a selection in the input replaces it, as in an editor. `Ctrl+Shift+`
-arrows are not editor keys.
+`Shift+Enter` over a selection in the input replaces it, as in an editor.
 
 ## Documentation
 
