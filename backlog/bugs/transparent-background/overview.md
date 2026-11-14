@@ -1,6 +1,6 @@
 # Transparent terminal background does not work
 
-**Statut** : tasks created — see [technical.md](technical.md)
+**Statut** : terminé — voir [technical.md](technical.md)
 
 ## Context
 
