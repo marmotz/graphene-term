@@ -4,11 +4,11 @@
 
 ## Update Configuration at Startup ·  [overview](features/config-defaults-on-startup/overview.md)
 
-_1/2 tasks done_
+terminé — voir [technical.md](features/config-defaults-on-startup/technical.md) — 2/2 tasks done
 
 | Done | Issue                                                     | Title                                       | Blocked by |
 |------|-----------------------------------------------------------|---------------------------------------------|------------|
-| [ ]  | [#93](https://github.com/marmotz/graphene-term/issues/93) | Complete missing config defaults at startup | —          |
+| [x]  | [#93](https://github.com/marmotz/graphene-term/issues/93) | Complete missing config defaults at startup | —          |
 | [x]  | [#94](https://github.com/marmotz/graphene-term/issues/94) | Add explicit config pruning command         | #93        |
 
 ## Settings screen ·  [overview](features/settings-screen/overview.md)
