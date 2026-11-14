@@ -123,7 +123,7 @@ foreground = "#d7dae0"
 background = "#14161b"
 cursor = "#82aaff"
 cursor_text = "#14161b"
-selection_background = "#3a4252"
+selection_background = "#33508a"
 selection_foreground = ""    # empty: keep the cell's own foreground
 
 [colors.normal]  # black, red, green, yellow, blue, magenta, cyan, white

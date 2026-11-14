@@ -7,7 +7,7 @@ foreground = "#d7dae0"
 background = "#14161b"
 cursor = "#82aaff"
 cursor_text = "#14161b"
-selection_background = "#3a4252"
+selection_background = "#33508a"
 selection_foreground = ""
 
 [colors.normal]

@@ -107,9 +107,10 @@ work on AZERTY where that row types `&`, `é`... without `Shift`.
 ## Ordre des features
 
 - Comes after [command-blocks](../command-blocks/overview.md) and
-  [rich-input-editor](../rich-input-editor/overview.md) (roadmap). `Ctrl+Shift+Arrow`
-  belongs to pane focus: block navigation uses `Ctrl+Shift+PageUp/PageDown`, and the
-  rich input editor does not use `Ctrl+Shift+Arrow`.
+  [rich-input-editor](../rich-input-editor/overview.md) (roadmap). Block navigation
+  uses `Ctrl+Shift+PageUp/PageDown`. The rich input editor binds `Ctrl+Shift+Left/Right`
+  at the prompt (extend the selection by a word): the pane focus shortcut must be
+  revisited before this feature is implemented.
 
 - Comes before [config-themes](../config-themes/overview.md), which makes the tab
   position (top, bottom, left, right) and the UI colors (tab bar, command palette)

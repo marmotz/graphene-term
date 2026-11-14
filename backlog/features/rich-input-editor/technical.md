@@ -68,12 +68,13 @@ table in `src/input_editor.rs`, mirrored in the three scripts:
 |---|---|---|---|---|
 | `CharLeft` | `CSI 59136 u` | widget `CURSOR-=1` (zsh clamps) | `bind -x`, `READLINE_POINT--` if > 0 | `backward-char-passive` |
 | `CharRight` | `CSI 59137 u` | widget `CURSOR+=1` | `bind -x`, bounded by `${#READLINE_LINE}` | `forward-char-passive` |
-| `WordLeft` / `WordRight` | `CSI 59138 u` / `CSI 59139 u` | `backward-word` / `forward-word` | same readline functions | same |
+| `WordLeft` / `WordRight` | `CSI 59138 u` / `CSI 59139 u` | `backward-word` / `forward-word` (start of the next word) | `backward-word` / `bind -x` to the next word start (readline's `forward-word` stops at the word end) | `backward-word` / `forward-word-vi` |
 | `DeleteWordLeft` / `DeleteWordRight` | `CSI 59140 u` / `CSI 59141 u` | `backward-kill-word` / `kill-word` | same | same |
 | `LineStart` / `LineEnd` | `CSI 59142 u` / `CSI 59143 u` | `beginning-of-line` / `end-of-line` | `bind -x`: previous / next `\n` in `READLINE_LINE` | same as zsh |
 | `LineUp` / `LineDown` | `CSI 59144 u` / `CSI 59145 u` | `up-line` / `down-line` (no history) | `bind -x`: same column on the previous / next line | `up-line` / `down-line` |
 | `BufferStart` / `BufferEnd` | `CSI 59146 u` / `CSI 59147 u` | widget `CURSOR=0` / `CURSOR=$#BUFFER` | `bind -x` on `READLINE_POINT` | `beginning-of-buffer` / `end-of-buffer` |
 | `InsertNewline` | `CSI 59148 u` | widget `LBUFFER+=$'\n'` | `bind -x`, insert `\n` at `READLINE_POINT` | `commandline -i \n` |
+| `WordEnd` | `CSI 59149 u` | `emacs-forward-word` | `forward-word` | `forward-word` |
 
 Bindings are installed in the emacs and vi insert keymaps (zsh `emacs`, `viins`;
 bash `emacs`, `vi-insert`; fish default and insert modes).
@@ -92,8 +93,8 @@ Unit-tested, no window or PTY access.
   with a direction.
 - `editor_command(key, mods) -> Option<EditorCommand>`: the v1 shortcut table of the
   overview (`Ctrl+Left/Right`, `Ctrl+Backspace/Delete`, `Home/End`, `Ctrl+Home/End`,
-  `Shift+` arrows, `Shift+Home/End`, `Ctrl+A`, `Shift+Enter`; never `Ctrl+Shift+`
-  arrows, which belong to pane focus in tabs-splits-palette). Keys not
+  `Shift+` arrows, `Ctrl+Shift+Left/Right` (extend to the word start / end), `Shift+Home/End`,
+  `Ctrl+A`, `Shift+Enter`; `Ctrl+Shift+Up/Down` are not bound). Keys not
   in the table return `None` and follow the normal path (`Tab`, `Up/Down`, `Enter`,
   `Backspace` reach the shell unchanged).
 - `motion_bytes(motion) -> &[u8]` and `repeat(CharLeft | CharRight, n)`.

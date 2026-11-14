@@ -33,6 +33,7 @@ src/
   frame.rs         snapshot of the visible grid with resolved colors and block marks
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
+  input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection, selection replacement (pure)
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
@@ -52,13 +53,13 @@ src/
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
 themes/            built-in themes, embedded with include_str!
-shell-integration/ zsh, bash and fish scripts, embedded with include_str!
+shell-integration/ zsh, bash and fish scripts (block signals, editor key bindings), embedded with include_str!
 benches/
   render.rs        criterion benchmarks: parse, frame, glyphs_cold/warm, gpu_prepare
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Threads
@@ -133,7 +134,9 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
   variable and unsets the environment variable, so commands run from the shell never
   see it. The hooks (zsh `preexec` / `precmd`, bash `PS0` / first `PROMPT_COMMAND`
   entry, fish `fish_preexec` / `fish_postexec`) send `start` with the base64 command
-  line and `end` with the status; they never read, wrap or rebuild the prompt.
+  line and `end` with the status, then `prompt` before each prompt (fish
+  `fish_prompt`), for the rich input editor; they never read, wrap or rebuild the
+  prompt.
 - `view::rows(timeline, live, lines)` lists the view rows: the source each one takes
   its cells from (`RowSource::{Header, Output, Live, Summary}`), the line in that
   source, its block, its offset from the view top in half-lines (`top`) and whether a
@@ -254,6 +257,24 @@ is reset with the glyph cache, and the frame is resolved again.
   modifier parameter `1 + shift + 2*alt + 4*ctrl`, application cursor mode (`SS3`),
   Alt as ESC prefix, Ctrl+char control codes.
 - Any input scrolls the view back to the bottom.
+- Rich input editor (`input_editor`): active while the current block is at an editing
+  prompt (`timeline::Current::editing`, set by the `prompt` signal, cleared when the
+  command starts), on the main screen and with the mouse not reserved for an
+  application (`input_editor::rich_mode`, read with `Term` then `Timeline` locked). The
+  keyboard branch checks `input_editor::prompt_command` before `action_for`, so the
+  editor shortcuts win over the app shortcuts at the prompt only; a move clears the
+  selection, and each command writes its private sequence (`CSI <code> u`, bound by the
+  integration scripts). A simple click on the live grid writes
+  `input_editor::click_moves` (`CharLeft` / `CharRight` over the buffer distance from
+  the cursor, the click bounded by `Current::prompt_start`) on release. `Extend` and
+  `SelectAll` set the selection (`input_editor::extend_selection` / `select_all`) and
+  an `input_editor::PendingExtend`; the next `Wakeup` where the cursor moved updates the
+  selection end there, recaptures the `SelectionSnapshot` and writes the primary
+  selection. A key typing text, `Backspace` / `Delete` (`input_editor::replacing_text`)
+  or a `DeleteWord` / `InsertNewline` command (`command_replacing_text`) over a
+  selection in the input (`input_editor::input_selection`, from
+  `TimelineSelection::live_ends`) writes `input_editor::replacement_bytes` instead, then
+  clears the selection.
 - Mouse wheel: block or timeline scrolling on the primary screen (see Command blocks),
   arrow keys on the alternate screen when the application enabled alternate scroll.
 - Mouse reporting only covers the live grid's rows (`mouse::reports_at`: a

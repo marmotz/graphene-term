@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(p.background, rgb(0x14161b));
         assert_eq!(p.cursor, rgb(0x82aaff));
         assert_eq!(p.cursor_text, rgb(0x14161b));
-        assert_eq!(p.selection_background, rgb(0x3a4252));
+        assert_eq!(p.selection_background, rgb(0x33508a));
         assert_eq!(p.selection_foreground, None);
     }
 
