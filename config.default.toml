@@ -4,42 +4,39 @@
 ## to change it. A missing setting takes its default value; an invalid value or an
 ## unknown key is reported and ignored.
 
-## Interface language: "auto" (follows LANG), "en", "fr".
+## Allowed values: "auto", "en", "fr".
 # language = "auto"
 
 # [font]
-## Font family name. Empty: the system monospace font.
+## Font family name. Run `fc-list : family` to list installed fonts; empty uses system monospace.
 # family = ""
 ## Size in points, from 6 to 72.
 # size = 14.0
 
 # [window]
-## Size of a new window: "default" (width and height below), "maximized", or
-## "remember" (the size and maximized state of the last window closed).
+## Startup mode: "default" (configured size), "maximized", or "remember" (last closed window size/state).
 # startup_mode = "default"
-## Initial size when startup_mode is "default", or "remember" with nothing remembered
-## yet, in logical pixels.
+## Initial window size, in logical pixels.
 # width = 960
+## Initial window size, in logical pixels.
 # height = 600
-## Minimum space around the grid, in logical pixels.
+## Minimum space around the grid, in logical pixels (zero or greater).
 # padding = 8
-## Opacity of the default background, from 0.0 (transparent) to 1.0 (opaque).
-## Explicit cell backgrounds, the selection and the cursor stay opaque. Needs a
-## compositor; ignored when the GPU surface does not support transparency.
+## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.
 # background_opacity = 1.0
 
 # [scrollback]
-## Number of lines kept in the history, up to 100000.
+## Number of history lines to keep, up to 100000.
 # lines = 10000
 
 # [cursor]
-## "block", "beam" or "underline".
+## Cursor shape: "block", "beam" or "underline".
 # shape = "block"
-## Applications can still change both (DECSCUSR).
+## Cursor blinking: true or false. Applications can still change this (DECSCUSR).
 # blinking = false
 
 # [selection]
-## Characters ending a word on double-click.
+## Characters that end a word on double-click.
 # word_separators = ",│`|\"' ()[]{}<>\t"
 
 # [tabs]
@@ -47,32 +44,30 @@
 # position = "top"
 
 # [theme]
-## Single theme. Built-in themes: graphene-night, graphene-day, solarized-dark,
-## solarized-light, gruvbox-dark, gruvbox-light, catppuccin-mocha, catppuccin-latte.
-## A file themes/<name>.toml next to this one is used first, so it can override a
-## built-in theme; a color it does not set comes from graphene-night.
+## Theme name. Built-ins: graphene-night, graphene-day, solarized-dark, solarized-light, gruvbox-dark, gruvbox-light, catppuccin-mocha, catppuccin-latte; custom theme files are also supported.
 # name = "graphene-night"
-## Set both `light` and `dark` to follow the system appearance:
+## Optional light theme name (built-in or custom file); set both `light` and `dark` to follow system appearance.
 ## light = "graphene-day"
+## Optional dark theme name (built-in or custom file).
 ## dark = "graphene-night"
 
 # [keybindings]
-## "Keys" = "action". The action "none" disables a default shortcut, so the key goes
-## to the shell. Keys: modifiers Ctrl, Shift, Alt, Super joined with "+", then a key
-## name (PageUp, F5, Insert, Left...) or one character. Letters ignore case; Shift is
-## ignored for other characters ("Ctrl++"). Alt+digit uses the digit row on any layout.
-## Actions: copy, paste, scroll_page_up, scroll_page_down, scroll_to_top,
-## scroll_to_bottom, font_size_increase, font_size_decrease, font_size_reset,
-## previous_block, next_block, copy_command, copy_output, toggle_fold, toggle_fold_all,
-## split_right, split_down, close_pane, focus_pane_left (right, up, down),
-## resize_pane_left (right, up, down), next_pane, previous_pane, toggle_zoom,
-## equalise_panes, detach_pane, new_tab, next_tab, previous_tab, go_to_tab_1 (2, 3...),
-## command_palette. Example: `"Ctrl+Alt+T" = "new_tab"` adds a shortcut;
-## `"Shift+PageUp" = "none"` gives a default shortcut back to the shell.
+## Each string shortcut key maps to one string action name. Keys use modifiers Ctrl, Shift, Alt, Super
+## joined with "+", then a key name (PageUp, F5, Insert, Left...) or one character.
+## Letters ignore case; Shift is ignored for other characters ("Ctrl++"). Alt+digit uses
+## the digit row on any layout. "none" disables a shortcut and sends its key to the shell.
+## Allowed actions: "none", "copy", "paste", "scroll_page_up", "scroll_page_down",
+## "scroll_to_top", "scroll_to_bottom", "font_size_increase", "font_size_decrease",
+## "font_size_reset", "previous_block", "next_block", "copy_command", "copy_output",
+## "toggle_fold", "toggle_fold_all", "split_right", "split_down", "close_pane",
+## "focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down",
+## "resize_pane_left", "resize_pane_right", "resize_pane_up", "resize_pane_down",
+## "next_pane", "previous_pane", "toggle_zoom", "equalise_panes", "detach_pane", "new_tab",
+## "next_tab", "previous_tab", "go_to_tab_1" through "go_to_tab_255", "command_palette".
+## Example: `"Ctrl+Alt+T" = "new_tab"` adds a shortcut.
 
 # [updates]
-## Check GitHub for a newer release and show a banner. false: no network call at all.
+## Check GitHub for a newer release and show a banner (true or false); false makes no network call.
 # check = true
-## Time between two checks: "auto", "6h", "12h", "24h", "2d", "3d", "1w".
-## auto: 6h for dev builds, 24h for stable builds.
+## Check interval: "auto", "6h", "12h", "24h", "2d", "3d" or "1w"; "auto" is 6h for dev builds, 24h for stable builds.
 # interval = "auto"

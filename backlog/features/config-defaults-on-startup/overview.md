@@ -23,9 +23,12 @@ configured manually.
 - User-configured values remain active with their existing values; options not configured
   by the user remain commented with their defaults. The complete built-in shortcut list
   is included.
-- Preserve the user's comments, key order, and formatting except for malformed commented
-  settings that unambiguously match a supported option; normalize those to the template
-  comment instead of duplicating them.
+- Preserve the user's comments, key order, and formatting. Normalize only recognized
+  comments from the previous template/generated help and malformed commented settings to
+  the current concise wording; preserve custom comments.
+- Give each setting one concise comment explaining its format and range, and listing
+  allowed values when they form a finite set. Existing and automatically added supported
+  settings include their matching help without repeating descriptions or changing values.
 - Keys unknown to the current version (including obsolete keys) are preserved during
   automatic updates.
 - The explicit `graphene --prune-config` command can remove unknown keys: it lists them

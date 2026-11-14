@@ -1195,6 +1195,12 @@ interval = "2d"
         assert_eq!(updated.matches("# startup_mode = \"default\"").count(), 1);
         assert_eq!(updated.matches("[cursor]").count(), 1);
         assert_eq!(updated.matches("# shape = \"block\"").count(), 1);
+        assert!(updated.contains(
+            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.\nbackground_opacity = 0.9\n"
+        ));
+        assert!(updated.contains(
+            "## Cursor blinking: true or false. Applications can still change this (DECSCUSR).\nblinking = true\n"
+        ));
         assert!(updated.contains("background_opacity = 0.9"));
         assert!(updated.contains("blinking = true"));
 
@@ -1208,7 +1214,8 @@ interval = "2d"
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(CONFIG_FILE);
-        let invalid = "# keep this\n[font\nsize = 12\n";
+        let invalid =
+            "# keep this\n## Type: finite number in the range 6..=72.\n[font\nsize = 12\n";
         std::fs::write(&path, invalid).unwrap();
 
         let (_, errors) = load_from(&dir);

@@ -63,10 +63,16 @@ Product decisions: [overview.md](overview.md).
   without maintaining a second hard-coded list. Existing shortcuts, whether active or
   commented, are neither duplicated nor replaced.
 - Root-level options are inserted in the root section, before the first table. Preserve
-  all existing text, user comments, active values, unknown keys, ordering, and formatting
-  except for a malformed commented setting that can be unambiguously matched to a
-  supported option; normalize that line to the corresponding template comment rather than
-  adding a duplicate.
+  active values, unknown keys, ordering, formatting, and custom comments. Normalize known
+  legacy template/generated help and malformed commented settings to the current concise
+  wording, rather than leaving duplicate or stale help.
+- `config.default.toml` is the documentation source for option lines. Give each setting
+  one concise comment that combines its format, range, and finite allowed values as
+  applicable. `option_lines` retains the concise comments before each template setting;
+  copy them when inserting a missing option. For existing settings, add help only when no
+  nearby description exists, preserving user values and custom comments. The keybindings
+  section states the shared key/action format and allowed action set once instead of
+  repeating them for every shortcut ([src/config_edit.rs:890-937](../../../src/config_edit.rs)).
 - Do not add a schema version: each startup can fill in missing options. This avoids
   maintaining a migration table for a file whose missing options already use the values
   from `Config::default`.
@@ -97,23 +103,26 @@ Alternatives:
   commented lines, and pruning. `complete_defaults` checks active TOML nodes plus
   commented options, then inserts additions in existing section blocks or creates a
   single commented header for an absent section
-  ([src/config_edit.rs:23-110](../../../src/config_edit.rs)). The previous implementation
+  ([src/config_edit.rs:24-143](../../../src/config_edit.rs)). The previous implementation
   appended every missing option at EOF, which caused the repeated section headers
   observed in existing files.
 - Use the direct `toml_edit = "0.25.19"` dependency and its syntax tree and spans to
   recognize active keys and remove only the targeted TOML entries without serializing
   the entire document. For commented template options and section headers, scan the
   original text while tracking both active and commented table headers (`section_blocks`
-  and `commented_options`, [src/config_edit.rs:156-180](../../../src/config_edit.rs),
-  [src/config_edit.rs:569-599](../../../src/config_edit.rs)). Parse quoted keys using TOML
+  and `commented_options`, [src/config_edit.rs:383-410](../../../src/config_edit.rs),
+  [src/config_edit.rs:938-968](../../../src/config_edit.rs)). Parse quoted keys using TOML
   syntax where possible; tolerate a leading stray quote on a commented known key so
   malformed examples such as `# "shape = "block"` are normalized in place rather than
-  duplicated ([src/config_edit.rs:195-235](../../../src/config_edit.rs)).
+  duplicated. Normalize repetitive help from the prior template and generated `Type:`
+  lines without rewriting unrelated comments
+  ([src/config_edit.rs:422-597](../../../src/config_edit.rs)).
 - Group missing options by section and apply insertions from the end of the file toward
   the beginning so earlier byte offsets remain valid. Place each insertion at the end of
   the existing active or commented section block. For an absent section, append one
   commented section header and its missing options. For root-level keys, insert before
-  the first table header. The edit must preserve all unaffected source slices exactly.
+  the first table header. Preserve unaffected source slices exactly, except for recognized
+  legacy help that is deliberately canonicalized.
 - Return unknown keys as structured data (path and span) from configuration parsing
   instead of deriving them from `ConfigError` messages. Reuse the same recognition
   branches as `Config::parse` so that parsing and pruning agree on which keys are valid.
@@ -158,10 +167,11 @@ Alternatives:
 - Add unit tests to `config_edit` for active and commented options being present or
   absent, insertion into existing active and commented sections, no duplicate section
   headers, root-level insertion, normalization of a malformed commented known option,
-  duplicate avoidance, exact preservation of unaffected text, custom values and unknown
-  keys, no write on invalid TOML, and no write when nothing is missing. Also verify that
-  each entry in `keybindings::DEFAULTS` is exposed as a commented line with the correct
-  `Action::id` when absent.
+  concise help on supported active/commented settings and every inserted setting, finite
+  allowed values in the template, duplicate avoidance, exact preservation of unaffected
+  text, custom values and unknown keys, no write on invalid TOML, and no write when
+  nothing is missing. Also verify that each entry in `keybindings::DEFAULTS`
+  is exposed as a commented line with the correct `Action::id` when absent.
 - Test pruning of unknown root-level and nested keys, preservation of recognized keys
   with invalid values, no write on syntax errors, confirmation/refusal/`--yes` paths, and
   creation of the default file when it is missing.
