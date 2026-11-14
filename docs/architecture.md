@@ -29,7 +29,10 @@ src/
     mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback (pure)
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
-  config.rs        config.toml location, model, key-by-key parsing and validation
+  config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
+  window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
+  watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
+  appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
@@ -56,7 +59,7 @@ src/
                    block and timeline scrolls, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors and block marks
-  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
+  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG; `language` forces it) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
   input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection, selection replacement (pure)
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
@@ -210,6 +213,49 @@ Renderer::render(pane frames, interface rects)
   hides it and sends `Command::Ignore` to the thread, which writes `ignored` in
   `update.json` (written directly when the thread is not running).
 
+- The `config-watcher` thread (`src/watcher.rs`, started in `app::run` when the config
+  directory exists) watches that directory and its `themes/` with `notify`,
+  non-recursively: the directory, not the file, since editors save through a rename
+  that replaces the watched inode. Creations, changes and removals of `config.toml` or
+  of a `themes/*.toml` are debounced (100 ms after the last one) and sent as
+  `UserEvent::ConfigChanged`; reads are ignored, so the reload does not trigger itself.
+  `App::reload_config` parses `config.toml` with the applied configuration as
+  `previous` (an invalid value keeps its previous value, a syntax error the whole
+  previous configuration), loads its theme, replaces the banner, then
+  `Session::apply_config` updates every pane (`Term::set_options`, the timeline
+  scrollback), the font (`Renderer::set_font` when the family changed; a changed
+  `font.size` resets the zoom, see `reloaded_font_size`), the padding, the background
+  opacity, the palette and the keybindings, then lays the panes out again. `width`,
+  `height` and `startup_mode` only affect windows created afterwards.
+- The `appearance` thread (`src/appearance.rs`) follows the system light/dark
+  appearance: winit 0.30 does not report the theme on X11 or Wayland, so it reads
+  `color-scheme` from `org.freedesktop.portal.Settings` (`ReadOne`, else `Read` on older
+  portals) with zbus, then listens to `SettingChanged`. 2 is light; 1, 0 (no
+  preference), or no portal at all, dark. Each value is sent as
+  `UserEvent::Appearance`. `App::watch_appearance` starts it only once a configuration
+  sets both `theme.light` and `theme.dark` (at startup or by hot reload); at startup,
+  `app::run` waits up to 200 ms for the first value so the first window opens with the
+  right theme. `ThemeConfig::active` picks the theme to load; a new appearance goes
+  through `App::reload_config`, the hot reload path.
+
+## Window startup
+
+- `App::create_session` sizes the window with `initial_window` (pure): the configured
+  `width`/`height` (`default`, and `maximized` which also maximizes it), or the size and
+  maximized state of `window.json` (`remember`; nothing remembered falls back to
+  `default`). `window.json` is only read in `remember` mode.
+- `Session.restore_size` is the last inner size seen while the window was not maximized,
+  in logical pixels: winit 0.30 has no getter for the restore size, and the inner size
+  of a maximized window is the screen. `ApplicationHandler::exiting` saves it with
+  `window.is_maximized()` to `window.json` whatever the mode, so every exit path (window
+  closed, last shell exited) is covered. The position is not saved.
+- The window is always created transparent (`with_transparent(true)`: winit only
+  honours it at creation on X11). `Renderer::new` picks the `PreMultiplied` surface
+  alpha mode, else `Inherit`, else the first one with a warning (the opacity is then
+  ignored). Only the clear color carries `window.background_opacity`, premultiplied
+  (`scene::premultiplied`): cells on the default background show it, every rect
+  (explicit backgrounds, selection, cursor, banner, interface) stays opaque.
+
 ## Command blocks
 
 Design and rationale: [command-blocks technical design](../backlog/features/command-blocks/technical.md).
@@ -348,7 +394,10 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    interface layer (`UiLayer`: rects, then text items): the dividers (`ui.pane_border`)
    and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
    the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
-   there are several tabs. The panes area is the window minus the bar. The open dialog
+   there are several tabs, on the edge of `tabs.position` (`TabBarPosition`): side by
+   side along the top or bottom edge, stacked in a bar `TAB_MAX_WIDTH` wide (at most a
+   third of the window) on the left or right. The panes area is the window minus the
+   bar (`TabBarPosition::content_area`); each grid is centred in its pane. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
    the window height) goes to the overlay rects and texts of the layer. The link

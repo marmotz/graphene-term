@@ -2,6 +2,7 @@
 //! internals. The `graphene` binary only calls [`run`].
 
 mod app;
+mod appearance;
 mod banner;
 mod block_actions;
 #[cfg(test)]
@@ -9,11 +10,13 @@ mod build_version;
 mod chrome;
 mod clipboard;
 mod config;
+mod cursor_blink;
 mod frame;
 mod graphics;
 mod i18n;
 mod input;
 mod input_editor;
+mod keybindings;
 mod layout;
 mod links;
 mod mouse;
@@ -33,6 +36,8 @@ mod timeline;
 mod timeline_selection;
 mod update;
 mod view;
+mod watcher;
+mod window_state;
 mod workspace;
 
 /// Version of this build, computed by `build.rs`.

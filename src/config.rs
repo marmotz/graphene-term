@@ -14,6 +14,10 @@ use serde::de::DeserializeOwned;
 use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 
+use crate::appearance::Appearance;
+use crate::i18n::Lang;
+use crate::keybindings;
+
 /// The fully commented default configuration, written on first launch.
 pub const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
 
@@ -52,6 +56,24 @@ fn config_dir_from(xdg_config_home: Option<OsString>, home: Option<OsString>) ->
     Some(base.join("graphene"))
 }
 
+/// `$XDG_STATE_HOME/graphene`, else `$HOME/.local/state/graphene`: files written by
+/// Graphene itself (update check, last window), shared by every instance.
+pub fn state_dir() -> Option<PathBuf> {
+    state_dir_from(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
+}
+
+fn state_dir_from(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    // The XDG spec ignores an empty or relative `XDG_STATE_HOME`.
+    let xdg = xdg_state_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute());
+    let base = xdg.or_else(|| {
+        home.filter(|home| !home.is_empty())
+            .map(|home| PathBuf::from(home).join(".local").join("state"))
+    })?;
+    Some(base.join("graphene"))
+}
+
 /// Loads `config.toml` from the config directory. A missing file is created from
 /// [`DEFAULT_CONFIG`] (a write failure is only logged) and yields the default.
 pub fn load() -> (Config, Vec<ConfigError>) {
@@ -61,6 +83,34 @@ pub fn load() -> (Config, Vec<ConfigError>) {
             log::warn!("neither XDG_CONFIG_HOME nor HOME is set: using the default configuration");
             (Config::default(), Vec::new())
         }
+    }
+}
+
+/// Reads `config.toml` again after it changed on disk: an invalid value keeps the one
+/// of `previous`, a syntax error keeps `previous` whole. A missing file yields the
+/// default and is not written back (an editor may be replacing it).
+pub fn reload(previous: &Config) -> (Config, Vec<ConfigError>) {
+    match config_dir() {
+        Some(dir) => reload_from(&dir, previous),
+        None => (previous.clone(), Vec::new()),
+    }
+}
+
+fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
+    let file = dir.join(CONFIG_FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => Config::parse(&text, previous, &file),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (Config::default(), Vec::new())
+        }
+        Err(error) => (
+            previous.clone(),
+            vec![ConfigError {
+                file,
+                line: None,
+                message: format!("cannot read the file: {error}"),
+            }],
+        ),
     }
 }
 
@@ -119,6 +169,18 @@ pub enum Language {
     Fr,
 }
 
+impl Language {
+    /// Language of the interface: the forced one, or `detected` (the locale's) for
+    /// `auto`.
+    pub fn resolve(self, detected: impl FnOnce() -> Lang) -> Lang {
+        match self {
+            Language::Auto => detected(),
+            Language::En => Lang::En,
+            Language::Fr => Lang::Fr,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorShape {
@@ -148,6 +210,19 @@ pub enum TabPosition {
     Right,
 }
 
+/// `window.startup_mode`: size and state of a new window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StartupMode {
+    /// The configured `width` and `height`.
+    #[default]
+    Default,
+    /// Maximized; the configured size is used when the user unmaximizes it.
+    Maximized,
+    /// The size and maximized state of the last window closed.
+    Remember,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FontConfig {
     /// `None` uses the system monospace font.
@@ -157,11 +232,15 @@ pub struct FontConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowConfig {
-    /// Initial size, in logical pixels.
+    pub startup_mode: StartupMode,
+    /// Initial size, in logical pixels, when `startup_mode` is `Default`, or `Remember`
+    /// with nothing remembered yet.
     pub width: u32,
     pub height: u32,
     /// Minimum padding around the grid, in logical pixels.
     pub padding: f32,
+    /// Opacity of the default background, from 0.0 (transparent) to 1.0 (opaque).
+    pub background_opacity: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -214,28 +293,41 @@ pub struct UpdatesConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeConfig {
     pub name: String,
-    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
     pub light: Option<String>,
-    #[allow(dead_code, reason = "applied by the light/dark appearance task")]
     pub dark: Option<String>,
+}
+
+impl ThemeConfig {
+    /// Whether the theme follows the system appearance: both `light` and `dark` are set.
+    pub fn follows_appearance(&self) -> bool {
+        self.light.is_some() && self.dark.is_some()
+    }
+
+    /// The theme to load: `light` or `dark` by `appearance` when both are set,
+    /// otherwise `name`.
+    pub fn active(&self, appearance: Appearance) -> &str {
+        match (&self.light, &self.dark, appearance) {
+            (Some(light), Some(_), Appearance::Light) => light,
+            (Some(_), Some(dark), Appearance::Dark) => dark,
+            _ => &self.name,
+        }
+    }
 }
 
 /// The user configuration. `Default` holds the built-in values, so a missing or empty
 /// file behaves like no configuration at all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    #[allow(dead_code, reason = "applied by the language task")]
     pub language: Language,
     pub font: FontConfig,
     pub window: WindowConfig,
     pub scrollback_lines: usize,
     pub cursor: CursorConfig,
     pub word_separators: String,
-    #[allow(dead_code, reason = "applied by the tab bar position task")]
     pub tab_position: TabPosition,
     pub theme: ThemeConfig,
-    /// Raw `"keys" = "action"` pairs, interpreted by the keybindings task.
-    #[allow(dead_code, reason = "applied by the keybindings task")]
+    /// Valid `"keys" = "action"` pairs, applied on top of the default shortcuts by
+    /// [`crate::keybindings::Keybindings`].
     pub keybindings: BTreeMap<String, String>,
     #[allow(dead_code, reason = "applied by the update check thread task")]
     pub updates: UpdatesConfig,
@@ -250,9 +342,11 @@ impl Default for Config {
                 size: DEFAULT_FONT_SIZE,
             },
             window: WindowConfig {
+                startup_mode: StartupMode::Default,
                 width: 960,
                 height: 600,
                 padding: 8.0,
+                background_opacity: 1.0,
             },
             scrollback_lines: 10_000,
             cursor: CursorConfig {
@@ -423,6 +517,7 @@ impl Reader<'_> {
                     Checked::Clamped(clamped, format!("{size} is out of {MIN_FONT_SIZE}..={MAX_FONT_SIZE}, using {clamped}"))
                 }
             }),
+            ("window", "startup_mode") => self.set(value, path, &mut config.window.startup_mode, &previous.window.startup_mode, Checked::Valid),
             ("window", "width") => self.set(value, path, &mut config.window.width, &previous.window.width, positive_size),
             ("window", "height") => self.set(value, path, &mut config.window.height, &previous.window.height, positive_size),
             ("window", "padding") => self.set(value, path, &mut config.window.padding, &previous.window.padding, |padding: f32| {
@@ -430,6 +525,16 @@ impl Reader<'_> {
                     Checked::Valid(padding)
                 } else {
                     Checked::Invalid("must be a non-negative number".to_owned())
+                }
+            }),
+            ("window", "background_opacity") => self.set(value, path, &mut config.window.background_opacity, &previous.window.background_opacity, |opacity: f32| {
+                if !opacity.is_finite() {
+                    Checked::Invalid("not a number".to_owned())
+                } else if (0.0..=1.0).contains(&opacity) {
+                    Checked::Valid(opacity)
+                } else {
+                    let clamped = opacity.clamp(0.0, 1.0);
+                    Checked::Clamped(clamped, format!("{opacity} is out of 0.0..=1.0, using {clamped}"))
                 }
             }),
             ("scrollback", "lines") => self.set(value, path, &mut config.scrollback_lines, &previous.scrollback_lines, |lines: usize| {
@@ -459,7 +564,12 @@ impl Reader<'_> {
             ("keybindings", keys) => {
                 let previous_action = previous.keybindings.get(keys).cloned();
                 let mut action = previous_action.clone();
-                self.set(value, path, &mut action, &previous_action, |action: String| Checked::Valid(Some(action)));
+                self.set(value, path, &mut action, &previous_action, |action: String| {
+                    match keybindings::parse_binding(keys, &action) {
+                        Ok(_) => Checked::Valid(Some(action)),
+                        Err(message) => Checked::Invalid(message),
+                    }
+                });
                 if let Some(action) = action {
                     config.keybindings.insert(keys.to_owned(), action);
                 }
@@ -504,8 +614,50 @@ mod tests {
         PathBuf::from("/home/user/.config/graphene/config.toml")
     }
 
+    #[test]
+    fn auto_language_is_the_detected_one() {
+        assert_eq!(Language::Auto.resolve(|| Lang::Fr), Lang::Fr);
+        assert_eq!(Language::Auto.resolve(|| Lang::En), Lang::En);
+    }
+
+    #[test]
+    fn forced_language_ignores_the_locale() {
+        let detect = || panic!("the locale is not read for a forced language");
+        assert_eq!(Language::En.resolve(detect), Lang::En);
+        assert_eq!(Language::Fr.resolve(detect), Lang::Fr);
+    }
+
     fn parse(text: &str) -> (Config, Vec<ConfigError>) {
         Config::parse(text, &Config::default(), &file())
+    }
+
+    fn theme(light: Option<&str>, dark: Option<&str>) -> ThemeConfig {
+        ThemeConfig {
+            name: "gruvbox-dark".to_owned(),
+            light: light.map(str::to_owned),
+            dark: dark.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn light_and_dark_pick_the_theme_by_appearance() {
+        let theme = theme(Some("graphene-day"), Some("graphene-night"));
+        assert!(theme.follows_appearance());
+        assert_eq!(theme.active(Appearance::Light), "graphene-day");
+        assert_eq!(theme.active(Appearance::Dark), "graphene-night");
+    }
+
+    #[test]
+    fn without_both_light_and_dark_the_name_is_used() {
+        for theme in [
+            theme(None, None),
+            theme(Some("graphene-day"), None),
+            theme(None, Some("graphene-night")),
+        ] {
+            assert!(!theme.follows_appearance());
+            assert_eq!(theme.active(Appearance::Light), "gruvbox-dark");
+            assert_eq!(theme.active(Appearance::Dark), "gruvbox-dark");
+        }
     }
 
     /// `config.default.toml` with every commented setting enabled: lines starting with
@@ -551,6 +703,30 @@ mod tests {
     }
 
     #[test]
+    fn state_dir_prefers_xdg_state_home() {
+        assert_eq!(
+            state_dir_from(Some("/xdg".into()), Some("/home/u".into())),
+            Some(PathBuf::from("/xdg/graphene"))
+        );
+    }
+
+    #[test]
+    fn state_dir_falls_back_to_home() {
+        let expected = Some(PathBuf::from("/home/u/.local/state/graphene"));
+        assert_eq!(state_dir_from(None, Some("/home/u".into())), expected);
+        assert_eq!(
+            state_dir_from(Some("".into()), Some("/home/u".into())),
+            expected
+        );
+        assert_eq!(
+            state_dir_from(Some("relative".into()), Some("/home/u".into())),
+            expected
+        );
+        assert_eq!(state_dir_from(None, None), None);
+        assert_eq!(state_dir_from(None, Some("".into())), None);
+    }
+
+    #[test]
     fn empty_file_is_the_default() {
         assert_eq!(parse(""), (Config::default(), Vec::new()));
     }
@@ -580,9 +756,11 @@ family = "JetBrains Mono"
 size = 11.5
 
 [window]
+startup_mode = "remember"
 width = 1200
 height = 800
 padding = 4
+background_opacity = 0.8
 
 [scrollback]
 lines = 5000
@@ -621,9 +799,11 @@ interval = "2d"
                     size: 11.5,
                 },
                 window: WindowConfig {
+                    startup_mode: StartupMode::Remember,
                     width: 1200,
                     height: 800,
                     padding: 4.0,
+                    background_opacity: 0.8,
                 },
                 scrollback_lines: 5000,
                 cursor: CursorConfig {
@@ -681,6 +861,36 @@ interval = "2d"
                 (Some(4), "unknown key `font.sise`"),
                 (Some(6), "unknown key `nope`"),
             ]
+        );
+    }
+
+    #[test]
+    fn startup_mode_is_read() {
+        for (name, mode) in [
+            ("default", StartupMode::Default),
+            ("maximized", StartupMode::Maximized),
+            ("remember", StartupMode::Remember),
+        ] {
+            let text = format!("[window]\nstartup_mode = \"{name}\"\n");
+            let (config, errors) = parse(&text);
+            assert!(errors.is_empty());
+            assert_eq!(config.window.startup_mode, mode);
+        }
+    }
+
+    #[test]
+    fn unknown_startup_mode_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.window.startup_mode = StartupMode::Maximized;
+        let text = "[window]\nstartup_mode = \"fullscreen\"\n";
+        let (config, errors) = Config::parse(text, &previous, &file());
+        assert_eq!(config.window.startup_mode, StartupMode::Maximized);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, Some(2));
+        assert!(
+            errors[0]
+                .message
+                .starts_with("invalid value for `window.startup_mode`")
         );
     }
 
@@ -746,6 +956,37 @@ interval = "2d"
     }
 
     #[test]
+    fn background_opacity_is_clamped() {
+        let (config, errors) = parse("[window]\nbackground_opacity = 1.5\n");
+        assert_eq!(config.window.background_opacity, 1.0);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("1.5 is out of 0.0..=1.0"));
+        let (config, errors) = parse("[window]\nbackground_opacity = -0.5\n");
+        assert_eq!(config.window.background_opacity, 0.0);
+        assert_eq!(errors.len(), 1);
+        let (config, errors) = parse("[window]\nbackground_opacity = 0\n");
+        assert_eq!(config.window.background_opacity, 0.0);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn non_finite_background_opacity_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.window.background_opacity = 0.7;
+        for value in ["nan", "inf"] {
+            let text = format!("[window]\nbackground_opacity = {value}\n");
+            let (config, errors) = Config::parse(&text, &previous, &file());
+            assert_eq!(config.window.background_opacity, 0.7);
+            assert_eq!(errors.len(), 1);
+            assert!(
+                errors[0].message.contains("not a number"),
+                "{}",
+                errors[0].message
+            );
+        }
+    }
+
+    #[test]
     fn scrollback_is_capped() {
         let (config, errors) = parse("[scrollback]\nlines = 1000000\n");
         assert_eq!(config.scrollback_lines, MAX_SCROLLBACK_LINES);
@@ -767,11 +1008,36 @@ interval = "2d"
         let mut previous = Config::default();
         previous
             .keybindings
-            .insert("Ctrl+Q".to_owned(), "quit".to_owned());
+            .insert("Ctrl+Q".to_owned(), "copy".to_owned());
         let text = "[keybindings]\n\"Ctrl+Q\" = 1\n\"Ctrl+W\" = true\n";
         let (config, errors) = Config::parse(text, &previous, &file());
         assert_eq!(config.keybindings, previous.keybindings);
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn unknown_keybinding_keys_or_actions_are_reported() {
+        let mut previous = Config::default();
+        previous
+            .keybindings
+            .insert("Ctrl+Q".to_owned(), "copy".to_owned());
+        let text = "[keybindings]\n\"Ctrl+Q\" = \"quit\"\n\"Ctrl+PgUp\" = \"copy\"\n\"Ctrl+Alt+T\" = \"new_tab\"\n";
+        let (config, errors) = Config::parse(text, &previous, &file());
+        assert_eq!(
+            config.keybindings,
+            BTreeMap::from([
+                ("Ctrl+Q".to_owned(), "copy".to_owned()),
+                ("Ctrl+Alt+T".to_owned(), "new_tab".to_owned()),
+            ])
+        );
+        let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            messages,
+            [
+                "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"quit\"",
+                "config.toml:3: invalid value for `keybindings.Ctrl+PgUp`: unknown key \"PgUp\" in \"Ctrl+PgUp\"",
+            ]
+        );
     }
 
     #[test]
@@ -809,6 +1075,45 @@ interval = "2d"
         assert_eq!(load_from(&nested).0.font.size, 9.0);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_keeps_the_previous_value_of_an_invalid_key() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-config-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut previous = Config::default();
+        previous.font.size = 11.0;
+        previous.scrollback_lines = 500;
+
+        std::fs::write(dir.join(CONFIG_FILE), "[font]\nsize = \"big\"\n").unwrap();
+        let (config, errors) = reload_from(&dir, &previous);
+        assert_eq!(config.font.size, 11.0);
+        // A key absent from the file takes its default, not the previous value.
+        assert_eq!(config.scrollback_lines, Config::default().scrollback_lines);
+        assert_eq!(errors.len(), 1);
+
+        std::fs::write(dir.join(CONFIG_FILE), "[font\n").unwrap();
+        let (config, errors) = reload_from(&dir, &previous);
+        assert_eq!(config, previous);
+        assert_eq!(errors.len(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_of_a_missing_file_is_the_default_without_writing_it() {
+        let dir = std::env::temp_dir().join(format!("graphene-config-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut previous = Config::default();
+        previous.font.size = 11.0;
+
+        assert_eq!(
+            reload_from(&dir, &previous),
+            (Config::default(), Vec::new())
+        );
+        assert!(!dir.join(CONFIG_FILE).exists());
     }
 
     #[test]

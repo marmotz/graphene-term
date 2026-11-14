@@ -29,10 +29,16 @@ commented out, default values) is written there; a write failure is only logged.
 
 Parsing (`src/config.rs`) reads the file key by key: a missing key takes its default, an
 invalid value or an unknown key is logged with its line and ignored, a TOML syntax error
-ignores the whole file. Settings applied at startup: font family and size, padding,
-initial window size, scrollback, word separators, cursor shape. The other keys
-(`language`, `tabs`, `theme`, `keybindings`, `cursor.blinking`) are read but not applied
-yet.
+ignores the whole file. Every key is applied: interface language (`auto` resolves the
+locale, see `Language::resolve`), font family and size, padding, initial window size,
+background opacity, scrollback, word separators, cursor shape and blinking, tab bar
+position, theme, and keybindings (`src/keybindings.rs`: default table, then the
+configured entries; an invalid key or action is reported like any invalid value).
+
+The cursor blinks (`src/cursor_blink.rs`) when its style asks for it (`cursor.blinking`,
+or DECSCUSR from the application) and the window has the focus: the phase toggles every
+500 ms, `App::about_to_wait` waits until the next toggle, and a key press or a paste
+restarts the cycle on a visible phase.
 
 In `config.default.toml`, settings and section headers are commented with `# ` and
 documentation lines with `##`: a test uncomments the settings and checks that the result
@@ -67,7 +73,8 @@ Unit tests live next to the code (`#[cfg(test)]` modules):
 | Module            | Covers                                                      |
 |-------------------|-------------------------------------------------------------|
 | `palette`         | 256-color table, overrides, inverse/hidden/dim              |
-| `input`           | key encoding, control codes, cursor modes, shortcuts, paste |
+| `input`           | key encoding, control codes, cursor modes, action ids, paste |
+| `keybindings`     | default shortcuts, remapping, `none`, key syntax, Shift and physical-key matching |
 | `layout`          | grid size from pixels, padding, minimum size                |
 | `frame`           | capture from a real `Term` fed with escape sequences        |
 | `renderer::scene` | background merging, glyph instances, decorations, sRGB conversion |

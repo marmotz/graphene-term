@@ -16,7 +16,8 @@ use winit::keyboard::{Key, NamedKey};
 
 use super::tab_bar::UiMetrics;
 use crate::i18n::{self, Lang, Msg};
-use crate::input::{self, Action};
+use crate::input::Action;
+use crate::keybindings::Keybindings;
 use crate::layout::Rect;
 use crate::terminal::PaneId;
 use crate::workspace::{TitleSource, Workspace};
@@ -58,25 +59,30 @@ pub enum Command {
 pub struct Entry {
     pub command: Command,
     pub label: String,
-    pub shortcut: Option<&'static str>,
+    pub shortcut: Option<String>,
 }
 
 /// The entries of the palette in their default order: every [`Action::ALL`], then each
-/// tab of `workspace`, followed by its panes when it holds several.
-pub fn entries<P: TitleSource>(workspace: &Workspace<P>, lang: Lang) -> Vec<Entry> {
+/// tab of `workspace`, followed by its panes when it holds several. Shortcuts are read
+/// from `keybindings`.
+pub fn entries<P: TitleSource>(
+    workspace: &Workspace<P>,
+    lang: Lang,
+    keybindings: &Keybindings,
+) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Action::ALL
         .into_iter()
         .map(|action| Entry {
             command: Command::Action(action),
             label: i18n::text(lang, &action.label()).into_owned(),
-            shortcut: input::shortcut_label(action),
+            shortcut: keybindings.label(action),
         })
         .collect();
     for (index, tab) in workspace.tabs().iter().enumerate() {
         let title = workspace.tab_title(index).unwrap_or_default();
         let shortcut = u8::try_from(index + 1)
             .ok()
-            .and_then(|number| input::shortcut_label(Action::GoToTab(number)));
+            .and_then(|number| keybindings.label(Action::GoToTab(number)));
         entries.push(Entry {
             command: Command::Tab(index),
             label: i18n::text(
@@ -519,9 +525,9 @@ impl PaletteLayout {
         let entry = palette.entry(found);
         let text_x = rect.x + text_padding;
         let right = rect.x + rect.width - text_padding;
-        let shortcut = entry.shortcut.map(|shortcut| {
+        let shortcut = entry.shortcut.as_ref().map(|shortcut| {
             let x = (right - measure(shortcut)).round();
-            (shortcut.to_owned(), x)
+            (shortcut.clone(), x)
         });
         let label_right = shortcut.as_ref().map_or(right, |(_, x)| x - gap);
         // Pieces of consecutive characters that match, or not: (first char, text).
@@ -794,14 +800,14 @@ mod tests {
             })
             .expect("split fits");
 
-        let entries = entries(&ws, Lang::En);
+        let entries = entries(&ws, Lang::En, &Keybindings::default());
         let actions = Action::ALL.len();
         assert_eq!(entries.len(), actions + 4);
         assert_eq!(entries[0].label, "New tab");
-        assert_eq!(entries[0].shortcut, Some("Ctrl+Shift+T"));
+        assert_eq!(entries[0].shortcut.as_deref(), Some("Ctrl+Shift+T"));
         let rest: Vec<(&str, Command, Option<&str>)> = entries[actions..]
             .iter()
-            .map(|e| (e.label.as_str(), e.command, e.shortcut))
+            .map(|e| (e.label.as_str(), e.command, e.shortcut.as_deref()))
             .collect();
         assert_eq!(
             rest,
@@ -958,7 +964,7 @@ mod tests {
     fn layout_splits_labels_into_highlighted_runs_and_places_shortcuts() {
         let mut palette = CommandPalette::new(
             vec![Entry {
-                shortcut: Some("Ctrl+Shift+E"),
+                shortcut: Some("Ctrl+Shift+E".to_owned()),
                 ..entry("Split right", Action::SplitRight)
             }],
             Vec::new(),

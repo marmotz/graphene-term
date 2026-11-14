@@ -25,13 +25,18 @@ use crate::timeline::Timeline;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u64);
 
-/// Events sent from the PTY and update check threads to the UI thread.
+/// Events sent from the PTY, update check and configuration watcher threads to the UI
+/// thread.
 #[derive(Debug)]
 pub enum UserEvent {
     /// An event from the terminal of a pane.
     Terminal(PaneId, Event),
     /// Release to show in the update banner, `None` to hide it.
     Update(Option<crate::update::Release>),
+    /// `config.toml` or a theme file changed on disk.
+    ConfigChanged,
+    /// The system light/dark appearance, at startup and on each change.
+    Appearance(crate::appearance::Appearance),
 }
 
 /// Forwards the terminal events of one pane to the winit event loop.

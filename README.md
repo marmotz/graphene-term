@@ -17,10 +17,23 @@ uncomment a line to change it. See [config.default.toml](config.default.toml).
 
 Themes are set with `name` in the `[theme]` section. Eight are built in (see
 [themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,
-with the same format, and only needs the colors it changes.
+with the same format, and only needs the colors it changes. Setting both `light` and
+`dark` instead follows the system light/dark appearance (read from the XDG desktop
+portal; dark without portal), switching the theme as soon as it changes.
+
+`[window] startup_mode` opens new windows at the configured size (`"default"`),
+maximized (`"maximized"`), or at the size and maximized state of the last window closed
+(`"remember"`, kept in `~/.local/state/graphene/window.json`).
+`[window] background_opacity` (0.0 to 1.0) makes the default background translucent,
+with a compositor; explicit cell backgrounds, the selection and the cursor stay opaque.
+
+Changes to `config.toml` and to the theme files apply to the open window as soon as
+they are saved, without restart. A changed `font.size` resets the zoom; `width`,
+`height` and `startup_mode` only affect windows opened afterwards.
 
 Errors in these files are logged and shown in a banner at the top of the window (click
-to hide it); the faulty settings keep their default value.
+to hide it); the faulty settings keep their default value, or their previous value on a
+reload.
 
 Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
 builds, every 24 hours for stable builds) and caches the result in
@@ -117,9 +130,17 @@ Tabs and split panes:
 palette, which also lists the open tabs and panes. Type to filter (fuzzy, case
 sensitive only with an uppercase letter), `Up` / `Down` to choose, `Enter` to run,
 `Escape` to close; recently run actions come first. The tab bar shows once there are
-two tabs. Closing a pane, a tab or the window asks for confirmation while a program
+two tabs, on the edge set by `tabs.position` (`top`, `bottom`, `left` or `right`; on a
+side, the tabs are stacked). Closing a pane, a tab or the window asks for confirmation while a program
 other than the shell runs in it. With several panes in the tab, `Ctrl+Shift+Left /
 Right` moves the focus instead of extending the input selection.
+
+Every key-bound action can be remapped in the `[keybindings]` section of `config.toml`:
+`"Ctrl+Alt+T" = "new_tab"` adds a shortcut, `"Shift+PageUp" = "none"` gives a default
+one back to the shell. Keys are modifiers (`Ctrl`, `Shift`, `Alt`, `Super`) joined with
+`+`, then a key name (`PageUp`, `F5`, `Left`...) or one character; actions are the
+snake_case names of the palette entries (`copy`, `split_right`, `focus_pane_left`,
+`go_to_tab_3`, `command_palette`...). The palette shows the configured shortcut.
 
 At the shell prompt (zsh, bash or fish with the integration, not inside a running
 command or a full-screen application), the command line is edited like in an editor.

@@ -55,8 +55,12 @@ pub struct GridLayout {
     /// Rectangle of the window the grid is laid out in.
     pub rect: Rect,
     pub cell: CellSize,
-    /// Inner padding around the content, in physical pixels.
+    /// Minimum inner padding around the content, in physical pixels.
     pub padding: f32,
+    /// Offset of the content's top-left corner from the rectangle's corner, in physical
+    /// pixels: the padding plus half of the pixels left over by the whole cells, on each
+    /// axis, so the content is centred in the rectangle.
+    pub origin: (f32, f32),
     /// Width of the margin left of the cards, in physical pixels: half a cell.
     pub margin: f32,
     /// Horizontal padding inside a card on each side of the grid: half a cell.
@@ -102,35 +106,50 @@ enum RowAt {
 }
 
 impl GridLayout {
-    /// Computes how many cells fit in the rectangle `rect` of the window.
+    /// Computes how many cells fit in the rectangle `rect` of the window, keeping at
+    /// least `padding` around the content, and centres the content in the rectangle
+    /// with the pixels left over by the whole cells.
     pub fn new(rect: Rect, cell: CellSize, padding: f32) -> Self {
         let margin = (cell.width / 2.0).round();
         let card_pad = (cell.width / 2.0).round();
         let chevron_radius = (cell.height * 0.45).round();
         let right_reserve = padding.max(chevron_radius);
         let horizontal = rect.width - padding - margin - 2.0 * card_pad - right_reserve;
+        let vertical = rect.height - 2.0 * padding;
+        let columns = ((horizontal.max(0.0) / cell.width).floor() as usize).max(MIN_COLUMNS);
+        let lines = ((vertical.max(0.0) / cell.height).floor() as usize).max(MIN_SCREEN_LINES);
+        // Half of the leftover, on whole pixels so glyphs stay crisp. Below the minimum
+        // grid size, nothing is left over.
+        let half_leftover = |room: f32, cells: usize, size: f32| {
+            ((room - cells as f32 * size).max(0.0) / 2.0).floor()
+        };
         Self {
             rect,
             cell,
             padding,
+            origin: (
+                padding + half_leftover(horizontal, columns, cell.width),
+                padding + half_leftover(vertical, lines, cell.height),
+            ),
             margin,
             card_pad,
             chevron_radius,
             right_reserve,
-            columns: ((horizontal.max(0.0) / cell.width).floor() as usize).max(MIN_COLUMNS),
-            lines: (((rect.height - 2.0 * padding).max(0.0) / cell.height).floor() as usize)
-                .max(MIN_SCREEN_LINES),
+            columns,
+            lines,
         }
     }
 
-    /// Left pixel edge of the content: the rectangle's left edge plus the padding.
+    /// Left pixel edge of the content: the rectangle's left edge plus the horizontal
+    /// origin (padding and half of the leftover pixels).
     pub fn content_left(&self) -> f32 {
-        self.rect.x + self.padding
+        self.rect.x + self.origin.0
     }
 
-    /// Top pixel edge of the content: the rectangle's top edge plus the padding.
+    /// Top pixel edge of the content: the rectangle's top edge plus the vertical origin
+    /// (padding and half of the leftover pixels).
     pub fn content_top(&self) -> f32 {
-        self.rect.y + self.padding
+        self.rect.y + self.origin.1
     }
 
     /// Whether the physical pixel (`x`, `y`) lies in the layout's rectangle.
@@ -355,13 +374,60 @@ mod tests {
     }
 
     #[test]
+    fn exact_fit_has_the_padding_as_origin() {
+        assert_eq!(layout().origin, (8.0, 8.0));
+    }
+
+    #[test]
+    fn leftover_pixels_are_split_evenly_on_both_axes() {
+        // 8 px left over horizontally and 18 px vertically: half on each side.
+        let l = GridLayout::new(Rect::from_size(WIDTH + 8, HEIGHT + 18), CELL, 8.0);
+        assert_eq!((l.columns, l.lines), (80, 20));
+        assert_eq!(l.origin, (12.0, 17.0));
+        assert_eq!((l.content_left(), l.content_top()), (12.0, 17.0));
+        assert_eq!(l.grid_left(), 22.0);
+        assert_eq!(l.row_top(0), 17.0);
+        // The leftover right of the right reserve and below the last row matches the
+        // leftover past the padding on the other side.
+        let right = (WIDTH + 8) as f32 - l.grid_right() - l.card_pad - l.right_reserve;
+        assert_eq!(right, l.origin.0 - l.padding);
+        let bottom = (HEIGHT + 18) as f32 - l.row_top(2 * l.lines as u32);
+        assert_eq!(bottom, l.content_top());
+    }
+
+    #[test]
+    fn odd_leftover_keeps_the_origin_on_whole_pixels() {
+        let l = GridLayout::new(Rect::from_size(WIDTH + 9, HEIGHT + 19), CELL, 8.0);
+        assert_eq!(l.origin, (12.0, 17.0));
+    }
+
+    #[test]
+    fn leftover_moves_point_at_hit_and_overflow() {
+        let l = GridLayout::new(Rect::from_size(WIDTH + 8, HEIGHT + 18), CELL, 8.0);
+        let view = plain(20);
+        assert_eq!(l.point_at(22.0, 17.0, &view), (0, 0, Side::Left));
+        assert_eq!(l.point_at(61.9, 76.9, &view), (3, 2, Side::Right));
+        assert_eq!(l.hit(21.9, 17.0, &view), Hit::Margin { row: 0 });
+        assert_eq!(l.vertical_overflow(16.9, &view), -1);
+        assert_eq!(l.vertical_overflow(17.0, &view), 0);
+        assert_eq!(l.vertical_overflow(416.9, &view), 0);
+        assert_eq!(l.vertical_overflow(417.0, &view), 1);
+    }
+
+    #[test]
+    fn below_minimum_size_the_origin_is_the_padding() {
+        let l = GridLayout::new(Rect::from_size(0, 0), CELL, 8.0);
+        assert_eq!(l.origin, (8.0, 8.0));
+    }
+
+    #[test]
     fn never_smaller_than_minimum() {
         let l = GridLayout::new(Rect::from_size(0, 0), CELL, 8.0);
         assert_eq!((l.columns, l.lines), (MIN_COLUMNS, MIN_SCREEN_LINES));
     }
 
     #[test]
-    fn grid_left_includes_padding_margin_and_card_padding() {
+    fn grid_left_includes_origin_margin_and_card_padding() {
         let l = layout();
         assert_eq!(l.grid_left(), 18.0);
         assert_eq!(l.grid_right(), 818.0);
@@ -599,7 +665,8 @@ mod tests {
     #[test]
     fn point_at_is_the_inverse_of_the_cell_origin() {
         let view = plain(20);
-        for l in [layout(), offset()] {
+        let leftover = GridLayout::new(Rect::from_size(WIDTH + 7, HEIGHT + 13), CELL, 8.0);
+        for l in [layout(), offset(), leftover] {
             for column in [0, 1, 40, 79] {
                 for row in [0, 7, 19] {
                     let (x, y) = (l.cell_x(column), l.row_top(view[row].top));
