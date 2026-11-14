@@ -21,8 +21,10 @@ struct OptionLine {
 /// Returns commented entries for supported options not already present in the document.
 /// `None` means the document is already complete. Invalid TOML is never rewritten.
 pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit::TomlError> {
-    let document = text.parse::<DocumentMut>()?;
     let options = option_lines();
+    let normalized = normalize_malformed_comments(text, &options);
+    let text = normalized.as_deref().unwrap_or(text);
+    let document = text.parse::<DocumentMut>()?;
     let commented = commented_options(text);
     let missing: Vec<_> = options
         .into_iter()
@@ -33,37 +35,204 @@ pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit:
         .collect();
 
     if missing.is_empty() {
-        return Ok(None);
+        return Ok(normalized);
     }
 
-    let mut updated = String::with_capacity(text.len() + missing.len() * 32);
-    updated.push_str(text);
-    if !text.is_empty() && !text.ends_with('\n') {
-        updated.push('\n');
-    }
-    if !text.is_empty() && !text.ends_with("\n\n") {
-        updated.push('\n');
-    }
-    updated.push_str("## Added automatically because these supported options were missing.\n");
+    let groups = grouped_options(missing);
+    let blocks = section_blocks(text);
+    let newline = newline(text);
+    let mut insertions = Vec::new();
+    let mut appended_sections = String::new();
 
-    let mut current_section: Option<String> = None;
-    for option in missing {
-        if current_section != option.section {
-            if current_section.is_some() || option.section.is_some() {
-                updated.push('\n');
+    for (section, options) in groups {
+        if let Some(section) = section {
+            if let Some(block) = blocks
+                .iter()
+                .filter(|block| block.name == section && block.active)
+                .chain(
+                    blocks
+                        .iter()
+                        .filter(|block| block.name == section && !block.active),
+                )
+                .next()
+            {
+                let position = insertion_point(text, block.start, block.end);
+                insertions.push((position, render_options(&options, position, text, &newline)));
+            } else {
+                if appended_sections.is_empty() {
+                    if !text.is_empty() && !text.ends_with(&format!("{newline}{newline}")) {
+                        appended_sections.push_str(&newline);
+                        if !text.ends_with(&newline) {
+                            appended_sections.push_str(&newline);
+                        }
+                    }
+                } else if !appended_sections.ends_with(&format!("{newline}{newline}")) {
+                    appended_sections.push_str(&newline);
+                }
+                appended_sections.push_str("# [");
+                appended_sections.push_str(&section);
+                appended_sections.push(']');
+                appended_sections.push_str(&newline);
+                for option in options {
+                    appended_sections.push_str("# ");
+                    appended_sections.push_str(&option.line);
+                    appended_sections.push_str(&newline);
+                }
             }
-            if let Some(section) = &option.section {
-                updated.push_str("# [");
-                updated.push_str(section);
-                updated.push_str("]\n");
-            }
-            current_section.clone_from(&option.section);
+        } else {
+            let root_end = blocks.first().map_or(text.len(), |block| block.start);
+            let position = insertion_point(text, 0, root_end);
+            insertions.push((position, render_options(&options, position, text, &newline)));
         }
-        updated.push_str("# ");
-        updated.push_str(&option.line);
-        updated.push('\n');
     }
+
+    if !appended_sections.is_empty() {
+        insertions.push((text.len(), appended_sections));
+    }
+
+    let mut merged_insertions: Vec<(usize, String)> = Vec::new();
+    for (position, insertion) in insertions {
+        if let Some((last_position, last_insertion)) = merged_insertions.last_mut()
+            && *last_position == position
+        {
+            last_insertion.push_str(&insertion);
+        } else {
+            merged_insertions.push((position, insertion));
+        }
+    }
+    merged_insertions.sort_by_key(|(position, _)| std::cmp::Reverse(*position));
+    let mut updated = text.to_owned();
+    for (position, insertion) in merged_insertions {
+        updated.insert_str(position, &insertion);
+    }
+
+    updated.parse::<DocumentMut>()?;
     Ok(Some(updated))
+}
+
+fn grouped_options(options: Vec<OptionLine>) -> Vec<(Option<String>, Vec<OptionLine>)> {
+    let mut groups: Vec<(Option<String>, Vec<OptionLine>)> = Vec::new();
+    for option in options {
+        if let Some((section, group)) = groups.last_mut()
+            && *section == option.section
+        {
+            group.push(option);
+        } else {
+            groups.push((option.section.clone(), vec![option]));
+        }
+    }
+    groups
+}
+
+fn render_options(options: &[OptionLine], position: usize, text: &str, newline: &str) -> String {
+    let mut rendered = String::new();
+    if position > 0 && !text[..position].ends_with('\n') {
+        rendered.push_str(newline);
+    }
+    for option in options {
+        rendered.push_str("# ");
+        rendered.push_str(&option.line);
+        rendered.push_str(newline);
+    }
+    rendered
+}
+
+fn newline(text: &str) -> String {
+    if text.contains("\r\n") {
+        "\r\n".to_owned()
+    } else {
+        "\n".to_owned()
+    }
+}
+
+#[derive(Debug)]
+struct SectionBlock {
+    name: String,
+    start: usize,
+    end: usize,
+    active: bool,
+}
+
+fn section_blocks(text: &str) -> Vec<SectionBlock> {
+    let mut blocks: Vec<SectionBlock> = Vec::new();
+    let mut offset = 0;
+    for raw_line in text.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
+        let trimmed = line.trim_start();
+        let (header, active) = if trimmed.starts_with('#') {
+            (comment_body(trimmed).and_then(table_header), false)
+        } else {
+            (table_header(trimmed), true)
+        };
+        if let Some(name) = header {
+            if let Some(previous) = blocks.last_mut() {
+                previous.end = offset;
+            }
+            blocks.push(SectionBlock {
+                name: name.to_owned(),
+                start: offset,
+                end: text.len(),
+                active,
+            });
+        }
+        offset += raw_line.len();
+    }
+    blocks
+}
+
+fn insertion_point(text: &str, start: usize, end: usize) -> usize {
+    let mut point = start;
+    let mut offset = start;
+    for raw_line in text[start..end].split_inclusive('\n') {
+        if !raw_line.trim().is_empty() {
+            point = offset + raw_line.len();
+        }
+        offset += raw_line.len();
+    }
+    point
+}
+
+fn normalize_malformed_comments(text: &str, options: &[OptionLine]) -> Option<String> {
+    let mut normalized = String::with_capacity(text.len());
+    let mut section = None;
+    let mut changed = false;
+
+    for raw_line in text.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
+        let trimmed = line.trim_start();
+        let Some(body) = comment_body(trimmed) else {
+            if let Some(header) = table_header(trimmed) {
+                section = Some(header.to_owned());
+            }
+            normalized.push_str(raw_line);
+            continue;
+        };
+        if let Some(header) = table_header(body) {
+            section = Some(header.to_owned());
+            normalized.push_str(raw_line);
+            continue;
+        }
+
+        let malformed_option = body.split_once('=').and_then(|(key, _)| {
+            let key = key.trim().trim_matches(['"', '\'']).trim();
+            options
+                .iter()
+                .find(|option| option.section == section && option.key == key)
+                .filter(|_| commented_keys(section.as_deref(), body).is_none())
+        });
+        if let Some(option) = malformed_option {
+            let indentation = line.len() - trimmed.len();
+            normalized.push_str(&line[..indentation]);
+            normalized.push_str("# ");
+            normalized.push_str(&option.line);
+            normalized.push_str(&raw_line[line.len()..]);
+            changed = true;
+        } else {
+            normalized.push_str(raw_line);
+        }
+    }
+
+    changed.then_some(normalized)
 }
 
 /// Writes a complete replacement next to the target and atomically renames it into place.
@@ -406,20 +575,8 @@ fn commented_options(text: &str) -> HashSet<(Option<String>, String)> {
                 section = Some(header.to_owned());
                 continue;
             }
-            let Some((key, _)) = body.split_once('=') else {
-                continue;
-            };
-            let key = key.trim();
-            if section.as_deref() == Some("keybindings") {
-                // TOML parses quoted shortcut keys (including escaped characters) for us.
-                let snippet = format!("[keybindings]\n{body}\n");
-                if let Ok(value) = toml::from_str::<toml::Value>(&snippet)
-                    && let Some(table) = value.get("keybindings").and_then(toml::Value::as_table)
-                {
-                    options.extend(table.keys().map(|key| (section.clone(), key.clone())));
-                }
-            } else if !key.is_empty() {
-                options.insert((section.clone(), key.to_owned()));
+            if let Some(keys) = commented_keys(section.as_deref(), body) {
+                options.extend(keys.into_iter().map(|key| (section.clone(), key)));
             }
         } else if let Some(header) = table_header(line.trim()) {
             section = Some(header.to_owned());
@@ -428,10 +585,26 @@ fn commented_options(text: &str) -> HashSet<(Option<String>, String)> {
     options
 }
 
+fn commented_keys(section: Option<&str>, body: &str) -> Option<Vec<String>> {
+    let source = match section {
+        Some(section) => format!("[{section}]\n{body}\n"),
+        None => format!("{body}\n"),
+    };
+    let value = toml::from_str::<toml::Value>(&source).ok()?;
+    let table = match section {
+        Some(section) => value.get(section)?.as_table()?,
+        None => value.as_table()?,
+    };
+    Some(table.keys().cloned().collect())
+}
+
 /// Returns the body of a single- or multi-hash TOML comment.
 fn comment_body(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
-    let body = trimmed.trim_start_matches('#').trim_start();
+    let body = trimmed
+        .strip_prefix('#')?
+        .trim_start_matches('#')
+        .trim_start();
     if body.is_empty() { None } else { Some(body) }
 }
 
@@ -492,6 +665,7 @@ mod tests {
         for (key, action) in crate::keybindings::defaults() {
             assert!(completed.contains(&format!("# {key:?} = {:?}\n", action.id())));
         }
+        assert!(commented_options(&completed).contains(&(None, "language".to_owned())));
         assert_eq!(complete_defaults(&completed).unwrap(), None);
     }
 
@@ -513,12 +687,66 @@ mod tests {
         let original = "# [keybindings]\n# \"Ctrl+Shift+C\" = \"copy\"\n";
         let updated = complete_defaults(original).unwrap().unwrap();
         assert_eq!(updated.matches("\"Ctrl+Shift+C\" = \"copy\"").count(), 1);
-        assert!(updated.starts_with(original));
+        assert_eq!(updated.matches("# [keybindings]").count(), 1);
+        assert!(updated.contains(original));
+    }
+
+    #[test]
+    fn missing_options_are_inserted_into_existing_sections_without_duplicate_headers() {
+        let original = concat!(
+            "[window]\n",
+            "# width = 960\n",
+            "background_opacity = 0.9\n",
+            "# [scrollback]\n",
+            "# lines = 10000\n",
+            "[cursor]\n",
+            "# \"shape = \"block\"\n",
+            "blinking = true\n",
+        );
+
+        let updated = complete_defaults(original).unwrap().unwrap();
+
+        assert_eq!(updated.matches("[window]").count(), 1);
+        assert_eq!(updated.matches("# [window]").count(), 0);
+        assert_eq!(updated.matches("# startup_mode = \"default\"").count(), 1);
+        assert!(
+            updated.find("# startup_mode = \"default\"").unwrap()
+                < updated.find("# [scrollback]").unwrap()
+        );
+        assert_eq!(updated.matches("[cursor]").count(), 1);
+        assert_eq!(updated.matches("# [cursor]").count(), 0);
+        assert_eq!(updated.matches("# shape = \"block\"").count(), 1);
+        assert!(updated.contains("background_opacity = 0.9"));
+        assert!(updated.contains("blinking = true"));
+        assert!(updated.parse::<DocumentMut>().is_ok());
+        assert_eq!(complete_defaults(&updated).unwrap(), None);
+    }
+
+    #[test]
+    fn root_options_are_inserted_before_the_first_section() {
+        let original = "[window]\nwidth = 900\n";
+        let updated = complete_defaults(original).unwrap().unwrap();
+
+        assert!(updated.find("# language = \"auto\"").unwrap() < updated.find("[window]").unwrap());
+        assert_eq!(updated.matches("[window]").count(), 1);
+        assert!(updated.contains("width = 900"));
+    }
+
+    #[test]
+    fn absent_sections_get_one_commented_header() {
+        let original = "[window]\nwidth = 900\n";
+        let updated = complete_defaults(original).unwrap().unwrap();
+
+        assert_eq!(updated.matches("# [font]").count(), 1);
+        assert_eq!(updated.matches("# [updates]").count(), 1);
+        assert!(updated.contains("# family = \"\""));
+        assert!(updated.contains("# check = true"));
     }
 
     #[test]
     fn invalid_toml_is_rejected_without_a_replacement() {
         assert!(complete_defaults("[font\nsize = 12\n").is_err());
+        assert!(complete_defaults("[cursor]\nshape = \"unterminated\n").is_err());
     }
 
     #[test]
@@ -630,9 +858,7 @@ mod tests {
         let outcome = prune_file(&path, |_| panic!("default creation must not ask")).unwrap();
         assert_eq!(outcome, PruneOutcome::CreatedDefault);
         let contents = fs::read_to_string(&path).unwrap();
-        assert!(
-            contents.contains("Added automatically because these supported options were missing")
-        );
+        assert!(contents.contains("# \"Ctrl+Shift+T\" = \"new_tab\""));
         assert!(contents.parse::<DocumentMut>().is_ok());
         remove_temporary_config(directory);
     }

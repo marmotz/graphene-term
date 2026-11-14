@@ -17,11 +17,15 @@ configured manually.
 
 ## Decisions
 
-- At startup, missing options are added to the existing file with their default values.
-- All supported options that are not already present in the file are added as commented
-  lines, following the configuration template. This includes the complete list of
-  built-in keyboard shortcuts.
-- Existing user-configured values are preserved.
+- At startup, complete the existing file in place, adding missing options to their
+  existing sections without duplicate options or section headers. Add a section header
+  only when that section is absent.
+- User-configured values remain active with their existing values; options not configured
+  by the user remain commented with their defaults. The complete built-in shortcut list
+  is included.
+- Preserve the user's comments, key order, and formatting except for malformed commented
+  settings that unambiguously match a supported option; normalize those to the template
+  comment instead of duplicating them.
 - Keys unknown to the current version (including obsolete keys) are preserved during
   automatic updates.
 - The explicit `graphene --prune-config` command can remove unknown keys: it lists them
@@ -31,5 +35,3 @@ configured manually.
   created before pruning.
 - If the file contains invalid TOML syntax, neither startup updates nor pruning may
   rewrite it.
-- Updates should preserve the user's file presentation as much as possible, including
-  comments, key order, and formatting.

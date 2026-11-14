@@ -1143,7 +1143,8 @@ interval = "2d"
 
         assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
         let written = std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap();
-        assert!(written.starts_with(DEFAULT_CONFIG));
+        assert!(written.starts_with("## Graphene Term configuration.\n"));
+        assert_eq!(written.matches("# [keybindings]").count(), 1);
         for (key, action) in keybindings::defaults() {
             assert!(written.contains(&format!("# {key:?} = {:?}\n", action.id())));
         }
@@ -1155,6 +1156,47 @@ interval = "2d"
 
         std::fs::write(nested.join(CONFIG_FILE), "[font]\nsize = 9\n").unwrap();
         assert_eq!(load_from(&nested).0.font.size, 9.0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn initial_load_completes_existing_sections_without_duplicate_headers() {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-config-complete-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        let original = concat!(
+            "[window]\n",
+            "# width = 960\n",
+            "background_opacity = 0.9\n",
+            "# [scrollback]\n",
+            "# lines = 10000\n",
+            "[cursor]\n",
+            "# \"shape = \"block\"\n",
+            "blinking = true\n",
+        );
+        std::fs::write(&path, original).unwrap();
+
+        let (config, errors) = load_from(&dir);
+        let updated = std::fs::read_to_string(&path).unwrap();
+
+        assert!(errors.is_empty());
+        assert_eq!(config.window.background_opacity, 0.9);
+        assert!(config.cursor.blinking);
+        assert_eq!(updated.matches("[window]").count(), 1);
+        assert_eq!(updated.matches("# [window]").count(), 0);
+        assert_eq!(updated.matches("# startup_mode = \"default\"").count(), 1);
+        assert_eq!(updated.matches("[cursor]").count(), 1);
+        assert_eq!(updated.matches("# shape = \"block\"").count(), 1);
+        assert!(updated.contains("background_opacity = 0.9"));
+        assert!(updated.contains("blinking = true"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
