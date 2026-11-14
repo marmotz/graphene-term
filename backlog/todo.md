@@ -1,37 +1,35 @@
-<!-- backlog-sync 2026-11-13T19:50Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-14T19:52Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
-## Configuration file and themes ·  [overview](features/config-themes/overview.md)
+## Update Configuration at Startup ·  [overview](features/config-defaults-on-startup/overview.md)
 
-_terminé — voir [technical.md](features/config-themes/technical.md)_ — 11/11 tasks done
+_0/2 tasks done_
 
-| Done | Issue                                                     | Title                                                      | Blocked by                   |
-|------|-----------------------------------------------------------|------------------------------------------------------------|------------------------------|
-| [x]  | [#13](https://github.com/marmotz/graphene-term/issues/13) | Config: centre the grid with the leftover pixels           | —                            |
-| [x]  | [#16](https://github.com/marmotz/graphene-term/issues/16) | Config: configurable keybindings                           | #14                          |
-| [x]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking                                    | #14                          |
-| [x]  | [#19](https://github.com/marmotz/graphene-term/issues/19) | Config: hot reload of the configuration and themes         | #14, #15, #16                |
-| [x]  | [#20](https://github.com/marmotz/graphene-term/issues/20) | Config: follow the system light/dark appearance            | #15, #19                     |
-| [x]  | [#21](https://github.com/marmotz/graphene-term/issues/21) | Config: language, tab bar position and UI colors           | #13, #15, #19, #35, #40, #42 |
-| [x]  | [#62](https://github.com/marmotz/graphene-term/issues/62) | Config: window startup mode (default, maximized, remember) | #14                          |
-| [x]  | [#63](https://github.com/marmotz/graphene-term/issues/63) | Config: transparent background                             | #14                          |
-| [x]  | [#14](https://github.com/marmotz/graphene-term/issues/14) | Config: configuration file, model and startup settings     | —                            |
-| [x]  | [#15](https://github.com/marmotz/graphene-term/issues/15) | Config: themes, built-in themes and selection color        | #14                          |
-| [x]  | [#18](https://github.com/marmotz/graphene-term/issues/18) | Config: error banner                                       | #14, #15                     |
+| Done | Issue                                                     | Title                                       | Blocked by |
+|------|-----------------------------------------------------------|---------------------------------------------|------------|
+| [ ]  | [#93](https://github.com/marmotz/graphene-term/issues/93) | Complete missing config defaults at startup | —          |
+| [ ]  | [#94](https://github.com/marmotz/graphene-term/issues/94) | Add explicit config pruning command         | #93        |
 
-## Images and clickable links ·  [overview](features/images-links/overview.md)
+## Settings screen ·  [overview](features/settings-screen/overview.md)
 
-_terminé — voir [technical.md](features/images-links/technical.md)_ — 8/8 tasks done
+tâches créées — voir [technical.md](features/settings-screen/technical.md) — 0/6 tasks done
 
-| Done | Issue                                                     | Title                                                    | Blocked by |
-|------|-----------------------------------------------------------|----------------------------------------------------------|------------|
-| [x]  | [#22](https://github.com/marmotz/graphene-term/issues/22) | Images: image sequence splitter in the PTY read path     | #6         |
-| [x]  | [#23](https://github.com/marmotz/graphene-term/issues/23) | Images: image store, placeholder anchoring and rendering | #22        |
-| [x]  | [#24](https://github.com/marmotz/graphene-term/issues/24) | Links: OSC 8 and URL detection, hover and click to open  | —          |
-| [x]  | [#25](https://github.com/marmotz/graphene-term/issues/25) | Images: kitty graphics protocol, still images            | #22, #23   |
-| [x]  | [#26](https://github.com/marmotz/graphene-term/issues/26) | Images: sixel                                            | #22, #23   |
-| [x]  | [#28](https://github.com/marmotz/graphene-term/issues/28) | Links: tooltip with the OSC 8 target                     | #24        |
-| [x]  | [#30](https://github.com/marmotz/graphene-term/issues/30) | Images: kitty animations                                 | #25        |
-| [x]  | [#31](https://github.com/marmotz/graphene-term/issues/31) | Images: copy text and image to the clipboard             | #23, #25   |
+| Done | Issue                                                     | Title                                                       | Blocked by    |
+|------|-----------------------------------------------------------|-------------------------------------------------------------|---------------|
+| [ ]  | [#85](https://github.com/marmotz/graphene-term/issues/85) | Settings: key path on configuration errors                  | —             |
+| [ ]  | [#86](https://github.com/marmotz/graphene-term/issues/86) | Settings: write config.toml preserving comments (toml_edit) | —             |
+| [ ]  | [#87](https://github.com/marmotz/graphene-term/issues/87) | Settings: shared GPU context and window routing             | —             |
+| [ ]  | [#88](https://github.com/marmotz/graphene-term/issues/88) | Settings: settings window with egui, action and Ctrl+,      | #87           |
+| [ ]  | [#89](https://github.com/marmotz/graphene-term/issues/89) | Settings: settings fields, immediate writes and errors      | #85, #86, #88 |
+| [ ]  | [#90](https://github.com/marmotz/graphene-term/issues/90) | Settings: keyboard shortcuts section                        | #89           |
 
+## Bugs
+
+### Transparent terminal background does not work ·  [overview](bugs/transparent-background/overview.md)
+
+tasks created — see [technical.md](bugs/transparent-background/technical.md) — 0/1 tasks done
+
+| Done | Issue                                                     | Title                                       | Blocked by |
+|------|-----------------------------------------------------------|---------------------------------------------|------------|
+| [ ]  | [#92](https://github.com/marmotz/graphene-term/issues/92) | Fix transparent terminal background opacity | —          |
