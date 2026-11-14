@@ -10,6 +10,7 @@ mod config;
 mod frame;
 mod i18n;
 mod input;
+mod input_editor;
 mod layout;
 mod mouse;
 mod opener;
