@@ -4,3 +4,4 @@ pub mod command_palette;
 pub mod dialog;
 pub mod scene;
 pub mod tab_bar;
+pub mod tooltip;

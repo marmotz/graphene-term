@@ -6,6 +6,7 @@
 use super::command_palette::PaletteLayout;
 use super::dialog::DialogLayout;
 use super::tab_bar::TabBarLayout;
+use super::tooltip::TooltipLayout;
 use crate::layout::Rect;
 use crate::palette::UiColors;
 use crate::renderer::scene::gpu_color;
@@ -151,6 +152,27 @@ fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
             font: UiFont::Chrome,
         });
     }
+}
+
+/// The link tooltip, last in the overlay so it shows over the dialog or palette: its
+/// box and border, then the URI.
+pub fn tooltip(tooltip: &TooltipLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    ui.overlay_rects
+        .push(rect(tooltip.rect, color(colors.palette_background)));
+    ui.overlay_rects.extend(border(
+        tooltip.rect,
+        DIALOG_BORDER,
+        color(colors.pane_border),
+    ));
+    ui.overlay_texts.push(UiTextItem {
+        text: tooltip.text.clone(),
+        x: tooltip.text_x,
+        y: tooltip.text_y,
+        color: color(colors.palette_text),
+        max_width: tooltip.text_width,
+        font: UiFont::Chrome,
+    });
 }
 
 /// The tab bar: its background, the shown tab's background, each title and close
@@ -622,5 +644,53 @@ mod tests {
         assert_eq!(ui.overlay_texts[0].color, gpu_color(INACTIVE_TEXT, false));
         // No row, so no selected row: box, border, field and cursor.
         assert_eq!(ui.overlay_rects.len(), 7);
+    }
+
+    #[test]
+    fn tooltip_is_drawn_last_in_the_overlay() {
+        let colors = UiColors {
+            palette_background: DIALOG_BACKGROUND,
+            palette_text: DIALOG_TEXT,
+            ..colors()
+        };
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let layout = TooltipLayout::new(
+            "https://example.com",
+            (10.0, 10.0),
+            area(0.0, 0.0, 1000.0, 600.0),
+            metrics,
+            |t| t.chars().count() as f32 * 8.0,
+        )
+        .unwrap();
+        let mut ui = build(&two_columns(), Some(PaneId(1)), None, None, &colors, false);
+        let before = ui.clone();
+        tooltip(&layout, &colors, false, &mut ui);
+        assert_eq!((&ui.rects, &ui.texts), (&before.rects, &before.texts));
+        // Box then its border, then the URI.
+        assert_eq!(ui.overlay_rects.len(), 5);
+        assert_eq!(ui.overlay_rects[0].position, [layout.rect.x, layout.rect.y]);
+        assert_eq!(
+            ui.overlay_rects[0].color,
+            gpu_color(DIALOG_BACKGROUND, false)
+        );
+        assert!(
+            ui.overlay_rects[1..]
+                .iter()
+                .all(|r| r.color == gpu_color(BORDER, false))
+        );
+        assert_eq!(
+            ui.overlay_texts,
+            vec![UiTextItem {
+                text: "https://example.com".to_owned(),
+                x: layout.text_x,
+                y: layout.text_y,
+                color: gpu_color(DIALOG_TEXT, false),
+                max_width: layout.text_width,
+                font: UiFont::Chrome,
+            }]
+        );
     }
 }
