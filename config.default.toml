@@ -67,9 +67,8 @@
 ## split_right, split_down, close_pane, focus_pane_left (right, up, down),
 ## resize_pane_left (right, up, down), next_pane, previous_pane, toggle_zoom,
 ## equalise_panes, detach_pane, new_tab, next_tab, previous_tab, go_to_tab_1 (2, 3...),
-## command_palette. Examples:
-## "Ctrl+Shift+C" = "copy"
-## "Shift+PageUp" = "none"
+## command_palette. Example: `"Ctrl+Alt+T" = "new_tab"` adds a shortcut;
+## `"Shift+PageUp" = "none"` gives a default shortcut back to the shell.
 
 # [updates]
 ## Check GitHub for a newer release and show a banner. false: no network call at all.

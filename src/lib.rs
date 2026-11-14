@@ -10,6 +10,7 @@ mod build_version;
 mod chrome;
 mod clipboard;
 mod config;
+mod config_edit;
 mod cursor_blink;
 mod frame;
 mod graphics;

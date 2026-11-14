@@ -144,6 +144,11 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Ctrl+Shift+P", Action::CommandPalette),
 ];
 
+/// Built-in key/action pairs, in the order shown in the default configuration.
+pub(crate) fn defaults() -> impl Iterator<Item = (&'static str, Action)> + Clone {
+    DEFAULTS.iter().copied()
+}
+
 impl Shortcut {
     /// Parses a shortcut written as in the configuration file (`Ctrl+Shift+C`).
     pub fn parse(text: &str) -> Result<Shortcut, String> {

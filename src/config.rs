@@ -117,11 +117,29 @@ fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
 fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
     let file = dir.join(CONFIG_FILE);
     match std::fs::read_to_string(&file) {
-        Ok(text) => Config::parse(&text, &Config::default(), &file),
+        Ok(text) => {
+            let text = match crate::config_edit::complete_defaults(&text) {
+                Ok(Some(updated)) => match crate::config_edit::write_atomic(&file, &updated) {
+                    Ok(()) => updated,
+                    Err(error) => {
+                        log::warn!("cannot update {}: {error}", file.display());
+                        text
+                    }
+                },
+                Ok(None) | Err(_) => text,
+            };
+            Config::parse(&text, &Config::default(), &file)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if let Err(error) =
-                std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, DEFAULT_CONFIG))
-            {
+            if let Err(error) = std::fs::create_dir_all(dir) {
+                log::warn!("cannot create {}: {error}", dir.display());
+                return (Config::default(), Vec::new());
+            }
+            let defaults = crate::config_edit::complete_defaults(DEFAULT_CONFIG)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| DEFAULT_CONFIG.to_owned());
+            if let Err(error) = crate::config_edit::write_atomic(&file, &defaults) {
                 log::warn!("cannot write {}: {error}", file.display());
             }
             (Config::default(), Vec::new())
@@ -1069,10 +1087,35 @@ interval = "2d"
 
         assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
         let written = std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap();
-        assert_eq!(written, DEFAULT_CONFIG);
+        assert!(written.starts_with(DEFAULT_CONFIG));
+        for (key, action) in keybindings::defaults() {
+            assert!(written.contains(&format!("# {key:?} = {:?}\n", action.id())));
+        }
+        assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
+        assert_eq!(
+            std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap(),
+            written
+        );
 
         std::fs::write(nested.join(CONFIG_FILE), "[font]\nsize = 9\n").unwrap();
         assert_eq!(load_from(&nested).0.font.size, 9.0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn initial_load_does_not_rewrite_invalid_toml() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-config-invalid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        let invalid = "# keep this\n[font\nsize = 12\n";
+        std::fs::write(&path, invalid).unwrap();
+
+        let (_, errors) = load_from(&dir);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1098,6 +1141,24 @@ interval = "2d"
         let (config, errors) = reload_from(&dir, &previous);
         assert_eq!(config, previous);
         assert_eq!(errors.len(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_does_not_complete_or_write_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-config-reload-read-only-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        let original = "# keep me\n[font]\nsize = 9\n";
+        std::fs::write(&path, original).unwrap();
+
+        let _ = reload_from(&dir, &Config::default());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
