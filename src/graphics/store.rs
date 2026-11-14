@@ -6,9 +6,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// Byte budget of the pixels of one terminal's images.
 pub const BUDGET: usize = 256 * 1024 * 1024;
+
+/// Gap, in milliseconds, of an animation frame added without one (kitty's default).
+pub const DEFAULT_GAP: u32 = 40;
 
 /// RGBA pixels of one image frame, immutable once built. Each value has its own
 /// [`Pixels::uid`], so the renderer keys its textures on it: a changed frame is a new
@@ -64,14 +68,43 @@ impl fmt::Debug for Pixels {
     }
 }
 
+/// Whether an animated image plays (kitty `a=a,s=`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnimationState {
+    /// The shown frame only changes when the client picks another one.
+    #[default]
+    Stopped,
+    /// Plays, and waits on the last frame for more frames instead of looping.
+    Loading,
+    /// Plays and loops.
+    Running,
+}
+
+/// Playback of an animated image.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Animation {
+    pub state: AnimationState,
+    /// Loops to play before stopping, 0 to loop forever.
+    pub max_loops: u32,
+    /// Loops played since the animation started.
+    pub current_loop: u32,
+    /// When the shown frame gives way to the next one; `None` until the next
+    /// [`ImageStore::advance`] schedules it.
+    next_at: Option<Instant>,
+}
+
 /// An image: its frames (one for a still image) and the one shown.
 #[derive(Debug, Clone)]
 pub struct StoredImage {
     pub frames: Vec<Arc<Pixels>>,
+    /// Milliseconds each frame stays shown, by frame; 0 for a gapless frame, skipped
+    /// when playing.
+    pub gaps: Vec<u32>,
     /// Index in `frames` of the frame shown.
     pub current: usize,
     /// Changes each time the image's pixels or shown frame change.
     pub generation: u64,
+    pub animation: Animation,
     /// Insertion order, for eviction.
     seq: u64,
     bytes: usize,
@@ -81,6 +114,82 @@ impl StoredImage {
     /// The frame shown.
     pub fn frame(&self) -> &Arc<Pixels> {
         &self.frames[self.current.min(self.frames.len() - 1)]
+    }
+
+    /// The frame that follows the shown one when playing, skipping gapless frames, and
+    /// whether reaching it wraps around to the first frame. `None` when there is none
+    /// yet: a loading animation waits on its last frame.
+    fn next_frame(&self) -> Option<(usize, bool)> {
+        let len = self.frames.len();
+        let mut index = self.current;
+        let mut wrapped = false;
+        for _ in 0..len {
+            index += 1;
+            if index >= len {
+                if self.animation.state == AnimationState::Loading {
+                    return None;
+                }
+                index = 0;
+                wrapped = true;
+            }
+            if self.gaps[index] > 0 {
+                return Some((index, wrapped));
+            }
+        }
+        None
+    }
+
+    /// Whether the image plays on its own: not stopped, several frames, and at least
+    /// one frame shown for some time.
+    fn plays(&self) -> bool {
+        self.animation.state != AnimationState::Stopped
+            && self.frames.len() > 1
+            && self.gaps.iter().any(|&gap| gap > 0)
+    }
+
+    fn gap(&self) -> Duration {
+        Duration::from_millis(u64::from(self.gaps[self.current]))
+    }
+
+    /// Shows the next frames due at `now`. Returns whether the shown frame changed.
+    fn step(&mut self, now: Instant) -> bool {
+        let Some(mut at) = self.animation.next_at else {
+            self.animation.next_at = Some(now + self.gap());
+            return false;
+        };
+        if now < at {
+            return false;
+        }
+        // Far behind (the pane was hidden, the machine slept): resume from now rather
+        // than replaying every missed frame.
+        let total: u64 = self.gaps.iter().map(|&gap| u64::from(gap)).sum();
+        if now.duration_since(at) >= Duration::from_millis(total) {
+            at = now;
+        }
+        let mut changed = false;
+        while at <= now {
+            let Some((index, wrapped)) = self.next_frame() else {
+                // Waits for more frames; `at` stays due so a new frame shows at once.
+                self.animation.next_at = Some(at);
+                return changed;
+            };
+            changed |= index != self.current;
+            self.current = index;
+            if wrapped {
+                self.animation.current_loop += 1;
+                let max = self.animation.max_loops;
+                if max != 0 && self.animation.current_loop >= max {
+                    self.animation = Animation {
+                        max_loops: max,
+                        ..Animation::default()
+                    };
+                    return changed;
+                }
+            }
+            at += self.gap();
+        }
+        self.animation.next_at = Some(at);
+        changed
     }
 }
 
@@ -201,17 +310,34 @@ impl ImageStore {
         let generation = self.bump_generation();
         self.order.insert(seq, id);
         self.bytes += bytes;
+        let gaps = (0..frames.len())
+            .map(|index| if index == 0 { 0 } else { DEFAULT_GAP })
+            .collect();
         self.images.insert(
             id,
             StoredImage {
                 frames,
+                gaps,
                 current: 0,
                 generation,
+                animation: Animation::default(),
                 seq,
                 bytes,
             },
         );
         Some(evicted)
+    }
+
+    /// Evicts the oldest images other than `keep` until `extra` more bytes fit in the
+    /// budget. `false` when they still do not.
+    fn make_room(&mut self, extra: usize, keep: u32) -> bool {
+        while self.bytes + extra > self.budget {
+            let Some(oldest) = self.order.values().copied().find(|&id| id != keep) else {
+                return false;
+            };
+            self.remove(oldest);
+        }
+        true
     }
 
     fn bump_generation(&mut self) -> u64 {
@@ -224,7 +350,8 @@ impl ImageStore {
         self.images.get(&id)
     }
 
-    /// Shows frame `index` of image `id`. `false` when there is no such frame.
+    /// Shows frame `index` of image `id`; a playing animation goes on from it. `false`
+    /// when there is no such frame.
     pub fn set_current_frame(&mut self, id: u32, index: usize) -> bool {
         let generation = self.next_generation;
         match self.images.get_mut(&id) {
@@ -234,10 +361,171 @@ impl ImageStore {
                     image.generation = generation;
                     self.next_generation += 1;
                 }
+                image.animation.next_at = None;
                 true
             }
             _ => false,
         }
+    }
+
+    /// Appends a frame of `gap` milliseconds to image `id`, evicting older images if
+    /// needed. Returns its index, `None` when there is no such image or the frame does
+    /// not fit in the budget.
+    pub fn add_frame(&mut self, id: u32, pixels: Arc<Pixels>, gap: u32) -> Option<usize> {
+        if !self.images.contains_key(&id) {
+            return None;
+        }
+        let extra = pixels.rgba.len();
+        if !self.make_room(extra, id) {
+            return None;
+        }
+        self.bytes += extra;
+        let image = self.images.get_mut(&id)?;
+        image.frames.push(pixels);
+        image.gaps.push(gap);
+        image.bytes += extra;
+        Some(image.frames.len() - 1)
+    }
+
+    /// Replaces frame `index` of image `id`, and its gap when `gap` is given. `false`
+    /// when there is no such frame or the new pixels do not fit in the budget.
+    pub fn replace_frame(
+        &mut self,
+        id: u32,
+        index: usize,
+        pixels: Arc<Pixels>,
+        gap: Option<u32>,
+    ) -> bool {
+        let Some(old) = self
+            .images
+            .get(&id)
+            .and_then(|image| image.frames.get(index))
+            .map(|frame| frame.rgba.len())
+        else {
+            return false;
+        };
+        let new = pixels.rgba.len();
+        if new > old && !self.make_room(new - old, id) {
+            return false;
+        }
+        let generation = self.bump_generation();
+        let Some(image) = self.images.get_mut(&id) else {
+            return false;
+        };
+        image.frames[index] = pixels;
+        if let Some(gap) = gap {
+            image.gaps[index] = gap;
+        }
+        image.bytes = image.bytes - old + new;
+        image.generation = generation;
+        self.bytes = self.bytes - old + new;
+        true
+    }
+
+    /// Sets the gap of frame `index` of image `id`, in milliseconds (0 for gapless).
+    /// `false` when there is no such frame.
+    pub fn set_gap(&mut self, id: u32, index: usize, gap: u32) -> bool {
+        match self.images.get_mut(&id) {
+            Some(image) if index < image.gaps.len() => {
+                image.gaps[index] = gap;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Removes frame `index` of image `id`; the frame after it takes its place. `false`
+    /// when there is no such frame or it is the only one.
+    pub fn remove_frame(&mut self, id: u32, index: usize) -> bool {
+        let generation = self.next_generation;
+        let Some(image) = self.images.get_mut(&id) else {
+            return false;
+        };
+        if index >= image.frames.len() || image.frames.len() == 1 {
+            return false;
+        }
+        let bytes = image.frames.remove(index).rgba.len();
+        image.gaps.remove(index);
+        image.bytes -= bytes;
+        if image.current > index || image.current >= image.frames.len() {
+            image.current = image.current.saturating_sub(1);
+        }
+        image.generation = generation;
+        self.next_generation += 1;
+        self.bytes -= bytes;
+        true
+    }
+
+    /// Changes the playback of image `id`: its state when given, and its loop count
+    /// (`loops` loops before stopping, 0 forever) when given. Stopping resets the loop
+    /// counter. `false` when there is no such image.
+    pub fn set_animation(
+        &mut self,
+        id: u32,
+        state: Option<AnimationState>,
+        loops: Option<u32>,
+    ) -> bool {
+        let Some(image) = self.images.get_mut(&id) else {
+            return false;
+        };
+        let animation = &mut image.animation;
+        if let Some(loops) = loops {
+            animation.max_loops = loops;
+        }
+        if let Some(state) = state {
+            if state == AnimationState::Stopped {
+                animation.current_loop = 0;
+                animation.next_at = None;
+            } else if animation.state == AnimationState::Stopped {
+                animation.next_at = None;
+            }
+            animation.state = state;
+        }
+        true
+    }
+
+    /// Whether image `id` plays on its own and is placed somewhere.
+    fn animates(&self, id: u32, image: &StoredImage) -> bool {
+        image.plays() && self.placements_of(id).next().is_some()
+    }
+
+    /// Shows the frames of the playing animations due at `now`, and schedules the
+    /// animations that just started. Returns whether a shown frame changed.
+    pub fn advance(&mut self, now: Instant) -> bool {
+        let ids: Vec<u32> = self
+            .images
+            .iter()
+            .filter(|&(&id, image)| self.animates(id, image))
+            .map(|(&id, _)| id)
+            .collect();
+        let mut changed = false;
+        for id in ids {
+            let generation = self.next_generation;
+            let Some(image) = self.images.get_mut(&id) else {
+                continue;
+            };
+            if image.step(now) {
+                image.generation = generation;
+                self.next_generation += 1;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// When the next frame of a playing animation is due: `now` for an animation not
+    /// scheduled yet, `None` when nothing plays. An animation waiting for more frames
+    /// does not count.
+    pub fn next_frame_deadline(&self, now: Instant) -> Option<Instant> {
+        self.images
+            .iter()
+            .filter(|&(&id, image)| self.animates(id, image))
+            .filter_map(|(_, image)| match image.animation.next_at {
+                None => Some(now),
+                Some(at) if at <= now && image.next_frame().is_none() => None,
+                Some(at) => Some(at),
+            })
+            .min()
     }
 
     /// Removes image `id` and its placements. `false` when there was none.
@@ -452,6 +740,209 @@ mod tests {
         assert!(image.generation > before);
         assert_eq!(image.frame().width, 2);
         assert!(!store.set_current_frame(1, 2));
+    }
+
+    /// Image 1 placed once, with frames of `gaps` milliseconds (frame `i` is `i + 1`
+    /// pixels wide).
+    fn animated(gaps: &[u32]) -> ImageStore {
+        let mut store = ImageStore::new();
+        store.insert(1, vec![pixels(1)]);
+        store.set_gap(1, 0, gaps[0]);
+        for (index, &gap) in gaps.iter().enumerate().skip(1) {
+            store.add_frame(1, pixels(index as u32 + 1), gap);
+        }
+        store.place(1, 1, placement(1));
+        store
+    }
+
+    fn ms(start: Instant, ms: u64) -> Instant {
+        start + Duration::from_millis(ms)
+    }
+
+    fn shown(store: &ImageStore) -> usize {
+        store.get(1).unwrap().current
+    }
+
+    #[test]
+    fn frames_are_added_replaced_and_removed_with_their_bytes() {
+        let mut store = ImageStore::new();
+        store.insert(1, vec![pixels(1)]);
+        assert_eq!(store.get(1).unwrap().gaps, [0]);
+        assert_eq!(store.add_frame(1, pixels(2), DEFAULT_GAP), Some(1));
+        assert_eq!(store.add_frame(1, pixels(3), 7), Some(2));
+        assert_eq!(store.add_frame(9, pixels(1), 7), None);
+        assert_eq!(store.bytes(), 24);
+        assert_eq!(store.get(1).unwrap().gaps, [0, DEFAULT_GAP, 7]);
+
+        let before = store.get(1).unwrap().generation;
+        assert!(store.replace_frame(1, 1, pixels(4), None));
+        assert!(store.replace_frame(1, 2, pixels(1), Some(9)));
+        assert!(!store.replace_frame(1, 3, pixels(1), None));
+        let image = store.get(1).unwrap();
+        assert!(image.generation > before);
+        assert_eq!(image.gaps, [0, DEFAULT_GAP, 9]);
+        assert_eq!(store.bytes(), 24);
+
+        store.set_current_frame(1, 2);
+        assert!(store.remove_frame(1, 0));
+        let image = store.get(1).unwrap();
+        assert_eq!(image.frames.len(), 2);
+        assert_eq!(image.current, 1);
+        assert_eq!(image.frame().width, 1);
+        assert_eq!(store.bytes(), 20);
+        assert!(store.remove_frame(1, 1));
+        assert_eq!(store.get(1).unwrap().current, 0);
+        // The last frame stays.
+        assert!(!store.remove_frame(1, 0));
+    }
+
+    #[test]
+    fn a_new_frame_evicts_older_images_but_never_its_own() {
+        let mut store = ImageStore::with_budget(12);
+        store.insert(1, vec![pixels(1)]);
+        store.insert(2, vec![pixels(1)]);
+        assert_eq!(store.add_frame(2, pixels(1), 5), Some(1));
+        assert!(store.get(1).is_some());
+        assert_eq!(store.add_frame(2, pixels(1), 5), Some(2));
+        assert!(store.get(1).is_none());
+        assert_eq!(store.add_frame(2, pixels(1), 5), None);
+        assert!(!store.replace_frame(2, 0, pixels(2), None));
+        assert_eq!(store.bytes(), 12);
+    }
+
+    #[test]
+    fn a_running_animation_shows_each_frame_for_its_gap_and_loops() {
+        let mut store = animated(&[100, 50, 30]);
+        let start = Instant::now();
+        // Stopped: nothing plays.
+        assert!(!store.advance(start));
+        assert_eq!(store.next_frame_deadline(start), None);
+
+        store.set_animation(1, Some(AnimationState::Running), None);
+        assert_eq!(store.next_frame_deadline(start), Some(start));
+        assert!(!store.advance(start));
+        assert_eq!(store.next_frame_deadline(start), Some(ms(start, 100)));
+        assert!(!store.advance(ms(start, 99)));
+        assert!(store.advance(ms(start, 100)));
+        assert_eq!(shown(&store), 1);
+        assert_eq!(store.next_frame_deadline(start), Some(ms(start, 150)));
+        assert!(store.advance(ms(start, 150)));
+        assert_eq!(shown(&store), 2);
+        // Back to the first frame: one loop played.
+        assert!(store.advance(ms(start, 185)));
+        assert_eq!(shown(&store), 0);
+        assert_eq!(store.get(1).unwrap().animation.current_loop, 1);
+        assert_eq!(store.next_frame_deadline(start), Some(ms(start, 280)));
+    }
+
+    #[test]
+    fn several_due_frames_are_shown_at_once_and_a_long_pause_resumes_from_now() {
+        let mut store = animated(&[10, 10, 10]);
+        let start = Instant::now();
+        store.set_animation(1, Some(AnimationState::Running), None);
+        store.advance(start);
+        assert!(store.advance(ms(start, 25)));
+        assert_eq!(shown(&store), 2);
+        assert_eq!(store.next_frame_deadline(start), Some(ms(start, 30)));
+        // Far behind: one step, then the gap from now.
+        assert!(store.advance(ms(start, 10_000)));
+        assert_eq!(shown(&store), 0);
+        assert_eq!(store.next_frame_deadline(start), Some(ms(start, 10_010)));
+    }
+
+    #[test]
+    fn gapless_frames_are_skipped() {
+        // The root frame has no gap by default.
+        let mut store = animated(&[0, 20, 0, 20]);
+        let start = Instant::now();
+        store.set_animation(1, Some(AnimationState::Running), None);
+        store.advance(start);
+        assert_eq!(store.next_frame_deadline(start), Some(start));
+        assert!(store.advance(start));
+        assert_eq!(shown(&store), 1);
+        assert!(store.advance(ms(start, 20)));
+        assert_eq!(shown(&store), 3);
+        assert!(store.advance(ms(start, 40)));
+        assert_eq!(shown(&store), 1);
+
+        // No frame shown for some time: nothing plays.
+        let mut store = animated(&[0, 0]);
+        store.set_animation(1, Some(AnimationState::Running), None);
+        assert!(!store.advance(start));
+        assert_eq!(store.next_frame_deadline(start), None);
+    }
+
+    #[test]
+    fn a_loop_count_stops_the_animation_on_the_first_frame() {
+        let mut store = animated(&[10, 10]);
+        let start = Instant::now();
+        // Two loops: `v=3`.
+        store.set_animation(1, Some(AnimationState::Running), Some(2));
+        store.advance(start);
+        for (at, frame) in [(10, 1), (20, 0), (30, 1)] {
+            store.advance(ms(start, at));
+            assert_eq!(shown(&store), frame, "at {at} ms");
+        }
+        store.advance(ms(start, 40));
+        let image = store.get(1).unwrap();
+        assert_eq!(image.current, 0);
+        assert_eq!(image.animation.state, AnimationState::Stopped);
+        assert_eq!(image.animation.current_loop, 0);
+        assert_eq!(store.next_frame_deadline(ms(start, 40)), None);
+        assert!(!store.advance(ms(start, 100)));
+    }
+
+    #[test]
+    fn a_loading_animation_waits_on_its_last_frame_for_more() {
+        let mut store = animated(&[10, 10]);
+        let start = Instant::now();
+        store.set_animation(1, Some(AnimationState::Loading), None);
+        store.advance(start);
+        assert!(store.advance(ms(start, 10)));
+        assert_eq!(shown(&store), 1);
+        assert!(!store.advance(ms(start, 20)));
+        assert_eq!(shown(&store), 1);
+        assert_eq!(store.next_frame_deadline(ms(start, 20)), None);
+
+        // A new frame shows as soon as it arrives.
+        store.add_frame(1, pixels(3), 10);
+        assert_eq!(
+            store.next_frame_deadline(ms(start, 25)),
+            Some(ms(start, 20))
+        );
+        assert!(store.advance(ms(start, 25)));
+        assert_eq!(shown(&store), 2);
+    }
+
+    #[test]
+    fn stopping_keeps_the_frame_and_resets_the_loop_counter() {
+        let mut store = animated(&[10, 10]);
+        let start = Instant::now();
+        store.set_animation(1, Some(AnimationState::Running), None);
+        store.advance(start);
+        store.advance(ms(start, 20));
+        assert_eq!(store.get(1).unwrap().animation.current_loop, 1);
+        store.set_animation(1, Some(AnimationState::Stopped), None);
+        assert!(!store.advance(ms(start, 1000)));
+        let image = store.get(1).unwrap();
+        assert_eq!((image.current, image.animation.current_loop), (0, 0));
+        assert!(!store.set_animation(9, None, None));
+    }
+
+    #[test]
+    fn picking_a_frame_restarts_its_gap_and_an_unplaced_image_does_not_play() {
+        let mut store = animated(&[10, 30]);
+        let start = Instant::now();
+        store.set_animation(1, Some(AnimationState::Running), None);
+        store.advance(start);
+        store.set_current_frame(1, 1);
+        assert_eq!(store.next_frame_deadline(ms(start, 5)), Some(ms(start, 5)));
+        store.advance(ms(start, 5));
+        assert_eq!(store.next_frame_deadline(ms(start, 5)), Some(ms(start, 35)));
+
+        store.remove_placement(1, 1);
+        assert_eq!(store.next_frame_deadline(start), None);
+        assert!(!store.advance(ms(start, 1000)));
     }
 
     #[test]

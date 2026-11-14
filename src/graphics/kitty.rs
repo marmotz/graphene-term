@@ -1,4 +1,4 @@
-//! Kitty graphics protocol, still images:
+//! Kitty graphics protocol, still images and animations:
 //! <https://sw.kovidgoyal.net/kitty/graphics-protocol/>.
 //!
 //! [`parse`], [`load`] and [`decode`] turn a sequence into pixels. [`Kitty`] runs the
@@ -24,7 +24,10 @@ use log::debug;
 
 use super::placeholder::{MAX_CELLS, on_screen};
 use super::store::BUDGET;
-use super::{CursorMove, ImageStore, Pixels, Placement, PlacementKind, SourceRect, erase, place};
+use super::{
+    AnimationState, CursorMove, DEFAULT_GAP, ImageStore, Pixels, Placement, PlacementKind,
+    SourceRect, erase, place,
+};
 
 /// Largest decoded payload, decompressed data or file read: the store budget.
 const MAX_DATA: usize = BUDGET;
@@ -83,7 +86,8 @@ impl fmt::Display for Error {
 }
 
 /// The control keys of a command. Keys not given keep the protocol defaults; keys this
-/// terminal does not use (`X`, `Y`, relative placements) are ignored.
+/// terminal does not use (relative placements) are ignored. Animation commands give
+/// some keys another meaning, noted on each field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     /// `a`: `t` transmit, `T` transmit and put, `p` put, `q` query, `d` delete, `f`
@@ -99,7 +103,8 @@ pub struct Command {
     pub compression: u8,
     /// `m=1`: more chunks follow.
     pub more: bool,
-    /// `s`, `v`: pixel size of raw data.
+    /// `s`, `v`: pixel size of raw data. For `a=a`: `s` is the state (1 stop, 2 run
+    /// waiting for frames, 3 run and loop), `v` the loop count.
     pub width: u32,
     pub height: u32,
     /// `S`, `O`: bytes to read from a file or shared memory, and where to start.
@@ -116,15 +121,25 @@ pub struct Command {
     pub y: u32,
     pub w: u32,
     pub h: u32,
-    /// `c`, `r`: columns and rows of the placement (0 to compute it).
+    /// `c`, `r`: columns and rows of the placement (0 to compute it). For animations,
+    /// 1-based frame numbers: `a=f` `c` base frame and `r` frame to edit, `a=a` `c`
+    /// frame to show and `r` frame whose gap `z` sets, `a=c` `c` destination and `r`
+    /// source, `d=f` `r` frame to delete.
     pub cols: u32,
     pub rows: u32,
-    /// `C=1`: leave the cursor where it is.
+    /// `C=1`: leave the cursor where it is. For `a=c`: overwrite instead of blending.
     pub keep_cursor: bool,
     /// `U=1`: virtual placement, the client prints the placeholders.
     pub unicode: bool,
-    /// `z`: stacking order.
+    /// `z`: stacking order. For `a=f` and `a=a`: frame gap in milliseconds, negative
+    /// for a gapless frame, 0 for unspecified.
     pub z: i32,
+    /// `X`: for `a=f`, 1 overwrites instead of blending; for `a=c`, left edge of the
+    /// source rectangle.
+    pub big_x: u32,
+    /// `Y`: for `a=f`, background color as `0xRRGGBBAA`; for `a=c`, top edge of the
+    /// source rectangle.
+    pub big_y: u32,
     /// `d`: what to delete.
     pub delete: u8,
 }
@@ -154,6 +169,8 @@ impl Default for Command {
             keep_cursor: false,
             unicode: false,
             z: 0,
+            big_x: 0,
+            big_y: 0,
             delete: b'a',
         }
     }
@@ -201,6 +218,8 @@ pub fn parse(payload: &[u8]) -> Result<(Command, &[u8]), Error> {
             b'r' => command.rows = number(key, value)?,
             b'C' => command.keep_cursor = number(key, value)? == 1,
             b'U' => command.unicode = number(key, value)? == 1,
+            b'X' => command.big_x = number(key, value)?,
+            b'Y' => command.big_y = number(key, value)?,
             b'z' => {
                 command.z = text(value)
                     .parse()
@@ -561,10 +580,13 @@ impl Kitty {
                 self.delete(term, store, command);
                 None
             }
-            b'f' | b'a' | b'c' => {
-                debug!("kitty animation command ignored");
-                None
-            }
+            b'f' => reply(command, self.frame(store, command, data)),
+            b'c' => reply(command, self.compose(store, command)),
+            // Like kitty, only errors are replied to an animation control.
+            b'a' => match self.control(store, command) {
+                Ok(_) => None,
+                Err(err) => reply(command, Err(err)),
+            },
             other => reply(
                 command,
                 Err(Error::invalid(format!("unknown action: {}", other as char))),
@@ -616,18 +638,173 @@ impl Kitty {
         store: &mut ImageStore,
         command: &Command,
     ) -> Result<u32, Error> {
+        let id = self.image_id(command)?;
+        self.place(term, store, command, id)?;
+        Ok(id)
+    }
+
+    /// The image a command names, by id (`i`) or number (`I`).
+    fn image_id(&self, command: &Command) -> Result<u32, Error> {
         if command.id != 0 && command.number != 0 {
             return Err(Error::invalid("i and I cannot be used together"));
         }
-        let id = match (command.id, command.number) {
-            (0, 0) => return Err(Error::invalid("no image id (i or I)")),
-            (0, number) => *self
+        match (command.id, command.number) {
+            (0, 0) => Err(Error::invalid("no image id (i or I)")),
+            (0, number) => self
                 .numbers
                 .get(&number)
-                .ok_or_else(|| Error::new("ENOENT", format!("no image with number {number}")))?,
-            (id, _) => id,
+                .copied()
+                .ok_or_else(|| Error::new("ENOENT", format!("no image with number {number}"))),
+            (id, _) => Ok(id),
+        }
+    }
+
+    /// `a=f`: adds a frame to an image, or edits one (`r`). The data covers a
+    /// rectangle at `x`, `y` (the whole image by default), drawn over the base frame
+    /// `c`, or a `Y` background. Returns the image id.
+    fn frame(&self, store: &mut ImageStore, command: &Command, data: &[u8]) -> Result<u32, Error> {
+        let id = self.image_id(command)?;
+        let image = store.get(id).ok_or_else(|| no_image(id))?;
+        let root = image.frames[0].clone();
+        let frame_of = |number: u32| {
+            image
+                .frames
+                .get(number as usize - 1)
+                .cloned()
+                .ok_or_else(|| no_frame(number))
         };
-        self.place(term, store, command, id)?;
+        let edited = (command.rows != 0)
+            .then(|| frame_of(command.rows))
+            .transpose()?;
+        let base = (command.cols != 0)
+            .then(|| frame_of(command.cols))
+            .transpose()?;
+
+        let mut format = command.clone();
+        if format.width == 0 && format.height == 0 {
+            format.width = root.width;
+            format.height = root.height;
+        }
+        let rect = decode(&format, load(command, data)?)?;
+        let mut canvas = match edited.or(base) {
+            Some(frame) => frame.rgba.clone(),
+            None => command
+                .big_y
+                .to_be_bytes()
+                .repeat(root.width as usize * root.height as usize),
+        };
+        blit(
+            &mut canvas,
+            root.width,
+            root.height,
+            &rect,
+            SourceRect {
+                x: 0,
+                y: 0,
+                width: rect.width,
+                height: rect.height,
+            },
+            (command.x, command.y),
+            command.big_x == 1,
+        );
+        let pixels = Pixels::new(root.width, root.height, canvas)
+            .ok_or_else(|| Error::invalid("empty frame"))?;
+        let gap = match command.z {
+            0 => None,
+            z => Some(u32::try_from(z).unwrap_or(0)),
+        };
+        let stored = match command.rows {
+            0 => store
+                .add_frame(id, pixels, gap.unwrap_or(DEFAULT_GAP))
+                .is_some(),
+            number => store.replace_frame(id, number as usize - 1, pixels, gap),
+        };
+        if !stored {
+            return Err(Error::too_big());
+        }
+        Ok(id)
+    }
+
+    /// `a=c`: copies a `w` x `h` rectangle of frame `r`, at `X`, `Y`, onto frame `c` at
+    /// `x`, `y`. Returns the image id.
+    fn compose(&self, store: &mut ImageStore, command: &Command) -> Result<u32, Error> {
+        let id = self.image_id(command)?;
+        let image = store.get(id).ok_or_else(|| no_image(id))?;
+        let frame_of = |number: u32| {
+            number
+                .checked_sub(1)
+                .and_then(|index| image.frames.get(index as usize))
+                .cloned()
+                .ok_or_else(|| no_frame(number))
+        };
+        let source = frame_of(command.rows)?;
+        let target = frame_of(command.cols)?;
+        let (width, height) = (source.width, source.height);
+        let w = if command.w == 0 { width } else { command.w };
+        let h = if command.h == 0 { height } else { command.h };
+        let fits = |x: u32, y: u32| {
+            x.checked_add(w).is_some_and(|end| end <= width)
+                && y.checked_add(h).is_some_and(|end| end <= height)
+        };
+        if !fits(command.big_x, command.big_y) || !fits(command.x, command.y) {
+            return Err(Error::invalid("the rectangle is outside the frame"));
+        }
+        let overlaps = command.big_x < command.x + w
+            && command.x < command.big_x + w
+            && command.big_y < command.y + h
+            && command.y < command.big_y + h;
+        if command.rows == command.cols && overlaps {
+            return Err(Error::invalid(
+                "the source and destination rectangles overlap",
+            ));
+        }
+        let mut canvas = target.rgba.clone();
+        blit(
+            &mut canvas,
+            width,
+            height,
+            &source,
+            SourceRect {
+                x: command.big_x,
+                y: command.big_y,
+                width: w,
+                height: h,
+            },
+            (command.x, command.y),
+            command.keep_cursor,
+        );
+        let pixels =
+            Pixels::new(width, height, canvas).ok_or_else(|| Error::invalid("empty frame"))?;
+        if !store.replace_frame(id, command.cols as usize - 1, pixels, None) {
+            return Err(Error::too_big());
+        }
+        Ok(id)
+    }
+
+    /// `a=a`: sets the gap of frame `r` (`z`), shows frame `c`, sets the loop count
+    /// (`v`) and the state (`s`). Returns the image id.
+    fn control(&self, store: &mut ImageStore, command: &Command) -> Result<u32, Error> {
+        let id = self.image_id(command)?;
+        if store.get(id).is_none() {
+            return Err(no_image(id));
+        }
+        if command.rows != 0 && command.z != 0 {
+            let gap = u32::try_from(command.z).unwrap_or(0);
+            if !store.set_gap(id, command.rows as usize - 1, gap) {
+                return Err(no_frame(command.rows));
+            }
+        }
+        if command.cols != 0 && !store.set_current_frame(id, command.cols as usize - 1) {
+            return Err(no_frame(command.cols));
+        }
+        let state = match command.width {
+            1 => Some(AnimationState::Stopped),
+            2 => Some(AnimationState::Loading),
+            3 => Some(AnimationState::Running),
+            _ => None,
+        };
+        let loops = (command.height != 0).then(|| command.height - 1);
+        store.set_animation(id, state, loops);
         Ok(id)
     }
 
@@ -810,7 +987,7 @@ impl Kitty {
                 .map(|(key, _)| key)
                 .collect(),
             b'f' => {
-                debug!("kitty animation frame deletion ignored");
+                self.delete_frame(store, command, free);
                 return;
             }
             other => {
@@ -841,6 +1018,88 @@ impl Kitty {
             }
         }
     }
+}
+
+impl Kitty {
+    /// `d=f`: removes frame `r` (clamped to the last one, the first when 0). The only
+    /// frame left stays; with `d=F`, an image down to it and without placement is
+    /// freed.
+    fn delete_frame(&mut self, store: &mut ImageStore, command: &Command, free: bool) {
+        let Ok(id) = self.image_id(command) else {
+            return;
+        };
+        let Some(count) = store.get(id).map(|image| image.frames.len()) else {
+            return;
+        };
+        let number = (command.rows as usize).clamp(1, count);
+        let removed = store.remove_frame(id, number - 1);
+        if !removed && free && store.placements_of(id).next().is_none() {
+            store.remove(id);
+            self.numbers.retain(|_, image| *image != id);
+        }
+    }
+}
+
+fn no_image(id: u32) -> Error {
+    Error::new("ENOENT", format!("no image with id {id}"))
+}
+
+fn no_frame(number: u32) -> Error {
+    Error::new("ENOENT", format!("no frame number {number}"))
+}
+
+/// Draws `rect` of `source` onto the `width` x `height` RGBA `canvas` with its top left
+/// corner at `at`, clipped to the canvas: blended over it, or replacing it when
+/// `overwrite`.
+fn blit(
+    canvas: &mut [u8],
+    width: u32,
+    height: u32,
+    source: &Pixels,
+    rect: SourceRect,
+    at: (u32, u32),
+    overwrite: bool,
+) {
+    let Some(rect) = SourceRect::resolve(Some(rect), source.width, source.height) else {
+        return;
+    };
+    let columns = rect.width.min(width.saturating_sub(at.0)) as usize;
+    let rows = rect.height.min(height.saturating_sub(at.1));
+    for row in 0..rows {
+        let from = (((rect.y + row) * source.width + rect.x) * 4) as usize;
+        let to = (((at.1 + row) * width + at.0) * 4) as usize;
+        let src = &source.rgba[from..from + columns * 4];
+        let dst = &mut canvas[to..to + columns * 4];
+        if overwrite {
+            dst.copy_from_slice(src);
+            continue;
+        }
+        for (dst, src) in dst
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.as_chunks::<4>().0)
+        {
+            blend(dst, src);
+        }
+    }
+}
+
+/// `src` over `dst`, straight alpha.
+fn blend(dst: &mut [u8; 4], src: &[u8; 4]) {
+    let (sa, da) = (u32::from(src[3]), u32::from(dst[3]));
+    // Alphas scaled to 255 * 255.
+    let dst_weight = da * (255 - sa);
+    let out = sa * 255 + dst_weight;
+    if out == 0 {
+        *dst = [0; 4];
+        return;
+    }
+    for channel in 0..3 {
+        let value = u32::from(src[channel]) * sa * 255 + u32::from(dst[channel]) * dst_weight;
+        dst[channel] = ((value + out / 2) / out) as u8;
+    }
+    dst[3] = ((out + 127) / 255) as u8;
 }
 
 /// Ids of the direct placements of image `id`.
@@ -1005,6 +1264,7 @@ mod tests {
                 quiet: 2,
                 more: true,
                 compression: b'z',
+                big_x: 9,
                 ..Command::default()
             }
         );
@@ -1483,5 +1743,188 @@ mod tests {
         // Not taken for the end of the transfer: a command of its own.
         assert_eq!(setup.run("f=32,s=1,v=1,i=7", &rgba(1, 1, 0)), ok("i=7"));
         assert!(setup.run_raw("a=p,I=5").unwrap().contains("ENOENT"));
+    }
+
+    /// Image 1: a 2x1 RGBA root frame of red pixels, placed.
+    fn animation_setup() -> Setup {
+        let mut setup = Setup::new();
+        setup.run(
+            "a=T,f=32,s=2,v=1,i=1,q=1",
+            &[255, 0, 0, 255, 255, 0, 0, 255],
+        );
+        setup
+    }
+
+    fn frame(setup: &Setup, number: usize) -> Vec<u8> {
+        setup.store.get(1).unwrap().frames[number - 1].rgba.clone()
+    }
+
+    #[test]
+    fn a_frame_covers_the_whole_image_by_default_with_its_gap() {
+        let mut setup = animation_setup();
+        let green = [0, 255, 0, 255, 0, 255, 0, 255];
+        assert_eq!(setup.run("a=f,f=32,i=1", &green), ok("i=1"));
+        assert_eq!(setup.run("a=f,f=32,i=1,z=70,q=1", &green), None);
+        assert_eq!(setup.run("a=f,f=32,i=1,z=-1,q=1", &green), None);
+        let image = setup.store.get(1).unwrap();
+        assert_eq!(image.frames.len(), 4);
+        assert_eq!(image.gaps, [0, DEFAULT_GAP, 70, 0]);
+        assert_eq!(frame(&setup, 2), green);
+        // The shown frame does not change.
+        assert_eq!(image.current, 0);
+    }
+
+    #[test]
+    fn a_partial_frame_is_drawn_over_its_base_or_background() {
+        let mut setup = animation_setup();
+        let blue = [0, 0, 255, 255];
+        // Over a transparent background by default.
+        setup.run("a=f,f=32,s=1,v=1,x=1,i=1", &blue);
+        assert_eq!(frame(&setup, 2), [0, 0, 0, 0, 0, 0, 255, 255]);
+        // Over a background color.
+        setup.run("a=f,f=32,s=1,v=1,i=1,Y=4294967295", &blue);
+        assert_eq!(frame(&setup, 3), [0, 0, 255, 255, 255, 255, 255, 255]);
+        // Over frame 1, half transparent: blended.
+        setup.run("a=f,f=32,s=1,v=1,x=1,c=1,i=1", &[0, 0, 255, 128]);
+        assert_eq!(frame(&setup, 4), [255, 0, 0, 255, 127, 0, 128, 255]);
+        // Overwriting.
+        setup.run("a=f,f=32,s=1,v=1,c=1,X=1,i=1", &[0, 0, 255, 128]);
+        assert_eq!(frame(&setup, 5), [0, 0, 255, 128, 255, 0, 0, 255]);
+        // Clipped to the image.
+        setup.run(
+            "a=f,f=32,s=2,v=1,x=1,c=1,i=1",
+            &[1, 1, 1, 255, 2, 2, 2, 255],
+        );
+        assert_eq!(frame(&setup, 6), [255, 0, 0, 255, 1, 1, 1, 255]);
+    }
+
+    #[test]
+    fn a_frame_can_be_edited_in_place() {
+        let mut setup = animation_setup();
+        setup.run("a=f,f=32,i=1,z=50", &[0; 8]);
+        setup.run("a=f,f=32,s=1,v=1,r=2,i=1", &[9, 9, 9, 255]);
+        let image = setup.store.get(1).unwrap();
+        assert_eq!(image.frames.len(), 2);
+        assert_eq!(image.gaps[1], 50);
+        assert_eq!(frame(&setup, 2), [9, 9, 9, 255, 0, 0, 0, 0]);
+        // The root frame too.
+        setup.run("a=f,f=32,s=1,v=1,r=1,z=30,i=1", &[1, 2, 3, 255]);
+        assert_eq!(frame(&setup, 1)[..4], [1, 2, 3, 255]);
+        assert_eq!(setup.store.get(1).unwrap().gaps[0], 30);
+    }
+
+    #[test]
+    fn frame_errors_are_replied() {
+        let mut setup = animation_setup();
+        let reply = setup.run("a=f,f=32,i=2", &[0; 8]).unwrap();
+        assert!(reply.contains("ENOENT"), "{reply}");
+        let reply = setup.run("a=f,f=32,c=3,i=1", &[0; 8]).unwrap();
+        assert!(reply.contains("ENOENT"), "{reply}");
+        let reply = setup.run("a=f,f=32,r=2,i=1", &[0; 8]).unwrap();
+        assert!(reply.contains("ENOENT"), "{reply}");
+        assert_eq!(setup.store.get(1).unwrap().frames.len(), 1);
+        // By image number.
+        setup.run("a=t,f=32,s=1,v=1,I=4,q=2", &[0; 4]);
+        let reply = setup.run("a=f,f=32,I=4", &[0; 4]).unwrap();
+        assert!(
+            reply.ends_with(";OK\x1b\\") && reply.contains("I=4"),
+            "{reply}"
+        );
+    }
+
+    #[test]
+    fn a_chunked_frame_is_reassembled() {
+        let mut setup = animation_setup();
+        let data = BASE64.encode([5u8; 8]);
+        let (first, rest) = data.split_at(4);
+        assert_eq!(setup.run_raw(&format!("a=f,f=32,i=1,m=1;{first}")), None);
+        assert_eq!(setup.run_raw(&format!("a=f,m=0;{rest}")), ok("i=1"));
+        assert_eq!(frame(&setup, 2), [5; 8]);
+    }
+
+    #[test]
+    fn control_sets_state_loops_gaps_and_the_shown_frame() {
+        let mut setup = animation_setup();
+        setup.run("a=f,f=32,i=1", &[0; 8]);
+        assert_eq!(setup.run_raw("a=a,i=1,r=1,z=120"), None);
+        assert_eq!(setup.run_raw("a=a,i=1,s=3,v=4"), None);
+        let image = setup.store.get(1).unwrap();
+        assert_eq!(image.gaps, [120, DEFAULT_GAP]);
+        assert_eq!(image.animation.state, AnimationState::Running);
+        assert_eq!(image.animation.max_loops, 3);
+
+        setup.run_raw("a=a,i=1,c=2,s=1");
+        let image = setup.store.get(1).unwrap();
+        assert_eq!(image.current, 1);
+        assert_eq!(image.animation.state, AnimationState::Stopped);
+        setup.run_raw("a=a,i=1,s=2,v=1,r=2,z=-1");
+        let image = setup.store.get(1).unwrap();
+        assert_eq!(image.animation.state, AnimationState::Loading);
+        assert_eq!(image.animation.max_loops, 0);
+        assert_eq!(image.gaps[1], 0);
+
+        // Only errors are replied.
+        let reply = setup.run_raw("a=a,i=1,c=3").unwrap();
+        assert!(reply.contains("ENOENT"), "{reply}");
+        let reply = setup.run_raw("a=a,i=9,s=3").unwrap();
+        assert!(reply.contains("ENOENT"), "{reply}");
+    }
+
+    #[test]
+    fn compose_copies_a_rectangle_between_frames() {
+        let mut setup = animation_setup();
+        setup.run("a=f,f=32,i=1", &[0, 0, 255, 255, 0, 255, 0, 255]);
+        // Pixel 2 of frame 2 onto pixel 1 of frame 1, overwriting.
+        assert_eq!(setup.run_raw("a=c,i=1,r=2,c=1,X=1,w=1,h=1,C=1"), ok("i=1"));
+        assert_eq!(frame(&setup, 1), [0, 255, 0, 255, 255, 0, 0, 255]);
+        // The whole frame by default.
+        setup.run_raw("a=c,i=1,r=1,c=2,q=1");
+        assert_eq!(frame(&setup, 2), frame(&setup, 1));
+        // Within one frame, rectangles must not overlap.
+        assert_eq!(setup.run_raw("a=c,i=1,r=1,c=1,x=1,w=1,h=1,q=1"), None);
+        assert_eq!(frame(&setup, 1)[4..], [0, 255, 0, 255]);
+        let reply = setup.run_raw("a=c,i=1,r=1,c=1,w=1,h=1").unwrap();
+        assert!(reply.contains("EINVAL"), "{reply}");
+        let reply = setup.run_raw("a=c,i=1,r=1,c=2,x=1").unwrap();
+        assert!(reply.contains("EINVAL"), "{reply}");
+        let reply = setup.run_raw("a=c,i=1,r=3,c=1").unwrap();
+        assert!(reply.contains("ENOENT"), "{reply}");
+        let reply = setup.run_raw("a=c,i=1,c=1").unwrap();
+        assert!(reply.contains("ENOENT"), "{reply}");
+    }
+
+    #[test]
+    fn delete_frames_keeps_the_last_one() {
+        let mut setup = animation_setup();
+        setup.run("a=f,f=32,i=1,q=1", &[1; 8]);
+        setup.run("a=f,f=32,i=1,q=1", &[2; 8]);
+        setup.run_raw("a=d,d=f,i=1,r=9");
+        assert_eq!(setup.store.get(1).unwrap().frames.len(), 2);
+        assert_eq!(frame(&setup, 2), [1; 8]);
+        // Frame 1 by default.
+        setup.run_raw("a=d,d=f,i=1");
+        assert_eq!(frame(&setup, 1), [1; 8]);
+        setup.run_raw("a=d,d=F,i=1");
+        assert_eq!(setup.store.get(1).unwrap().frames.len(), 1);
+        // Still placed: not freed.
+        setup.run_raw("a=d,d=F,i=1");
+        assert!(setup.store.get(1).is_some());
+        // Not placed any more: freed.
+        setup.run_raw("a=d,d=i,i=1");
+        setup.run("a=t,f=32,s=1,v=1,i=1,q=2", &[0; 4]);
+        setup.run_raw("a=d,d=F,i=1");
+        assert!(setup.store.get(1).is_none());
+    }
+
+    #[test]
+    fn blending_follows_straight_alpha() {
+        let mut dst = [0, 0, 0, 0];
+        blend(&mut dst, &[10, 20, 30, 0]);
+        assert_eq!(dst, [0, 0, 0, 0]);
+        blend(&mut dst, &[10, 20, 30, 200]);
+        assert_eq!(dst, [10, 20, 30, 200]);
+        let mut dst = [200, 100, 0, 255];
+        blend(&mut dst, &[0, 0, 0, 255]);
+        assert_eq!(dst, [0, 0, 0, 255]);
     }
 }

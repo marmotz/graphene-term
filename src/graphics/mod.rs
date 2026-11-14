@@ -23,7 +23,9 @@ use log::debug;
 use self::kitty::DEFAULT_CELL;
 
 pub use placeholder::{CursorMove, ImageCell, erase, place};
-pub use store::{ImageStore, Pixels, Placement, PlacementKind, SourceRect};
+pub use store::{
+    AnimationState, DEFAULT_GAP, ImageStore, Pixels, Placement, PlacementKind, SourceRect,
+};
 
 /// An image sequence cut out of the PTY stream.
 #[derive(Debug, Clone, PartialEq, Eq)]

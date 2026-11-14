@@ -36,14 +36,16 @@ src/
     mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
                    StoreHandler (runs kitty commands, keeps their PTY replies, places the
                    sixel images, clears the image store on a full reset)
-    kitty.rs       kitty graphics protocol, still images: control keys, chunked transfer,
-                   media (direct, file, temp file, shared memory), base64 / zlib / PNG /
-                   raw decoding, transmit / put / query / delete, replies
+    kitty.rs       kitty graphics protocol: control keys, chunked transfer, media (direct,
+                   file, temp file, shared memory), base64 / zlib / PNG / raw decoding,
+                   transmit / put / query / delete, animation frames / control /
+                   composition, replies
     sixel.rs       sixel decoder to RGBA: color registers (RGB / HLS), repeat, `$`, `-`,
                    raster attributes, background from p2 (pure)
     sequence.rs    incremental splitter of the kitty and sixel sequences in the PTY stream (pure)
-    store.rs       ImageStore: images (RGBA frames, generation), placements, 256 MiB budget
-                   with oldest-first eviction, terminal-assigned ids (pure)
+    store.rs       ImageStore: images (RGBA frames and gaps, generation, animation
+                   playback), placements, 256 MiB budget with oldest-first eviction,
+                   terminal-assigned ids (pure, time passed in)
     placeholder.rs Unicode placeholder cells: place an image at the cursor, erase it,
                    decode a row of cells into image cells (pure, on a Term)
     diacritics.rs  kitty's row / column diacritics table
@@ -402,7 +404,31 @@ the 256 MiB store budget.
   virtual placement, printed by the client, stay.
 - A command naming an image (`i` or `I`) gets `ESC _ G i=..,I=..,p=..;OK ESC \` or
   `CODE:message` (`EINVAL`, `ENOENT`, `ENODATA`, `EFBIG`, `EBADF`); `q=1` mutes `OK`,
-  `q=2` mutes errors too. Animation commands (`a=f`, `a`, `c`, `d=f`) are ignored.
+  `q=2` mutes errors too.
+
+Kitty animations: an image holds its frames, each with a gap in milliseconds (0 is a
+gapless frame, skipped when playing; the root frame starts gapless, new frames get 40
+ms), and is redrawn when its shown frame changes (generation).
+
+- `a=f` adds a frame as large as the root frame, or edits frame `r`. Its data covers the
+  rectangle at `x`, `y` (`s` x `v`, the whole image by default), drawn over the base
+  frame `c`, or over the `Y` background color (`0xRRGGBBAA`, transparent by default):
+  alpha blended, or overwriting with `X=1`. `z` sets the gap, negative for gapless, 0
+  keeping the default (or an edited frame's gap). It replies like `a=t`.
+- `a=a` sets the gap of frame `r` (`z`), shows frame `c`, the loop count `v` (1 forever,
+  `n` plays `n - 1` loops) and the state `s`: 1 stops (and resets the loop counter), 2
+  plays and waits on the last frame for more frames, 3 plays and loops. Only errors are
+  replied, as kitty does.
+- `a=c` copies the `w` x `h` rectangle (the whole frame by default) of frame `r` at `X`,
+  `Y` onto frame `c` at `x`, `y`, blended or overwriting with `C=1`; a rectangle out of
+  the frame, or overlapping itself within one frame, is `EINVAL`.
+- `d=f` / `d=F` removes frame `r` (clamped to the last frame, the first when 0). The only
+  frame left stays; `d=F` then frees the image if it has no placement.
+
+Playback (`ImageStore::advance`, `next_frame_deadline`) only runs for images that play
+(not stopped, several frames, some frame with a gap) and have a placement. When a loop
+count runs out, the animation stops on the first frame. After a long pause (hidden pane,
+sleep) playback resumes from the current time instead of replaying the missed frames.
 
 Sixel (`graphics/sixel.rs`): the DCS body `<p1>;<p2>;<p3>q<data>` is decoded to RGBA with
 1024 color registers (the first 16 start with the VT340 palette), `#Pc;1;H;L;S` (HLS, DEC
@@ -489,6 +515,11 @@ is reset with the glyph cache, and the frame is resolved again.
   auto_scroll_delta` lines (1 plus 1 per cell height of overflow, capped at 10) every
   50 ms (`ControlFlow::WaitUntil`) and the selection end follows the edge row. Disabled
   on the alternate screen, which has no history.
+- Animations: `about_to_wait` also calls `Session::animate`, which advances the due
+  frames of the image stores of the shown panes (redraw requested when a frame changed)
+  and returns the next frame deadline. The event loop waits until the earliest of it and
+  the auto-scroll deadline; with neither, it waits for events only, so no timer runs
+  while no shown pane plays an animation.
 - Middle press pastes the primary selection through `input::paste_bytes` and, like
   every paste, clears the selection.
 - Text change: the release stores a `selection::SelectionSnapshot` in the `Session`.

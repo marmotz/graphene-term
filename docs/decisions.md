@@ -58,6 +58,19 @@ image is scaled to fit its box of cells, so a font zoom rescales it with the tex
 Textures are keyed on the pixels' uid and dropped when no store holds them, so an
 animation frame or a replaced image needs no explicit invalidation.
 
+## Kitty animations: frames stored whole, played on the UI thread
+
+Each animation frame is stored as a full RGBA canvas, composed when it arrives (`a=f`,
+`a=c`), instead of kitty's lazily applied operations: drawing a frame is then a plain
+texture upload, at the cost of memory (the 256 MiB budget counts every frame, and a
+frame that does not fit is refused with `EFBIG`). Playback state lives in the
+`ImageStore` with the frames, and the UI thread advances it from `about_to_wait`
+(`ControlFlow::WaitUntil` on the next frame deadline) rather than on a timer thread:
+only shown panes advance, nothing wakes the loop while nothing plays, and the PTY thread
+only changes the state. A paused or hidden animation resumes from the current time.
+When its loop count runs out it stops on the first frame, and a new `s=3` plays it
+again. An animation control (`a=a`) gets no `OK` reply, as in kitty.
+
 ## Kitty graphics: unnamed placements and replies
 
 A kitty direct placement without `p` gets its own placement id, counting down from

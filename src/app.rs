@@ -552,6 +552,27 @@ impl Session {
 
     /// Applies what the panes asked for since the last call: a redraw when one of the
     /// visible ones changed, their text for the primary selection.
+    /// Shows the due frames of the animated images of the shown panes, and requests a
+    /// redraw when one changed. Returns when the next frame is due, `None` when no
+    /// shown pane plays an animation.
+    fn animate(&mut self, now: Instant) -> Option<Instant> {
+        let shown = self.workspace.active_tab().cloned();
+        let mut redraw = false;
+        let mut deadline = None;
+        for (id, pane) in self.workspace.panes_mut() {
+            if !shown.as_ref().is_some_and(|tab| tab.shows(id)) {
+                continue;
+            }
+            let mut images = graphics::lock(&pane.terminal.images);
+            redraw |= images.advance(now);
+            deadline = earliest(deadline, images.next_frame_deadline(now));
+        }
+        if redraw {
+            self.window.request_redraw();
+        }
+        deadline
+    }
+
     fn flush_panes(&mut self) {
         let shown = self.workspace.active_tab().cloned();
         let mut redraw = false;
@@ -1497,6 +1518,14 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
     }
 }
 
+/// The earlier of two optional deadlines.
+fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
 pub struct App {
     proxy: EventLoopProxy<UserEvent>,
     config: Config,
@@ -1610,7 +1639,8 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let deadline = self.session.as_mut().and_then(|session| {
-            let deadline = session.auto_scroll(Instant::now());
+            let now = Instant::now();
+            let deadline = earliest(session.auto_scroll(now), session.animate(now));
             session.flush_panes();
             deadline
         });
@@ -1717,5 +1747,22 @@ pub fn run() -> anyhow::Result<()> {
     match app.error {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn earliest_keeps_the_sooner_deadline() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(5);
+        assert_eq!(earliest(Some(later), Some(now)), Some(now));
+        assert_eq!(earliest(None, Some(later)), Some(later));
+        assert_eq!(earliest(Some(now), None), Some(now));
+        assert_eq!(earliest(None, None), None);
     }
 }
