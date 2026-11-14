@@ -18,6 +18,7 @@ use winit::window::{Window, WindowId};
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::block_actions::{Direction, Part};
 use crate::chrome;
+use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::i18n::Lang;
@@ -56,6 +57,9 @@ enum Drag {
     },
     /// A divider of the shown tab being moved.
     Divider { node_path: NodePath, axis: Axis },
+    /// Tab `index` of the bar being moved, grabbed `grab_offset` pixels right of its
+    /// left edge.
+    Tab { index: usize, grab_offset: f32 },
 }
 
 struct Session {
@@ -129,13 +133,50 @@ impl Session {
         true
     }
 
+    /// Sizes of the interface text.
+    fn ui_metrics(&self) -> UiMetrics {
+        UiMetrics {
+            line_height: self.renderer.ui_line_height(),
+            scale: self.window.scale_factor() as f32,
+        }
+    }
+
+    /// Height of the tab bar, 0 while it is hidden.
+    fn tab_bar_height(&self) -> f32 {
+        if tab_bar::shown(self.workspace.tabs().len()) {
+            self.ui_metrics().bar_height()
+        } else {
+            0.0
+        }
+    }
+
+    /// The tab bar, `None` while it is hidden.
+    fn tab_bar(&self) -> Option<TabBarLayout> {
+        let count = self.workspace.tabs().len();
+        if !tab_bar::shown(count) {
+            return None;
+        }
+        let titles: Vec<String> = (0..count)
+            .map(|index| {
+                self.workspace
+                    .tab_title(index)
+                    .unwrap_or_else(|| DEFAULT_TITLE.to_owned())
+            })
+            .collect();
+        Some(TabBarLayout::new(
+            self.window.inner_size().width as f32,
+            &titles,
+            self.workspace.active_index(),
+            self.ui_metrics(),
+        ))
+    }
+
     /// Area the tabs divide between their panes, and the sizes they are laid out with.
     fn geometry(&self) -> Geometry {
         let size = self.window.inner_size();
         let window = Rect::from_size(size.width, size.height);
         Geometry {
-            // No tab bar is drawn yet: it takes no room.
-            area: TAB_BAR.content_area(window, 0.0),
+            area: TAB_BAR.content_area(window, self.tab_bar_height()),
             cell: self.renderer.cell_size(),
             divider: DIVIDER_THICKNESS,
         }
@@ -185,19 +226,24 @@ impl Session {
         self.update_pointer();
     }
 
-    /// Splits the active pane along `axis`; the new pane's shell starts in the active
-    /// pane's directory, else the home directory, and takes the focus.
-    fn split(&mut self, axis: Axis) {
-        let Some(active) = self.workspace.active_pane() else {
-            return;
-        };
+    /// What a new pane is spawned from: the directory its shell starts in (the active
+    /// pane's, else the home directory) and a first layout, the active pane's (the new
+    /// pane is laid out for real by `relayout`). `None` without active pane.
+    fn new_pane_start(&self) -> Option<(Option<PathBuf>, GridLayout)> {
+        let active = self.workspace.active_pane()?;
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let cwd = workspace::start_dir(active.terminal.current_dir(), home);
-        // The new pane is laid out for real by `relayout` once it is in the tree.
-        let layout = active.layout;
+        Some((cwd, active.layout))
+    }
+
+    /// A closure spawning the pane of a given id, starting in `cwd` with `layout`.
+    fn pane_spawner(
+        &self,
+        cwd: Option<PathBuf>,
+        layout: GridLayout,
+    ) -> impl FnOnce(PaneId) -> Option<Pane> + use<> {
         let (proxy, config) = (self.proxy.clone(), self.term_config.clone());
-        let old = Some(active.id);
-        let spawn = |id| match Terminal::spawn(
+        move |id| match Terminal::spawn(
             EventProxy::new(proxy, id),
             layout.window_size(),
             config,
@@ -208,9 +254,82 @@ impl Session {
                 log::error!("cannot start a shell for the new pane: {error:#}");
                 None
             }
+        }
+    }
+
+    /// Splits the active pane along `axis`; the new pane takes the focus.
+    fn split(&mut self, axis: Axis) {
+        let Some((cwd, layout)) = self.new_pane_start() else {
+            return;
         };
+        let old = self.workspace.active_pane_id();
+        let spawn = self.pane_spawner(cwd, layout);
         if self.workspace.split(axis, self.geometry(), spawn).is_some() {
             self.focus_changed(old);
+        }
+    }
+
+    /// Opens a tab after the last one and shows it.
+    fn new_tab(&mut self) {
+        let Some((cwd, layout)) = self.new_pane_start() else {
+            return;
+        };
+        let old = self.workspace.active_pane_id();
+        let id = self.workspace.allocate_id();
+        if let Some(pane) = self.pane_spawner(cwd, layout)(id) {
+            self.workspace.new_tab(id, pane);
+            self.focus_changed(old);
+        }
+    }
+
+    /// Shows the tab chosen by `select` on the workspace, when it changes the shown tab.
+    fn change_tab(&mut self, select: impl FnOnce(&mut Workspace<Pane>) -> bool) {
+        let (old, index) = (
+            self.workspace.active_pane_id(),
+            self.workspace.active_index(),
+        );
+        if select(&mut self.workspace) && self.workspace.active_index() != index {
+            self.focus_changed(old);
+        }
+    }
+
+    /// Closes every pane of tab `index`; the application exits with the last tab.
+    fn close_tab(&mut self, index: usize, event_loop: &ActiveEventLoop) {
+        let Some(tab) = self.workspace.tabs().get(index) else {
+            return;
+        };
+        for id in tab.tree.leaves() {
+            if event_loop.exiting() {
+                return;
+            }
+            self.close_pane(id, event_loop);
+        }
+    }
+
+    /// Handles a press on the tab bar: a tab is shown and grabbed, its close button or a
+    /// middle click closes it, the `+` button opens a tab.
+    fn tab_bar_press(
+        &mut self,
+        button: mouse::Button,
+        hit: TabBarHit,
+        bar: &TabBarLayout,
+        event_loop: &ActiveEventLoop,
+    ) {
+        match (button, hit) {
+            (mouse::Button::Left, TabBarHit::Tab(index)) => {
+                self.change_tab(|workspace| workspace.select(index));
+                let (x, _) = self.mouse_pixel();
+                self.drag = Some(Drag::Tab {
+                    index,
+                    grab_offset: x - bar.tabs[index].rect.x,
+                });
+            }
+            (mouse::Button::Left, TabBarHit::Close(index))
+            | (mouse::Button::Middle, TabBarHit::Tab(index) | TabBarHit::Close(index)) => {
+                self.close_tab(index, event_loop);
+            }
+            (mouse::Button::Left, TabBarHit::NewTab) => self.new_tab(),
+            _ => {}
         }
     }
 
@@ -234,6 +353,7 @@ impl Session {
         self.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         let scale = self.window.scale_factor() as f32;
         self.renderer.set_font_size(self.font_size * scale);
+        self.renderer.set_ui_scale(scale);
         self.relayout();
     }
 
@@ -276,6 +396,10 @@ impl Session {
     /// Over a divider, or while dragging one, the resize arrows of its axis.
     fn update_pointer(&mut self) {
         let (x, y) = self.mouse_pixel();
+        if matches!(self.drag, Some(Drag::Tab { .. })) || y < self.tab_bar_height() {
+            self.set_pointer(winit::window::CursorIcon::Default);
+            return;
+        }
         let layout = self.shown_layout();
         let divider = match &self.drag {
             Some(Drag::Divider { axis, .. }) => Some(*axis),
@@ -299,6 +423,11 @@ impl Session {
             };
             mouse::pointer_icon(captured, over_chevron)
         };
+        self.set_pointer(icon);
+    }
+
+    /// Applies the pointer shape `icon` when it changed.
+    fn set_pointer(&mut self, icon: winit::window::CursorIcon) {
         if self.pointer != Some(icon) {
             self.window.set_cursor(icon);
             self.pointer = Some(icon);
@@ -340,21 +469,35 @@ impl Session {
         }
     }
 
-    fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
+    fn mouse_input(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        event_loop: &ActiveEventLoop,
+    ) {
         let Some(button) = mouse::button_from(button) else {
             return;
         };
         match state {
-            ElementState::Pressed => self.mouse_press(button),
+            ElementState::Pressed => self.mouse_press(button, event_loop),
             ElementState::Released => self.mouse_release(button),
         }
     }
 
-    fn mouse_press(&mut self, button: mouse::Button) {
+    /// A press goes to the first of: the banner, the tab bar, a divider, a pane.
+    fn mouse_press(&mut self, button: mouse::Button, event_loop: &ActiveEventLoop) {
         if button == mouse::Button::Left && self.banner_press() {
             return;
         }
         let (x, y) = self.mouse_pixel();
+        if let Some(bar) = self.tab_bar()
+            && bar.rect.contains(x, y)
+        {
+            if let Some(hit) = bar.hit(x, y) {
+                self.tab_bar_press(button, hit, &bar, event_loop);
+            }
+            return;
+        }
         let layout = self.shown_layout();
         if button == mouse::Button::Left
             && let Some(divider) = layout.divider_at(x, y)
@@ -423,6 +566,19 @@ impl Session {
             self.update_pointer();
             return;
         }
+        if button == mouse::Button::Left
+            && let Some(Drag::Tab { index, grab_offset }) = self.drag
+        {
+            self.drag = None;
+            if let Some(mut bar) = self.tab_bar() {
+                let (x, _) = self.mouse_pixel();
+                let to = bar.dragged(index, x - grab_offset);
+                self.workspace.move_tab(index, to);
+            }
+            self.window.request_redraw();
+            self.update_pointer();
+            return;
+        }
         let (position, modifiers) = (self.mouse_position, self.modifiers);
         let Some(pane) = self.workspace.active_pane_mut() else {
             return;
@@ -444,6 +600,10 @@ impl Session {
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
         self.update_pointer();
+        if matches!(self.drag, Some(Drag::Tab { .. })) {
+            self.window.request_redraw();
+            return;
+        }
         if let Some(Drag::Divider { node_path, axis }) = &self.drag {
             let along = match axis {
                 Axis::Horizontal => position.x,
@@ -548,6 +708,19 @@ impl Session {
 
     fn run_action(&mut self, action: Action, default_font_size: f32, event_loop: &ActiveEventLoop) {
         match action {
+            Action::NewTab => self.new_tab(),
+            Action::NextTab => self.change_tab(|workspace| {
+                workspace.next();
+                true
+            }),
+            Action::PreviousTab => self.change_tab(|workspace| {
+                workspace.previous();
+                true
+            }),
+            Action::GoToTab(number) => {
+                let index = usize::from(number).saturating_sub(1);
+                self.change_tab(|workspace| workspace.select(index));
+            }
             Action::SplitRight => self.split(Axis::Horizontal),
             Action::SplitDown => self.split(Axis::Vertical),
             Action::ClosePane => {
@@ -679,10 +852,12 @@ impl Session {
     /// Closes the pane `id`; the application exits with the last one.
     fn close_pane(&mut self, id: PaneId, event_loop: &ActiveEventLoop) {
         // The closed pane's selection, and a divider of the tree it leaves, are dropped.
+        // A dragged tab may be the one closing: the drag is dropped.
         let shown_tab = self.workspace.tab_of(id) == Some(self.workspace.active_index());
         match self.drag {
             Some(Drag::Selection { pane, .. }) if pane == id => self.drag = None,
             Some(Drag::Divider { .. }) if shown_tab => self.drag = None,
+            Some(Drag::Tab { .. }) => self.drag = None,
             _ => {}
         }
         let old = self.workspace.active_pane_id();
@@ -704,6 +879,8 @@ impl Session {
     ) {
         let visible = self.workspace.is_visible(id);
         let active = self.workspace.active_pane_id() == Some(id);
+        // The tab bar shows the title of every tab.
+        let bar_shown = tab_bar::shown(self.workspace.tabs().len());
         let Some(pane) = self.workspace.pane_mut(id) else {
             return;
         };
@@ -736,11 +913,17 @@ impl Session {
                 if active {
                     self.refresh_title();
                 }
+                if bar_shown {
+                    self.window.request_redraw();
+                }
             }
             TermEvent::ResetTitle => {
                 pane.title = None;
                 if active {
                     self.refresh_title();
+                }
+                if bar_shown {
+                    self.window.request_redraw();
                 }
             }
             TermEvent::PtyWrite(text) => pane.terminal.write(text.into_bytes()),
@@ -774,7 +957,7 @@ impl Session {
     }
 
     /// Draws every pane of the shown tab, inactive ones dimmed when it shows several,
-    /// then the dividers and the active pane border, then the banner.
+    /// then the dividers, the active pane border and the tab bar, then the banner.
     fn redraw(&mut self) {
         let mut banner = self.shown_banner().map(|shown| FrameBanner {
             layout: self.banner_layout(&shown),
@@ -819,7 +1002,17 @@ impl Session {
             .iter()
             .map(|(frame, layout)| PaneFrame { frame, layout })
             .collect();
-        let ui = chrome::scene::build(&layout, active, &self.palette.ui, self.renderer.is_srgb());
+        let mut bar = self.tab_bar();
+        if let (Some(bar), Some(Drag::Tab { index, grab_offset })) = (bar.as_mut(), &self.drag) {
+            bar.dragged(*index, self.mouse_pixel().0 - grab_offset);
+        }
+        let ui = chrome::scene::build(
+            &layout,
+            active,
+            bar.as_ref(),
+            &self.palette.ui,
+            self.renderer.is_srgb(),
+        );
         match self.renderer.render(&panes, &ui) {
             Ok(true) if self.first_frame.frame_drawn() => {
                 perf::mark("first frame drawn after PTY output");
@@ -857,7 +1050,11 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::PreviousPane
         | Action::ToggleZoom
         | Action::EqualisePanes
-        | Action::DetachPane => {}
+        | Action::DetachPane
+        | Action::NewTab
+        | Action::NextTab
+        | Action::PreviousTab
+        | Action::GoToTab(_) => {}
     }
 }
 
@@ -887,13 +1084,15 @@ impl App {
         // Shell first, GPU second: the PTY reader thread parses the shell output while
         // the renderer is being created, so the first frame shows it complete.
         let scale = window.scale_factor() as f32;
-        let glyphs = Glyphs::new(
+        let mut glyphs = Glyphs::new(
             self.config.font.family.clone(),
             self.config.font.size * scale,
         );
+        glyphs.set_ui_scale(scale);
         perf::mark("glyphs ready");
 
         let size = window.inner_size();
+        // A single tab: no tab bar.
         let layout = GridLayout::new(
             TAB_BAR.content_area(Rect::from_size(size.width, size.height), 0.0),
             glyphs.cell_size(),
@@ -1022,7 +1221,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
             WindowEvent::MouseInput { state, button, .. } => {
-                session.mouse_input(state, button);
+                session.mouse_input(state, button, event_loop);
                 if let Some(tag) = session.ignored_tag.take() {
                     self.update_checker.ignore(&tag);
                 }

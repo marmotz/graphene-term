@@ -39,6 +39,9 @@ src/
   layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
+  chrome/
+    scene.rs       interface layer: tab bar, dividers, active pane border (pure)
+    tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
     state.rs       update.json state file (last check, latest release, ignored tag)
@@ -46,7 +49,9 @@ src/
   renderer/
     mod.rs         wgpu device/surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + glyph instances (pure, no GPU)
-    glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic) -> atlas slot
+    glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic, ui) -> atlas slot,
+                   interface font shaping
+    ui_text.rs     interface text: truncation with an ellipsis, shaped line cache, glyph instances
     atlas.rs       shelf allocator of the mask and color atlas pages (pure, no GPU)
     cells.rs       instanced glyph pipeline: atlas textures, uploads, one quad per glyph
     cell.wgsl      shader for glyphs (mask tinted with the cell color, or color glyph)
@@ -224,15 +229,24 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
     - overlay rects and glyph instances at pixel positions (banner).
 3. `Session::redraw` captures one frame per pane shown by the active tab. When the tab
    shows several panes, the inactive ones go through `Frame::dimmed(INACTIVE_PANE_DIM)`
-   (every color mixed 30 % toward the background) and `chrome::scene::build` adds the
-   interface rects: the dividers (`ui.pane_border`) and a 2 px border inside the active
-   pane (`ui.palette_match`, the accent color).
+   (every color mixed 30 % toward the background). `chrome::scene::build` gives the
+   interface layer (`UiLayer`: rects, then text items): the dividers (`ui.pane_border`)
+   and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
+   the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
+   there are several tabs. The panes area is the window minus the bar.
 4. `Renderer::render` builds the scene of each pane with its own `GridLayout`, resolves
-   the glyph instances through the glyph cache (one group per pane, then the overlay),
-   uploads the newly rasterized glyphs, then draws in one pass: clear; for each pane,
-   clipped to its rect by a scissor, `under` rects, glyphs, `over` rects; then over the
-   whole window the interface rects, the overlay rects and the overlay glyphs. Colors
-   are linearized when the surface format is sRGB.
+   the glyph instances through the glyph cache (one group per pane, then the interface
+   text, then the overlay), uploads the newly rasterized glyphs, then draws in one pass:
+   clear; for each pane, clipped to its rect by a scissor, `under` rects, glyphs,
+   `over` rects; then over the whole window the interface rects, the interface text,
+   the overlay rects and the overlay glyphs. Colors are linearized when the surface
+   format is sRGB.
+
+The interface text (`renderer/ui_text.rs`) uses its own font: sans-serif at
+`UI_FONT_SIZE` (13 px) times the window scale factor, independent of the terminal font
+and its zoom. Each line is shaped once per text and maximum width (truncated with `…`),
+and its characters go through the same glyph cache and atlas as the grid, under keys
+marked `ui`.
 
 ### Banner
 

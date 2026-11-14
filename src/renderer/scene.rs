@@ -14,6 +14,7 @@ fn plain(c: char) -> GlyphKey {
         c,
         bold: false,
         italic: false,
+        ui: false,
     }
 }
 
@@ -273,6 +274,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                     c: c.c,
                     bold: c.bold,
                     italic: c.italic,
+                    ui: false,
                 },
                 color: gpu_color(c.fg, srgb_target),
             });
@@ -330,6 +332,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                     c,
                     bold: false,
                     italic: false,
+                    ui: false,
                 },
                 color,
             }));
@@ -514,7 +517,8 @@ mod tests {
             GlyphKey {
                 c: 'b',
                 bold: true,
-                italic: true
+                italic: true,
+                ui: false,
             }
         );
         assert_eq!(b.color, [1.0, 0.0, 0.0, 1.0]);

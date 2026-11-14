@@ -1,21 +1,97 @@
-//! Interface rectangles of the shown tab (pure, no GPU access): the dividers between
-//! its panes and the border of the active pane. Nothing is drawn while the tab shows a
-//! single pane.
+//! Interface of the window (pure, no GPU access): the tab bar, the dividers between the
+//! panes of the shown tab and the border of its active pane. Dividers and border are
+//! only drawn while the tab shows several panes, the bar while there are several tabs.
 
+use super::tab_bar::TabBarLayout;
 use crate::layout::Rect;
 use crate::palette::UiColors;
-use crate::renderer::RectInstance;
 use crate::renderer::scene::gpu_color;
+use crate::renderer::{RectInstance, UiLayer, UiTextItem};
 use crate::terminal::PaneId;
 use crate::workspace::tree::Layout;
 
 /// Thickness of the active pane border, in physical pixels.
 pub const ACTIVE_BORDER: f32 = 2.0;
 
+/// Character of the tab close buttons.
+const CLOSE: &str = "×";
+
+/// Thickness of the strokes of the `+` button, relative to the bar height.
+const PLUS_STROKE: f32 = 1.0 / 15.0;
+
+/// The interface over the panes of `layout`: the pane rectangles (see [`panes`]), then
+/// the tab bar when `tab_bar` is given.
+pub fn build(
+    layout: &Layout,
+    active: Option<PaneId>,
+    tab_bar: Option<&TabBarLayout>,
+    colors: &UiColors,
+    srgb_target: bool,
+) -> UiLayer {
+    let mut ui = UiLayer {
+        rects: panes(layout, active, colors, srgb_target),
+        texts: Vec::new(),
+    };
+    if let Some(bar) = tab_bar {
+        tabs(bar, colors, srgb_target, &mut ui);
+    }
+    ui
+}
+
+/// The tab bar: its background, the shown tab's background, each title and close
+/// button, then the `+` button.
+fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    ui.rects
+        .push(rect(bar.rect, color(colors.tab_bar_background)));
+    for tab in &bar.tabs {
+        let text = if tab.active {
+            ui.rects
+                .push(rect(tab.rect, color(colors.tab_active_background)));
+            color(colors.tab_active_text)
+        } else {
+            color(colors.tab_inactive_text)
+        };
+        ui.texts.push(UiTextItem {
+            text: tab.title.clone(),
+            x: tab.title_x,
+            y: bar.text_y,
+            color: text,
+            max_width: tab.title_width,
+        });
+        // The glyph is about half the line height wide: centered in its square.
+        ui.texts.push(UiTextItem {
+            text: CLOSE.to_owned(),
+            x: (tab.close.x + tab.close.width / 4.0).round(),
+            y: bar.text_y,
+            color: text,
+            max_width: tab.close.width,
+        });
+    }
+    let plus = bar.new_tab;
+    let stroke = (plus.height * PLUS_STROKE).round().max(1.0);
+    let arm = (plus.height / 3.0).round();
+    let (cx, cy) = (
+        (plus.x + plus.width / 2.0).round(),
+        (plus.y + plus.height / 2.0).round(),
+    );
+    let text = color(colors.tab_inactive_text);
+    ui.rects.push(RectInstance::new(
+        [cx - arm / 2.0, cy - stroke / 2.0],
+        [arm, stroke],
+        text,
+    ));
+    ui.rects.push(RectInstance::new(
+        [cx - stroke / 2.0, cy - arm / 2.0],
+        [stroke, arm],
+        text,
+    ));
+}
+
 /// Rectangles drawn over the panes of `layout`: its dividers, in the pane border color,
 /// then the border of the `active` pane, inside its rectangle, in the accent color
 /// (the one highlighting command palette matches).
-pub fn build(
+pub fn panes(
     layout: &Layout,
     active: Option<PaneId>,
     colors: &UiColors,
@@ -68,6 +144,7 @@ mod tests {
     use alacritty_terminal::vte::ansi::Rgb;
 
     use super::*;
+    use crate::chrome::tab_bar::UiMetrics;
     use crate::workspace::tree::{Axis, Branch, Divider};
 
     const BORDER: Rgb = Rgb { r: 1, g: 2, b: 3 };
@@ -125,12 +202,16 @@ mod tests {
             dividers: Vec::new(),
             divider: 1.0,
         };
-        assert!(build(&layout, Some(PaneId(1)), &colors(), false).is_empty());
+        assert!(panes(&layout, Some(PaneId(1)), &colors(), false).is_empty());
+        assert_eq!(
+            build(&layout, Some(PaneId(1)), None, &colors(), false),
+            UiLayer::default()
+        );
     }
 
     #[test]
     fn several_panes_draw_the_dividers_then_the_active_border() {
-        let rects = build(&two_columns(), Some(PaneId(2)), &colors(), false);
+        let rects = panes(&two_columns(), Some(PaneId(2)), &colors(), false);
         let border = gpu_color(BORDER, false);
         let accent = gpu_color(ACCENT, false);
         assert_eq!(
@@ -148,15 +229,96 @@ mod tests {
 
     #[test]
     fn unknown_active_pane_draws_only_the_dividers() {
-        let rects = build(&two_columns(), Some(PaneId(9)), &colors(), false);
+        let rects = panes(&two_columns(), Some(PaneId(9)), &colors(), false);
         assert_eq!(rects.len(), 1);
-        assert!(build(&two_columns(), None, &colors(), false).len() == 1);
+        assert!(panes(&two_columns(), None, &colors(), false).len() == 1);
     }
 
     #[test]
     fn colors_follow_the_target_encoding() {
-        let rects = build(&two_columns(), Some(PaneId(1)), &colors(), true);
+        let rects = panes(&two_columns(), Some(PaneId(1)), &colors(), true);
         assert_eq!(rects[0].color, gpu_color(BORDER, true));
         assert_eq!(rects[1].color, gpu_color(ACCENT, true));
+    }
+
+    const BAR: Rgb = Rgb { r: 10, g: 0, b: 0 };
+    const ACTIVE_TAB: Rgb = Rgb { r: 20, g: 0, b: 0 };
+    const ACTIVE_TEXT: Rgb = Rgb { r: 30, g: 0, b: 0 };
+    const INACTIVE_TEXT: Rgb = Rgb { r: 40, g: 0, b: 0 };
+
+    fn tab_colors() -> UiColors {
+        UiColors {
+            tab_bar_background: BAR,
+            tab_active_background: ACTIVE_TAB,
+            tab_active_text: ACTIVE_TEXT,
+            tab_inactive_text: INACTIVE_TEXT,
+            ..colors()
+        }
+    }
+
+    fn bar() -> TabBarLayout {
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let titles = ["one".to_owned(), "two".to_owned()];
+        TabBarLayout::new(1000.0, &titles, 1, metrics)
+    }
+
+    #[test]
+    fn tab_bar_draws_its_background_the_shown_tab_and_the_titles() {
+        let single = Layout {
+            panes: vec![(PaneId(1), area(0.0, 30.0, 1000.0, 100.0))],
+            dividers: Vec::new(),
+            divider: 1.0,
+        };
+        let bar = bar();
+        let ui = build(&single, Some(PaneId(1)), Some(&bar), &tab_colors(), false);
+        let color = |c| gpu_color(c, false);
+        assert_eq!(ui.rects[0].position, [0.0, 0.0]);
+        assert_eq!(ui.rects[0].size, [1000.0, bar.rect.height]);
+        assert_eq!(ui.rects[0].color, color(BAR));
+        // Only the shown tab (the second) gets a background.
+        assert_eq!(ui.rects[1].position, [bar.tabs[1].rect.x, 0.0]);
+        assert_eq!(ui.rects[1].color, color(ACTIVE_TAB));
+        // Then the two strokes of the `+` button, inside it.
+        assert_eq!(ui.rects.len(), 4);
+        assert!(
+            ui.rects[2..]
+                .iter()
+                .all(|r| bar.new_tab.contains(r.position[0], r.position[1]))
+        );
+
+        let titles: Vec<(&str, [f32; 4])> = ui
+            .texts
+            .iter()
+            .map(|t| (t.text.as_str(), t.color))
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                ("one", color(INACTIVE_TEXT)),
+                (CLOSE, color(INACTIVE_TEXT)),
+                ("two", color(ACTIVE_TEXT)),
+                (CLOSE, color(ACTIVE_TEXT)),
+            ]
+        );
+        assert_eq!(ui.texts[2].x, bar.tabs[1].title_x);
+        assert_eq!(ui.texts[2].max_width, bar.tabs[1].title_width);
+        assert!(ui.texts.iter().all(|t| t.y == bar.text_y));
+    }
+
+    #[test]
+    fn tab_bar_comes_after_the_pane_rects() {
+        let bar = bar();
+        let ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            Some(&bar),
+            &tab_colors(),
+            false,
+        );
+        assert_eq!(ui.rects[0].color, gpu_color(BORDER, false));
+        assert_eq!(ui.rects[5].color, gpu_color(BAR, false));
     }
 }

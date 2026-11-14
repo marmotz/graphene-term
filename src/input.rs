@@ -42,6 +42,12 @@ pub enum Action {
     /// Moves the active pane into a new tab; no default key.
     #[allow(dead_code, reason = "reached through the command palette")]
     DetachPane,
+    /// Opens a tab after the last one.
+    NewTab,
+    NextTab,
+    PreviousTab,
+    /// Shows the tab of this number, counted from 1.
+    GoToTab(u8),
 }
 
 /// Letter a shortcut is matched on: the character the key types when it is an ASCII
@@ -91,6 +97,27 @@ fn shortcut_letter(key: &Key, physical: PhysicalKey) -> Option<char> {
     Some(letter)
 }
 
+/// Tab number of a digit key `1` to `9`, matched on the physical key so it works on
+/// layouts where the digits need Shift (AZERTY).
+fn tab_digit(physical: PhysicalKey) -> Option<u8> {
+    let PhysicalKey::Code(code) = physical else {
+        return None;
+    };
+    let digit = match code {
+        KeyCode::Digit1 => 1,
+        KeyCode::Digit2 => 2,
+        KeyCode::Digit3 => 3,
+        KeyCode::Digit4 => 4,
+        KeyCode::Digit5 => 5,
+        KeyCode::Digit6 => 6,
+        KeyCode::Digit7 => 7,
+        KeyCode::Digit8 => 8,
+        KeyCode::Digit9 => 9,
+        _ => return None,
+    };
+    Some(digit)
+}
+
 /// Direction of an arrow key.
 fn arrow_direction(key: &Key) -> Option<Direction> {
     match key {
@@ -108,6 +135,11 @@ fn arrow_direction(key: &Key) -> Option<Direction> {
 pub fn action_for(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Option<Action> {
     let ctrl_shift = mods.control_key() && mods.shift_key() && !mods.alt_key();
     let ctrl_shift_alt = mods.control_key() && mods.shift_key() && mods.alt_key();
+    if mods == ModifiersState::ALT
+        && let Some(digit) = tab_digit(physical)
+    {
+        return Some(Action::GoToTab(digit));
+    }
     if ctrl_shift_alt && let Some(direction) = arrow_direction(key) {
         return Some(Action::ResizePane(direction));
     }
@@ -133,6 +165,7 @@ pub fn action_for(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Opt
             'n' => Some(Action::NextPane),
             'b' => Some(Action::PreviousPane),
             'z' => Some(Action::ToggleZoom),
+            't' => Some(Action::NewTab),
             _ => None,
         };
     }
@@ -147,6 +180,14 @@ pub fn action_for(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Opt
             "0" if !mods.shift_key() => Some(Action::FontSizeReset),
             _ => None,
         },
+        Key::Named(NamedKey::Tab) if mods == ModifiersState::CONTROL => Some(Action::NextTab),
+        Key::Named(NamedKey::Tab) if mods == ModifiersState::CONTROL | ModifiersState::SHIFT => {
+            Some(Action::PreviousTab)
+        }
+        Key::Named(NamedKey::PageDown) if mods == ModifiersState::CONTROL => Some(Action::NextTab),
+        Key::Named(NamedKey::PageUp) if mods == ModifiersState::CONTROL => {
+            Some(Action::PreviousTab)
+        }
         Key::Named(NamedKey::Paste) => Some(Action::Paste),
         Key::Named(NamedKey::Copy) => Some(Action::Copy),
         Key::Named(NamedKey::PageUp) if mods == ModifiersState::SHIFT => Some(Action::ScrollPageUp),
@@ -437,9 +478,9 @@ mod tests {
         assert_eq!(action_for(&ch("C"), cs), Some(Action::Copy));
         assert_eq!(action_for(&ch("V"), cs), Some(Action::Paste));
         assert_eq!(action_for(&ch("V"), csa), None);
-        // Ctrl+PageUp stays with the shell.
+        // Alt+PageUp stays with the shell.
         assert_eq!(
-            action_for(&named(NamedKey::PageUp), ModifiersState::CONTROL),
+            action_for(&named(NamedKey::PageUp), ModifiersState::ALT),
             None
         );
     }
@@ -483,6 +524,77 @@ mod tests {
         }
         // Ctrl+Shift+Alt+O copies the output, Ctrl+Shift+O splits down.
         assert_eq!(action_for(&ch("O"), csa), Some(Action::CopyOutput));
+    }
+
+    #[test]
+    fn tab_actions() {
+        let ctrl = ModifiersState::CONTROL;
+        let cs = ctrl | ModifiersState::SHIFT;
+        assert_eq!(action_for(&ch("T"), cs), Some(Action::NewTab));
+        assert_eq!(action_for(&ch("t"), cs), Some(Action::NewTab));
+        assert_eq!(
+            action_for(&named(NamedKey::Tab), ctrl),
+            Some(Action::NextTab)
+        );
+        assert_eq!(
+            action_for(&named(NamedKey::Tab), cs),
+            Some(Action::PreviousTab)
+        );
+        assert_eq!(
+            action_for(&named(NamedKey::PageDown), ctrl),
+            Some(Action::NextTab)
+        );
+        assert_eq!(
+            action_for(&named(NamedKey::PageUp), ctrl),
+            Some(Action::PreviousTab)
+        );
+        // Ctrl+Shift+PageUp/PageDown still move between blocks; Tab alone is the shell's.
+        assert_eq!(
+            action_for(&named(NamedKey::PageUp), cs),
+            Some(Action::PreviousBlock)
+        );
+        assert_eq!(action_for(&named(NamedKey::Tab), NONE), None);
+    }
+
+    #[test]
+    fn alt_digits_go_to_a_tab_by_their_physical_key() {
+        let alt = ModifiersState::ALT;
+        let codes = [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
+        ];
+        for (number, code) in (1..=9).zip(codes) {
+            assert_eq!(
+                super::action_for(&ch(&number.to_string()), PhysicalKey::Code(code), alt),
+                Some(Action::GoToTab(number))
+            );
+        }
+        // AZERTY: the Digit1 key types `&` without Shift.
+        assert_eq!(
+            super::action_for(&ch("&"), PhysicalKey::Code(KeyCode::Digit1), alt),
+            Some(Action::GoToTab(1))
+        );
+        // Digit0, other modifiers and the logical digit alone are not tab shortcuts.
+        assert_eq!(
+            super::action_for(&ch("0"), PhysicalKey::Code(KeyCode::Digit0), alt),
+            None
+        );
+        assert_eq!(
+            super::action_for(
+                &ch("1"),
+                PhysicalKey::Code(KeyCode::Digit1),
+                alt | ModifiersState::CONTROL
+            ),
+            None
+        );
+        assert_eq!(action_for(&ch("1"), alt), None);
     }
 
     #[test]

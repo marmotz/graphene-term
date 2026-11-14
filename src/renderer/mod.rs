@@ -5,6 +5,7 @@ mod cells;
 mod glyphs;
 mod rects;
 pub mod scene;
+mod ui_text;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -20,6 +21,16 @@ pub use glyphs::{GlyphKey, Glyphs};
 pub use rects::RectInstance;
 use rects::RectRenderer;
 use scene::GlyphInstance;
+use ui_text::UiText;
+pub use ui_text::UiTextItem;
+
+/// The interface drawn over the panes (tab bar, dividers, active pane border): its
+/// rectangles, then its text over them.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UiLayer {
+    pub rects: Vec<RectInstance>,
+    pub texts: Vec<UiTextItem>,
+}
 
 /// One pane to draw: its frame and the layout placing its grid in the window.
 #[derive(Clone, Copy)]
@@ -49,6 +60,8 @@ struct Layers {
     cells: CellRenderer,
     /// Font system, cell metrics and glyph cache feeding `cells`.
     glyphs: Glyphs,
+    /// Shaped lines of the interface text.
+    ui_text: UiText,
     srgb: bool,
 }
 
@@ -66,7 +79,8 @@ struct Prepared {
     clear: [f32; 4],
     screen: (u32, u32),
     panes: Vec<PreparedPane>,
-    /// Interface rects (dividers, active pane border), over every pane.
+    /// Interface rects (tab bar, dividers, active pane border), over every pane; the
+    /// interface text is the glyph group after the panes'.
     ui: Range<u32>,
     /// Window overlay rects (banner), last; their glyphs are the last glyph group.
     overlay: Range<u32>,
@@ -78,18 +92,19 @@ impl Layers {
             rects: RectRenderer::new(device, format),
             cells: CellRenderer::new(device, format, glyphs.atlas_size()),
             glyphs,
+            ui_text: UiText::default(),
             srgb: format.is_srgb(),
         }
     }
 
-    /// Builds the scene of each pane and uploads them with the interface rects `ui`.
+    /// Builds the scene of each pane and uploads them with the interface `ui`.
     fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen: (u32, u32),
         panes: &[PaneFrame<'_>],
-        ui: &[RectInstance],
+        ui: &UiLayer,
     ) -> Prepared {
         let scenes: Vec<_> = panes
             .iter()
@@ -111,7 +126,7 @@ impl Layers {
                 over: push(&scene.over),
             })
             .collect();
-        let ui = push(ui);
+        let ui_rects = push(&ui.rects);
         let overlay_rects: Vec<_> = scenes
             .iter()
             .flat_map(|scene| scene.overlay_rects.iter().copied())
@@ -123,8 +138,12 @@ impl Layers {
             .iter()
             .flat_map(|scene| scene.overlay.iter().copied())
             .collect();
+        let mut ui_glyphs = Vec::new();
+        self.ui_text
+            .glyphs(&mut self.glyphs, &ui.texts, &mut ui_glyphs);
         let mut groups: Vec<&[GlyphInstance]> =
             scenes.iter().map(|scene| scene.glyphs.as_slice()).collect();
+        groups.push(&ui_glyphs);
         groups.push(&overlay_glyphs);
         self.cells
             .prepare(device, queue, screen, &mut self.glyphs, &groups);
@@ -133,14 +152,15 @@ impl Layers {
             clear: scenes.first().map_or(NO_PANE_CLEAR, |scene| scene.clear),
             screen,
             panes: prepared_panes,
-            ui,
+            ui: ui_rects,
             overlay,
         }
     }
 
     /// Records the render pass drawing what [`Self::prepare`] uploaded into `view`:
     /// clear, then each pane clipped to its rectangle (`under` rects, grid glyphs,
-    /// `over` rects), then the interface rects and the overlay over the whole window.
+    /// `over` rects), then over the whole window the interface rects and text, and the
+    /// overlay rects and glyphs.
     fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -176,8 +196,9 @@ impl Layers {
         let (width, height) = prepared.screen;
         pass.set_scissor_rect(0, 0, width, height);
         self.rects.render(&mut pass, prepared.ui.clone());
-        self.rects.render(&mut pass, prepared.overlay.clone());
         self.cells.render(&mut pass, prepared.panes.len());
+        self.rects.render(&mut pass, prepared.overlay.clone());
+        self.cells.render(&mut pass, prepared.panes.len() + 1);
     }
 }
 
@@ -301,16 +322,26 @@ impl Renderer {
         self.layers.glyphs.set_font_size(font_size);
     }
 
+    /// Scales the interface font to a window of scale factor `scale`.
+    pub fn set_ui_scale(&mut self, scale: f32) {
+        self.layers.glyphs.set_ui_scale(scale);
+    }
+
+    /// Line height of the interface font, in pixels.
+    pub fn ui_line_height(&self) -> f32 {
+        self.layers.glyphs.ui_line_height()
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Draws `panes`, then the interface rects `ui` over them. Returns whether it
-    /// reached the screen (`false` when the surface was not ready and a new redraw was
-    /// requested or will come).
-    pub fn render(&mut self, panes: &[PaneFrame<'_>], ui: &[RectInstance]) -> anyhow::Result<bool> {
+    /// Draws `panes`, then the interface `ui` over them. Returns whether it reached the
+    /// screen (`false` when the surface was not ready and a new redraw was requested or
+    /// will come).
+    pub fn render(&mut self, panes: &[PaneFrame<'_>], ui: &UiLayer) -> anyhow::Result<bool> {
         let screen = (self.config.width, self.config.height);
         let prepared = self
             .layers
@@ -405,16 +436,12 @@ impl Headless {
 
     /// Prepares, draws and submits `frame` alone, without waiting for the GPU.
     pub fn render(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<()> {
-        self.render_panes(&[PaneFrame { frame, layout }], &[])
+        self.render_panes(&[PaneFrame { frame, layout }], &UiLayer::default())
     }
 
-    /// Prepares, draws and submits `panes` and the interface rects `ui`, without
-    /// waiting for the GPU.
-    pub fn render_panes(
-        &mut self,
-        panes: &[PaneFrame<'_>],
-        ui: &[RectInstance],
-    ) -> anyhow::Result<()> {
+    /// Prepares, draws and submits `panes` and the interface `ui`, without waiting for
+    /// the GPU.
+    pub fn render_panes(&mut self, panes: &[PaneFrame<'_>], ui: &UiLayer) -> anyhow::Result<()> {
         let prepared = self
             .layers
             .prepare(&self.device, &self.queue, self.screen, panes, ui);
@@ -666,11 +693,14 @@ mod tests {
         let left_frame = blank_frame(vec![wide]);
         let right_frame = blank_frame(vec![vec![cell(' ')]]);
         // A full-width interface rect along the bottom row.
-        let ui = [RectInstance::new(
-            [0.0, SIZE as f32 - 1.0],
-            [SIZE as f32, 1.0],
-            [1.0; 4],
-        )];
+        let ui = UiLayer {
+            rects: vec![RectInstance::new(
+                [0.0, SIZE as f32 - 1.0],
+                [SIZE as f32, 1.0],
+                [1.0; 4],
+            )],
+            texts: Vec::new(),
+        };
         renderer
             .render_panes(
                 &[
@@ -702,6 +732,48 @@ mod tests {
         assert!(
             (0..SIZE).all(|x| red(x, SIZE - 1) == 255),
             "ui rect clipped"
+        );
+    }
+
+    #[test]
+    fn ui_text_is_drawn_over_the_panes_at_its_position() {
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let layout = GridLayout::new(Rect::from_size(SIZE, SIZE), renderer.cell_size(), 0.0);
+        let frame = blank_frame(vec![vec![cell(' ')]]);
+        let line_height = renderer.layers.glyphs.ui_line_height();
+        let ui = UiLayer {
+            rects: Vec::new(),
+            texts: vec![UiTextItem {
+                text: "MM".to_owned(),
+                x: 32.0,
+                y: 16.0,
+                color: [1.0; 4],
+                max_width: 32.0,
+            }],
+        };
+        renderer
+            .render_panes(
+                &[PaneFrame {
+                    frame: &frame,
+                    layout: &layout,
+                }],
+                &ui,
+            )
+            .unwrap();
+        let pixels = renderer.read_pixels();
+        let lit: Vec<(u32, u32)> = (0..SIZE)
+            .flat_map(|y| (0..SIZE).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixels[((y * SIZE + x) * 4) as usize] > 0)
+            .collect();
+        assert!(!lit.is_empty(), "no ui text drawn");
+        // Inside the line box, one pixel of antialiasing slack.
+        assert!(
+            lit.iter()
+                .all(|&(x, y)| x + 1 >= 32 && y + 1 >= 16 && (y as f32) <= 16.0 + line_height),
+            "{lit:?}"
         );
     }
 

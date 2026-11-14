@@ -237,7 +237,6 @@ impl<P> Workspace<P> {
     }
 
     /// Shows tab `index`. `false` when there is no such tab.
-    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn select(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -247,7 +246,6 @@ impl<P> Workspace<P> {
     }
 
     /// Shows the tab after the shown one, wrapping to the first.
-    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn next(&mut self) {
         if !self.tabs.is_empty() {
             self.active = (self.active + 1) % self.tabs.len();
@@ -255,7 +253,6 @@ impl<P> Workspace<P> {
     }
 
     /// Shows the tab before the shown one, wrapping to the last.
-    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn previous(&mut self) {
         if !self.tabs.is_empty() {
             self.active = (self.active + self.tabs.len() - 1) % self.tabs.len();
@@ -264,7 +261,6 @@ impl<P> Workspace<P> {
 
     /// Moves tab `from` to index `to`; the shown tab stays shown. `false` when either
     /// index is out of range.
-    #[allow(dead_code, reason = "wired by the tab bar and tab shortcuts task")]
     pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
         if from >= self.tabs.len() || to >= self.tabs.len() {
             return false;
