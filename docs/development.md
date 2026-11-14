@@ -29,11 +29,11 @@ commented out, default values) is written there; a write failure is only logged.
 
 Parsing (`src/config.rs`) reads the file key by key: a missing key takes its default, an
 invalid value or an unknown key is logged with its line and ignored, a TOML syntax error
-ignores the whole file. Settings applied at startup: font family and size, padding,
-initial window size, background opacity, scrollback, word separators, cursor shape and blinking, keybindings
-(`src/keybindings.rs`: default table, then the configured entries; an invalid key or
-action is reported like any invalid value). The other keys (`language`, `tabs`, `theme`)
-are read but not applied yet.
+ignores the whole file. Every key is applied: interface language (`auto` resolves the
+locale, see `Language::resolve`), font family and size, padding, initial window size,
+background opacity, scrollback, word separators, cursor shape and blinking, tab bar
+position, theme, and keybindings (`src/keybindings.rs`: default table, then the
+configured entries; an invalid key or action is reported like any invalid value).
 
 The cursor blinks (`src/cursor_blink.rs`) when its style asks for it (`cursor.blinking`,
 or DECSCUSR from the application) and the window has the focus: the phase toggles every

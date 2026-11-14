@@ -354,3 +354,22 @@ holds one image. The image copied is the part the placement shows (its source
 rectangle) of the frame shown at copy time; a sixel image keeps the transparent
 padding to whole cells. When the window closes, the X11 owner thread dies with the
 process and the image offer is lost (no clipboard manager handoff).
+
+## Configuration parsed key by key
+
+`config.toml` is read as a TOML table, key by key, rather than deserialized at once
+with `serde` and `deny_unknown_fields`: one invalid value or unknown key must not
+discard the rest of the file. `serde` still deserializes each value. A missing key
+takes its default, an invalid one keeps its previous value (the default at startup,
+the applied one on hot reload) and is reported with its line in the log and the error
+banner; only a TOML syntax error ignores the whole file. Themes are read the same way,
+on top of `graphene-night`.
+
+## Light/dark appearance from the XDG desktop portal
+
+winit 0.30 documents `Window::theme` and `ThemeChanged` as unsupported on X11 and
+Wayland, so the appearance comes from the XDG desktop portal
+(`org.freedesktop.portal.Settings`, `org.freedesktop.appearance` `color-scheme`) through
+`zbus`, on a dedicated thread that reads it then listens to `SettingChanged`. The
+thread only runs when the configuration sets both `theme.light` and `theme.dark`; with
+no portal or no preference, `dark` is used.

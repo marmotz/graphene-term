@@ -4,7 +4,7 @@
 
 ## Configuration file and themes ·  [overview](features/config-themes/overview.md)
 
-_tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 10/11 tasks done
+_terminé — voir [technical.md](features/config-themes/technical.md)_ — 11/11 tasks done
 
 | Done | Issue                                                     | Title                                                      | Blocked by                   |
 |------|-----------------------------------------------------------|------------------------------------------------------------|------------------------------|
@@ -13,7 +13,7 @@ _tâches créées, voir [technical.md](features/config-themes/technical.md)_ —
 | [x]  | [#17](https://github.com/marmotz/graphene-term/issues/17) | Config: cursor blinking                                    | #14                          |
 | [x]  | [#19](https://github.com/marmotz/graphene-term/issues/19) | Config: hot reload of the configuration and themes         | #14, #15, #16                |
 | [x]  | [#20](https://github.com/marmotz/graphene-term/issues/20) | Config: follow the system light/dark appearance            | #15, #19                     |
-| [ ]  | [#21](https://github.com/marmotz/graphene-term/issues/21) | Config: language, tab bar position and UI colors           | #13, #15, #19, #35, #40, #42 |
+| [x]  | [#21](https://github.com/marmotz/graphene-term/issues/21) | Config: language, tab bar position and UI colors           | #13, #15, #19, #35, #40, #42 |
 | [x]  | [#62](https://github.com/marmotz/graphene-term/issues/62) | Config: window startup mode (default, maximized, remember) | #14                          |
 | [x]  | [#63](https://github.com/marmotz/graphene-term/issues/63) | Config: transparent background                             | #14                          |
 | [x]  | [#14](https://github.com/marmotz/graphene-term/issues/14) | Config: configuration file, model and startup settings     | —                            |
