@@ -9,6 +9,7 @@
 | Font loading, fallback, raster    | `cosmic-text` (glyphs drawn by our own wgpu pipeline)    | 0.19    |
 | PTY, VT parsing, grid, scrollback | `alacritty_terminal`                                     | 0.26    |
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
+| Clipboard with an image           | `wl-clipboard-rs` (Wayland) + `x11rb` (X11 selection owner) | 0.9, 0.13 |
 | Config file                       | `toml` + `serde`                                         | 1       |
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
@@ -64,6 +65,9 @@ src/
   links.rs         OSC 8 and detected URL under a point, hover / click / open rules (pure)
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
+                   (image placeholders stripped), image placements inside a selection
+  clipboard.rs     copy with an image: text or image choice, PNG of the shown part, Wayland
+                   offer (`wl-clipboard-rs`), X11 selection owner thread (`x11rb`, INCR)
   chrome/
     command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
@@ -295,6 +299,19 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
   selection and to `Ctrl+Shift+C`. `Ctrl+Shift+Alt+C` / `O` copy the command (the
   signal's command line, or the last header row) / the output; an empty part leaves the
   clipboard untouched.
+- Copy with images (`Pane::copy_content`, `clipboard.rs`): copied text never holds the
+  image placeholders (`clean_copied_text` strips `U+10EEEE` and its diacritics). When
+  the text selection covers exactly one image placement
+  (`timeline_selection::images`, over every grid), `Ctrl+Shift+C` offers the shown part
+  (placement source rectangle) of the image's current frame as `image/png`, with the
+  text when there is any; no image or several images copy the text only through
+  `arboard`. On Wayland (`WAYLAND_DISPLAY` set) `wl-clipboard-rs` serves both MIME
+  types from its own thread; without data control, or on X11, a new `x11rb` connection
+  owns `CLIPBOARD` and a `clipboard-owner` thread answers `TARGETS`, `UTF8_STRING`,
+  `text/plain;charset=utf-8` and `image/png` (data over 256 KiB, or the server's
+  maximum request size, sent with `INCR`) until another client takes the selection. If
+  both fail, the text is copied through `arboard`. The primary selection stays text
+  only.
 
 ## Rendering pipeline
 

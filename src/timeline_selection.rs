@@ -10,7 +10,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::Term;
 
-use crate::selection::clean_copied_text;
+use crate::selection::{self, clean_copied_text};
 use crate::timeline::{BlockId, Phase, Timeline};
 use crate::view::{self, RowSource};
 
@@ -285,6 +285,22 @@ pub fn text<L>(term: &Term<L>, timeline: &Timeline) -> Option<String> {
         .chain(term.selection_to_string())
         .collect();
     (!parts.is_empty()).then(|| clean_copied_text(&parts.join("\n")))
+}
+
+/// Distinct image placements selected in the grids, top to bottom (see
+/// [`selection::selected_images`]).
+pub fn images<L>(term: &Term<L>, timeline: &Timeline) -> Vec<(u32, u32)> {
+    let mut images = Vec::new();
+    let found = timeline
+        .frozen()
+        .flat_map(|(_, _, frozen)| selection::selected_images(frozen))
+        .chain(selection::selected_images(term));
+    for ids in found {
+        if !images.contains(&ids) {
+            images.push(ids);
+        }
+    }
+    images
 }
 
 #[cfg(test)]
@@ -580,5 +596,29 @@ mod tests {
         // The live grid detached into a block since: stale.
         session.feed(&crate::timeline::testing::start("ls"));
         assert_eq!(selection.live_ends(&session.timeline, &session.term), None);
+    }
+
+    /// Placeholder cell of image `image` (low 24 bits) at row 0, column `col`.
+    fn image_cell(image: u8, col: char) -> String {
+        format!("\x1b[38;5;{image}m\u{10EEEE}\u{305}{col}\x1b[m")
+    }
+
+    #[test]
+    fn images_are_found_across_grids_once_each() {
+        let mut session = Session::sized(20, 10, 1000);
+        let first = image_cell(7, '\u{305}') + &image_cell(7, '\u{30d}');
+        session.command("one", &[&first], 0);
+        session.feed(&format!("$ {}", image_cell(9, '\u{305}')));
+        select(
+            &mut session,
+            at(RowSource::Header(ONE), 0, 0, Side::Left),
+            at(RowSource::Live, 0, 5, Side::Right),
+        );
+        assert_eq!(
+            images(&session.term, &session.timeline),
+            vec![(7, 0), (9, 0)]
+        );
+        let text = copied(&session).unwrap();
+        assert!(!text.contains('\u{10EEEE}'), "{text:?}");
     }
 }

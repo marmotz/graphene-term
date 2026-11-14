@@ -1,12 +1,16 @@
 //! Mouse selection logic: click counting, selection kind, capture rule, the live
-//! selection snapshot and copied text cleanup. No window or clipboard access.
+//! selection snapshot, copied text cleanup and the images inside a selection. No window
+//! or clipboard access.
 
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::index::Point;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Term, TermMode};
 use winit::keyboard::ModifiersState;
+
+use crate::graphics::placeholder::{self, PLACEHOLDER};
 
 /// Maximum delay between two clicks of the same series.
 const MULTI_CLICK_DELAY: Duration = Duration::from_millis(400);
@@ -116,9 +120,50 @@ impl SelectionSnapshot {
     }
 }
 
-/// Cleans a selection before it reaches the clipboard: trailing whitespace removed from
-/// every line, common indentation of non-blank lines removed, no trailing newline.
+/// Distinct image placements, as `(image, placement)`, with a placeholder cell inside
+/// the selection of `term`, in reading order. Empty without selection.
+pub fn selected_images<T>(term: &Term<T>) -> Vec<(u32, u32)> {
+    let Some(range) = term.selection.as_ref().and_then(|s| s.to_range(term)) else {
+        return Vec::new();
+    };
+    let grid = term.grid();
+    let first = range.start.line.0.max(-(grid.history_size() as i32));
+    let last = range.end.line.0.min(grid.screen_lines() as i32 - 1);
+    let mut images = Vec::new();
+    for line in first..=last {
+        let cells = placeholder::row_cells(&grid[Line(line)]);
+        for (column, cell) in cells.into_iter().enumerate() {
+            let Some(cell) = cell else { continue };
+            let ids = (cell.image, cell.placement);
+            if range.contains(Point::new(Line(line), Column(column))) && !images.contains(&ids) {
+                images.push(ids);
+            }
+        }
+    }
+    images
+}
+
+/// `text` without the image placeholder characters and the diacritics that follow them:
+/// the cells of an image copy as nothing.
+fn strip_placeholders(text: &str) -> String {
+    let mut stripped = String::with_capacity(text.len());
+    let mut in_placeholder = false;
+    for c in text.chars() {
+        if c == PLACEHOLDER {
+            in_placeholder = true;
+        } else if !(in_placeholder && placeholder::diacritic_value(c).is_some()) {
+            in_placeholder = false;
+            stripped.push(c);
+        }
+    }
+    stripped
+}
+
+/// Cleans a selection before it reaches the clipboard: image placeholders removed,
+/// trailing whitespace removed from every line, common indentation of non-blank lines
+/// removed, no trailing newline.
 pub fn clean_copied_text(text: &str) -> String {
+    let text = strip_placeholders(text);
     let lines: Vec<&str> = text.split('\n').map(str::trim_end).collect();
 
     let indent_of = |line: &str| line.len() - line.trim_start().len();
@@ -581,5 +626,61 @@ mod tests {
         assert_eq!(selected_text(&term).as_deref(), Some("hello"));
         // The refreshed snapshot follows the rotated selection.
         assert!(snapshot.validate(&mut term));
+    }
+
+    /// `ab`, a 2x2 image (id 7, placement 3) after them, then `cd` below the image, at its
+    /// first column, and a 1x1 image (id 9, placement 1) after `cd`.
+    fn term_with_images() -> Term<VoidListener> {
+        use crate::graphics::{CursorMove, place};
+        let mut term = term_with(10, 6, b"ab");
+        place(&mut term, 7, 3, 2, 2, CursorMove::Below);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"cd");
+        place(&mut term, 9, 1, 1, 1, CursorMove::After);
+        term
+    }
+
+    fn select<T>(term: &mut Term<T>, from: Point, to: Point) {
+        let mut selection = Selection::new(SelectionType::Simple, from, Side::Left);
+        selection.update(to, Side::Right);
+        term.selection = Some(selection);
+    }
+
+    #[test]
+    fn placeholders_and_their_diacritics_are_stripped() {
+        let row = '\u{305}';
+        let col = '\u{30d}';
+        let text = format!("a{PLACEHOLDER}{row}{col}{PLACEHOLDER}{row}b\u{301}");
+        // Combining marks outside a placeholder are kept.
+        assert_eq!(strip_placeholders(&text), "ab\u{301}");
+    }
+
+    #[test]
+    fn copied_text_never_holds_placeholders() {
+        let mut term = term_with_images();
+        select(&mut term, point(0, 0), point(2, 9));
+        let text = selected_text(&term).unwrap();
+        assert!(!text.contains(PLACEHOLDER), "{text:?}");
+        assert_eq!(text, "ab\n\n  cd");
+    }
+
+    #[test]
+    fn selected_images_lists_each_placement_once_in_reading_order() {
+        let mut term = term_with_images();
+        select(&mut term, point(0, 0), point(2, 9));
+        assert_eq!(selected_images(&term), vec![(7, 3), (9, 1)]);
+    }
+
+    #[test]
+    fn selected_images_counts_only_cells_inside_the_selection() {
+        let mut term = term_with_images();
+        // Second row of the first image only.
+        select(&mut term, point(1, 2), point(1, 3));
+        assert_eq!(selected_images(&term), vec![(7, 3)]);
+        // Text before the first image.
+        select(&mut term, point(0, 0), point(0, 1));
+        assert!(selected_images(&term).is_empty());
+        term.selection = None;
+        assert!(selected_images(&term).is_empty());
     }
 }

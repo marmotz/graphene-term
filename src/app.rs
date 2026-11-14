@@ -25,6 +25,7 @@ use crate::chrome::command_palette::{
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
+use crate::clipboard::{self, Content};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
@@ -760,8 +761,16 @@ impl Session {
     /// Writes the cleaned selection to the clipboard. Without selection, the shortcut is
     /// still swallowed so it never sends `^C`.
     fn copy(&mut self) {
-        let text = self.workspace.active_pane().and_then(Pane::selected_text);
-        self.set_clipboard(text);
+        match self.workspace.active_pane().and_then(Pane::copy_content) {
+            Some(Content::Text(text)) => self.set_clipboard(Some(text)),
+            Some(Content::Image { text, png }) => {
+                if let Err(error) = clipboard::set_text_and_image(text.clone(), png) {
+                    log::warn!("image copy failed, copying the text only: {error:#}");
+                    self.set_clipboard(text);
+                }
+            }
+            None => {}
+        }
     }
 
     /// Copies one part of the target block to the clipboard. An empty part leaves the

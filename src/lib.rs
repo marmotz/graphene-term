@@ -7,6 +7,7 @@ mod block_actions;
 #[cfg(test)]
 mod build_version;
 mod chrome;
+mod clipboard;
 mod config;
 mod frame;
 mod graphics;

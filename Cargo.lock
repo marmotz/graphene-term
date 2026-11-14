@@ -998,6 +998,8 @@ dependencies = [
  "ureq",
  "wgpu",
  "winit",
+ "wl-clipboard-rs",
+ "x11rb",
 ]
 
 [[package]]

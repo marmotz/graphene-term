@@ -22,7 +22,7 @@ _tâches créées, voir [technical.md](features/config-themes/technical.md)_ —
 
 ## Images and clickable links ·  [overview](features/images-links/overview.md)
 
-_tâches créées, voir [technical.md](features/images-links/technical.md)_ — 7/8 tasks done
+_terminé — voir [technical.md](features/images-links/technical.md)_ — 8/8 tasks done
 
 | Done | Issue                                                     | Title                                                    | Blocked by |
 |------|-----------------------------------------------------------|----------------------------------------------------------|------------|
@@ -33,5 +33,5 @@ _tâches créées, voir [technical.md](features/images-links/technical.md)_ — 
 | [x]  | [#26](https://github.com/marmotz/graphene-term/issues/26) | Images: sixel                                            | #22, #23   |
 | [x]  | [#28](https://github.com/marmotz/graphene-term/issues/28) | Links: tooltip with the OSC 8 target                     | #24        |
 | [x]  | [#30](https://github.com/marmotz/graphene-term/issues/30) | Images: kitty animations                                 | #25        |
-| [ ]  | [#31](https://github.com/marmotz/graphene-term/issues/31) | Images: copy text and image to the clipboard             | #23, #25   |
+| [x]  | [#31](https://github.com/marmotz/graphene-term/issues/31) | Images: copy text and image to the clipboard             | #23, #25   |
 

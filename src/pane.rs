@@ -18,7 +18,9 @@ use winit::event::MouseScrollDelta;
 use winit::keyboard::ModifiersState;
 
 use crate::block_actions::{self, Direction, Part};
+use crate::clipboard::{self, Content};
 use crate::frame;
+use crate::graphics;
 use crate::i18n::{self, Lang, Msg};
 use crate::input;
 use crate::input_editor::{self, EditorCommand};
@@ -402,6 +404,24 @@ impl Pane {
         }
         self.selection.as_ref()?;
         timeline_selection::text(&*term, &timeline)
+    }
+
+    /// What a copy offers: the selected text, with the selected image when there is
+    /// exactly one (see [`clipboard::content`]). A selected block copies its text only.
+    pub fn copy_content(&self) -> Option<Content> {
+        let text = self.selected_text();
+        let images = if self.selected_block.is_none() && self.selection.is_some() {
+            let term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            timeline_selection::images(&*term, &timeline)
+        } else {
+            Vec::new()
+        };
+        clipboard::content(text, &images, |image, placement| {
+            let store = graphics::lock(&self.terminal.images);
+            let source = store.placement(image, placement)?.source;
+            clipboard::encode_png(store.get(image)?.frame(), source)
+        })
     }
 
     /// Text of one part of the target block.

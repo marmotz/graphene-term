@@ -341,3 +341,16 @@ URLs are limited to `http`, `https`, `file` and `mailto`; OSC 8 links, set on pu
 by the application, open with any scheme, except a `file://` URI naming a host other
 than empty, `localhost` or this machine's (`/proc/sys/kernel/hostname`): the file
 would be looked up locally under a remote name, so it is refused and logged.
+
+## Copy with an image: own clipboard offers next to `arboard`
+
+`arboard` 3.7 sets one format at a time, so text and image cannot be offered together.
+A copy holding exactly one image therefore offers its PNG and its text itself:
+`wl-clipboard-rs` `copy_multi` on Wayland, and on X11 a dedicated `x11rb` connection
+whose thread owns `CLIPBOARD` until another client takes it (the two crates were
+already built through `arboard` and `winit`). Text-only copies, the primary selection
+and paste stay on `arboard`. Several images copy the text only, since a clipboard
+holds one image. The image copied is the part the placement shows (its source
+rectangle) of the frame shown at copy time; a sixel image keeps the transparent
+padding to whole cells. When the window closes, the X11 owner thread dies with the
+process and the image offer is lost (no clipboard manager handoff).
