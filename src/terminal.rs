@@ -15,6 +15,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
+use crate::graphics::ImageStore;
 use crate::process;
 use crate::pty::{self, Msg, PtyLoop};
 use crate::shell_integration;
@@ -58,6 +59,8 @@ pub struct Terminal {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     /// The command blocks. Lock order: `term` first, then `timeline`.
     pub timeline: Arc<Mutex<Timeline>>,
+    /// The images shown by the grids. Lock order: `term`, `timeline`, then `images`.
+    pub images: Arc<Mutex<ImageStore>>,
     sender: pty::Sender,
     /// Process id of the shell.
     shell_pid: u32,
@@ -98,13 +101,22 @@ impl Terminal {
         let timeline = Arc::new(Mutex::new(Timeline::new(config.scrolling_history)));
         let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
 
-        let pty_loop = PtyLoop::new(term.clone(), timeline.clone(), token, proxy, pty)?;
+        let images = Arc::new(Mutex::new(ImageStore::new()));
+        let pty_loop = PtyLoop::new(
+            term.clone(),
+            timeline.clone(),
+            token,
+            images.clone(),
+            proxy,
+            pty,
+        )?;
         let sender = pty_loop.sender();
         pty_loop.spawn();
 
         Ok(Self {
             term,
             timeline,
+            images,
             sender,
             shell_pid,
         })

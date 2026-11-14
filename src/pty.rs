@@ -23,7 +23,7 @@ use log::error;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
 use crate::graphics::sequence::{self, Splitter};
-use crate::graphics::{Handler, Image, LogHandler};
+use crate::graphics::{Handler, Image, ImageStore, StoreHandler};
 use crate::signals::{Chunk, Scanner};
 use crate::timeline::Timeline;
 
@@ -198,6 +198,8 @@ pub struct PtyLoop<T, L: EventListener> {
     timeline: Arc<Mutex<Timeline>>,
     /// Session token expected in the block signals.
     token: String,
+    /// Locked after `term` and `timeline`, never before.
+    images: Arc<Mutex<ImageStore>>,
     event_proxy: L,
 }
 
@@ -207,7 +209,7 @@ struct State {
     processor: Processor,
     splitter: Splitter,
     scanner: Scanner,
-    graphics: LogHandler,
+    graphics: StoreHandler,
 }
 
 impl<T, L> PtyLoop<T, L>
@@ -219,6 +221,7 @@ where
         term: Arc<FairMutex<Term<L>>>,
         timeline: Arc<Mutex<Timeline>>,
         token: String,
+        images: Arc<Mutex<ImageStore>>,
         event_proxy: L,
         pty: T,
     ) -> io::Result<Self> {
@@ -231,6 +234,7 @@ where
             term,
             timeline,
             token,
+            images,
             event_proxy,
         })
     }
@@ -252,7 +256,7 @@ where
             processor: Processor::new(),
             splitter: Splitter::new(),
             scanner: Scanner::new(&self.token),
-            graphics: LogHandler,
+            graphics: StoreHandler::new(self.images.clone()),
         };
         let mut buf = vec![0u8; READ_BUFFER_SIZE];
         let mode = PollMode::Level;
@@ -786,6 +790,7 @@ mod tests {
             term.clone(),
             timeline,
             "0123456789abcdef0123456789abcdef".to_owned(),
+            Arc::new(Mutex::new(ImageStore::new())),
             Events(tx),
             pty,
         )
