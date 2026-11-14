@@ -11,6 +11,7 @@
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
 | Config file                       | `toml` + `serde`                                         | 1       |
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
+| Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
 
 ## Modules
 
@@ -19,7 +20,12 @@ src/
   main.rs          binary entry point: --version, logger setup, calls lib::run
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup timing logs (`graphene::perf` target)
-  app.rs           winit ApplicationHandler, Session (one window + one shell)
+  app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay)
+  pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
+  process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
+  workspace/
+    mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback (pure)
+    tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml location, model, key-by-key parsing and validation
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
@@ -39,6 +45,11 @@ src/
   layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
+  chrome/
+    command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
+    dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
+    scene.rs       interface layer: tab bar, dividers, active pane border, dialog or palette overlay (pure)
+    tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
     state.rs       update.json state file (last check, latest release, ignored tag)
@@ -46,7 +57,9 @@ src/
   renderer/
     mod.rs         wgpu device/surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + glyph instances (pure, no GPU)
-    glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic) -> atlas slot
+    glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic, ui) -> atlas slot,
+                   interface font shaping
+    ui_text.rs     interface text: truncation with an ellipsis, shaped line cache, glyph instances
     atlas.rs       shelf allocator of the mask and color atlas pages (pure, no GPU)
     cells.rs       instanced glyph pipeline: atlas textures, uploads, one quad per glyph
     cell.wgsl      shader for glyphs (mask tinted with the cell color, or color glyph)
@@ -59,8 +72,49 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
+
+## Session and panes
+
+- `Session` owns the window and what is shared by every pane: the renderer, the
+  clipboard, the modifiers, the font size, the banners, the mouse gesture in progress
+  (`Drag`) and the open overlay. Its `Workspace<Pane>` holds the tabs; each tab is a
+  binary split tree (`workspace::tree::Node`) whose leaves are `PaneId`s, with its
+  active pane and zoom flag.
+- `Pane` owns everything about one shell: its `Terminal`, its `GridLayout` (the pane's
+  rectangle), its scroll anchor, selection, selected block, mouse reporting state and
+  title. It never touches the window: it raises a redraw flag and hands the text for
+  the primary selection back, which `Session::flush_panes` applies after each event.
+- Every terminal event carries the `PaneId` of its pane
+  (`UserEvent::Terminal(PaneId, Event)`, set by `EventProxy`), so the session routes it
+  to its pane; events of a closed pane are dropped. A redraw is only requested for a
+  pane shown by the active tab.
+- Keys go to the active pane; mouse presses and the wheel go to the pane under the
+  pointer (a press in an inactive pane focuses it first). A press goes to the first of:
+  the overlay, the banner, the tab bar, a divider, a pane.
+- New panes (split, new tab) start their shell in the active pane's directory
+  (`Terminal::current_dir`, from `/proc/<pid>/cwd`), else `$HOME`.
+
+## Command palette
+
+- `Ctrl+Shift+P` (`Action::CommandPalette`) opens `chrome::command_palette::
+  CommandPalette` as the session overlay. Its entries are every `Action::ALL` (label
+  from `i18n`, shortcut from `input::shortcut_label`), then each tab and, for a tab
+  holding several panes, each of its panes.
+- The query is matched with `nucleo-matcher` (fuzzy, smart case, Unicode
+  normalization); the matches are sorted by score, then by rank in the recent actions,
+  then in the default order, so an empty query lists the recent actions first. The
+  matched characters are highlighted in the accent color.
+- While it is open, keys and mouse presses go to it only: typed text edits the query,
+  `Backspace`, `Up` / `Down` (wrapping), `Enter` runs the selected entry, `Escape` or a
+  press outside the box closes it; a click on a row runs it, the wheel scrolls the rows.
+  At most 12 rows are shown.
+- Running an action goes through `Session::run_action`, so closing a pane still asks
+  for confirmation. The action's id (`Action::id`, snake_case) is then written first in
+  `$XDG_STATE_HOME/graphene/palette-recent` (default `~/.local/state/graphene/`), one id
+  per line, at most 50; the file is read each time the palette opens, and a missing or
+  unreadable file means no recent actions. Tab and pane entries are not stored.
 
 ## Threads
 
@@ -72,11 +126,11 @@ keyboard / mouse  --pty::Sender(Msg)-->   writes to PTY (WriteQueue)
                                           pty::feed parses VT into Term,
                                           Timeline::apply handles each signal
 request_redraw   <--UserEvent::Terminal-- EventProxy::send_event(Wakeup, Title, ...)
-RedrawRequested:
+RedrawRequested, for each pane shown by the active tab:
   lock Term (FairMutex), then Timeline
   view::prepare + Frame::capture  (short critical section)
   unlock
-  Renderer::render(frame)
+Renderer::render(pane frames, interface rects)
 ```
 
 - `Term` is shared as `Arc<FairMutex<Term<EventProxy>>>`. The UI thread only holds the
@@ -85,7 +139,14 @@ RedrawRequested:
   Lock order, everywhere: `Term` first, then `Timeline`.
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
-- When the shell exits, the event loop exits and the window closes.
+- When the shell of a pane exits, the pane closes, without confirmation; the last pane
+  closes its tab, the last tab closes the window.
+- Closing a pane (`ClosePane`), a tab (close button, middle click) or the window
+  (`CloseRequested`) goes through `Session::request_close`: when a targeted pane runs a
+  program other than its shell in the foreground (`Terminal::foreground_program`), a
+  `chrome::dialog::ConfirmClose` opens as the session overlay instead. While it is open
+  it takes every key (`Enter` closes, `Escape` cancels) and every mouse press (its
+  buttons); the wheel is ignored.
 - The PTY thread (`src/pty.rs`) is Graphene's own, with the structure of alacritty's
   `EventLoop`: one `polling::Poller` for the PTY, the child exit and the channel;
   `Msg::{Input, Resize, Shutdown}` sent through `pty::Sender` (mpsc + `poller.notify()`);
@@ -221,17 +282,40 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
       shapes of the rect pipeline), non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
       anchored at the cell origin, plus the fold summaries (one character per cell);
-    - overlay glyph instances at pixel positions (banner).
-3. `Renderer::render` resolves the glyph instances through the glyph cache, uploads the
-   newly rasterized glyphs, then draws in one pass: clear, `under` rects, glyphs,
-   `over` rects, overlay glyphs. Colors are linearized when the surface format is sRGB.
+    - overlay rects and glyph instances at pixel positions (banner).
+3. `Session::redraw` captures one frame per pane shown by the active tab. When the tab
+   shows several panes, the inactive ones go through `Frame::dimmed(INACTIVE_PANE_DIM)`
+   (every color mixed 30 % toward the background). `chrome::scene::build` gives the
+   interface layer (`UiLayer`: rects, then text items): the dividers (`ui.pane_border`)
+   and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
+   the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
+   there are several tabs. The panes area is the window minus the bar. The open dialog
+   (`chrome::dialog::DialogLayout`, centered) or command palette
+   (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
+   the window height) goes to the overlay rects and texts of the layer.
+4. `Renderer::render` builds the scene of each pane with its own `GridLayout`, resolves
+   the glyph instances through the glyph cache (one group per pane, then the interface
+   text, the banner, the overlay text), uploads the newly rasterized glyphs, then draws
+   in one pass: clear; for each pane, clipped to its rect by a scissor, `under` rects,
+   glyphs, `over` rects; then over the whole window the interface rects, the interface
+   text, the banner rects and glyphs, and the overlay rects and text, so the dialog
+   or the palette covers everything. Colors are linearized when the surface
+   format is sRGB.
+
+The interface text (`renderer/ui_text.rs`) uses its own font: sans-serif, at a size
+per `UiFont` (`Chrome`: `UI_FONT_SIZE`, 13 px, for the tab bar and the dialog;
+`Palette`: `PALETTE_FONT_SIZE`, 16 px, for the command palette) times the window scale
+factor, independent of the terminal font and its zoom. Each line is shaped once per
+font, text and maximum width (truncated with `…`), and its characters go through the
+same glyph cache and atlas as the grid, under keys marked with their `UiFont`.
 
 ### Banner
 
 `Frame.banner` holds a `BannerLayout` (from `banner.rs`) and its theme colors
 (`ui.banner_background`, `ui.banner_text`). It covers the top of the window, over the
-grid (the grid does not move): its rect is the last `over` rect and its text goes to the
-overlay glyphs (one character per cell width), drawn after it. The layout gives the pixel rect of each action,
+grid (the grid does not move), in the frame of the active pane: its rect goes to the
+scene's overlay rects and its text to its overlay glyphs (one character per cell
+width), drawn after every pane and the interface, unclipped, under the dialog. The layout gives the pixel rect of each action,
 and `Session::left_press` hit-tests the banner before starting a selection.
 
 The configuration error banner shows the first error of `config.toml` and the theme
@@ -252,7 +336,10 @@ is reset with the glyph cache, and the frame is resolved again.
 
 ## Input
 
-- `input::action_for` checks app shortcuts first (paste, scrollback, font size).
+- `input::action_for` checks app shortcuts first (paste, scrollback, font size, tabs,
+  panes, command palette). Letters are matched on the character typed, else on the
+  physical key; `Alt+1..9` on the physical digit row. While an overlay is open, keys go
+  to it only.
 - Otherwise `input::key_to_bytes` encodes the key following xterm conventions:
   modifier parameter `1 + shift + 2*alt + 4*ctrl`, application cursor mode (`SS3`),
   Alt as ESC prefix, Ctrl+char control codes.

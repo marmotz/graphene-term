@@ -7,6 +7,7 @@
 
 use std::borrow::Cow;
 use std::mem;
+use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -60,27 +61,29 @@ pub fn resolve(glyphs: &mut Glyphs, items: &[GlyphInstance], out: &mut Vec<CellI
     }));
 }
 
-/// Resolves the grid glyphs then the overlay glyphs into `out` (cleared first). Returns
-/// how many quads belong to the grid. Starts over when the atlas was reset meanwhile, so
+/// Resolves each group of `groups` in order into `out` (cleared first). Returns the
+/// range of quads of each group. Starts over when the atlas was reset meanwhile, so
 /// every quad points to a region of the current atlas.
-pub fn resolve_frame(
+pub fn resolve_groups(
     glyphs: &mut Glyphs,
-    grid: &[GlyphInstance],
-    overlay: &[GlyphInstance],
+    groups: &[&[GlyphInstance]],
     out: &mut Vec<CellInstance>,
-) -> usize {
-    let mut grid_count = 0;
+) -> Vec<Range<u32>> {
+    let mut ranges = Vec::with_capacity(groups.len());
     for _ in 0..MAX_RESOLVE_ATTEMPTS {
         let generation = glyphs.generation();
         out.clear();
-        resolve(glyphs, grid, out);
-        grid_count = out.len();
-        resolve(glyphs, overlay, out);
+        ranges.clear();
+        for group in groups {
+            let start = out.len() as u32;
+            resolve(glyphs, group, out);
+            ranges.push(start..out.len() as u32);
+        }
         if glyphs.generation() == generation {
             break;
         }
     }
-    grid_count
+    ranges
 }
 
 pub struct CellRenderer {
@@ -93,8 +96,8 @@ pub struct CellRenderer {
     capacity: usize,
     /// Quads of the current frame, reused between frames.
     instances: Vec<CellInstance>,
-    grid_count: u32,
-    total: u32,
+    /// Quads of each group passed to [`Self::prepare`].
+    groups: Vec<Range<u32>>,
 }
 
 const INITIAL_CAPACITY: usize = 4096;
@@ -262,8 +265,7 @@ impl CellRenderer {
             instance_buffer: Self::create_instance_buffer(device, INITIAL_CAPACITY),
             capacity: INITIAL_CAPACITY,
             instances: Vec::new(),
-            grid_count: 0,
-            total: 0,
+            groups: Vec::new(),
         }
     }
 
@@ -276,16 +278,16 @@ impl CellRenderer {
         })
     }
 
-    /// Resolves the glyphs of the frame, uploads the newly rasterized ones to the atlas
-    /// and the quads to the instance buffer.
+    /// Resolves the glyph groups of the frame, uploads the newly rasterized glyphs to
+    /// the atlas and the quads to the instance buffer. Each group is then drawn on its
+    /// own by [`Self::render`].
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen: (u32, u32),
         glyphs: &mut Glyphs,
-        grid: &[GlyphInstance],
-        overlay: &[GlyphInstance],
+        groups: &[&[GlyphInstance]],
     ) {
         queue.write_buffer(
             &self.uniform_buffer,
@@ -296,13 +298,11 @@ impl CellRenderer {
             }),
         );
 
-        let grid_count = resolve_frame(glyphs, grid, overlay, &mut self.instances);
+        self.groups = resolve_groups(glyphs, groups, &mut self.instances);
         for upload in glyphs.take_uploads() {
             self.upload(queue, &upload);
         }
 
-        self.grid_count = grid_count as u32;
-        self.total = self.instances.len() as u32;
         if self.instances.len() > self.capacity {
             self.capacity = self.instances.len().next_power_of_two();
             self.instance_buffer = Self::create_instance_buffer(device, self.capacity);
@@ -347,7 +347,7 @@ impl CellRenderer {
         );
     }
 
-    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>) {
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, range: Range<u32>) {
         if range.is_empty() {
             return;
         }
@@ -357,14 +357,11 @@ impl CellRenderer {
         pass.draw(0..4, range);
     }
 
-    /// Draws the grid glyphs uploaded by [`Self::prepare`].
-    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        self.draw(pass, 0..self.grid_count);
-    }
-
-    /// Draws the overlay glyphs uploaded by [`Self::prepare`].
-    pub fn render_overlay(&self, pass: &mut wgpu::RenderPass<'_>) {
-        self.draw(pass, self.grid_count..self.total);
+    /// Draws the glyphs of the group `index` uploaded by [`Self::prepare`].
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
+        if let Some(range) = self.groups.get(index) {
+            self.draw(pass, range.clone());
+        }
     }
 }
 
@@ -383,6 +380,7 @@ mod tests {
                 c,
                 bold: false,
                 italic: false,
+                ui: None,
             },
             color: WHITE,
         }
@@ -396,6 +394,7 @@ mod tests {
                 c: 'M',
                 bold: false,
                 italic: false,
+                ui: None,
             })
             .unwrap();
         let mut out = Vec::new();
@@ -425,18 +424,21 @@ mod tests {
     }
 
     #[test]
-    fn overlay_quads_come_after_the_grid_ones() {
+    fn groups_are_resolved_in_order_into_their_own_ranges() {
         let mut glyphs = Glyphs::new(None, FONT_SIZE);
         let mut out = Vec::new();
-        let grid = [item('a', [0.0, 0.0]), item('b', [10.0, 0.0])];
-        let overlay = [item('x', [0.0, 0.0])];
-        let grid_count = resolve_frame(&mut glyphs, &grid, &overlay, &mut out);
-        assert_eq!((grid_count, out.len()), (2, 3));
+        let first = [item('a', [0.0, 0.0]), item('b', [10.0, 0.0])];
+        let empty = [item(' ', [0.0, 0.0])];
+        let last = [item('x', [0.0, 0.0])];
+        let ranges = resolve_groups(&mut glyphs, &[&first, &empty, &last], &mut out);
+        assert_eq!(ranges, [0..2, 2..2, 2..3]);
+        assert_eq!(out.len(), 3);
         let x = glyphs
             .get(GlyphKey {
                 c: 'x',
                 bold: false,
                 italic: false,
+                ui: None,
             })
             .unwrap();
         assert_eq!(out[2].uv, [x.region.x as f32, x.region.y as f32]);
@@ -450,6 +452,7 @@ mod tests {
             c,
             bold: false,
             italic: false,
+            ui: None,
         };
         // How many of `chars` fit a fresh atlas before it resets.
         let mut probe = Glyphs::with_atlas_size(None, FONT_SIZE, ATLAS);
@@ -473,7 +476,7 @@ mod tests {
             .map(|(i, &c)| item(c, [i as f32 * 10.0, 0.0]))
             .collect();
         let mut out = Vec::new();
-        resolve_frame(&mut glyphs, &grid, &[], &mut out);
+        resolve_groups(&mut glyphs, &[&grid], &mut out);
         assert_eq!(glyphs.generation(), 1, "the frame did not reset the atlas");
         // Every quad points to the region its glyph holds in the current atlas.
         assert_eq!(out.len(), grid.len());

@@ -4,9 +4,6 @@
 //! exhaustive `match`, so adding a [`Msg`] variant fails to compile until every
 //! language translates it.
 
-// The tab bar, the command palette and the dialogs consume these labels as they land.
-#![allow(dead_code, reason = "labels are consumed by the UI tasks as they land")]
-
 use std::borrow::Cow;
 
 /// Language of the user interface.
@@ -83,6 +80,13 @@ pub enum Msg {
     FontSizeIncrease,
     FontSizeDecrease,
     FontSizeReset,
+    // Command blocks actions.
+    PreviousBlock,
+    NextBlock,
+    CopyCommand,
+    CopyOutput,
+    ToggleFold,
+    ToggleFoldAll,
     // Tabs and panes actions.
     NewTab,
     ClosePane,
@@ -100,6 +104,8 @@ pub enum Msg {
     CommandPalette,
     EqualisePanes,
     DetachPane,
+    /// Hint shown in the command palette's empty search field.
+    PalettePlaceholder,
     // Command palette entries for open tabs and panes (1-based numbers).
     TabEntry {
         tab: usize,
@@ -145,6 +151,12 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::FontSizeIncrease => "Increase font size",
         Msg::FontSizeDecrease => "Decrease font size",
         Msg::FontSizeReset => "Reset font size",
+        Msg::PreviousBlock => "Previous command block",
+        Msg::NextBlock => "Next command block",
+        Msg::CopyCommand => "Copy block command",
+        Msg::CopyOutput => "Copy block output",
+        Msg::ToggleFold => "Fold / unfold block",
+        Msg::ToggleFoldAll => "Fold / unfold all blocks",
         Msg::NewTab => "New tab",
         Msg::ClosePane => "Close pane",
         Msg::NextTab => "Next tab",
@@ -170,6 +182,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::CommandPalette => "Command palette",
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
+        Msg::PalettePlaceholder => "Type a command, a tab or a pane",
         Msg::TabEntry { tab, title } => return format!("Tab {tab}: {title}").into(),
         Msg::PaneEntry { tab, pane, title } => {
             return format!("Tab {tab} > pane {pane}: {title}").into();
@@ -212,6 +225,12 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::FontSizeIncrease => "Agrandir la police",
         Msg::FontSizeDecrease => "Réduire la police",
         Msg::FontSizeReset => "Taille de police par défaut",
+        Msg::PreviousBlock => "Bloc de commande précédent",
+        Msg::NextBlock => "Bloc de commande suivant",
+        Msg::CopyCommand => "Copier la commande du bloc",
+        Msg::CopyOutput => "Copier la sortie du bloc",
+        Msg::ToggleFold => "Replier / déplier le bloc",
+        Msg::ToggleFoldAll => "Replier / déplier tous les blocs",
         Msg::NewTab => "Nouvel onglet",
         Msg::ClosePane => "Fermer le panneau",
         Msg::NextTab => "Onglet suivant",
@@ -237,6 +256,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::CommandPalette => "Palette de commandes",
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
+        Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
         Msg::TabEntry { tab, title } => return format!("Onglet {tab} : {title}").into(),
         Msg::PaneEntry { tab, pane, title } => {
             return format!("Onglet {tab} > panneau {pane} : {title}").into();
@@ -294,34 +314,41 @@ mod tests {
             Msg::FontSizeIncrease => 6,
             Msg::FontSizeDecrease => 7,
             Msg::FontSizeReset => 8,
-            Msg::NewTab => 9,
-            Msg::ClosePane => 10,
-            Msg::NextTab => 11,
-            Msg::PreviousTab => 12,
-            Msg::GoToTab(_) => 13,
-            Msg::SplitRight => 14,
-            Msg::SplitDown => 15,
-            Msg::FocusPane(_) => 16,
-            Msg::ResizePane(_) => 17,
-            Msg::NextPane => 18,
-            Msg::PreviousPane => 19,
-            Msg::ToggleZoom => 20,
-            Msg::CommandPalette => 21,
-            Msg::EqualisePanes => 22,
-            Msg::DetachPane => 23,
-            Msg::TabEntry { .. } => 24,
-            Msg::PaneEntry { .. } => 25,
-            Msg::ConfirmCloseTitle(_) => 26,
-            Msg::ProgramsRunning(_) => 27,
-            Msg::Close => 28,
-            Msg::Cancel => 29,
-            Msg::UpdateAvailable(_) => 30,
-            Msg::OpenRelease => 31,
-            Msg::IgnoreVersion => 32,
-            Msg::LinesHidden(_) => 33,
+            Msg::PreviousBlock => 9,
+            Msg::NextBlock => 10,
+            Msg::CopyCommand => 11,
+            Msg::CopyOutput => 12,
+            Msg::ToggleFold => 13,
+            Msg::ToggleFoldAll => 14,
+            Msg::NewTab => 15,
+            Msg::ClosePane => 16,
+            Msg::NextTab => 17,
+            Msg::PreviousTab => 18,
+            Msg::GoToTab(_) => 19,
+            Msg::SplitRight => 20,
+            Msg::SplitDown => 21,
+            Msg::FocusPane(_) => 22,
+            Msg::ResizePane(_) => 23,
+            Msg::NextPane => 24,
+            Msg::PreviousPane => 25,
+            Msg::ToggleZoom => 26,
+            Msg::CommandPalette => 27,
+            Msg::EqualisePanes => 28,
+            Msg::DetachPane => 29,
+            Msg::TabEntry { .. } => 30,
+            Msg::PalettePlaceholder => 40,
+            Msg::PaneEntry { .. } => 31,
+            Msg::ConfirmCloseTitle(_) => 32,
+            Msg::ProgramsRunning(_) => 33,
+            Msg::Close => 34,
+            Msg::Cancel => 35,
+            Msg::UpdateAvailable(_) => 36,
+            Msg::OpenRelease => 37,
+            Msg::IgnoreVersion => 38,
+            Msg::LinesHidden(_) => 39,
         }
     }
-    const VARIANT_COUNT: usize = 34;
+    const VARIANT_COUNT: usize = 41;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -335,6 +362,12 @@ mod tests {
             Msg::FontSizeIncrease,
             Msg::FontSizeDecrease,
             Msg::FontSizeReset,
+            Msg::PreviousBlock,
+            Msg::NextBlock,
+            Msg::CopyCommand,
+            Msg::CopyOutput,
+            Msg::ToggleFold,
+            Msg::ToggleFoldAll,
             Msg::NewTab,
             Msg::ClosePane,
             Msg::NextTab,
@@ -348,6 +381,7 @@ mod tests {
             Msg::CommandPalette,
             Msg::EqualisePanes,
             Msg::DetachPane,
+            Msg::PalettePlaceholder,
             Msg::TabEntry {
                 tab: 2,
                 title: "~/dev".into(),
