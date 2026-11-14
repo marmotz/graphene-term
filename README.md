@@ -22,6 +22,8 @@ with the same format, and only needs the colors it changes.
 `[window] startup_mode` opens new windows at the configured size (`"default"`),
 maximized (`"maximized"`), or at the size and maximized state of the last window closed
 (`"remember"`, kept in `~/.local/state/graphene/window.json`).
+`[window] background_opacity` (0.0 to 1.0) makes the default background translucent,
+with a compositor; explicit cell backgrounds, the selection and the cursor stay opaque.
 
 Errors in these files are logged and shown in a banner at the top of the window (click
 to hide it); the faulty settings keep their default value.

@@ -23,6 +23,10 @@
 # height = 600
 ## Minimum space around the grid, in logical pixels.
 # padding = 8
+## Opacity of the default background, from 0.0 (transparent) to 1.0 (opaque).
+## Explicit cell backgrounds, the selection and the cursor stay opaque. Needs a
+## compositor; ignored when the GPU surface does not support transparency.
+# background_opacity = 1.0
 
 # [scrollback]
 ## Number of lines kept in the history, up to 100000.

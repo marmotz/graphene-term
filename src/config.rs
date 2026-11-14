@@ -197,6 +197,8 @@ pub struct WindowConfig {
     pub height: u32,
     /// Minimum padding around the grid, in logical pixels.
     pub padding: f32,
+    /// Opacity of the default background, from 0.0 (transparent) to 1.0 (opaque).
+    pub background_opacity: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -289,6 +291,7 @@ impl Default for Config {
                 width: 960,
                 height: 600,
                 padding: 8.0,
+                background_opacity: 1.0,
             },
             scrollback_lines: 10_000,
             cursor: CursorConfig {
@@ -467,6 +470,16 @@ impl Reader<'_> {
                     Checked::Valid(padding)
                 } else {
                     Checked::Invalid("must be a non-negative number".to_owned())
+                }
+            }),
+            ("window", "background_opacity") => self.set(value, path, &mut config.window.background_opacity, &previous.window.background_opacity, |opacity: f32| {
+                if !opacity.is_finite() {
+                    Checked::Invalid("not a number".to_owned())
+                } else if (0.0..=1.0).contains(&opacity) {
+                    Checked::Valid(opacity)
+                } else {
+                    let clamped = opacity.clamp(0.0, 1.0);
+                    Checked::Clamped(clamped, format!("{opacity} is out of 0.0..=1.0, using {clamped}"))
                 }
             }),
             ("scrollback", "lines") => self.set(value, path, &mut config.scrollback_lines, &previous.scrollback_lines, |lines: usize| {
@@ -650,6 +663,7 @@ startup_mode = "remember"
 width = 1200
 height = 800
 padding = 4
+background_opacity = 0.8
 
 [scrollback]
 lines = 5000
@@ -692,6 +706,7 @@ interval = "2d"
                     width: 1200,
                     height: 800,
                     padding: 4.0,
+                    background_opacity: 0.8,
                 },
                 scrollback_lines: 5000,
                 cursor: CursorConfig {
@@ -841,6 +856,37 @@ interval = "2d"
         assert_eq!(errors.len(), 1);
         let (config, _) = parse("[font]\nsize = 1\n");
         assert_eq!(config.font.size, MIN_FONT_SIZE);
+    }
+
+    #[test]
+    fn background_opacity_is_clamped() {
+        let (config, errors) = parse("[window]\nbackground_opacity = 1.5\n");
+        assert_eq!(config.window.background_opacity, 1.0);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("1.5 is out of 0.0..=1.0"));
+        let (config, errors) = parse("[window]\nbackground_opacity = -0.5\n");
+        assert_eq!(config.window.background_opacity, 0.0);
+        assert_eq!(errors.len(), 1);
+        let (config, errors) = parse("[window]\nbackground_opacity = 0\n");
+        assert_eq!(config.window.background_opacity, 0.0);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn non_finite_background_opacity_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.window.background_opacity = 0.7;
+        for value in ["nan", "inf"] {
+            let text = format!("[window]\nbackground_opacity = {value}\n");
+            let (config, errors) = Config::parse(&text, &previous, &file());
+            assert_eq!(config.window.background_opacity, 0.7);
+            assert_eq!(errors.len(), 1);
+            assert!(
+                errors[0].message.contains("not a number"),
+                "{}",
+                errors[0].message
+            );
+        }
     }
 
     #[test]

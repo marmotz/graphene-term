@@ -91,6 +91,15 @@ pub fn gpu_color(rgb: Rgb, srgb_target: bool) -> [f32; 4] {
     }
 }
 
+/// `color` (already converted by [`gpu_color`]) with `opacity`, premultiplied as the
+/// surface expects: `[r * a, g * a, b * a, a]`. Only the clear color carries the
+/// window's background opacity; every rect stays opaque.
+pub fn premultiplied(color: [f32; 4], opacity: f32) -> [f32; 4] {
+    let [r, g, b, a] = color;
+    let a = a * opacity;
+    [r * a, g * a, b * a, a]
+}
+
 /// Top and bottom pixel edges of the rows of `card`, the top one unclipped.
 fn card_edges(frame: &Frame, layout: &GridLayout, card: &Card) -> (f32, f32) {
     let top = layout.row_top(frame.row_tops[card.rows.start]);
@@ -1012,6 +1021,56 @@ mod tests {
         );
         // No glyph is drawn for the chevrons.
         assert_eq!(scene.glyphs.len(), 4);
+    }
+
+    #[test]
+    fn opacity_premultiplies_the_clear_color_in_the_target_space() {
+        let background = Rgb {
+            r: 128,
+            g: 255,
+            b: 0,
+        };
+        let linear = premultiplied(gpu_color(background, false), 0.5);
+        assert!((linear[0] - 128.0 / 255.0 * 0.5).abs() < 1e-6);
+        assert_eq!(linear[1..], [0.5, 0.0, 0.5]);
+        let srgb = premultiplied(gpu_color(background, true), 0.5);
+        assert!((srgb[0] - 0.2158 * 0.5).abs() < 0.001);
+        assert_eq!(srgb[1..], [0.5, 0.0, 0.5]);
+        let opaque = gpu_color(background, true);
+        assert_eq!(premultiplied(opaque, 1.0), opaque);
+        assert_eq!(premultiplied(opaque, 0.0), [0.0; 4]);
+    }
+
+    #[test]
+    fn backgrounds_cursor_and_banner_stay_opaque() {
+        let banner = Banner {
+            text: "oops".into(),
+            actions: vec!["x".into()],
+        };
+        // Explicit background (also how the selection is drawn), cursor and banner.
+        let mut row = vec![cell('a'), cell('b')];
+        row[1].bg = RED;
+        let mut f = frame(vec![row]);
+        f.cursor = Some(FrameCursor {
+            column: 0,
+            line: 0,
+            shape: CursorShape::Block,
+            color: FG,
+        });
+        f.banner = Some(FrameBanner {
+            layout: BannerLayout::new(&banner, layout().cell, 100.0),
+            background: RED,
+            text: FG,
+        });
+        let scene = build(&f, &layout(), true);
+        let rects: Vec<_> = scene
+            .under
+            .iter()
+            .chain(&scene.over)
+            .chain(&scene.overlay_rects)
+            .collect();
+        assert!(rects.len() >= 3);
+        assert!(rects.iter().all(|rect| rect.color[3] == 1.0));
     }
 
     #[test]

@@ -1629,7 +1629,10 @@ impl App {
         let attributes = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
             .with_inner_size(initial_size)
-            .with_maximized(maximized);
+            .with_maximized(maximized)
+            // Always: winit only honours it at creation on X11, and the opacity can
+            // change by hot reload.
+            .with_transparent(true);
         let window = Arc::new(event_loop.create_window(attributes)?);
         perf::mark("window created");
 
@@ -1665,6 +1668,7 @@ impl App {
             window.clone(),
             event_loop.owned_display_handle(),
             glyphs,
+            self.config.window.background_opacity,
         ))?;
 
         let clipboard = arboard::Clipboard::new()
@@ -1869,6 +1873,7 @@ mod tests {
             width: 960,
             height: 600,
             padding: 8.0,
+            background_opacity: 1.0,
         }
     }
 

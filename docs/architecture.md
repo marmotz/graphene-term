@@ -222,6 +222,12 @@ Renderer::render(pane frames, interface rects)
   of a maximized window is the screen. `ApplicationHandler::exiting` saves it with
   `window.is_maximized()` to `window.json` whatever the mode, so every exit path (window
   closed, last shell exited) is covered. The position is not saved.
+- The window is always created transparent (`with_transparent(true)`: winit only
+  honours it at creation on X11). `Renderer::new` picks the `PreMultiplied` surface
+  alpha mode, else `Inherit`, else the first one with a warning (the opacity is then
+  ignored). Only the clear color carries `window.background_opacity`, premultiplied
+  (`scene::premultiplied`): cells on the default background show it, every rect
+  (explicit backgrounds, selection, cursor, banner, interface) stays opaque.
 
 ## Command blocks
 

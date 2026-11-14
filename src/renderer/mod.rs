@@ -69,6 +69,8 @@ struct Layers {
     /// Shaped lines of the interface text.
     ui_text: UiText,
     srgb: bool,
+    /// Opacity of the clear color, 1.0 when the surface cannot be transparent.
+    background_opacity: f32,
 }
 
 /// What [`Layers::prepare`] uploaded for one pane, as ranges of the rect buffer. Its
@@ -104,6 +106,7 @@ impl Layers {
             glyphs,
             ui_text: UiText::default(),
             srgb: format.is_srgb(),
+            background_opacity: 1.0,
         }
     }
 
@@ -166,7 +169,10 @@ impl Layers {
             .prepare(device, queue, screen, &mut self.glyphs, &groups);
 
         Prepared {
-            clear: scenes.first().map_or(NO_PANE_CLEAR, |scene| scene.clear),
+            clear: scene::premultiplied(
+                scenes.first().map_or(NO_PANE_CLEAR, |scene| scene.clear),
+                self.background_opacity,
+            ),
             screen,
             panes: prepared_panes,
             ui: ui_rects,
@@ -248,6 +254,29 @@ where
     Err(last_error)
 }
 
+/// Surface alpha mode for a transparent window, and whether it allows transparency:
+/// `PreMultiplied` when offered, else `Inherit`, else the first mode (opaque).
+fn alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> (wgpu::CompositeAlphaMode, bool) {
+    [
+        wgpu::CompositeAlphaMode::PreMultiplied,
+        wgpu::CompositeAlphaMode::Inherit,
+    ]
+    .into_iter()
+    .find(|mode| modes.contains(mode))
+    .map_or_else(
+        || {
+            (
+                modes
+                    .first()
+                    .copied()
+                    .unwrap_or(wgpu::CompositeAlphaMode::Auto),
+                false,
+            )
+        },
+        |mode| (mode, true),
+    )
+}
+
 pub struct Renderer {
     instance: wgpu::Instance,
     device: wgpu::Device,
@@ -255,6 +284,8 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     layers: Layers,
+    /// Whether the surface alpha mode lets the background opacity through.
+    transparent: bool,
     // Dropped last: the surface must not outlive the window.
     window: Arc<Window>,
 }
@@ -266,6 +297,7 @@ impl Renderer {
         window: Arc<Window>,
         display: winit::event_loop::OwnedDisplayHandle,
         glyphs: Glyphs,
+        background_opacity: f32,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let (instance, surface, adapter) = first_success(&BACKEND_ATTEMPTS, |backends| {
@@ -302,13 +334,20 @@ impl Renderer {
             .find(|f| f.is_srgb())
             .or_else(|| caps.formats.first().copied())
             .context("surface has no supported format")?;
+        let (alpha_mode, transparent) = alpha_mode(&caps.alpha_modes);
+        if !transparent {
+            log::warn!(
+                "the surface does not support transparency ({:?}), background_opacity is ignored",
+                caps.alpha_modes
+            );
+        }
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Auto,
@@ -318,15 +357,24 @@ impl Renderer {
         let layers = Layers::new(&device, format, glyphs);
         perf::mark("renderer ready");
 
-        Ok(Self {
+        let mut renderer = Self {
             instance,
             device,
             queue,
             surface,
             config,
             layers,
+            transparent,
             window,
-        })
+        };
+        renderer.set_background_opacity(background_opacity);
+        Ok(renderer)
+    }
+
+    /// Sets the opacity of the default background, ignored when the surface cannot be
+    /// transparent.
+    pub fn set_background_opacity(&mut self, opacity: f32) {
+        self.layers.background_opacity = if self.transparent { opacity } else { 1.0 };
     }
 
     pub fn cell_size(&self) -> CellSize {
@@ -527,6 +575,18 @@ mod tests {
     use alacritty_terminal::vte::ansi::Rgb;
 
     use super::*;
+
+    #[test]
+    fn alpha_mode_prefers_premultiplied_then_inherit() {
+        use wgpu::CompositeAlphaMode::*;
+        assert_eq!(
+            alpha_mode(&[Opaque, Inherit, PreMultiplied]),
+            (PreMultiplied, true)
+        );
+        assert_eq!(alpha_mode(&[Opaque, Inherit]), (Inherit, true));
+        assert_eq!(alpha_mode(&[Opaque, PostMultiplied]), (Opaque, false));
+        assert_eq!(alpha_mode(&[]), (Auto, false));
+    }
     use crate::frame::{BlockColors, FrameCell};
     use crate::layout::Rect;
 
