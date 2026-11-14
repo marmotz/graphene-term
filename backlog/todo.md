@@ -37,7 +37,7 @@ _tâches créées, voir [technical.md](features/images-links/technical.md)_ — 
 
 ## Rich input editor ·  [overview](features/rich-input-editor/overview.md)
 
-_tâches créées — voir [technical.md](features/rich-input-editor/technical.md)_ — 4/5 tasks done
+_terminé — voir [technical.md](features/rich-input-editor/technical.md)_ — 5/5 tasks done
 
 | Done | Issue                                                     | Title                                                                    | Blocked by   |
 |------|-----------------------------------------------------------|--------------------------------------------------------------------------|--------------|
@@ -45,7 +45,7 @@ _tâches créées — voir [technical.md](features/rich-input-editor/technical.m
 | [x]  | [#29](https://github.com/marmotz/graphene-term/issues/29) | Rich input editor: shell bindings for the private sequences              | #8           |
 | [x]  | [#32](https://github.com/marmotz/graphene-term/issues/32) | Rich input editor: rich mode, editor moves and click to move the cursor  | #27, #29, #9 |
 | [x]  | [#33](https://github.com/marmotz/graphene-term/issues/33) | Rich input editor: keyboard selection in the input                       | #32          |
-| [ ]  | [#34](https://github.com/marmotz/graphene-term/issues/34) | Rich input editor: typing replaces the input selection                   | #32          |
+| [x]  | [#34](https://github.com/marmotz/graphene-term/issues/34) | Rich input editor: typing replaces the input selection                   | #32          |
 
 ## Tabs, splits and command palette ·  [overview](features/tabs-splits-palette/overview.md)
 

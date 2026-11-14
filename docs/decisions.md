@@ -196,3 +196,17 @@ and vi insert keymaps.
 - `Ctrl+A` anchors the selection where the prompt starts, the only point known in the
   grid, and writes `BufferEnd`: the selection covers the prompt text too. It ends at
   the cursor at once, so a cursor already at the end selects without waiting.
+- Typing over a selection in the input replaces it, in one PTY write so no shell
+  redraw interleaves: `CharLeft` / `CharRight` to the selection end, one `0x7f` per
+  selected character, then the typed text (nothing for `Backspace`, `Delete` and the
+  word deletions, the `InsertNewline` sequence for `Shift+Enter`). Distances are
+  buffer distances read from the grid (`input_editor::replacement_bytes`).
+- "In the input" means on the live grid alone, not stale, from where the prompt starts
+  on: the input start is not known (see above). A selection starting on the prompt
+  text is therefore replaced too: its prompt characters add backspaces the shell
+  absorbs at the buffer start, so the selected part of the input is erased. A
+  selection reaching the output above the prompt, or a block selection, keeps the
+  normal path (cleared, the key sent as is).
+- Known limit: an autosuggestion is drawn in the grid but not in the buffer; a
+  selection dragged over it counts extra characters, so the replacement may erase more
+  than selected. The shell's undo restores the buffer.

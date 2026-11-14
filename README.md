@@ -111,7 +111,9 @@ script binds, and completion (`Tab`) and history (`Up` / `Down`) stay the shell'
 | Shift+Enter                   | New line, without running the command           |
 
 The input selection is an ordinary selection: `Ctrl+Shift+C` copies it and it fills the
-primary selection. `Ctrl+Shift+` arrows are not editor keys.
+primary selection. Typing, `Backspace`, `Delete`, `Ctrl+Backspace` / `Ctrl+Delete` or
+`Shift+Enter` over a selection in the input replaces it, as in an editor. `Ctrl+Shift+`
+arrows are not editor keys.
 
 ## Documentation
 

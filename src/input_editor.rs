@@ -9,7 +9,7 @@
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point, Side};
-use alacritty_terminal::selection::SelectionType;
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, TermMode};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -291,17 +291,18 @@ pub fn char_moves(distance: isize) -> Vec<u8> {
 /// excluded, negative when `to` is before `from`.
 ///
 /// One per cell, wide-char spacers skipped; a line end without `WRAPLINE` counts as one
-/// `\n` and its trailing blank cells are ignored. Cells for which `skip` returns true
-/// (the right prompt) are not counted nor treated as line content.
-// Used by the selection replacement, outside tests.
-#[cfg_attr(not(test), allow(dead_code))]
+/// `\n` and its trailing blank cells are ignored, except on the line of `keep` (the
+/// shell cursor) up to its column: the blanks typed before the cursor are in the
+/// buffer. Cells for which `skip` returns true (the right prompt) are not counted nor
+/// treated as line content.
 pub fn buffer_distance<T: EventListener>(
     term: &Term<T>,
     from: Point,
     to: Point,
     skip: impl Fn(Point, &Cell) -> bool,
+    keep: Option<Point>,
 ) -> isize {
-    distance(term, from, to, &skip, None)
+    distance(term, from, to, &skip, keep)
 }
 
 /// Moves writing which brings the shell cursor, at the grid point `cursor`, to the
@@ -317,11 +318,100 @@ pub fn click_moves<T: EventListener>(
     floor: Option<Point>,
 ) -> Vec<u8> {
     let click = floor.map_or(click, |floor| click.max(floor));
-    char_moves(distance(term, cursor, click, &skip_none, Some(cursor)))
+    char_moves(buffer_distance(
+        term,
+        cursor,
+        click,
+        skip_none,
+        Some(cursor),
+    ))
 }
 
-/// [`buffer_distance`], with the content of the line of `keep` reaching at least its
-/// column.
+/// Grid points bounding a selection typing replaces: its first selected cell and the
+/// point past its last one. `None` unless it lies on the live grid alone, from where
+/// the prompt starts on (the cursor stands in the input), so a selection over the
+/// output keeps the normal path. Block selections are never replaced.
+pub fn input_selection<L>(
+    selection: &TimelineSelection,
+    timeline: &Timeline,
+    term: &Term<L>,
+) -> Option<(Point, Point)> {
+    let floor = timeline.current().prompt_start(term)?;
+    let (ty, upper, lower) = selection.live_ends(timeline, term)?;
+    let (start, end) = match ty {
+        SelectionType::Block => return None,
+        // The ends of a keyboard or a dragged selection, as cell sides: a lower end
+        // left of the first cell of a line takes the line break before it.
+        SelectionType::Simple => (past(upper.point, upper.side), past(lower.point, lower.side)),
+        // Words and lines grow from their ends: alacritty's range, inclusive.
+        SelectionType::Semantic | SelectionType::Lines => {
+            let mut grown = Selection::new(ty, upper.point, upper.side);
+            grown.update(lower.point, lower.side);
+            let range = grown.to_range(term)?;
+            (range.start, past(range.end, Side::Right))
+        }
+    };
+    (start >= floor && start < end).then_some((start, end))
+}
+
+/// The point before the cell side `side` of `point`: the cell itself for its left
+/// side, the next column for its right side (past the last column at a line end).
+fn past(point: Point, side: Side) -> Point {
+    match side {
+        Side::Left => point,
+        Side::Right => Point::new(point.line, point.column + 1),
+    }
+}
+
+/// Text a key types in place of an input selection: nothing for `Backspace` and
+/// `Delete`, the typed characters for a printable key (`Shift` allowed). `None` for any
+/// other key or with `Ctrl`, `Alt` or `Super`, which keep the normal path.
+pub fn replacing_text(key: &Key, text: Option<&str>, mods: ModifiersState) -> Option<Vec<u8>> {
+    if mods.intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER) {
+        return None;
+    }
+    match key {
+        Key::Named(NamedKey::Backspace | NamedKey::Delete) => Some(Vec::new()),
+        Key::Named(NamedKey::Space) => Some(b" ".to_vec()),
+        _ => text
+            .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
+            .map(|text| text.as_bytes().to_vec()),
+    }
+}
+
+/// What an editor command types in place of an input selection: nothing for a word
+/// deletion (the selection is deleted instead of the word), the line break sequence for
+/// `InsertNewline`. `None` for the moves and extensions, which keep their own path.
+pub fn command_replacing_text(command: EditorCommand) -> Option<&'static [u8]> {
+    match command {
+        EditorCommand::DeleteWord(_) => Some(b""),
+        EditorCommand::InsertNewline => Some(Sequence::InsertNewline.bytes()),
+        EditorCommand::Move(_) | EditorCommand::Extend(_) | EditorCommand::SelectAll => None,
+    }
+}
+
+/// Bytes replacing the input selection `(start, end)` by `typed`, the shell cursor at
+/// the grid point `cursor`, in one write: the moves to the selection end, one `0x7f`
+/// (`Backspace`) per selected character, then the typed text.
+///
+/// A selection starting on the prompt text counts its characters too: the extra
+/// backspaces are absorbed by the shell at the buffer start.
+pub fn replacement_bytes<T: EventListener>(
+    term: &Term<T>,
+    cursor: Point,
+    (start, end): (Point, Point),
+    typed: &[u8],
+) -> Vec<u8> {
+    let keep = Some(cursor);
+    let moves = buffer_distance(term, cursor, end, skip_none, keep);
+    let selected = buffer_distance(term, start, end, skip_none, keep);
+    let mut bytes = char_moves(moves);
+    bytes.extend(std::iter::repeat_n(0x7f, selected.unsigned_abs()));
+    bytes.extend_from_slice(typed);
+    bytes
+}
+
+/// Body of [`buffer_distance`], the skip predicate borrowed for the recursion.
 fn distance<T: EventListener>(
     term: &Term<T>,
     from: Point,
@@ -554,7 +644,7 @@ mod tests {
     }
 
     fn distance(term: &Term<VoidListener>, from: Point, to: Point) -> isize {
-        buffer_distance(term, from, to, skip_none)
+        buffer_distance(term, from, to, skip_none, None)
     }
 
     #[test]
@@ -630,11 +720,11 @@ mod tests {
         let skip_right_prompt =
             |point: Point, _: &Cell| point.line == Line(0) && point.column.0 >= 8;
         assert_eq!(
-            buffer_distance(&term, point(0, 2), point(1, 2), skip_right_prompt),
+            buffer_distance(&term, point(0, 2), point(1, 2), skip_right_prompt, None),
             5
         );
         assert_eq!(
-            buffer_distance(&term, point(0, 2), point(0, 9), skip_right_prompt),
+            buffer_distance(&term, point(0, 2), point(0, 9), skip_right_prompt, None),
             2
         );
     }
@@ -960,5 +1050,312 @@ mod tests {
         session.feed("\r\x1b[K$ echo hello\x1b[2D");
         assert!(snapshot.validate(&mut session.term));
         assert_eq!(selected(&session).as_deref(), Some("lo"));
+    }
+
+    // Selection replacement.
+
+    fn live(line: i32, column: usize, side: Side) -> End {
+        End {
+            source: RowSource::Live,
+            point: point(line, column),
+            side,
+        }
+    }
+
+    /// A selection of kind `ty` from `from` to `to`, set on the grids.
+    fn select_in(
+        session: &mut crate::timeline::testing::Session,
+        ty: SelectionType,
+        from: End,
+        to: End,
+    ) -> TimelineSelection {
+        let mut selection = TimelineSelection::new(ty, from, &session.timeline, &session.term);
+        selection.update(to, &session.term);
+        crate::timeline_selection::apply(
+            Some(&selection),
+            &mut session.term,
+            &mut session.timeline,
+        );
+        selection
+    }
+
+    /// Bytes typing `typed` over `selection`, `None` when it is not in the input.
+    fn replace(
+        session: &crate::timeline::testing::Session,
+        selection: &TimelineSelection,
+        typed: &[u8],
+    ) -> Option<Vec<u8>> {
+        let bounds = input_selection(selection, &session.timeline, &session.term)?;
+        let cursor = session.term.grid().cursor.point;
+        Some(replacement_bytes(&session.term, cursor, bounds, typed))
+    }
+
+    fn expected(moves: isize, erased: usize, typed: &[u8]) -> Vec<u8> {
+        let mut bytes = char_moves(moves);
+        bytes.extend(vec![0x7f; erased]);
+        bytes.extend_from_slice(typed);
+        bytes
+    }
+
+    #[test]
+    fn typing_over_a_selection_before_the_cursor() {
+        // "$ echo hello", cursor at the end, "hello" selected.
+        let mut session = editing("echo hello");
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 7, Side::Left),
+            live(1, 12, Side::Left),
+        );
+        assert_eq!(selected(&session).as_deref(), Some("hello"));
+        assert_eq!(
+            replace(&session, &selection, b"X"),
+            Some(expected(0, 5, b"X"))
+        );
+    }
+
+    #[test]
+    fn typing_over_a_selection_after_the_cursor() {
+        // Cursor on "e" of "echo", "hello" selected: move right to its end first.
+        let mut session = editing("echo hello\x1b[10D");
+        assert_eq!(session.term.grid().cursor.point, point(1, 2));
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 7, Side::Left),
+            live(1, 12, Side::Left),
+        );
+        assert_eq!(
+            replace(&session, &selection, b"world"),
+            Some(expected(10, 5, b"world"))
+        );
+    }
+
+    #[test]
+    fn typing_over_a_selection_holding_the_cursor() {
+        // Cursor on the second "l" of "hello", "hello" selected.
+        let mut session = editing("echo hello\x1b[3D");
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 12, Side::Left),
+            live(1, 7, Side::Left),
+        );
+        assert_eq!(
+            replace(&session, &selection, b"a"),
+            Some(expected(3, 5, b"a"))
+        );
+    }
+
+    #[test]
+    fn backspace_over_a_selection_erases_it_only() {
+        let mut session = editing("echo hello\x1b[3D");
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 2, Side::Left),
+            live(1, 6, Side::Left),
+        );
+        // Back left to the end of "echo", then four backspaces.
+        assert_eq!(
+            replace(&session, &selection, b""),
+            Some(expected(-3, 4, b""))
+        );
+    }
+
+    #[test]
+    fn multi_line_selection_counts_its_line_breaks() {
+        // Input "ab" then "cd" on the next line, cursor at the end of "cd".
+        let mut session = editing("ab\r\ncd");
+        assert_eq!(session.term.grid().cursor.point, point(2, 2));
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 3, Side::Left),
+            live(2, 1, Side::Left),
+        );
+        // "b", the line break, "c".
+        assert_eq!(
+            replace(&session, &selection, b""),
+            Some(expected(-1, 3, b""))
+        );
+
+        // A keyboard selection ending left of the next line's first cell holds the line
+        // break.
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 4, Side::Left),
+            live(2, 0, Side::Left),
+        );
+        assert_eq!(
+            replace(&session, &selection, b""),
+            Some(expected(-2, 1, b""))
+        );
+    }
+
+    #[test]
+    fn dragged_and_double_clicked_selections_cover_their_cells() {
+        let mut session = editing("echo hello");
+        // Dragged from the right side of the blank to the right side of the last "l".
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 6, Side::Right),
+            live(1, 10, Side::Right),
+        );
+        assert_eq!(selected(&session).as_deref(), Some("hell"));
+        assert_eq!(
+            replace(&session, &selection, b""),
+            Some(expected(-1, 4, b""))
+        );
+
+        // A double click on "hello" grows to the word.
+        let selection = select_in(
+            &mut session,
+            SelectionType::Semantic,
+            live(1, 8, Side::Left),
+            live(1, 8, Side::Right),
+        );
+        assert_eq!(selected(&session).as_deref(), Some("hello"));
+        assert_eq!(
+            replace(&session, &selection, b""),
+            Some(expected(0, 5, b""))
+        );
+    }
+
+    #[test]
+    fn selection_from_the_prompt_text_counts_it_too() {
+        // "$ e" selected from the prompt start: three backspaces, the two extra ones
+        // absorbed by the shell at the buffer start.
+        let mut session = editing("echo");
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 0, Side::Left),
+            live(1, 3, Side::Left),
+        );
+        assert_eq!(
+            replace(&session, &selection, b""),
+            Some(expected(-3, 3, b""))
+        );
+    }
+
+    #[test]
+    fn selection_outside_the_input_keeps_the_normal_path() {
+        let mut session = editing("echo hello");
+        // From the output above the prompt into the input.
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(0, 0, Side::Left),
+            live(1, 4, Side::Left),
+        );
+        assert_eq!(replace(&session, &selection, b"x"), None);
+        // A block selection in the input.
+        let selection = select_in(
+            &mut session,
+            SelectionType::Block,
+            live(1, 2, Side::Left),
+            live(1, 6, Side::Left),
+        );
+        assert_eq!(replace(&session, &selection, b"x"), None);
+        // An empty selection.
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 4, Side::Left),
+            live(1, 4, Side::Left),
+        );
+        assert_eq!(replace(&session, &selection, b"x"), None);
+    }
+
+    #[test]
+    fn selection_of_a_finished_command_is_not_replaced() {
+        let mut session = editing("ls");
+        let selection = select_in(
+            &mut session,
+            SelectionType::Simple,
+            live(1, 2, Side::Left),
+            live(1, 4, Side::Left),
+        );
+        session.feed(&crate::timeline::testing::start("ls"));
+        assert_eq!(replace(&session, &selection, b"x"), None);
+    }
+
+    #[test]
+    fn keys_replacing_a_selection() {
+        assert_eq!(
+            replacing_text(&named(NamedKey::Backspace), None, NONE),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            replacing_text(&named(NamedKey::Delete), None, NONE),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            replacing_text(&named(NamedKey::Space), Some(" "), NONE),
+            Some(b" ".to_vec())
+        );
+        assert_eq!(
+            replacing_text(&character("a"), Some("a"), NONE),
+            Some(b"a".to_vec())
+        );
+        assert_eq!(
+            replacing_text(&character("A"), Some("A"), SHIFT),
+            Some(b"A".to_vec())
+        );
+        assert_eq!(
+            replacing_text(&character("é"), Some("é"), NONE),
+            Some("é".as_bytes().to_vec())
+        );
+        // Shortcuts, control keys and keys without text keep the normal path.
+        assert_eq!(replacing_text(&character("c"), Some("c"), CTRL), None);
+        assert_eq!(replacing_text(&character("b"), Some("b"), ALT), None);
+        assert_eq!(
+            replacing_text(&named(NamedKey::Backspace), None, CTRL),
+            None
+        );
+        assert_eq!(
+            replacing_text(&named(NamedKey::Enter), Some("\r"), NONE),
+            None
+        );
+        assert_eq!(
+            replacing_text(&named(NamedKey::Tab), Some("\t"), NONE),
+            None
+        );
+        assert_eq!(
+            replacing_text(&named(NamedKey::ArrowLeft), None, NONE),
+            None
+        );
+        assert_eq!(
+            replacing_text(&named(NamedKey::Escape), Some("\x1b"), NONE),
+            None
+        );
+    }
+
+    #[test]
+    fn commands_replacing_a_selection() {
+        assert_eq!(
+            command_replacing_text(EditorCommand::DeleteWord(Backward)),
+            Some(&b""[..])
+        );
+        assert_eq!(
+            command_replacing_text(EditorCommand::DeleteWord(Forward)),
+            Some(&b""[..])
+        );
+        assert_eq!(
+            command_replacing_text(EditorCommand::InsertNewline),
+            Some(Sequence::InsertNewline.bytes())
+        );
+        assert_eq!(
+            command_replacing_text(EditorCommand::Move(Motion::Char(Backward))),
+            None
+        );
+        assert_eq!(
+            command_replacing_text(EditorCommand::Extend(Motion::Char(Forward))),
+            None
+        );
+        assert_eq!(command_replacing_text(EditorCommand::SelectAll), None);
     }
 }

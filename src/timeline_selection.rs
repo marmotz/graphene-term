@@ -79,6 +79,32 @@ impl TimelineSelection {
         self.covers_live(timeline) && (current.id, current.phase) != self.live
     }
 
+    /// The selection when it lies on the live grid alone, which still holds the content
+    /// it started on: its kind and its ends, upper first, in grid lines. `None`
+    /// otherwise.
+    pub fn live_ends<L>(
+        &self,
+        timeline: &Timeline,
+        live: &Term<L>,
+    ) -> Option<(SelectionType, End, End)> {
+        if self.start.source != RowSource::Live
+            || self.end.source != RowSource::Live
+            || self.is_stale(timeline)
+        {
+            return None;
+        }
+        let bounds = bounds(timeline, live, RowSource::Live)?;
+        let (start, end) = (
+            relative(self.start, live, bounds),
+            relative(self.end, live, bounds),
+        );
+        Some(if start.point <= end.point {
+            (self.ty, start, end)
+        } else {
+            (self.ty, end, start)
+        })
+    }
+
     /// The selection split per grid, top to bottom: the first grid from the upper end
     /// to its last cell, the grids in between whole, the last grid from its first cell
     /// to the lower end. A block selection keeps its columns in every grid. Empty when
@@ -523,5 +549,36 @@ mod tests {
         assert!(selection.is_stale(&session.timeline));
         assert!(!frozen.covers_live(&session.timeline));
         assert!(!frozen.is_stale(&session.timeline));
+    }
+
+    #[test]
+    fn live_ends_only_for_a_fresh_selection_on_the_live_grid() {
+        let mut session = two_blocks();
+        // Dragged upward: the ends come back upper first.
+        let selection = select(
+            &mut session,
+            at(RowSource::Live, 0, 2, Side::Left),
+            at(RowSource::Live, 0, 0, Side::Right),
+        );
+        assert_eq!(
+            selection.live_ends(&session.timeline, &session.term),
+            Some((
+                SelectionType::Simple,
+                at(RowSource::Live, 0, 0, Side::Right),
+                at(RowSource::Live, 0, 2, Side::Left),
+            ))
+        );
+
+        // Reaching a frozen block: not on the live grid alone.
+        let across = select(
+            &mut session,
+            at(RowSource::Output(ONE), 0, 0, Side::Left),
+            at(RowSource::Live, 0, 1, Side::Right),
+        );
+        assert_eq!(across.live_ends(&session.timeline, &session.term), None);
+
+        // The live grid detached into a block since: stale.
+        session.feed(&crate::timeline::testing::start("ls"));
+        assert_eq!(selection.live_ends(&session.timeline, &session.term), None);
     }
 }

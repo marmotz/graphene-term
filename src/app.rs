@@ -179,6 +179,28 @@ impl Session {
         self.terminal.write(input_editor::command_bytes(command));
     }
 
+    /// Replaces the selection by `typed` when it lies in the input (see
+    /// [`input_editor::input_selection`]): moves the shell cursor to its end, erases
+    /// it and types `typed`, in one PTY write so no shell redraw interleaves, then
+    /// clears it. Returns whether it did; otherwise the key keeps its normal path.
+    fn replace_selection(&mut self, typed: &[u8]) -> bool {
+        let bytes =
+            {
+                let term = self.terminal.term.lock();
+                let timeline = lock(&self.terminal.timeline);
+                let Some(bounds) = self.selection.as_ref().and_then(|selection| {
+                    input_editor::input_selection(selection, &timeline, &*term)
+                }) else {
+                    return false;
+                };
+                input_editor::replacement_bytes(&*term, term.grid().cursor.point, bounds, typed)
+            };
+        self.clear_selection();
+        self.scroll_to_bottom();
+        self.terminal.write(bytes);
+        true
+    }
+
     /// Before an extension sequence is written: the selection to grow (a new one at the
     /// cursor without one, the whole input for `select_all`), extended once the shell
     /// moved its cursor (see [`Session::finish_extend`]).
@@ -1063,11 +1085,26 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(command) =
                     input_editor::prompt_command(&event.logical_key, session.modifiers, rich)
                 {
-                    session.run_editor_command(command);
+                    let replaced = input_editor::command_replacing_text(command)
+                        .is_some_and(|typed| session.replace_selection(typed));
+                    if !replaced {
+                        session.run_editor_command(command);
+                    }
                     return;
                 }
                 if let Some(action) = input::action_for(&event.logical_key, session.modifiers) {
                     session.run_action(action, default_font_size);
+                    return;
+                }
+                // At the prompt, typing over a selection in the input replaces it.
+                if rich
+                    && let Some(typed) = input_editor::replacing_text(
+                        &event.logical_key,
+                        event.text.as_deref(),
+                        session.modifiers,
+                    )
+                    && session.replace_selection(&typed)
+                {
                     return;
                 }
                 let mode = session.mode();
