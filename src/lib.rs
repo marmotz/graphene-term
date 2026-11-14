@@ -49,6 +49,11 @@ pub fn run() -> anyhow::Result<()> {
     app::run()
 }
 
+/// Lists and optionally removes unknown entries from the user's configuration file.
+pub fn prune_config(yes: bool) -> anyhow::Result<()> {
+    config_edit::prune_config(yes)
+}
+
 /// Starts the startup clock used by the `graphene::perf` logs. Call it first in `main`.
 pub fn start_perf_clock() {
     perf::start();

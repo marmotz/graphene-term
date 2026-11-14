@@ -44,6 +44,11 @@ pub fn config_dir() -> Option<PathBuf> {
     )
 }
 
+/// Path of the user's configuration file, if a config directory can be resolved.
+pub(crate) fn config_file() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join(CONFIG_FILE))
+}
+
 fn config_dir_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     // The XDG spec ignores an empty or relative `XDG_CONFIG_HOME`.
     let xdg = xdg_config_home
@@ -401,16 +406,28 @@ impl Config {
     /// value keeps the one of `previous`, an unknown key is ignored; each problem is
     /// reported as an error. A TOML syntax error returns `previous` unchanged.
     pub fn parse(text: &str, previous: &Config, file: &Path) -> (Config, Vec<ConfigError>) {
+        let (config, errors, _) = Self::parse_with_unknown_keys(text, previous, file);
+        (config, errors)
+    }
+
+    /// Parses a file and returns the unknown keys as structured paths for explicit
+    /// cleanup. Value validation errors do not classify a recognized key as unknown.
+    pub(crate) fn parse_with_unknown_keys(
+        text: &str,
+        previous: &Config,
+        file: &Path,
+    ) -> (Config, Vec<ConfigError>, Vec<UnknownConfigKey>) {
         let mut reader = Reader {
             text,
             file,
             errors: Vec::new(),
+            unknown_keys: Vec::new(),
         };
         let root = match DeTable::parse(text) {
             Ok(root) => root.into_inner(),
             Err(error) => {
                 reader.error(error.span(), error.message().trim_end().to_owned());
-                return (previous.clone(), reader.errors);
+                return (previous.clone(), reader.errors, reader.unknown_keys);
             }
         };
 
@@ -435,12 +452,18 @@ impl Config {
                         reader.read_section_key(name, sub_key, sub_value, &mut config, previous);
                     }
                 }
-                _ => reader.error(Some(key.span()), format!("unknown key `{name}`")),
+                _ => reader.unknown_key(
+                    None,
+                    name,
+                    matches!(value.get_ref(), DeValue::Table(_)),
+                    Some(key.span()),
+                    format!("unknown key `{name}`"),
+                ),
             }
         }
         // Keys are visited in alphabetical order: report errors in file order.
         reader.errors.sort_by_key(|error| error.line);
-        (config, reader.errors)
+        (config, reader.errors, reader.unknown_keys)
     }
 
     /// The part of the configuration handled by `alacritty_terminal`.
@@ -461,9 +484,36 @@ struct Reader<'a> {
     text: &'a str,
     file: &'a Path,
     errors: Vec<ConfigError>,
+    unknown_keys: Vec<UnknownConfigKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnknownConfigKey {
+    pub section: Option<String>,
+    pub key: String,
+    pub path: String,
+    pub whole_section: bool,
 }
 
 impl Reader<'_> {
+    fn unknown_key(
+        &mut self,
+        section: Option<&str>,
+        key: &str,
+        whole_section: bool,
+        span: Option<Range<usize>>,
+        message: String,
+    ) {
+        let path = section.map_or_else(|| key.to_owned(), |section| format!("{section}.{key}"));
+        self.unknown_keys.push(UnknownConfigKey {
+            section: section.map(str::to_owned),
+            key: key.to_owned(),
+            path,
+            whole_section,
+        });
+        self.error(span, message);
+    }
+
     fn error(&mut self, span: Option<Range<usize>>, message: String) {
         let line = span.map(|span| {
             let end = span.start.min(self.text.len());
@@ -592,7 +642,13 @@ impl Reader<'_> {
                     config.keybindings.insert(keys.to_owned(), action);
                 }
             }
-            _ => self.error(Some(key.span()), format!("unknown key `{path}`")),
+            _ => self.unknown_key(
+                Some(section),
+                name,
+                matches!(value.get_ref(), DeValue::Table(_)),
+                Some(key.span()),
+                format!("unknown key `{path}`"),
+            ),
         }
     }
 }

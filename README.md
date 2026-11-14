@@ -17,6 +17,12 @@ uncomment a line to change it. On startup, Graphene adds comments for supported 
 missing from an existing file, without changing its settings, comments, or unknown keys.
 This also includes the built-in keybindings. See [config.default.toml](config.default.toml).
 
+Run `graphene --prune-config` to list and remove keys not recognized by this version.
+The command asks for confirmation in a terminal; when run non-interactively it makes no
+changes unless `--yes` is also provided (`graphene --prune-config --yes`). Recognized
+settings are preserved even if their values are invalid, and a file with invalid TOML is
+never rewritten.
+
 Themes are set with `name` in the `[theme]` section. Eight are built in (see
 [themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,
 with the same format, and only needs the colors it changes. Setting both `light` and
