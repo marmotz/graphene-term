@@ -210,3 +210,54 @@ and vi insert keymaps.
 - Known limit: an autosuggestion is drawn in the grid but not in the buffer; a
   selection dragged over it counts extra characters, so the replacement may erase more
   than selected. The shell's undo restores the buffer.
+
+## Tabs and splits: binary split tree
+
+Each tab is a binary tree whose leaves are panes and whose nodes split their rectangle
+along one axis at a ratio. Every operation (split, remove, resize, equalise) only
+touches one node and its children, where an n-ary tree would have to rebalance siblings.
+Equalise computes the ratios from leaf counts, so three columns made of two splits
+still get equal widths. Positions are rounded to whole cells, and a split is refused
+when a pane would get fewer than 10 columns or 3 rows.
+
+## Current directory and foreground program from `/proc`
+
+The directory a new pane starts in is `/proc/<shell pid>/cwd`, and the program a close
+confirmation names is the `tpgid` field of `/proc/<shell pid>/stat` (the terminal's
+foreground process group) then `/proc/<tpgid>/comm`. This works with every shell,
+needs no shell integration (OSC 7 is not sent by every shell) and no libc call on the
+PTY descriptor. Lookups happen on close requests, new panes and title refreshes, never
+per frame. Linux only, like the rest of Graphene.
+
+## Inactive panes dimmed in the frame
+
+When a tab shows several panes, the inactive ones are captured then passed through
+`Frame::dimmed`, which mixes every color 30 % toward the background. A translucent rect
+over the pane would cost an extra draw and leave glyph colors untouched; a pure
+function on the frame is free at draw time and unit tested.
+
+## Interface font separate from the terminal font
+
+The tab bar and the dialog use a sans-serif font at a fixed 13 px times the window
+scale, the command palette the same font at 16 px (it is read and typed in, 13 px was
+too small), independent of the terminal font and its zoom. Their
+text is shaped as lines at free positions, not cells, but its glyphs go through the
+same cache and atlas as the grid (keys marked `ui`), so no second text renderer is
+needed.
+
+## Own translation table
+
+Interface labels are an `i18n::Msg` enum translated by one exhaustive `match` per
+language (English, French; English is the fallback), the language read from
+`LC_ALL`, `LC_MESSAGES` then `LANG`. A missing translation does not compile, and no
+runtime dependency or resource file is needed. Fluent would only pay off with many
+languages and translators outside the code.
+
+## Command palette: `nucleo-matcher` and a recent actions file
+
+The palette matches its query with `nucleo-matcher` (the matcher of the helix editor):
+proven fuzzy scoring, smart case, Unicode normalization and the matched indices used
+for highlighting. Recently run actions are kept in a state file
+(`$XDG_STATE_HOME/graphene/palette-recent`), so they survive restarts and are shared by
+every window; tab and pane entries are not stored since they do not outlive the
+session.

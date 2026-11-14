@@ -14,9 +14,36 @@ pub struct CellSize {
     pub height: f32,
 }
 
-/// Placement of the terminal grid inside the window.
+/// A rectangle of the window, in physical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Rect {
+    /// The whole surface of the given physical size, from the window corner.
+    pub fn from_size(width: u32, height: u32) -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: width as f32,
+            height: height as f32,
+        }
+    }
+
+    /// Whether the physical pixel (`x`, `y`) lies in the rectangle (right and bottom
+    /// edges excluded).
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    }
+}
+
+/// Placement of the terminal grid inside a pane rectangle of the window.
 ///
-/// The window holds, from the left: the padding, the margin (status stripe of the
+/// The rectangle holds, from the left: the padding, the margin (status stripe of the
 /// command block cards), the card padding, the grid, the card padding again, then the
 /// right reserve (room for the fold chevron on the cards' top-right corner). All of it
 /// is always reserved, so a block never reflows the grid.
@@ -25,6 +52,8 @@ pub struct CellSize {
 /// half a line separates two cards.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GridLayout {
+    /// Rectangle of the window the grid is laid out in.
+    pub rect: Rect,
     pub cell: CellSize,
     /// Inner padding around the content, in physical pixels.
     pub padding: f32,
@@ -73,14 +102,15 @@ enum RowAt {
 }
 
 impl GridLayout {
-    /// Computes how many cells fit in a surface of the given physical size.
-    pub fn new(width: u32, height: u32, cell: CellSize, padding: f32) -> Self {
+    /// Computes how many cells fit in the rectangle `rect` of the window.
+    pub fn new(rect: Rect, cell: CellSize, padding: f32) -> Self {
         let margin = (cell.width / 2.0).round();
         let card_pad = (cell.width / 2.0).round();
         let chevron_radius = (cell.height * 0.45).round();
         let right_reserve = padding.max(chevron_radius);
-        let horizontal = width as f32 - padding - margin - 2.0 * card_pad - right_reserve;
+        let horizontal = rect.width - padding - margin - 2.0 * card_pad - right_reserve;
         Self {
+            rect,
             cell,
             padding,
             margin,
@@ -88,14 +118,29 @@ impl GridLayout {
             chevron_radius,
             right_reserve,
             columns: ((horizontal.max(0.0) / cell.width).floor() as usize).max(MIN_COLUMNS),
-            lines: (((height as f32 - 2.0 * padding).max(0.0) / cell.height).floor() as usize)
+            lines: (((rect.height - 2.0 * padding).max(0.0) / cell.height).floor() as usize)
                 .max(MIN_SCREEN_LINES),
         }
     }
 
+    /// Left pixel edge of the content: the rectangle's left edge plus the padding.
+    pub fn content_left(&self) -> f32 {
+        self.rect.x + self.padding
+    }
+
+    /// Top pixel edge of the content: the rectangle's top edge plus the padding.
+    pub fn content_top(&self) -> f32 {
+        self.rect.y + self.padding
+    }
+
+    /// Whether the physical pixel (`x`, `y`) lies in the layout's rectangle.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        self.rect.contains(x, y)
+    }
+
     /// Left pixel edge of the grid.
     pub fn grid_left(&self) -> f32 {
-        self.padding + self.margin + self.card_pad
+        self.content_left() + self.margin + self.card_pad
     }
 
     /// Right pixel edge of the grid.
@@ -110,12 +155,12 @@ impl GridLayout {
 
     /// Top pixel edge of a row placed `units` half-lines below the view top.
     pub fn row_top(&self, units: u32) -> f32 {
-        self.padding + units as f32 * self.cell.height / 2.0
+        self.content_top() + units as f32 * self.cell.height / 2.0
     }
 
     /// View row under the pixel row `y`, clamped to the view, or the gap above a row.
     fn row_at(&self, y: f32, view: &[ViewRow]) -> RowAt {
-        let units = (y - self.padding) / (self.cell.height / 2.0);
+        let units = (y - self.content_top()) / (self.cell.height / 2.0);
         for (index, row) in view.iter().enumerate() {
             let top = row.top as f32;
             if units < top {
@@ -247,7 +292,7 @@ mod tests {
     const HEIGHT: u32 = 416;
 
     fn layout() -> GridLayout {
-        GridLayout::new(WIDTH, HEIGHT, CELL, 8.0)
+        GridLayout::new(Rect::from_size(WIDTH, HEIGHT), CELL, 8.0)
     }
 
     fn row(top: u32, gap_before: bool, block: Option<u64>) -> ViewRow {
@@ -290,22 +335,28 @@ mod tests {
     #[test]
     fn margin_card_padding_and_right_reserve_are_always_reserved() {
         // One pixel less loses a column.
-        assert_eq!(GridLayout::new(WIDTH - 1, HEIGHT, CELL, 8.0).columns, 79);
+        assert_eq!(
+            GridLayout::new(Rect::from_size(WIDTH - 1, HEIGHT), CELL, 8.0).columns,
+            79
+        );
         // Without padding, the chevron radius is reserved on the right: 9 + 5 + 10.
-        let l = GridLayout::new(824, HEIGHT, CELL, 0.0);
+        let l = GridLayout::new(Rect::from_size(824, HEIGHT), CELL, 0.0);
         assert_eq!((l.right_reserve, l.columns), (9.0, 80));
-        assert_eq!(GridLayout::new(823, HEIGHT, CELL, 0.0).columns, 79);
+        assert_eq!(
+            GridLayout::new(Rect::from_size(823, HEIGHT), CELL, 0.0).columns,
+            79
+        );
     }
 
     #[test]
     fn partial_cells_are_dropped() {
-        let l = GridLayout::new(840, 435, CELL, 8.0);
+        let l = GridLayout::new(Rect::from_size(840, 435), CELL, 8.0);
         assert_eq!((l.columns, l.lines), (80, 20));
     }
 
     #[test]
     fn never_smaller_than_minimum() {
-        let l = GridLayout::new(0, 0, CELL, 8.0);
+        let l = GridLayout::new(Rect::from_size(0, 0), CELL, 8.0);
         assert_eq!((l.columns, l.lines), (MIN_COLUMNS, MIN_SCREEN_LINES));
     }
 
@@ -494,6 +545,81 @@ mod tests {
         assert_eq!(l.vertical_overflow(18.0, &view), 0);
         assert_eq!(l.vertical_overflow(107.9, &view), 0);
         assert_eq!(l.vertical_overflow(108.0, &view), 1);
+    }
+
+    /// The layout of `layout()` moved to a rect at (300, 200) of a larger window.
+    fn offset() -> GridLayout {
+        GridLayout::new(
+            Rect {
+                x: 300.0,
+                y: 200.0,
+                width: WIDTH as f32,
+                height: HEIGHT as f32,
+            },
+            CELL,
+            8.0,
+        )
+    }
+
+    #[test]
+    fn full_window_rect_keeps_the_window_origin() {
+        let l = layout();
+        assert_eq!(l.rect, Rect::from_size(WIDTH, HEIGHT));
+        assert_eq!((l.content_left(), l.content_top()), (8.0, 8.0));
+    }
+
+    #[test]
+    fn offset_rect_moves_the_grid_origin() {
+        let l = offset();
+        // Same cell count: only the origin moves.
+        assert_eq!((l.columns, l.lines), (80, 20));
+        assert_eq!((l.content_left(), l.content_top()), (308.0, 208.0));
+        assert_eq!(l.grid_left(), 318.0);
+        assert_eq!(l.grid_right(), 1118.0);
+        assert_eq!(l.cell_x(3), 348.0);
+        assert_eq!(l.row_top(4), 248.0);
+    }
+
+    #[test]
+    fn offset_rect_moves_point_at_hit_and_overflow() {
+        let l = offset();
+        let view = plain(20);
+        assert_eq!(l.point_at(318.0, 208.0, &view), (0, 0, Side::Left));
+        assert_eq!(l.point_at(357.9, 267.9, &view), (3, 2, Side::Right));
+        // Left of the rect clamps to the first cell.
+        assert_eq!(l.point_at(0.0, 0.0, &view), (0, 0, Side::Left));
+        assert_eq!(l.hit(300.0, 248.0, &view), Hit::Margin { row: 2 });
+        assert_eq!(l.hit(318.0, 208.0, &view), cell(0, 0, Side::Left, &view));
+        assert_eq!(l.vertical_overflow(207.9, &view), -1);
+        assert_eq!(l.vertical_overflow(208.0, &view), 0);
+        assert_eq!(l.vertical_overflow(607.9, &view), 0);
+        assert_eq!(l.vertical_overflow(608.0, &view), 1);
+    }
+
+    #[test]
+    fn point_at_is_the_inverse_of_the_cell_origin() {
+        let view = plain(20);
+        for l in [layout(), offset()] {
+            for column in [0, 1, 40, 79] {
+                for row in [0, 7, 19] {
+                    let (x, y) = (l.cell_x(column), l.row_top(view[row].top));
+                    assert_eq!(l.point_at(x, y, &view), (column, row, Side::Left));
+                    let (x, y) = (x + CELL.width - 0.1, y + CELL.height - 0.1);
+                    assert_eq!(l.point_at(x, y, &view), (column, row, Side::Right));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contains_excludes_the_right_and_bottom_edges() {
+        let l = offset();
+        assert!(l.contains(300.0, 200.0));
+        assert!(l.contains(1131.9, 615.9));
+        assert!(!l.contains(299.9, 300.0));
+        assert!(!l.contains(400.0, 199.9));
+        assert!(!l.contains(1132.0, 300.0));
+        assert!(!l.contains(400.0, 616.0));
     }
 
     #[test]

@@ -49,17 +49,17 @@ _terminé — voir [technical.md](features/rich-input-editor/technical.md)_ — 
 
 ## Tabs, splits and command palette ·  [overview](features/tabs-splits-palette/overview.md)
 
-_tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md)_ — 1/10 tasks done
+_terminé — voir [technical.md](features/tabs-splits-palette/technical.md)_ — 10/10 tasks done
 
 | Done | Issue                                                     | Title                                                                         | Blocked by |
 |------|-----------------------------------------------------------|-------------------------------------------------------------------------------|------------|
-| [ ]  | [#36](https://github.com/marmotz/graphene-term/issues/36) | Tabs: pane identity in terminal events, shell pid, cwd and foreground program | —          |
-| [ ]  | [#37](https://github.com/marmotz/graphene-term/issues/37) | Tabs: grid layout inside a pane rectangle                                     | —          |
-| [ ]  | [#38](https://github.com/marmotz/graphene-term/issues/38) | Tabs: binary split tree                                                       | #37        |
-| [ ]  | [#39](https://github.com/marmotz/graphene-term/issues/39) | Tabs: Pane extracted from Session, workspace model and event routing          | #36, #38   |
-| [ ]  | [#40](https://github.com/marmotz/graphene-term/issues/40) | Tabs: multi-pane rendering, dimming, dividers and active border               | #39        |
-| [ ]  | [#41](https://github.com/marmotz/graphene-term/issues/41) | Tabs: split, focus, resize, zoom shortcuts and pane mouse handling            | #40        |
-| [ ]  | [#42](https://github.com/marmotz/graphene-term/issues/42) | Tabs: tab bar, UI text and tab shortcuts                                      | #41        |
-| [ ]  | [#43](https://github.com/marmotz/graphene-term/issues/43) | Tabs: close confirmation dialog                                               | #35, #42   |
-| [ ]  | [#44](https://github.com/marmotz/graphene-term/issues/44) | Tabs: command palette and docs                                                | #35, #43   |
+| [x]  | [#36](https://github.com/marmotz/graphene-term/issues/36) | Tabs: pane identity in terminal events, shell pid, cwd and foreground program | —          |
+| [x]  | [#37](https://github.com/marmotz/graphene-term/issues/37) | Tabs: grid layout inside a pane rectangle                                     | —          |
+| [x]  | [#38](https://github.com/marmotz/graphene-term/issues/38) | Tabs: binary split tree                                                       | #37        |
+| [x]  | [#39](https://github.com/marmotz/graphene-term/issues/39) | Tabs: Pane extracted from Session, workspace model and event routing          | #36, #38   |
+| [x]  | [#40](https://github.com/marmotz/graphene-term/issues/40) | Tabs: multi-pane rendering, dimming, dividers and active border               | #39        |
+| [x]  | [#41](https://github.com/marmotz/graphene-term/issues/41) | Tabs: split, focus, resize, zoom shortcuts and pane mouse handling            | #40        |
+| [x]  | [#42](https://github.com/marmotz/graphene-term/issues/42) | Tabs: tab bar, UI text and tab shortcuts                                      | #41        |
+| [x]  | [#43](https://github.com/marmotz/graphene-term/issues/43) | Tabs: close confirmation dialog                                               | #35, #42   |
+| [x]  | [#44](https://github.com/marmotz/graphene-term/issues/44) | Tabs: command palette and docs                                                | #35, #43   |
 | [x]  | [#35](https://github.com/marmotz/graphene-term/issues/35) | Tabs: translation table and language detection                                | —          |

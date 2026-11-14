@@ -14,6 +14,7 @@ fn plain(c: char) -> GlyphKey {
         c,
         bold: false,
         italic: false,
+        ui: None,
     }
 }
 
@@ -38,7 +39,10 @@ pub struct Scene {
     pub over: Vec<RectInstance>,
     /// Glyphs of the grid cells.
     pub glyphs: Vec<GlyphInstance>,
-    /// Glyphs drawn after the `over` rectangles (banner text).
+    /// Rectangles covering the whole window, drawn after every pane and the interface
+    /// (banner background).
+    pub overlay_rects: Vec<RectInstance>,
+    /// Glyphs drawn after `overlay_rects` (banner text).
     pub overlay: Vec<GlyphInstance>,
 }
 
@@ -106,7 +110,7 @@ fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<Rec
         );
         if let Some(status) = card.status {
             // Centered in the margin, with round ends.
-            let x = layout.padding + ((layout.margin - stripe) / 2.0).max(0.0).round();
+            let x = layout.content_left() + ((layout.margin - stripe) / 2.0).max(0.0).round();
             rects.push(
                 RectInstance::new(
                     [x, top],
@@ -270,6 +274,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                     c: c.c,
                     bold: c.bold,
                     italic: c.italic,
+                    ui: None,
                 },
                 color: gpu_color(c.fg, srgb_target),
             });
@@ -307,12 +312,13 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         }
     }
 
-    // The banner covers the grid: its rect comes last and its glyphs go in the overlay,
-    // one character per cell width from the text position.
+    // The banner covers the grid and the interface: its rect and its glyphs go in the
+    // overlay, one character per cell width from the text position.
+    let mut overlay_rects = Vec::new();
     let mut overlay = Vec::new();
     if let Some(banner) = &frame.banner {
         let rect = banner.layout.rect;
-        over.push(RectInstance::new(
+        overlay_rects.push(RectInstance::new(
             [rect.x, rect.y],
             [rect.width, rect.height],
             gpu_color(banner.background, srgb_target),
@@ -326,6 +332,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
                     c,
                     bold: false,
                     italic: false,
+                    ui: None,
                 },
                 color,
             }));
@@ -337,6 +344,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         under,
         over,
         glyphs,
+        overlay_rects,
         overlay,
     }
 }
@@ -348,7 +356,7 @@ mod tests {
     use crate::frame::{
         BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration, ScrollBar,
     };
-    use crate::layout::CellSize;
+    use crate::layout::{CellSize, Rect};
     use crate::timeline::Status;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -376,8 +384,7 @@ mod tests {
     /// card padding.
     fn margin_layout() -> GridLayout {
         GridLayout::new(
-            100,
-            100,
+            Rect::from_size(100, 100),
             CellSize {
                 width: 10.0,
                 height: 20.0,
@@ -510,7 +517,8 @@ mod tests {
             GlyphKey {
                 c: 'b',
                 bold: true,
-                italic: true
+                italic: true,
+                ui: None,
             }
         );
         assert_eq!(b.color, [1.0, 0.0, 0.0, 1.0]);
@@ -559,11 +567,12 @@ mod tests {
     fn no_banner_draws_no_overlay() {
         let scene = build(&frame(vec![vec![cell('a')]]), &layout(), false);
         assert!(scene.over.is_empty());
+        assert!(scene.overlay_rects.is_empty());
         assert!(scene.overlay.is_empty());
     }
 
     #[test]
-    fn banner_is_drawn_last_over_the_cursor() {
+    fn banner_goes_in_the_overlay_above_the_cursor() {
         let banner = Banner {
             text: "oops".into(),
             actions: vec!["x".into()],
@@ -581,8 +590,10 @@ mod tests {
             text: FG,
         });
         let scene = build(&f, &layout(), false);
-        assert_eq!(scene.over.len(), 2);
-        let last = scene.over[1];
+        // The cursor stays in `over`, clipped to its pane; the banner is drawn later.
+        assert_eq!(scene.over.len(), 1);
+        assert_eq!(scene.overlay_rects.len(), 1);
+        let last = scene.overlay_rects[0];
         assert_eq!(last.position, [0.0, 0.0]);
         assert_eq!(last.size, [100.0, 30.0]);
         assert_eq!(last.color, [1.0, 0.0, 0.0, 1.0]);
@@ -850,8 +861,7 @@ mod tests {
         frame.decorations[0].summary = Some(1);
         frame.lang = crate::i18n::Lang::Fr;
         let layout = GridLayout::new(
-            400,
-            100,
+            Rect::from_size(400, 100),
             CellSize {
                 width: 10.0,
                 height: 20.0,

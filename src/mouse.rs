@@ -9,6 +9,7 @@ use winit::window::CursorIcon;
 use crate::layout::Hit;
 use crate::timeline::BlockId;
 use crate::view::{RowSource, ScrollTarget};
+use crate::workspace::tree::Axis;
 
 /// Highest 1-based coordinate the X10 encoding can carry (`32 + 223 = 255`).
 const X10_MAX_COORDINATE: usize = 223;
@@ -250,6 +251,15 @@ pub fn wheel_target(hit: &Hit, scrollable: impl Fn(BlockId) -> bool) -> ScrollTa
     }
 }
 
+/// Pointer shape over a divider between panes split along `axis`, or while dragging
+/// it: the arrows across the divider.
+pub fn divider_icon(axis: Axis) -> CursorIcon {
+    match axis {
+        Axis::Horizontal => CursorIcon::ColResize,
+        Axis::Vertical => CursorIcon::RowResize,
+    }
+}
+
 /// Pointer shape: the hand over a fold chevron (always Graphene's, even while the
 /// application captures the mouse), the arrow while the application captures the
 /// mouse, the I-beam (text selection) otherwise.
@@ -266,6 +276,12 @@ pub fn pointer_icon(mode: TermMode, over_chevron: bool) -> CursorIcon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn divider_icon_follows_the_axis() {
+        assert_eq!(divider_icon(Axis::Horizontal), CursorIcon::ColResize);
+        assert_eq!(divider_icon(Axis::Vertical), CursorIcon::RowResize);
+    }
 
     const NONE: ModifiersState = ModifiersState::empty();
 

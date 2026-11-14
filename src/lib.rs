@@ -6,6 +6,7 @@ mod banner;
 mod block_actions;
 #[cfg(test)]
 mod build_version;
+mod chrome;
 mod config;
 mod frame;
 mod i18n;
@@ -15,7 +16,9 @@ mod layout;
 mod mouse;
 mod opener;
 mod palette;
+mod pane;
 mod perf;
+mod process;
 mod pty;
 mod renderer;
 mod selection;
@@ -27,6 +30,7 @@ mod timeline;
 mod timeline_selection;
 mod update;
 mod view;
+mod workspace;
 
 /// Version of this build, computed by `build.rs`.
 pub const VERSION: &str = env!("GRAPHENE_VERSION");
@@ -45,7 +49,7 @@ pub fn start_perf_clock() {
 #[doc(hidden)]
 pub mod bench {
     pub use crate::frame::Frame;
-    pub use crate::layout::{CellSize, GridLayout};
+    pub use crate::layout::{CellSize, GridLayout, Rect};
     pub use crate::palette::Palette;
     pub use crate::pty::process;
     pub use crate::renderer::scene;

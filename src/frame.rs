@@ -161,7 +161,7 @@ impl BlockColors {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     /// Visible rows, top to bottom.
     pub rows: Vec<Vec<FrameCell>>,
@@ -479,6 +479,39 @@ fn is_selected(range: &SelectionRange, point: Point, flags: Flags) -> bool {
             && range.contains(Point::new(point.line, point.column - 1)))
 }
 
+/// How far the colors of an inactive pane move toward its background, when its tab
+/// shows several panes.
+pub const INACTIVE_PANE_DIM: f32 = 0.3;
+
+impl Frame {
+    /// This frame with every color moved `factor` (0 to 1) toward the background: cell
+    /// text and backgrounds, block marks and the cursor. The banner is left as is, and
+    /// a factor of 0 changes nothing.
+    pub fn dimmed(mut self, factor: f32) -> Self {
+        let background = self.background;
+        let dim = |color: Rgb| blend(color, background, factor);
+        for cell in self.rows.iter_mut().flatten() {
+            cell.fg = dim(cell.fg);
+            cell.bg = dim(cell.bg);
+        }
+        let colors = &mut self.block_colors;
+        for color in [
+            &mut colors.success,
+            &mut colors.failure,
+            &mut colors.running,
+            &mut colors.dim,
+            &mut colors.card,
+            &mut colors.card_selected,
+        ] {
+            *color = dim(*color);
+        }
+        if let Some(cursor) = &mut self.cursor {
+            cursor.color = dim(cursor.color);
+        }
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,6 +571,55 @@ mod tests {
         (0..frame.rows.len())
             .map(|line| row_text(frame, line).trim_end().to_owned())
             .collect()
+    }
+
+    #[test]
+    fn dimmed_by_zero_is_the_identity() {
+        let session = session_with("\x1b[31;44mR\x1b[0m plain");
+        let frame = capture(&session, &Palette::default(), true);
+        assert_eq!(frame.clone().dimmed(0.0), frame);
+    }
+
+    #[test]
+    fn dimmed_moves_colors_toward_the_background() {
+        let session = session_with("\x1b[31;44mR\x1b[0m plain");
+        let mut frame = capture(&session, &Palette::default(), true);
+        frame.cursor = Some(FrameCursor {
+            column: 0,
+            line: 0,
+            shape: CursorShape::Beam,
+            color: Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        });
+        let background = frame.background;
+        let toward = |color: Rgb| blend(color, background, 0.3);
+        let dimmed = frame.clone().dimmed(0.3);
+
+        let (cell, before) = (dimmed.rows[0][0], frame.rows[0][0]);
+        assert_eq!((cell.fg, cell.bg), (toward(before.fg), toward(before.bg)));
+        assert_ne!(cell.fg, before.fg);
+        // Default-background cells keep the background, so they still draw no rect.
+        assert_eq!(dimmed.rows[0][5].bg, background);
+        assert_eq!(dimmed.background, background);
+        assert_eq!(dimmed.block_colors.card, toward(frame.block_colors.card));
+        assert_eq!(
+            dimmed.block_colors.failure,
+            toward(frame.block_colors.failure)
+        );
+        assert_eq!(
+            dimmed.cursor.unwrap().color,
+            toward(Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            })
+        );
+        // Text and layout are untouched.
+        assert_eq!(texts(&dimmed), texts(&frame));
+        assert_eq!(dimmed.row_tops, frame.row_tops);
     }
 
     #[test]

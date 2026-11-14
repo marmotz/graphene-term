@@ -92,6 +92,35 @@ first output.
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
 | Mouse wheel                   | Scroll the block under the pointer, or history  |
 
+Tabs and split panes:
+
+| Keys                          | Action                                          |
+|-------------------------------|-------------------------------------------------|
+| Ctrl+Shift+P                  | Command palette                                 |
+| Ctrl+Shift+T                  | New tab                                         |
+| Ctrl+Tab / Ctrl+Shift+Tab     | Next / previous tab                             |
+| Ctrl+PageDown / Ctrl+PageUp   | Next / previous tab                             |
+| Alt+1 ... Alt+9               | Go to tab 1 to 9                                |
+| Ctrl+Shift+E / Ctrl+Shift+O   | Split the pane right / down                     |
+| Ctrl+Shift+W                  | Close the pane                                  |
+| Ctrl+Shift+Arrow              | Focus the pane in that direction                |
+| Ctrl+Shift+Alt+Arrow          | Resize the pane toward that direction           |
+| Ctrl+Shift+N / Ctrl+Shift+B   | Next / previous pane                            |
+| Ctrl+Shift+Z                  | Zoom the pane to the whole tab, or back         |
+| Click on a tab                | Show the tab; drag it to move it                |
+| Middle click or × on a tab    | Close the tab                                   |
+| Click on +                    | New tab                                         |
+| Click in a pane               | Focus the pane                                  |
+| Drag a divider                | Resize the panes on both sides                  |
+
+"Equalise panes" and "Move pane to a new tab" have no key: run them from the command
+palette, which also lists the open tabs and panes. Type to filter (fuzzy, case
+sensitive only with an uppercase letter), `Up` / `Down` to choose, `Enter` to run,
+`Escape` to close; recently run actions come first. The tab bar shows once there are
+two tabs. Closing a pane, a tab or the window asks for confirmation while a program
+other than the shell runs in it. With several panes in the tab, `Ctrl+Shift+Left /
+Right` moves the focus instead of extending the input selection.
+
 At the shell prompt (zsh, bash or fish with the integration, not inside a running
 command or a full-screen application), the command line is edited like in an editor.
 The shell keeps the command line: Graphene sends it key sequences its integration

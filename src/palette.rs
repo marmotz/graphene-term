@@ -26,10 +26,6 @@ pub struct Palette {
 
 /// Colors of the interface drawn around the grid.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(
-    dead_code,
-    reason = "the tab and command palette colors are drawn by the tabs tasks"
-)]
 pub struct UiColors {
     pub tab_bar_background: Rgb,
     pub tab_active_background: Rgb,
