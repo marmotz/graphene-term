@@ -24,6 +24,7 @@ use crate::chrome::command_palette::{
 };
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
+use crate::chrome::tooltip::TooltipLayout;
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
@@ -123,6 +124,9 @@ struct Session {
     hovered_link: Option<HoveredLink>,
     /// Left press on a link, until its release.
     link_press: Option<LinkPress>,
+    /// Whether the link tooltip stays hidden: set by the wheel, cleared when the mouse
+    /// moves.
+    tooltip_hidden: bool,
     /// Pointer shape last applied to the window; `None` before the first update.
     pointer: Option<winit::window::CursorIcon>,
     /// Title last applied to the window.
@@ -660,6 +664,38 @@ impl Session {
         links::active(pane.captures(hovered.source), self.modifiers).then_some(hovered)
     }
 
+    /// Target shown in the link tooltip: the URI of the active OSC 8 link, unless the
+    /// wheel hid the tooltip since the mouse last moved.
+    fn tooltip_uri(&self) -> Option<&str> {
+        let hovered = self.active_link()?;
+        (hovered.link.explicit && !self.tooltip_hidden).then_some(hovered.link.uri.as_str())
+    }
+
+    /// The link tooltip laid out near the mouse, `None` while no tooltip is shown.
+    fn tooltip_layout(&mut self) -> Option<TooltipLayout> {
+        let uri = self.tooltip_uri()?.to_owned();
+        let size = self.window.inner_size();
+        let metrics = self.ui_metrics(UiFont::Chrome);
+        let mouse = self.mouse_pixel();
+        let renderer = &mut self.renderer;
+        TooltipLayout::new(
+            &uri,
+            mouse,
+            Rect::from_size(size.width, size.height),
+            metrics,
+            |text| renderer.ui_text_width(UiFont::Chrome, text),
+        )
+    }
+
+    /// The mouse left the window: nothing is hovered any more.
+    fn cursor_left(&mut self) {
+        self.hovered_cell = None;
+        if self.hovered_link.take().is_some() {
+            self.window.request_redraw();
+        }
+        self.update_pointer();
+    }
+
     /// End of a left press on a link: opens it when the click calls for it (see
     /// [`links::click_opens`]) and it may be opened (see [`links::may_open`]).
     fn release_link(&mut self, press: LinkPress) {
@@ -927,6 +963,9 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
+        if std::mem::take(&mut self.tooltip_hidden) && self.tooltip_uri().is_some() {
+            self.window.request_redraw();
+        }
         self.update_hover(false);
         self.update_pointer();
         if matches!(self.drag, Some(Drag::Tab { .. })) {
@@ -1209,7 +1248,11 @@ impl Session {
         {
             pane.mouse_wheel(delta, position, modifiers);
         }
-        // Scrolling moves another cell under the mouse.
+        // Scrolling moves another cell under the mouse, and hides the link tooltip.
+        if !self.tooltip_hidden && self.tooltip_uri().is_some() {
+            self.window.request_redraw();
+        }
+        self.tooltip_hidden = true;
         self.update_hover(false);
         self.update_pointer();
     }
@@ -1338,6 +1381,7 @@ impl Session {
     fn redraw(&mut self) {
         let dialog = self.dialog_layout();
         let palette = self.palette_layout();
+        let tooltip = self.tooltip_layout();
         let overlay = match (&dialog, &palette) {
             (Some(dialog), _) => Some(chrome::scene::Overlay::Dialog(dialog)),
             (_, Some(palette)) => Some(chrome::scene::Overlay::Palette(palette)),
@@ -1396,7 +1440,7 @@ impl Session {
         if let (Some(bar), Some(Drag::Tab { index, grab_offset })) = (bar.as_mut(), &self.drag) {
             bar.dragged(*index, self.mouse_pixel().0 - grab_offset);
         }
-        let ui = chrome::scene::build(
+        let mut ui = chrome::scene::build(
             &layout,
             active,
             bar.as_ref(),
@@ -1404,6 +1448,9 @@ impl Session {
             &self.palette.ui,
             self.renderer.is_srgb(),
         );
+        if let Some(tooltip) = &tooltip {
+            chrome::scene::tooltip(tooltip, &self.palette.ui, self.renderer.is_srgb(), &mut ui);
+        }
         match self.renderer.render(&panes, &ui) {
             Ok(true) if self.first_frame.frame_drawn() => {
                 perf::mark("first frame drawn after PTY output");
@@ -1529,6 +1576,7 @@ impl App {
             hovered_cell: None,
             hovered_link: None,
             link_press: None,
+            tooltip_hidden: false,
             pointer: None,
             window_title: DEFAULT_TITLE.to_owned(),
             config_banner: self.config_banner.clone(),
@@ -1623,6 +1671,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
+            WindowEvent::CursorLeft { .. } => session.cursor_left(),
             WindowEvent::MouseInput { state, button, .. } => {
                 session.mouse_input(state, button, default_font_size, event_loop);
                 if let Some(tag) = session.ignored_tag.take() {

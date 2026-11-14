@@ -67,6 +67,7 @@ src/
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
     scene.rs       interface layer: tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
+    tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
     state.rs       update.json state file (last check, latest release, ignored tag)
@@ -331,14 +332,16 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    there are several tabs. The panes area is the window minus the bar. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
-   the window height) goes to the overlay rects and texts of the layer.
+   the window height) goes to the overlay rects and texts of the layer. The link
+   tooltip (`chrome::tooltip::TooltipLayout`, added by `chrome::scene::tooltip`) comes
+   last in the overlay.
 4. `Renderer::render` builds the scene of each pane with its own `GridLayout`, resolves
    the glyph instances through the glyph cache (one group per pane, then the interface
    text, the banner, the overlay text), uploads the newly rasterized glyphs, then draws
    in one pass: clear; for each pane, clipped to its rect by a scissor, `under` rects,
    images, glyphs, `over` rects; then over the whole window the interface rects, the interface
    text, the banner rects and glyphs, and the overlay rects and text, so the dialog
-   or the palette covers everything. Colors are linearized when the surface
+   or the palette covers everything, and the link tooltip covers them in turn. Colors are linearized when the surface
    format is sRGB.
 
 The interface text (`renderer/ui_text.rs`) uses its own font: sans-serif, at a size
@@ -522,3 +525,10 @@ is reset with the glyph cache, and the frame is resolved again.
   reported). The release opens the link when `links::click_opens` allows it (same
   cell, same link, simple click without `Shift`, or the consumed `Ctrl` + click) and
   `links::may_open` too, through `opener::open`.
+- Tooltip: while the active link is an OSC 8 one (`explicit`), `Session::tooltip_layout`
+  places its URI in a box (`chrome::tooltip::TooltipLayout`: below and right of the
+  pointer, moved left to stay in the window, above the pointer near the bottom edge,
+  at most the window width with the URI cut by an ellipsis) drawn last in the overlay.
+  It goes away with the hovered link (mouse moved off it, `CursorLeft`, content
+  changed on `Wakeup`) and on a wheel event (`tooltip_hidden`, cleared by the next
+  mouse move).
