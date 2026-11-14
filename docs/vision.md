@@ -33,7 +33,7 @@ Selected as the project's "modern" pillars:
 | Done    | Selection and copy                                                                   |
 | Planned | Mouse reporting to applications                                                      |
 | Done    | Command blocks                                                                       |
-| Planned | Rich input editor                                                                    |
+| Done    | Rich input editor                                                                    |
 | Planned | Tabs, splits, command palette                                                        |
 | Planned | Images and clickable links                                                           |
 | Planned | Configuration file and themes                                                        |

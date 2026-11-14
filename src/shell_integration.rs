@@ -396,6 +396,17 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::PermissionDenied);
     }
 
+    /// Every script binds every private sequence of the input editor table.
+    #[test]
+    fn scripts_bind_every_editor_sequence() {
+        for (relative, content) in SCRIPTS {
+            for (sequence, bytes) in crate::input_editor::SEQUENCES {
+                let code = std::str::from_utf8(&bytes[2..]).unwrap();
+                assert!(content.contains(code), "{relative}: {sequence:?} ({code})");
+            }
+        }
+    }
+
     /// Runs real shells with the integration: one test per case, skipped when the shell
     /// is not installed.
     mod shells {
@@ -430,7 +441,10 @@ mod tests {
         struct Session {
             pty: tty::Pty,
             output: Vec<u8>,
+            /// Block signals (`start`, `end`), in order.
             signals: Vec<Signal>,
+            /// `prompt` signals received.
+            prompt_signals: usize,
             scanner: Scanner,
             /// Primary device attributes queries answered so far.
             answered: usize,
@@ -498,6 +512,7 @@ mod tests {
                     pty: tty::new(&options, size, 0).unwrap(),
                     output: Vec::new(),
                     signals: Vec::new(),
+                    prompt_signals: 0,
                     scanner: Scanner::new(TOKEN),
                     answered: 0,
                 };
@@ -533,8 +548,10 @@ mod tests {
                         Ok(n) => {
                             let read = &buf[..n];
                             for chunk in self.scanner.split(read) {
-                                if let Chunk::Signal(signal) = chunk {
-                                    self.signals.push(signal);
+                                match chunk {
+                                    Chunk::Signal(Signal::Prompt) => self.prompt_signals += 1,
+                                    Chunk::Signal(signal) => self.signals.push(signal),
+                                    _ => {}
                                 }
                             }
                             self.output.extend_from_slice(read);
@@ -623,6 +640,10 @@ mod tests {
                 "{shell}: {:?}",
                 String::from_utf8_lossy(&session.output)
             );
+            // One `prompt` per prompt, the one after the empty line included.
+            session.read_until("the prompt signals", |s| s.prompt_signals >= s.prompts());
+            assert_eq!(session.prompt_signals, session.prompts(), "{shell}");
+            assert_eq!(session.prompts(), 6, "{shell}");
             let output = String::from_utf8_lossy(&session.output);
             assert!(output.contains(expected), "{shell}: {output:?}");
             session
@@ -778,6 +799,235 @@ mod tests {
             )
             .unwrap();
             check("fish", &home.0, FISH_PROBE, "rc:yes:0::0:end");
+        }
+
+        /// One editor input: typed text or a private sequence.
+        enum Input {
+            Text(&'static str),
+            Seq(Sequence),
+            Repeat(Sequence, usize),
+            /// In a shell with autosuggestions, waits until the suggestion ("zz") shows:
+            /// fish computes it in the background.
+            Suggestion,
+        }
+
+        use crate::input_editor::Sequence;
+        use Input::{Repeat, Seq, Suggestion, Text};
+        use Sequence::*;
+
+        const PRINT: &str = "printf '<%s>\\n' ";
+
+        /// Command lines run first: the history entries the autosuggestions offer for
+        /// the editor cases.
+        const HISTORY: [&str; 1] = ["printf '<%s>\\n' abcdzz"];
+
+        /// Editor cases: the inputs of one command line and what it prints. Each one
+        /// only prints `expected` when every move landed where it should.
+        fn editor_cases() -> Vec<(Vec<Input>, &'static str)> {
+            vec![
+                // Char moves clamped at both ends. At the end of the buffer the
+                // autosuggestion ("zz") shows: no forward move accepts it.
+                (
+                    vec![
+                        Text(PRINT),
+                        Text("ac"),
+                        Seq(CharLeft),
+                        Text("b"),
+                        Repeat(CharRight, 3),
+                        Text("d"),
+                        Suggestion,
+                        Seq(CharRight),
+                        Seq(WordRight),
+                        Seq(DeleteWordRight),
+                        Seq(LineEnd),
+                        Seq(BufferEnd),
+                        Repeat(CharLeft, 40),
+                        Text("true;"),
+                    ],
+                    "<abcd>",
+                ),
+                // Word moves and deletions, buffer start, line end on a single line.
+                (
+                    vec![
+                        Text(PRINT),
+                        Text("one two"),
+                        Seq(WordLeft),
+                        Text("X"),
+                        Seq(DeleteWordRight),
+                        Seq(DeleteWordLeft),
+                        Text("Y"),
+                        Seq(BufferStart),
+                        Text("true;"),
+                        Seq(LineEnd),
+                        Text("Q"),
+                    ],
+                    "<one>\r\n<YQ>",
+                ),
+                // Word right: the start of the next word, the buffer end after the
+                // last one.
+                (
+                    vec![
+                        Text(PRINT),
+                        Text("ab cd"),
+                        Repeat(WordLeft, 2),
+                        Seq(WordRight),
+                        Text("X"),
+                        Seq(WordRight),
+                        Text("Y"),
+                    ],
+                    "<ab>\r\n<XcdY>",
+                ),
+                // Word end: inside a word it stops at its end, between words at the
+                // end of the next one.
+                (
+                    vec![
+                        Text(PRINT),
+                        Text("ab cd"),
+                        Repeat(WordLeft, 2),
+                        Seq(WordEnd),
+                        Text("X"),
+                        Seq(WordEnd),
+                        Text("Y"),
+                    ],
+                    "<abX>\r\n<cdY>",
+                ),
+                // Newline, vertical moves (clamped column, nothing past the first and
+                // last lines, no history), line start, buffer end.
+                (
+                    vec![
+                        Text(PRINT),
+                        Text("'abcde'"),
+                        Repeat(CharLeft, 3),
+                        Seq(InsertNewline),
+                        Repeat(LineUp, 2),
+                        Text("true;"),
+                        Seq(LineDown),
+                        Text("X"),
+                        Seq(LineDown),
+                        Seq(LineStart),
+                        Text("Y"),
+                        Seq(BufferEnd),
+                        Text("Z"),
+                    ],
+                    "<abc\r\nYdeXZ>",
+                ),
+            ]
+        }
+
+        /// Runs the history entries then every editor case in `shell`, with the
+        /// configuration already written in `home`. `suggests`: the shell shows
+        /// autosuggestions.
+        fn check_editor(shell: &str, home: &Path, suggests: bool) {
+            let mut session = Session::spawn(shell, home);
+            for command in HISTORY {
+                session.run(command);
+            }
+            for (inputs, expected) in editor_cases() {
+                let from = session.output.len();
+                let mut line = String::new();
+                for input in &inputs {
+                    match input {
+                        Text(text) => line.push_str(text),
+                        Seq(sequence) => {
+                            line.push_str(std::str::from_utf8(sequence.bytes()).unwrap())
+                        }
+                        Repeat(sequence, n) => {
+                            for _ in 0..*n {
+                                line.push_str(std::str::from_utf8(sequence.bytes()).unwrap());
+                            }
+                        }
+                        Suggestion if suggests => {
+                            let mark = session.output.len();
+                            session.write(&std::mem::take(&mut line));
+                            session.read_until("the autosuggestion", |s| {
+                                count(&s.output[mark..], b"zz") > 0
+                            });
+                        }
+                        Suggestion => {}
+                    }
+                }
+                session.run(&line);
+                let output = String::from_utf8_lossy(&session.output[from..]);
+                assert!(
+                    output.contains(expected),
+                    "{shell}: expected {expected:?} in {output:?}"
+                );
+            }
+        }
+
+        const ZSH_AUTOSUGGESTIONS: &str =
+            "/usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh";
+
+        #[test]
+        fn zsh_editor_sequences() {
+            if find("zsh").is_none() {
+                eprintln!("zsh not installed, skipped");
+                return;
+            }
+            for (name, keymap) in [("emacs", "bindkey -e"), ("vi", "bindkey -v")] {
+                let home = TempDir::new(&format!("zsh-editor-{name}"));
+                fs::write(
+                    home.0.join(".zshrc"),
+                    format!("{keymap}\nPS1='%# '\n{ZSH_READY}"),
+                )
+                .unwrap();
+                check_editor("zsh", &home.0, false);
+            }
+        }
+
+        /// zsh-autosuggestions wraps the widgets: the moves at the end of the buffer
+        /// still do not accept its suggestion.
+        #[test]
+        fn zsh_editor_sequences_with_autosuggestions() {
+            if find("zsh").is_none() || !Path::new(ZSH_AUTOSUGGESTIONS).is_file() {
+                eprintln!("zsh or zsh-autosuggestions not installed, skipped");
+                return;
+            }
+            let home = TempDir::new("zsh-editor-autosuggestions");
+            fs::write(
+                home.0.join(".zshrc"),
+                format!("PS1='%# '\nsource {ZSH_AUTOSUGGESTIONS}\n{ZSH_READY}"),
+            )
+            .unwrap();
+            check_editor("zsh", &home.0, true);
+        }
+
+        #[test]
+        fn bash_editor_sequences() {
+            if find("bash").is_none() {
+                eprintln!("bash not installed, skipped");
+                return;
+            }
+            for (name, mode) in [("emacs", "set -o emacs"), ("vi", "set -o vi")] {
+                let home = TempDir::new(&format!("bash-editor-{name}"));
+                fs::write(
+                    home.0.join(".bashrc"),
+                    format!("{mode}\nPS1='$ '\n{BASH_READY}"),
+                )
+                .unwrap();
+                check_editor("bash", &home.0, false);
+            }
+        }
+
+        /// fish shows its own autosuggestions; `fish_vi_key_bindings` erases the
+        /// bindings, which come back before the prompt.
+        #[test]
+        fn fish_editor_sequences() {
+            if find("fish").is_none() {
+                eprintln!("fish not installed, skipped");
+                return;
+            }
+            for (name, bindings) in [("emacs", ""), ("vi", "fish_vi_key_bindings\n")] {
+                let home = TempDir::new(&format!("fish-editor-{name}"));
+                let dir = home.0.join(".config").join("fish");
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(
+                    dir.join("config.fish"),
+                    format!("{bindings}function fish_prompt; echo -n '> '; end\n{FISH_READY}"),
+                )
+                .unwrap();
+                check_editor("fish", &home.0, true);
+            }
         }
     }
 }

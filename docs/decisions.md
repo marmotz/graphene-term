@@ -141,3 +141,72 @@ text renderer unaware of the cursor. Non-block shapes are drawn as rects over th
 
 Enabling winit IME risks double input (key event text + IME commit). Deferred until
 it can be handled and tested properly.
+
+## Input editor: shell bindings for private sequences
+
+The shell keeps the command line buffer; Graphene never edits it. Editor moves are
+private `CSI <code> u` sequences (code points 59136 to 59149, Unicode private use
+area, table in `src/input_editor.rs`) bound by the integration scripts in the emacs
+and vi insert keymaps.
+
+- Every move is passive: clamped at both ends of the buffer, never leaving it for the
+  history, never accepting an autosuggestion. A plain `Right` at the end of the buffer
+  would accept it (fish, zsh-autosuggestions).
+- zsh: own widgets calling the builtin (dot) widgets (`.forward-word`,
+  `.end-of-line`, ...), which zsh-autosuggestions does not wrap, so none of them
+  accepts its suggestion. Bound again before each prompt, after the user's files and
+  plugins.
+- bash: `bind -x` functions on `READLINE_LINE` / `READLINE_POINT`, readline
+  functions for words. Verified on bash 5.3: `READLINE_POINT` counts characters in a
+  UTF-8 locale, like `${#READLINE_LINE}` and substring expansion (bytes in the C
+  locale, consistently for both), so the functions never mix units.
+- fish: a raw sequence starting with `\e` keeps the old `bind` syntax in fish 4
+  (verified on 4.9.3, per the 4.0 changelog), so one syntax covers fish 3 and 4.
+  `forward-char-passive` / `backward-char-passive` exist since fish 4.0; older fish
+  falls back to `backward-char` / `forward-char`, detected with
+  `bind --function-names`. `forward-word`, `kill-word`, `end-of-line` and
+  `end-of-buffer` accept the autosuggestion at the end of the buffer, the only place
+  it shows: they only run when the cursor is not there. Bound again before a prompt
+  when gone (`fish_vi_key_bindings` erases bindings).
+
+## Input editor: rich mode at the prompt
+
+- The shell keeps the buffer: Graphene never knows its content. A click, a shortcut or
+  a selection becomes private sequences only (see above); every edit is the shell's.
+- The rich mode needs to know the shell's line editor is reading a command line with
+  Graphene's bindings. Since each block is its own terminal, the hooks no longer mark
+  the prompt, so they send one more signal, `prompt`, before each prompt (zsh
+  `precmd`, bash's first `PROMPT_COMMAND` entry, fish `fish_prompt`). The current block
+  is then `editing` until its command starts. Without the integration (shell started by
+  hand, `ssh`), no `prompt` comes: every key behaves as in a plain terminal.
+- Only distances are read from the grid (`input_editor::buffer_distance`): a click
+  writes as many `CharLeft` / `CharRight` as buffer characters lie between the cursor
+  and the click, in one PTY write. The shell clamps them at the buffer ends, so a click
+  on the prompt or past the end of the text lands on the nearest buffer end. Where the
+  prompt starts (the cursor when `prompt` came) bounds a click on the output above it.
+- The prompt and the input are not told apart in the grid (bash has no hook between
+  drawing the prompt and reading the line): a click on the prompt counts its
+  characters, all absorbed by the clamp.
+- Keyboard selection follows the shell's cursor: `Shift+` motions start a selection at
+  the cursor (or grow the one on the live grid), write the motion, and move the
+  selection end to the cursor on the first PTY wakeup where the cursor moved (compared
+  with its line from the top of the live history, so a scroll is not a move). The text
+  is then kept (`SelectionSnapshot`) and written to the primary selection, as a mouse
+  release does. A motion clamped by the shell moves nothing: the selection stays.
+- `Ctrl+A` anchors the selection where the prompt starts, the only point known in the
+  grid, and writes `BufferEnd`: the selection covers the prompt text too. It ends at
+  the cursor at once, so a cursor already at the end selects without waiting.
+- Typing over a selection in the input replaces it, in one PTY write so no shell
+  redraw interleaves: `CharLeft` / `CharRight` to the selection end, one `0x7f` per
+  selected character, then the typed text (nothing for `Backspace`, `Delete` and the
+  word deletions, the `InsertNewline` sequence for `Shift+Enter`). Distances are
+  buffer distances read from the grid (`input_editor::replacement_bytes`).
+- "In the input" means on the live grid alone, not stale, from where the prompt starts
+  on: the input start is not known (see above). A selection starting on the prompt
+  text is therefore replaced too: its prompt characters add backspaces the shell
+  absorbs at the buffer start, so the selected part of the input is erased. A
+  selection reaching the output above the prompt, or a block selection, keeps the
+  normal path (cleared, the key sent as is).
+- Known limit: an autosuggestion is drawn in the grid but not in the buffer; a
+  selection dragged over it counts extra characters, so the replacement may erase more
+  than selected. The shell's undo restores the buffer.

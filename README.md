@@ -88,9 +88,32 @@ first output.
 | Middle click                  | Paste the primary selection                     |
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)      |
 | Shift+PageUp / Shift+PageDown | Scroll the selected block, or the history       |
-| Shift+Home / Shift+End        | Top / bottom of the history                     |
+| Shift+Home / Shift+End        | Top / bottom of the history (not at the prompt) |
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
 | Mouse wheel                   | Scroll the block under the pointer, or history  |
+
+At the shell prompt (zsh, bash or fish with the integration, not inside a running
+command or a full-screen application), the command line is edited like in an editor.
+The shell keeps the command line: Graphene sends it key sequences its integration
+script binds, and completion (`Tab`) and history (`Up` / `Down`) stay the shell's.
+
+| Keys at the prompt            | Action                                          |
+|-------------------------------|-------------------------------------------------|
+| Left click in the input       | Move the cursor there                           |
+| Ctrl+Left / Ctrl+Right        | Start of the previous / next word               |
+| Ctrl+Backspace / Ctrl+Delete  | Erase the word before / after the cursor        |
+| Home / End                    | Start / end of the line                         |
+| Ctrl+Home / Ctrl+End          | Start / end of a multi-line input               |
+| Shift+Left / Shift+Right      | Extend the selection by a character             |
+| Shift+Up / Shift+Down         | Extend the selection by a line                  |
+| Shift+Home / Shift+End        | Extend the selection to the line start / end    |
+| Ctrl+Shift+Left / Right       | Extend the selection to the word start / end    |
+| Ctrl+A                        | Select the whole input                          |
+| Shift+Enter                   | New line, without running the command           |
+
+The input selection is an ordinary selection: `Ctrl+Shift+C` copies it and it fills the
+primary selection. Typing, `Backspace`, `Delete`, `Ctrl+Backspace` / `Ctrl+Delete` or
+`Shift+Enter` over a selection in the input replaces it, as in an editor.
 
 ## Documentation
 

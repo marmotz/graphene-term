@@ -105,6 +105,13 @@ pub struct Current {
     pub scroll: usize,
     /// Set by a screen clear: the view shows this block at its top.
     pub pin_top: bool,
+    /// The shell sent `prompt` for this block: its line editor reads the command line,
+    /// with Graphene's editor key bindings. Never set without the shell integration.
+    pub editing: bool,
+    /// Where the cursor stood when `prompt` came, just before the prompt is drawn: the
+    /// line counted from the top of the live history (so it stays on its text while the
+    /// screen scrolls) and the column.
+    prompt_start: Option<(usize, Column)>,
 }
 
 impl Current {
@@ -117,7 +124,21 @@ impl Current {
             folded: false,
             scroll: 0,
             pin_top: false,
+            editing: false,
+            prompt_start: None,
         }
+    }
+
+    /// Point of the live grid `term` where the current prompt starts, the start of the
+    /// live history when it is gone (history cleared, reflow). `None` before `prompt`.
+    pub fn prompt_start<L>(&self, term: &Term<L>) -> Option<Point> {
+        let (line, column) = self.prompt_start?;
+        let grid = term.grid();
+        let history = grid.history_size() as i32;
+        let last = grid.screen_lines() as i32 - 1;
+        let line = (line as i32 - history).clamp(-history, last);
+        let column = column.min(Column(grid.columns() - 1));
+        Some(Point::new(Line(line), column))
     }
 }
 
@@ -300,6 +321,7 @@ impl Timeline {
                 self.current.header = Some(detach(term, self.scrollback));
                 self.current.command = command;
                 self.current.phase = Phase::Running;
+                self.current.editing = false;
             }
             (Signal::End { status }, Phase::Running) => {
                 let output = detach(term, self.scrollback);
@@ -325,7 +347,15 @@ impl Timeline {
                 self.blocks.push_back(block);
                 self.evict();
             }
-            // A start while running (missed end) or an end at the prompt: ignored.
+            (Signal::Prompt, Phase::Prompt) => {
+                let grid = term.grid();
+                let cursor = grid.cursor.point;
+                let line = (grid.history_size() as i32 + cursor.line.0).max(0) as usize;
+                self.current.editing = true;
+                self.current.prompt_start = Some((line, cursor.column));
+            }
+            // A start while running (missed end), an end at the prompt, a prompt while
+            // running: ignored.
             _ => {}
         }
     }
@@ -334,6 +364,10 @@ impl Timeline {
     /// live grid and the current block is shown at the top of the view.
     fn clear<L: EventListener>(&mut self, term: &mut Term<L>) {
         term.grid_mut().clear_history();
+        // The prompt is redrawn at the top of the cleared screen.
+        if self.current.prompt_start.is_some() {
+            self.current.prompt_start = Some((0, Column(0)));
+        }
         for block in &mut self.blocks {
             block.pin_top = false;
         }
@@ -536,6 +570,10 @@ pub(crate) mod testing {
         format!("\x1b]6973;{TOKEN};end;{status}\x07")
     }
 
+    pub fn prompt() -> String {
+        format!("\x1b]6973;{TOKEN};prompt\x07")
+    }
+
     /// Every row of `term`, history first, trailing spaces trimmed.
     pub fn texts<L>(term: &Term<L>) -> Vec<String> {
         let grid = term.grid();
@@ -632,6 +670,55 @@ mod tests {
         assert_eq!(current.id, BlockId(2));
         assert_eq!(current.phase, Phase::Prompt);
         assert!(current.header.is_none());
+    }
+
+    #[test]
+    fn prompt_signal_starts_editing_until_the_command_runs() {
+        let mut session = Session::new(100);
+        session.feed("motd\r\n");
+        assert!(!session.timeline.current().editing);
+        assert_eq!(session.timeline.current().prompt_start(&session.term), None);
+
+        session.feed(&format!("{}$ ls", prompt()));
+        let current = session.timeline.current();
+        assert!(current.editing);
+        assert_eq!(
+            current.prompt_start(&session.term),
+            Some(Point::new(Line(1), Column(0)))
+        );
+
+        session.feed(&format!("\r\n{}", start("ls")));
+        assert!(!session.timeline.current().editing);
+
+        // A prompt while the command runs is ignored.
+        session.feed(&prompt());
+        assert!(!session.timeline.current().editing);
+
+        // The next block edits again only once its prompt is signalled.
+        session.feed(&end(0));
+        assert!(!session.timeline.current().editing);
+        session.feed(&format!("{}$ ", prompt()));
+        assert!(session.timeline.current().editing);
+    }
+
+    #[test]
+    fn prompt_start_follows_the_screen_scroll_and_the_clear() {
+        let mut session = Session::new(100);
+        session.feed(&format!("{}$ a\r\n> b", prompt()));
+        // Five more lines scroll the prompt into the history.
+        session.feed("\r\n\r\n\r\n\r\n\r\n");
+        let top = -(session.term.grid().history_size() as i32);
+        assert_eq!(top, -2);
+        assert_eq!(
+            session.timeline.current().prompt_start(&session.term),
+            Some(Point::new(Line(-2), Column(0)))
+        );
+
+        session.feed("\x1b[H\x1b[2J\x1b[3J$ ");
+        assert_eq!(
+            session.timeline.current().prompt_start(&session.term),
+            Some(Point::new(Line(0), Column(0)))
+        );
     }
 
     #[test]
