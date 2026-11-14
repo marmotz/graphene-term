@@ -35,6 +35,7 @@ mod timeline;
 mod timeline_selection;
 mod update;
 mod view;
+mod watcher;
 mod window_state;
 mod workspace;
 

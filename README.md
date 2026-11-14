@@ -25,8 +25,13 @@ maximized (`"maximized"`), or at the size and maximized state of the last window
 `[window] background_opacity` (0.0 to 1.0) makes the default background translucent,
 with a compositor; explicit cell backgrounds, the selection and the cursor stay opaque.
 
+Changes to `config.toml` and to the theme files apply to the open window as soon as
+they are saved, without restart. A changed `font.size` resets the zoom; `width`,
+`height` and `startup_mode` only affect windows opened afterwards.
+
 Errors in these files are logged and shown in a banner at the top of the window (click
-to hide it); the faulty settings keep their default value.
+to hide it); the faulty settings keep their default value, or their previous value on a
+reload.
 
 Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
 builds, every 24 hours for stable builds) and caches the result in

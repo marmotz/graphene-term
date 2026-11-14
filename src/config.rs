@@ -84,6 +84,34 @@ pub fn load() -> (Config, Vec<ConfigError>) {
     }
 }
 
+/// Reads `config.toml` again after it changed on disk: an invalid value keeps the one
+/// of `previous`, a syntax error keeps `previous` whole. A missing file yields the
+/// default and is not written back (an editor may be replacing it).
+pub fn reload(previous: &Config) -> (Config, Vec<ConfigError>) {
+    match config_dir() {
+        Some(dir) => reload_from(&dir, previous),
+        None => (previous.clone(), Vec::new()),
+    }
+}
+
+fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
+    let file = dir.join(CONFIG_FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => Config::parse(&text, previous, &file),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (Config::default(), Vec::new())
+        }
+        Err(error) => (
+            previous.clone(),
+            vec![ConfigError {
+                file,
+                line: None,
+                message: format!("cannot read the file: {error}"),
+            }],
+        ),
+    }
+}
+
 fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
     let file = dir.join(CONFIG_FILE);
     match std::fs::read_to_string(&file) {
@@ -978,6 +1006,45 @@ interval = "2d"
         assert_eq!(load_from(&nested).0.font.size, 9.0);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_keeps_the_previous_value_of_an_invalid_key() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-config-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut previous = Config::default();
+        previous.font.size = 11.0;
+        previous.scrollback_lines = 500;
+
+        std::fs::write(dir.join(CONFIG_FILE), "[font]\nsize = \"big\"\n").unwrap();
+        let (config, errors) = reload_from(&dir, &previous);
+        assert_eq!(config.font.size, 11.0);
+        // A key absent from the file takes its default, not the previous value.
+        assert_eq!(config.scrollback_lines, Config::default().scrollback_lines);
+        assert_eq!(errors.len(), 1);
+
+        std::fs::write(dir.join(CONFIG_FILE), "[font\n").unwrap();
+        let (config, errors) = reload_from(&dir, &previous);
+        assert_eq!(config, previous);
+        assert_eq!(errors.len(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_of_a_missing_file_is_the_default_without_writing_it() {
+        let dir = std::env::temp_dir().join(format!("graphene-config-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut previous = Config::default();
+        previous.font.size = 11.0;
+
+        assert_eq!(
+            reload_from(&dir, &previous),
+            (Config::default(), Vec::new())
+        );
+        assert!(!dir.join(CONFIG_FILE).exists());
     }
 
     #[test]

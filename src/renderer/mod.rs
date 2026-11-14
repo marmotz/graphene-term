@@ -391,6 +391,11 @@ impl Renderer {
         self.layers.glyphs.set_font_size(font_size);
     }
 
+    /// Changes the font family (`None`: the system monospace font) and size.
+    pub fn set_font(&mut self, family: Option<String>, font_size: f32) {
+        self.layers.glyphs.set_font(family, font_size);
+    }
+
     /// Scales the interface font to a window of scale factor `scale`.
     pub fn set_ui_scale(&mut self, scale: f32) {
         self.layers.glyphs.set_ui_scale(scale);

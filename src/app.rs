@@ -26,7 +26,9 @@ use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout,
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
-use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE, StartupMode, WindowConfig};
+use crate::config::{
+    self, Config, ConfigError, FontConfig, MAX_FONT_SIZE, MIN_FONT_SIZE, StartupMode, WindowConfig,
+};
 use crate::cursor_blink::CursorBlink;
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
@@ -47,6 +49,7 @@ use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
 use crate::view::RowSource;
+use crate::watcher;
 use crate::window_state::{self, WindowState};
 use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
 use crate::workspace::{self, DIVIDER_THICKNESS, TabBarPosition, Workspace};
@@ -568,6 +571,44 @@ impl Session {
             }
         }
         self.window.request_redraw();
+    }
+
+    /// Applies a reloaded configuration, `old` being the one applied so far. The window
+    /// size and startup mode only affect the windows created afterwards.
+    fn apply_config(
+        &mut self,
+        old: &Config,
+        new: &Config,
+        palette: &Palette,
+        banner: Option<Banner>,
+    ) {
+        let term_config = new.term_config();
+        for (_, pane) in self.workspace.panes_mut() {
+            // Lock order: `term`, then `timeline`.
+            let mut term = pane.terminal.term.lock();
+            term.set_options(term_config.clone());
+            pane::lock(&pane.terminal.timeline).set_scrollback(new.scrollback_lines);
+        }
+        self.term_config = term_config;
+
+        let font_size = reloaded_font_size(&old.font, &new.font, self.font_size);
+        if new.font.family != old.font.family {
+            self.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+            let scale = self.window.scale_factor() as f32;
+            self.renderer
+                .set_font(new.font.family.clone(), self.font_size * scale);
+        } else if font_size != self.font_size {
+            self.apply_font_size(font_size);
+        }
+        self.padding = new.window.padding;
+        self.renderer
+            .set_background_opacity(new.window.background_opacity);
+        self.palette = palette.clone();
+        self.keybindings = Keybindings::new(&new.keybindings);
+        self.config_banner = banner;
+        // A changed cursor style shows at once, visible.
+        self.reset_blink();
+        self.relayout();
     }
 
     fn apply_font_size(&mut self, font_size: f32) {
@@ -1600,6 +1641,17 @@ fn initial_window(
     }
 }
 
+/// Font size of a session after a reload from `old` to `new`, `current` being the size
+/// shown (zoom included): the configured size when it changed, dropping the zoom in
+/// progress, else `current`.
+fn reloaded_font_size(old: &FontConfig, new: &FontConfig, current: f32) -> f32 {
+    if new.size == old.size {
+        current
+    } else {
+        new.size
+    }
+}
+
 fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -1707,6 +1759,22 @@ impl App {
         })
     }
 
+    /// Reads the configuration and its theme again after a change on disk, and applies
+    /// them to the open window.
+    fn reload_config(&mut self) {
+        let (config, errors) = config::reload(&self.config);
+        let (config, palette, banner) = with_theme(config, errors);
+        let old = std::mem::replace(&mut self.config, config);
+        self.palette = palette;
+        self.config_banner = banner.clone();
+        if let Some(session) = self.session.as_mut() {
+            session.apply_config(&old, &self.config, &self.palette, banner);
+            if old.updates != self.config.updates {
+                self.update_checker.apply(&self.config.updates);
+            }
+        }
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
         self.error = Some(error);
         event_loop.exit();
@@ -1746,6 +1814,9 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        if let UserEvent::ConfigChanged = event {
+            return self.reload_config();
+        }
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -1757,6 +1828,7 @@ impl ApplicationHandler<UserEvent> for App {
                 session.update.set(release);
                 session.window.request_redraw();
             }
+            UserEvent::ConfigChanged => {}
         }
         session.flush_panes();
     }
@@ -1819,7 +1891,13 @@ impl ApplicationHandler<UserEvent> for App {
 /// Loads the configuration file and its theme. Errors are logged and reported by the
 /// returned banner.
 fn load_config() -> (Config, Palette, Option<Banner>) {
-    let (config, mut errors) = config::load();
+    let (config, errors) = config::load();
+    with_theme(config, errors)
+}
+
+/// Loads the theme of `config`; `errors`, those of the configuration file, and the
+/// theme's are logged and reported by the returned banner.
+fn with_theme(config: Config, mut errors: Vec<ConfigError>) -> (Config, Palette, Option<Banner>) {
     let (palette, theme_errors) = theme::load(&config.theme.name, config::config_dir().as_deref());
     errors.extend(theme_errors);
     for error in &errors {
@@ -1832,6 +1910,13 @@ pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner) = load_config();
+    if let Some(dir) = config::config_dir() {
+        let proxy = event_loop.create_proxy();
+        watcher::spawn(dir, move || {
+            // The event loop may already be closed during shutdown.
+            let _ = proxy.send_event(UserEvent::ConfigChanged);
+        });
+    }
     let mut app = App {
         update_checker: Checker::new(move |release| {
             // The event loop may already be closed during shutdown.
@@ -1865,6 +1950,34 @@ mod tests {
         assert_eq!(earliest(None, Some(later)), Some(later));
         assert_eq!(earliest(Some(now), None), Some(now));
         assert_eq!(earliest(None, None), None);
+    }
+
+    fn font(family: Option<&str>, size: f32) -> FontConfig {
+        FontConfig {
+            family: family.map(str::to_owned),
+            size,
+        }
+    }
+
+    #[test]
+    fn reload_keeps_the_zoom_when_the_font_size_did_not_change() {
+        assert_eq!(
+            reloaded_font_size(&font(None, 14.0), &font(None, 14.0), 18.0),
+            18.0
+        );
+        // A new family alone keeps the zoom too.
+        assert_eq!(
+            reloaded_font_size(&font(None, 14.0), &font(Some("Fira Code"), 14.0), 18.0),
+            18.0
+        );
+    }
+
+    #[test]
+    fn reload_applies_a_changed_font_size_and_drops_the_zoom() {
+        assert_eq!(
+            reloaded_font_size(&font(None, 14.0), &font(None, 12.0), 18.0),
+            12.0
+        );
     }
 
     fn window_config(startup_mode: StartupMode) -> WindowConfig {

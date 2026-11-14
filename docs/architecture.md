@@ -31,6 +31,7 @@ src/
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
+  watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
@@ -210,6 +211,21 @@ Renderer::render(pane frames, interface rects)
   `opener::open`, "×" hides the banner until a newer release, "Ignore this version"
   hides it and sends `Command::Ignore` to the thread, which writes `ignored` in
   `update.json` (written directly when the thread is not running).
+
+- The `config-watcher` thread (`src/watcher.rs`, started in `app::run` when the config
+  directory exists) watches that directory and its `themes/` with `notify`,
+  non-recursively: the directory, not the file, since editors save through a rename
+  that replaces the watched inode. Creations, changes and removals of `config.toml` or
+  of a `themes/*.toml` are debounced (100 ms after the last one) and sent as
+  `UserEvent::ConfigChanged`; reads are ignored, so the reload does not trigger itself.
+  `App::reload_config` parses `config.toml` with the applied configuration as
+  `previous` (an invalid value keeps its previous value, a syntax error the whole
+  previous configuration), loads its theme, replaces the banner, then
+  `Session::apply_config` updates every pane (`Term::set_options`, the timeline
+  scrollback), the font (`Renderer::set_font` when the family changed; a changed
+  `font.size` resets the zoom, see `reloaded_font_size`), the padding, the background
+  opacity, the palette and the keybindings, then lays the panes out again. `width`,
+  `height` and `startup_mode` only affect windows created afterwards.
 
 ## Window startup
 
