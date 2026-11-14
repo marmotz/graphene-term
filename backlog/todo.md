@@ -2,40 +2,6 @@
 
 # Backlog
 
-## CI tests ·  [overview](features/ci-tests/overview.md)
-
-_terminé — voir [technical.md](features/ci-tests/technical.md)_ — 2/2 tasks done
-
-| Done | Issue                                                     | Title                                         | Blocked by |
-|------|-----------------------------------------------------------|-----------------------------------------------|------------|
-| [x]  | [#50](https://github.com/marmotz/graphene-term/issues/50) | CI: format the code base with rustfmt         | —          |
-| [x]  | [#51](https://github.com/marmotz/graphene-term/issues/51) | CI: GitHub Actions workflow for pull requests | #50        |
-
-## Command blocks ·  [overview](features/command-blocks/overview.md)
-
-_tâches créées — voir [technical.md](features/command-blocks/technical.md)_ — 7/18 tasks done
-
-| Done | Issue                                                     | Title                                                                  | Blocked by |
-|------|-----------------------------------------------------------|------------------------------------------------------------------------|------------|
-| [X]  | [#6](https://github.com/marmotz/graphene-term/issues/6)   | Command blocks: own PTY loop replacing alacritty's EventLoop           | —          |
-| [X]  | [#7](https://github.com/marmotz/graphene-term/issues/7)   | Command blocks: OSC 133 stream scanner                                 | —          |
-| [X]  | [#8](https://github.com/marmotz/graphene-term/issues/8)   | Command blocks: shell integration scripts and automatic injection      | —          |
-| [X]  | [#9](https://github.com/marmotz/graphene-term/issues/9)   | Command blocks: shell state, cell tags and row index                   | #6, #7     |
-| [X]  | [#10](https://github.com/marmotz/graphene-term/issues/10) | Command blocks: gutter, view rows and block decorations                | #9         |
-| [X]  | [#11](https://github.com/marmotz/graphene-term/issues/11) | Command blocks: block selection, navigation and copy actions           | #10        |
-| [X]  | [#12](https://github.com/marmotz/graphene-term/issues/12) | Command blocks: folding, chevron, summary and auto-fold                | #11        |
-| [X]  | [#70](https://github.com/marmotz/graphene-term/issues/70) | Command blocks: rounded corners and vector shapes in the rect pipeline | —          |
-| [X]  | [#71](https://github.com/marmotz/graphene-term/issues/71) | Command blocks: card layout and view geometry with gaps                | —          |
-| [X]  | [#72](https://github.com/marmotz/graphene-term/issues/72) | Command blocks: card frame and scene rendering                         | #70, #71   |
-| [X]  | [#73](https://github.com/marmotz/graphene-term/issues/73) | Command blocks: selected block shown as a highlighted card             | #72        |
-| [x]  | [#74](https://github.com/marmotz/graphene-term/issues/74) | Command blocks: private OSC signals scanner                            | —          |
-| [x]  | [#75](https://github.com/marmotz/graphene-term/issues/75) | Command blocks: timeline model with live grid and frozen blocks        | #74        |
-| [x]  | [#76](https://github.com/marmotz/graphene-term/issues/76) | Command blocks: view over the timeline with capped blocks              | #75        |
-| [x]  | [#77](https://github.com/marmotz/graphene-term/issues/77) | Command blocks: switch the PTY loop and rendering to the timeline      | #76        |
-| [x]  | [#78](https://github.com/marmotz/graphene-term/issues/78) | Command blocks: start and end hooks for zsh, bash and fish             | #74, #77   |
-| [x]  | [#79](https://github.com/marmotz/graphene-term/issues/79) | Command blocks: block and timeline scrolling, mouse routing            | #77        |
-| [x]  | [#80](https://github.com/marmotz/graphene-term/issues/80) | Command blocks: cross-block selection, block actions and copy          | #79        |
-
 ## Configuration file and themes ·  [overview](features/config-themes/overview.md)
 
 _tâches créées, voir [technical.md](features/config-themes/technical.md)_ — 3/11 tasks done
@@ -69,29 +35,6 @@ _tâches créées, voir [technical.md](features/images-links/technical.md)_ — 
 | [ ]  | [#30](https://github.com/marmotz/graphene-term/issues/30) | Images: kitty animations                                 | #25        |
 | [ ]  | [#31](https://github.com/marmotz/graphene-term/issues/31) | Images: copy text and image to the clipboard             | #23, #25   |
 
-## Mouse reporting ·  [overview](features/mouse-reporting/overview.md)
-
-_terminé, voir [technical.md](features/mouse-reporting/technical.md)_ — 4/4 tasks done
-
-| Done | Issue                                                     | Title                                                             | Blocked by |
-|------|-----------------------------------------------------------|-------------------------------------------------------------------|------------|
-| [x]  | [#45](https://github.com/marmotz/graphene-term/issues/45) | Mouse: pure encoding module for mouse, focus and alternate scroll | —          |
-| [x]  | [#46](https://github.com/marmotz/graphene-term/issues/46) | Mouse: report clicks, drag and motion to applications             | #45        |
-| [x]  | [#47](https://github.com/marmotz/graphene-term/issues/47) | Mouse: report the wheel, Shift + wheel scrolls the history        | #45        |
-| [x]  | [#48](https://github.com/marmotz/graphene-term/issues/48) | Mouse: arrow pointer while an application captures the mouse      | —          |
-
-## Performance ·  [overview](features/performance/overview.md)
-
-_terminé, voir [technical.md](features/performance/technical.md)_ — 5/5 tasks done
-
-| Done | Issue                                                     | Title                                                 | Blocked by |
-|------|-----------------------------------------------------------|-------------------------------------------------------|------------|
-| [x]  | [#64](https://github.com/marmotz/graphene-term/issues/64) | Performance: local benchmarks and startup timing logs | —          |
-| [x]  | [#65](https://github.com/marmotz/graphene-term/issues/65) | Performance: glyph cache and atlas allocator          | —          |
-| [x]  | [#66](https://github.com/marmotz/graphene-term/issues/66) | Performance: glyph pipeline replaces glyphon          | #65        |
-| [x]  | [#67](https://github.com/marmotz/graphene-term/issues/67) | Performance: spawn the shell before the GPU init      | #65        |
-| [x]  | [#68](https://github.com/marmotz/graphene-term/issues/68) | Performance: try the Vulkan backend first             | #64        |
-
 ## Rich input editor ·  [overview](features/rich-input-editor/overview.md)
 
 _tâches créées — voir [technical.md](features/rich-input-editor/technical.md)_ — 0/5 tasks done
@@ -103,18 +46,6 @@ _tâches créées — voir [technical.md](features/rich-input-editor/technical.m
 | [ ]  | [#32](https://github.com/marmotz/graphene-term/issues/32) | Rich input editor: rich mode, editor moves and click to move the cursor  | #27, #29, #9 |
 | [ ]  | [#33](https://github.com/marmotz/graphene-term/issues/33) | Rich input editor: keyboard selection in the input                       | #32          |
 | [ ]  | [#34](https://github.com/marmotz/graphene-term/issues/34) | Rich input editor: typing replaces the input selection                   | #32          |
-
-## Selection and copy ·  [overview](features/selection-copy/overview.md)
-
-_terminé — voir [technical.md](features/selection-copy/technical.md)_ — 5/5 tasks done
-
-| Done | Issue                                                   | Title                                                                      | Blocked by |
-|------|---------------------------------------------------------|----------------------------------------------------------------------------|------------|
-| [x]  | [#1](https://github.com/marmotz/graphene-term/issues/1) | Selection: pure helpers, semantic separators and pixel-to-cell geometry    | —          |
-| [x]  | [#2](https://github.com/marmotz/graphene-term/issues/2) | Selection: highlight selected cells in the frame                           | —          |
-| [x]  | [#3](https://github.com/marmotz/graphene-term/issues/3) | Selection: mouse selection, copy, primary selection and middle-click paste | #1, #2     |
-| [x]  | [#4](https://github.com/marmotz/graphene-term/issues/4) | Selection: auto-scroll while dragging past the grid edges                  | #3         |
-| [x]  | [#5](https://github.com/marmotz/graphene-term/issues/5) | Selection: clear the selection only when its text really changes           | #3         |
 
 ## Tabs, splits and command palette ·  [overview](features/tabs-splits-palette/overview.md)
 
@@ -132,14 +63,3 @@ _tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md
 | [ ]  | [#43](https://github.com/marmotz/graphene-term/issues/43) | Tabs: close confirmation dialog                                               | #35, #42   |
 | [ ]  | [#44](https://github.com/marmotz/graphene-term/issues/44) | Tabs: command palette and docs                                                | #35, #43   |
 | [x]  | [#35](https://github.com/marmotz/graphene-term/issues/35) | Tabs: translation table and language detection                                | —          |
-
-## Update notification ·  [overview](features/update-notification/overview.md)
-
-_terminé, voir [technical.md](features/update-notification/technical.md)_ — 4/4 tasks done
-
-| Done | Issue                                                     | Title                                                            | Blocked by    |
-|------|-----------------------------------------------------------|------------------------------------------------------------------|---------------|
-| [x]  | [#56](https://github.com/marmotz/graphene-term/issues/56) | Updates: build timestamp version and tag derived from the binary | —             |
-| [x]  | [#57](https://github.com/marmotz/graphene-term/issues/57) | Updates: settings, state file and GitHub release check           | #56, #14      |
-| [x]  | [#58](https://github.com/marmotz/graphene-term/issues/58) | Updates: background check thread and update event                | #57           |
-| [x]  | [#59](https://github.com/marmotz/graphene-term/issues/59) | Updates: banner with open, ignore and close actions              | #58, #18, #35 |
