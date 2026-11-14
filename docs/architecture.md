@@ -9,9 +9,11 @@
 | Font loading, fallback, raster    | `cosmic-text` (glyphs drawn by our own wgpu pipeline)    | 0.19    |
 | PTY, VT parsing, grid, scrollback | `alacritty_terminal`                                     | 0.26    |
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
+| Clipboard with an image           | `wl-clipboard-rs` (Wayland) + `x11rb` (X11 selection owner) | 0.9, 0.13 |
 | Config file                       | `toml` + `serde`                                         | 1       |
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
+| Kitty graphics: PNG, zlib, base64 | `png` + `flate2` + `base64`                              | 0.18, 1, 0.22 |
 
 ## Modules
 
@@ -31,6 +33,23 @@ src/
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
+  graphics/
+    mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
+                   StoreHandler (runs kitty commands, keeps their PTY replies, places the
+                   sixel images, clears the image store on a full reset)
+    kitty.rs       kitty graphics protocol: control keys, chunked transfer, media (direct,
+                   file, temp file, shared memory), base64 / zlib / PNG / raw decoding,
+                   transmit / put / query / delete, animation frames / control /
+                   composition, replies
+    sixel.rs       sixel decoder to RGBA: color registers (RGB / HLS), repeat, `$`, `-`,
+                   raster attributes, background from p2 (pure)
+    sequence.rs    incremental splitter of the kitty and sixel sequences in the PTY stream (pure)
+    store.rs       ImageStore: images (RGBA frames and gaps, generation, animation
+                   playback), placements, 256 MiB budget with oldest-first eviction,
+                   terminal-assigned ids (pure, time passed in)
+    placeholder.rs Unicode placeholder cells: place an image at the cursor, erase it,
+                   decode a row of cells into image cells (pure, on a Term)
+    diacritics.rs  kitty's row / column diacritics table
   timeline.rs      command blocks: finished blocks frozen in their own Term, current block (pure)
   block_actions.rs target block, block navigation, copied block / command / output (pure)
   view.rs          view rows over the timeline: source grid and line of each row, caps,
@@ -43,13 +62,18 @@ src/
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
+  links.rs         OSC 8 and detected URL under a point, hover / click / open rules (pure)
   opener.rs        opens a URI with xdg-open from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
+                   (image placeholders stripped), image placements inside a selection
+  clipboard.rs     copy with an image: text or image choice, PNG of the shown part, Wayland
+                   offer (`wl-clipboard-rs`), X11 selection owner thread (`x11rb`, INCR)
   chrome/
     command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
     scene.rs       interface layer: tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
+    tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
     state.rs       update.json state file (last check, latest release, ignored tag)
@@ -65,6 +89,8 @@ src/
     cell.wgsl      shader for glyphs (mask tinted with the cell color, or color glyph)
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
+    images.rs      textured image quad pipeline, one texture per image frame
+    image.wgsl     shader for images
 themes/            built-in themes, embedded with include_str!
 shell-integration/ zsh, bash and fish scripts (block signals, editor key bindings), embedded with include_str!
 benches/
@@ -72,7 +98,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
@@ -122,7 +148,9 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 UI thread (winit)                         PTY thread (pty::PtyLoop)
 -----------------                         -------------------------
 keyboard / mouse  --pty::Sender(Msg)-->   writes to PTY (WriteQueue)
-                                          reads PTY, signals::Scanner splits it,
+                                          reads PTY, graphics::sequence::Splitter
+                                          cuts the image sequences out,
+                                          signals::Scanner splits the VT bytes,
                                           pty::feed parses VT into Term,
                                           Timeline::apply handles each signal
 request_redraw   <--UserEvent::Terminal-- EventProxy::send_event(Wakeup, Title, ...)
@@ -135,8 +163,10 @@ Renderer::render(pane frames, interface rects)
 
 - `Term` is shared as `Arc<FairMutex<Term<EventProxy>>>`. The UI thread only holds the
   lock to read the mode, scroll, resize or capture a frame.
-- The `Timeline` (`src/timeline.rs`) is shared as `Arc<Mutex<Timeline>>` in `Terminal`.
-  Lock order, everywhere: `Term` first, then `Timeline`.
+- The `Timeline` (`src/timeline.rs`) is shared as `Arc<Mutex<Timeline>>` in `Terminal`,
+  and so is the `graphics::ImageStore` (`Arc<Mutex<ImageStore>>`, written by the PTY
+  thread, read when a frame is captured). Lock order, everywhere: `Term`, then
+  `Timeline`, then `ImageStore`.
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
 - When the shell of a pane exits, the pane closes, without confirmation; the last pane
@@ -152,7 +182,16 @@ Renderer::render(pane frames, interface rects)
   `Msg::{Input, Resize, Shutdown}` sent through `pty::Sender` (mpsc + `poller.notify()`);
   a `WriteQueue` resumed on partial writes; `EIO` on read ignored until the child exit
   event; synchronized updates flushed with `stop_sync` on their timeout. Each read goes
-  through `pty::process`: `signals::Scanner` (built with the session token) splits it
+  through `pty::handle_output`: `graphics::sequence::Splitter` first cuts the kitty
+  graphics commands (`ESC _ G ... ESC \`) and sixel images (DCS with final `q`) out of
+  the raw bytes, keeping its state across reads and passing every other APC / DCS
+  through; for each image sequence, and after each full reset (`ESC c`), a synchronized
+  update holding bytes is flushed and the `graphics::Handler` runs with the `Term` lock
+  held: `graphics::StoreHandler` runs the kitty commands (`graphics::kitty::Kitty`)
+  against the grid and the pane's `ImageStore`, places the sixel images, and clears the
+  store on a full reset. The kitty replies it keeps are pushed to
+  the `WriteQueue` after each parsed read. The cell pixel size given at spawn and on each
+  `Msg::Resize` sizes the kitty placements without `c` / `r` and the sixel images. The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
   into byte chunks, block signals and screen clears; each byte chunk is parsed by
   `pty::feed` (the single parse step), and each signal or clear is applied by
   `Timeline::apply` right after the bytes of its sequence, so the live grid holds
@@ -260,6 +299,19 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
   selection and to `Ctrl+Shift+C`. `Ctrl+Shift+Alt+C` / `O` copy the command (the
   signal's command line, or the last header row) / the output; an empty part leaves the
   clipboard untouched.
+- Copy with images (`Pane::copy_content`, `clipboard.rs`): copied text never holds the
+  image placeholders (`clean_copied_text` strips `U+10EEEE` and its diacritics). When
+  the text selection covers exactly one image placement
+  (`timeline_selection::images`, over every grid), `Ctrl+Shift+C` offers the shown part
+  (placement source rectangle) of the image's current frame as `image/png`, with the
+  text when there is any; no image or several images copy the text only through
+  `arboard`. On Wayland (`WAYLAND_DISPLAY` set) `wl-clipboard-rs` serves both MIME
+  types from its own thread; without data control, or on X11, a new `x11rb` connection
+  owns `CLIPBOARD` and a `clipboard-owner` thread answers `TARGETS`, `UTF8_STRING`,
+  `text/plain;charset=utf-8` and `image/png` (data over 256 KiB, or the server's
+  maximum request size, sent with `INCR`) until another client takes the selection. If
+  both fail, the text is copied through `arboard`. The primary selection stays text
+  only.
 
 ## Rendering pipeline
 
@@ -271,13 +323,20 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    block cards (`Frame::cards`, by `frame::marks`): character, final fg/bg (after DIM, INVERSE, HIDDEN, OSC overrides),
    bold/italic/underline/strikeout, wide-char spacer flag.
    The block cursor is baked into the cell colors; other shapes (beam, underline,
-   hollow when unfocused) are returned separately.
+   hollow when unfocused) are returned separately. A placeholder cell (`U+10EEEE`, see
+   "Images") becomes an image cell (`FrameCell::image`: image, placement, row, column)
+   with no text and no background; `Frame::attach_images` then looks up each shown
+   placement in the pane's `ImageStore` (`Frame::images`: box in cells, source rect,
+   current frame pixels).
 2. `scene::build` converts the frame into:
     - `under` rects: the card backgrounds (radius a quarter of a cell height) and
       status stripes (a sixth of a cell wide, at least 2 px, round ends), then the cell
       backgrounds, consecutive same-color cells merged, default background skipped (it
       is the clear color, so the card shows through); rows are placed at
       `GridLayout::row_top` of their view offset (`Frame::row_tops`, in half-lines);
+    - image quads: one per run of image cells showing consecutive columns of one row of
+      one placement; the image is scaled to fit its placement's box of cells, aspect
+      ratio kept, centered, and each quad shows the part falling in its cells;
     - `over` rects: underline, strikeout, the fold chevrons (disc and triangle, SDF
       shapes of the rect pipeline), non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
@@ -292,14 +351,16 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    there are several tabs. The panes area is the window minus the bar. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
-   the window height) goes to the overlay rects and texts of the layer.
+   the window height) goes to the overlay rects and texts of the layer. The link
+   tooltip (`chrome::tooltip::TooltipLayout`, added by `chrome::scene::tooltip`) comes
+   last in the overlay.
 4. `Renderer::render` builds the scene of each pane with its own `GridLayout`, resolves
    the glyph instances through the glyph cache (one group per pane, then the interface
    text, the banner, the overlay text), uploads the newly rasterized glyphs, then draws
    in one pass: clear; for each pane, clipped to its rect by a scissor, `under` rects,
-   glyphs, `over` rects; then over the whole window the interface rects, the interface
+   images, glyphs, `over` rects; then over the whole window the interface rects, the interface
    text, the banner rects and glyphs, and the overlay rects and text, so the dialog
-   or the palette covers everything. Colors are linearized when the surface
+   or the palette covers everything, and the link tooltip covers them in turn. Colors are linearized when the surface
    format is sRGB.
 
 The interface text (`renderer/ui_text.rs`) uses its own font: sans-serif, at a size
@@ -320,6 +381,91 @@ and `Session::left_press` hit-tests the banner before starting a selection.
 
 The configuration error banner shows the first error of `config.toml` and the theme
 file ("(+N more)" when there are several); every error is also logged. A click hides it.
+
+### Images
+
+An image is anchored in the grid by placeholder cells, as kitty's Unicode placeholders:
+`graphics::place` writes `U+10EEEE` at the cursor for each cell of the placement, the
+image id in the foreground color (low 24 bits; its high byte in a third diacritic), the
+placement id in the underline color, and the cell's row and column in the image as
+combining diacritics (kitty's table, `graphics/diacritics.rs`). Rows go down from the
+cursor line, scrolling at the bottom like text, and are clipped at the right edge. `Term`
+then scrolls, erases, keeps in history and clears these cells like any other, and
+`graphics::erase` blanks the cells of a deleted image or placement (screen and history).
+A cell without a column diacritic continues its left neighbour (column + 1).
+
+Kitty graphics (`graphics/kitty.rs`): a command is parsed from its control keys; a
+chunked transfer (`m=1`) collects the base64 data of every chunk until `m=0` and runs the
+first chunk's command (a later `q` applies to the reply). The data is base64 (padding
+optional), or names a file (`t=f`, not under `/proc`, `/sys`, `/dev`), a temporary file
+(`t=t`, only under the temp directory with `tty-graphics-protocol` in its path, deleted
+after reading) or a POSIX shared memory object (`t=s`, unlinked after reading), with `S`
+and `O` selecting a range. It is inflated when `o=z`, then decoded as PNG (`f=100`) or
+raw RGB / RGBA (`f=24` / `f=32` with `s`, `v`). Every decoded or read size is capped at
+the 256 MiB store budget.
+
+- `a=t` stores the image; `a=T` also places it; `a=q` decodes without storing. A client
+  id `i` replaces the image of that id and erases its direct placements; an image
+  number `I` gets a terminal id from the top of the 32-bit range, and `a=p` / `d=n` with
+  `I` address the newest image of that number.
+- `a=p` places an image. A direct placement writes its cells at the cursor through
+  `graphics::place` (cursor after the image, kept with `C=1`); without `p` it gets its own
+  placement id counting down from `0xFFFFFF`, so several unnamed placements of one image
+  coexist, and a reused `p` erases the old cells. A virtual placement (`U=1`) is only
+  recorded. Its box is `c` x `r`, the missing one keeping the aspect ratio, or the cells
+  the source rectangle (`x`, `y`, `w`, `h`) covers.
+- `a=d` removes placements (lowercase) or also frees the images left without placement
+  (uppercase): all on screen (`a`), by id (`i`, with `p`), by number (`n`), at the cursor
+  (`c`), at a cell (`p`, `q` with `z`), in a column (`x`) or row (`y`), by `z`, by id
+  range (`r`). Position deletes scan the placeholder cells of the screen; the cells of a
+  virtual placement, printed by the client, stay.
+- A command naming an image (`i` or `I`) gets `ESC _ G i=..,I=..,p=..;OK ESC \` or
+  `CODE:message` (`EINVAL`, `ENOENT`, `ENODATA`, `EFBIG`, `EBADF`); `q=1` mutes `OK`,
+  `q=2` mutes errors too.
+
+Kitty animations: an image holds its frames, each with a gap in milliseconds (0 is a
+gapless frame, skipped when playing; the root frame starts gapless, new frames get 40
+ms), and is redrawn when its shown frame changes (generation).
+
+- `a=f` adds a frame as large as the root frame, or edits frame `r`. Its data covers the
+  rectangle at `x`, `y` (`s` x `v`, the whole image by default), drawn over the base
+  frame `c`, or over the `Y` background color (`0xRRGGBBAA`, transparent by default):
+  alpha blended, or overwriting with `X=1`. `z` sets the gap, negative for gapless, 0
+  keeping the default (or an edited frame's gap). It replies like `a=t`.
+- `a=a` sets the gap of frame `r` (`z`), shows frame `c`, the loop count `v` (1 forever,
+  `n` plays `n - 1` loops) and the state `s`: 1 stops (and resets the loop counter), 2
+  plays and waits on the last frame for more frames, 3 plays and loops. Only errors are
+  replied, as kitty does.
+- `a=c` copies the `w` x `h` rectangle (the whole frame by default) of frame `r` at `X`,
+  `Y` onto frame `c` at `x`, `y`, blended or overwriting with `C=1`; a rectangle out of
+  the frame, or overlapping itself within one frame, is `EINVAL`.
+- `d=f` / `d=F` removes frame `r` (clamped to the last frame, the first when 0). The only
+  frame left stays; `d=F` then frees the image if it has no placement.
+
+Playback (`ImageStore::advance`, `next_frame_deadline`) only runs for images that play
+(not stopped, several frames, some frame with a gap) and have a placement. When a loop
+count runs out, the animation stops on the first frame. After a long pause (hidden pane,
+sleep) playback resumes from the current time instead of replaying the missed frames.
+
+Sixel (`graphics/sixel.rs`): the DCS body `<p1>;<p2>;<p3>q<data>` is decoded to RGBA with
+1024 color registers (the first 16 start with the VT340 palette), `#Pc;1;H;L;S` (HLS, DEC
+hue: 0 blue, 120 red, 240 green) and `#Pc;2;R;G;B` (percent) definitions, `!Pn` repeats,
+`$` (back to column 0) and `-` (next band of 6 rows). Pixels are square (the aspect
+ratio of `p1` and `"` is ignored, like xterm and foot). The image is as wide as the
+raster attributes (`"Pan;Pad;Ph;Pv`) or the columns reached, and as high as the raster
+or the painted rows; with `p2 = 1` unset pixels are transparent, otherwise they take
+color register 0 and a filled image without raster keeps whole bands. Sides are capped
+at 8192 px. `StoreHandler` stores each sixel as a new image (terminal-assigned id,
+placement 1), padded with transparent pixels to whole cells of the current cell size so
+it keeps its pixel size at the top-left of its box, and places it with
+`graphics::place`, cursor on the line below the image at its first column. An image no
+cell shows any more stays in the store until the budget evicts it.
+
+The pixels live in the pane's `ImageStore` as `Pixels` (immutable RGBA, a process-wide
+uid). `ImageRenderer` (`renderer/images.rs`) keys one texture on each uid: uploaded the
+first time a frame is drawn (sRGB format on an sRGB target), dropped once no store holds
+those pixels. Quads of the same texture are drawn in one call. A frame larger than the
+GPU texture limit is not drawn.
 
 ### Glyphs
 
@@ -386,6 +532,11 @@ is reset with the glyph cache, and the frame is resolved again.
   auto_scroll_delta` lines (1 plus 1 per cell height of overflow, capped at 10) every
   50 ms (`ControlFlow::WaitUntil`) and the selection end follows the edge row. Disabled
   on the alternate screen, which has no history.
+- Animations: `about_to_wait` also calls `Session::animate`, which advances the due
+  frames of the image stores of the shown panes (redraw requested when a frame changed)
+  and returns the next frame deadline. The event loop waits until the earliest of it and
+  the auto-scroll deadline; with neither, it waits for events only, so no timer runs
+  while no shown pane plays an animation.
 - Middle press pastes the primary selection through `input::paste_bytes` and, like
   every paste, clears the selection.
 - Text change: the release stores a `selection::SelectionSnapshot` in the `Session`.
@@ -398,3 +549,34 @@ is reset with the glyph cache, and the frame is resolved again.
   on a chevron disc (`Hit::Chevron`) is checked first and is always Graphene's, even
   under mouse reporting: the chevron toggles the fold of a card that has one, the
   margin selects the block of its row (see Command blocks), elsewhere it is ignored. A left press on a fold summary unfolds its block instead of selecting.
+
+### Links
+
+- `links::link_at(term, point)` on the grid of the cell under the pointer (the live
+  grid, or the frozen header or output of a block, `Pane::link_at`): the OSC 8
+  hyperlink of the cell (`Cell::hyperlink`), extended over the adjacent cells with the
+  same id and URI across wrapped lines; otherwise a URL found by a `RegexSearch` over
+  the logical line (`line_search_left` / `line_search_right`) for `http`, `https`,
+  `file` and `mailto`, trailing punctuation and unbalanced `)` / `]` trimmed. A `Link`
+  carries its cell range, its URI and `explicit` (OSC 8).
+- Hover: `Session::update_hover` looks the link up again when the cell under the mouse
+  changes (`CursorMoved`, wheel, release) and always on a `Wakeup` of the hovered pane,
+  and keeps `hovered_link`; none while an overlay is open or a gesture is in progress.
+  The link is Graphene's (`Session::active_link`, `links::active`) except over rows
+  where the application captures the mouse (`Pane::captures`), where `Ctrl` must be
+  held. An active link turns the pointer into the hand and is underlined by
+  `Frame::underline_link` after the capture.
+- Click: a left press on a link records a `LinkPress` (cell, click rank, modifiers,
+  whether the application captured the mouse); the selection logic runs unchanged, so
+  drag, double and triple-click from a link select as before. Where the application
+  captures the mouse, a `Ctrl` + press on a link is consumed by Graphene (never
+  reported). The release opens the link when `links::click_opens` allows it (same
+  cell, same link, simple click without `Shift`, or the consumed `Ctrl` + click) and
+  `links::may_open` too, through `opener::open`.
+- Tooltip: while the active link is an OSC 8 one (`explicit`), `Session::tooltip_layout`
+  places its URI in a box (`chrome::tooltip::TooltipLayout`: below and right of the
+  pointer, moved left to stay in the window, above the pointer near the bottom edge,
+  at most the window width with the URI cut by an ellipsis) drawn last in the overlay.
+  It goes away with the hovered link (mouse moved off it, `CursorLeft`, content
+  changed on `Wakeup`) and on a wheel event (`tooltip_hidden`, cleared by the next
+  mouse move).

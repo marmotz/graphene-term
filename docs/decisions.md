@@ -28,6 +28,73 @@ parse step `pty::feed` can be split around signals. alacritty's `tty` module sti
 shell and owns the PTY file descriptors. Poller keys `0` (read/write) and `1` (child
 event) mirror alacritty's unix `tty`, where they are `pub(crate)`.
 
+## Image splitter before the block signal scanner
+
+`vte` 0.15 drops APC strings and `alacritty_terminal` only logs DCS, so kitty graphics and
+sixel never reach Graphene through the parser. `graphics::sequence::Splitter` cuts them
+out of the raw PTY bytes first, before `signals::Scanner`: an image payload (megabytes of
+base64 or sixel data) is never scanned for block signals, and the scanner sees the VT bytes
+around an image as one contiguous stream. Only `ESC _ G` and DCS with final byte `q` and no
+intermediate are extracted; other APC / DCS strings pass through byte for byte, so `vte`
+keeps its behaviour (DECRQSS `ESC P $ q` included). A payload over 256 MiB (the image store
+budget) is dropped up to its terminator; `ESC`, `CAN` or `SUB` inside a payload abort it,
+as in `vte`. `Term` reports no full reset, so the splitter flags `ESC c` in the passed
+bytes.
+
+## Images anchored by placeholder cells
+
+Every image, kitty or sixel, is anchored in the grid by kitty's Unicode placeholder cells
+(`U+10EEEE`, ids in the foreground and underline colors, row and column as diacritics)
+rather than kept in a side table with line anchors. `Term` then handles scrolling,
+scrollback, erase, the alternate screen and the full reset for images exactly as for
+text, which a side table could not follow (`Term` exposes no scroll or erase event), and
+kitty's virtual placements (`U=1`, printed by tmux or editors) render through the same
+path. Accepted limits, inherent to the cell model: text printed over an image replaces
+that part of it (like sixel, unlike kitty which keeps the image above the text); no image
+is drawn under the text (`z < 0` is drawn like `z >= 0`); a column resize reflows the
+placeholder rows like text, which can cut an image on a narrow window (growing it back
+restores it); an image is clipped to 297 rows and columns (the diacritics table). The
+image is scaled to fit its box of cells, so a font zoom rescales it with the text.
+Textures are keyed on the pixels' uid and dropped when no store holds them, so an
+animation frame or a replaced image needs no explicit invalidation.
+
+## Kitty animations: frames stored whole, played on the UI thread
+
+Each animation frame is stored as a full RGBA canvas, composed when it arrives (`a=f`,
+`a=c`), instead of kitty's lazily applied operations: drawing a frame is then a plain
+texture upload, at the cost of memory (the 256 MiB budget counts every frame, and a
+frame that does not fit is refused with `EFBIG`). Playback state lives in the
+`ImageStore` with the frames, and the UI thread advances it from `about_to_wait`
+(`ControlFlow::WaitUntil` on the next frame deadline) rather than on a timer thread:
+only shown panes advance, nothing wakes the loop while nothing plays, and the PTY thread
+only changes the state. A paused or hidden animation resumes from the current time.
+When its loop count runs out it stops on the first frame, and a new `s=3` plays it
+again. An animation control (`a=a`) gets no `OK` reply, as in kitty.
+
+## Kitty graphics: unnamed placements and replies
+
+A kitty direct placement without `p` gets its own placement id, counting down from
+`0xFFFFFF` (the placement id travels in a 24-bit underline color), instead of sharing
+placement 0: each unnamed placement keeps its own box and source rectangle, as kitty
+keeps them apart, and deleting one does not erase the others. Client placement ids above
+`0xFFFFFF` are refused (`EINVAL`) rather than truncated into another placement's cells.
+Replies are kept by the graphics handler and pushed to the PTY write queue after each
+parsed read, so the handler needs no access to the loop's writer and stays testable on
+a plain `Term`.
+
+## Sixel: square pixels, images padded to whole cells
+
+Sixel encoders (libsixel `img2sixel`, `chafa`) target xterm, foot and mlterm, which draw
+square pixels: the VT340 aspect ratio of `p1` and of the raster attributes is ignored.
+The renderer scales an image to fit its box of cells, so a sixel image is padded with
+transparent pixels to whole cells of the cell size it is decoded with: it keeps its
+pixel size at the top-left of its cells instead of being stretched and centered. Unset
+pixels of a filled image (`p2` other than 1) take color register 0, the VT340
+background, rather than the theme background, which the PTY thread does not know. Each
+sixel is its own image: images that no cell shows any more are left to the store's
+budget, since scanning the grid and history after every sixel would cost more than it
+saves.
+
 ## One terminal per block: live grid and frozen blocks
 
 The first implementation cut one grid into blocks with the OSC 133 marks the shell
@@ -261,3 +328,29 @@ for highlighting. Recently run actions are kept in a state file
 (`$XDG_STATE_HOME/graphene/palette-recent`), so they survive restarts and are shared by
 every window; tab and pane entries are not stored since they do not outlive the
 session.
+
+## Links: a simple click opens, `xdg-open`, local files only
+
+A simple click without movement on a link opens it, like in a browser: selecting
+inside a link stays possible by dragging, double or triple-clicking, or holding
+`Shift`, and a click is no less deliberate than `Ctrl` + click. Where the application
+captures the mouse the click is its own, so only `Ctrl` + click opens there and is
+never reported. Links open with `xdg-open` from a detached thread that waits for it,
+like the update banner: the desktop's handler for each scheme, no zombie. Detected
+URLs are limited to `http`, `https`, `file` and `mailto`; OSC 8 links, set on purpose
+by the application, open with any scheme, except a `file://` URI naming a host other
+than empty, `localhost` or this machine's (`/proc/sys/kernel/hostname`): the file
+would be looked up locally under a remote name, so it is refused and logged.
+
+## Copy with an image: own clipboard offers next to `arboard`
+
+`arboard` 3.7 sets one format at a time, so text and image cannot be offered together.
+A copy holding exactly one image therefore offers its PNG and its text itself:
+`wl-clipboard-rs` `copy_multi` on Wayland, and on X11 a dedicated `x11rb` connection
+whose thread owns `CLIPBOARD` until another client takes it (the two crates were
+already built through `arboard` and `winit`). Text-only copies, the primary selection
+and paste stay on `arboard`. Several images copy the text only, since a clipboard
+holds one image. The image copied is the part the placement shows (its source
+rectangle) of the frame shown at copy time; a sixel image keeps the transparent
+padding to whole cells. When the window closes, the X11 owner thread dies with the
+process and the image offer is lost (no clipboard manager handoff).

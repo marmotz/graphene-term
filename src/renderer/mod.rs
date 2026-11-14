@@ -3,6 +3,7 @@
 mod atlas;
 mod cells;
 mod glyphs;
+mod images;
 mod rects;
 pub mod scene;
 mod ui_text;
@@ -18,6 +19,7 @@ use crate::layout::{CellSize, GridLayout, Rect};
 use crate::perf;
 use cells::CellRenderer;
 pub use glyphs::{GlyphKey, Glyphs, UiFont};
+use images::ImageRenderer;
 pub use rects::RectInstance;
 use rects::RectRenderer;
 use scene::GlyphInstance;
@@ -60,6 +62,7 @@ fn scissor(rect: Rect, screen: (u32, u32)) -> Option<[u32; 4]> {
 /// [`Headless`] one used by the benchmarks.
 struct Layers {
     rects: RectRenderer,
+    images: ImageRenderer,
     cells: CellRenderer,
     /// Font system, cell metrics and glyph cache feeding `cells`.
     glyphs: Glyphs,
@@ -96,6 +99,7 @@ impl Layers {
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat, glyphs: Glyphs) -> Self {
         Self {
             rects: RectRenderer::new(device, format),
+            images: ImageRenderer::new(device, format),
             cells: CellRenderer::new(device, format, glyphs.atlas_size()),
             glyphs,
             ui_text: UiText::default(),
@@ -140,6 +144,8 @@ impl Layers {
         let banner = push(&banner_rects);
         let overlay = push(&ui.overlay_rects);
         self.rects.prepare(device, queue, screen, &rects);
+        let images: Vec<_> = scenes.iter().map(|scene| scene.images.as_slice()).collect();
+        self.images.prepare(device, queue, screen, &images);
 
         let banner_glyphs: Vec<GlyphInstance> = scenes
             .iter()
@@ -170,8 +176,8 @@ impl Layers {
     }
 
     /// Records the render pass drawing what [`Self::prepare`] uploaded into `view`:
-    /// clear, then each pane clipped to its rectangle (`under` rects, grid glyphs,
-    /// `over` rects), then over the whole window the interface rects and text, the
+    /// clear, then each pane clipped to its rectangle (`under` rects, images, grid
+    /// glyphs, `over` rects), then over the whole window the interface rects and text, the
     /// banner rects and glyphs, and the overlay rects and text.
     fn draw(
         &self,
@@ -202,6 +208,7 @@ impl Layers {
             };
             pass.set_scissor_rect(x, y, width, height);
             self.rects.render(&mut pass, pane.under.clone());
+            self.images.render(&mut pass, index);
             self.cells.render(&mut pass, index);
             self.rects.render(&mut pass, pane.over.clone());
         }
@@ -541,6 +548,7 @@ mod tests {
             underline: false,
             strikeout: false,
             spacer: false,
+            image: None,
         }
     }
 
@@ -581,6 +589,7 @@ mod tests {
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
+            images: Vec::new(),
         };
         renderer.render(&frame, &layout).unwrap();
         let pixels = renderer.read_pixels();
@@ -631,6 +640,7 @@ mod tests {
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
+            images: Vec::new(),
         };
         renderer.render(&frame, &layout).unwrap();
         let pixels = renderer.read_pixels();
@@ -691,6 +701,59 @@ mod tests {
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
+            images: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn image_pixels_reach_the_target_centered_in_their_box() {
+        use crate::frame::FrameImage;
+        use crate::graphics::{ImageCell, Pixels, SourceRect};
+
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let cell_size = renderer.cell_size();
+        let layout = GridLayout::new(Rect::from_size(SIZE, SIZE), cell_size, 0.0);
+        let image_cell = |col| FrameCell {
+            image: Some(ImageCell {
+                image: 1,
+                placement: 0,
+                row: 0,
+                col,
+            }),
+            ..cell(' ')
+        };
+        let mut frame = blank_frame(vec![vec![image_cell(0), image_cell(1), cell(' ')]]);
+        // A red 1 x 1 image in a box of 2 x 1 cells: a square as high as the cell,
+        // centered in the box.
+        frame.images.push(FrameImage {
+            image: 1,
+            placement: 0,
+            cols: 2,
+            rows: 1,
+            source: SourceRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            pixels: Pixels::new(1, 1, vec![255, 0, 0, 255]).unwrap(),
+        });
+        renderer.render(&frame, &layout).unwrap();
+        let pixels = renderer.read_pixels();
+        let at = |x: f32, y: f32| {
+            let index = ((y as u32 * SIZE + x as u32) * 4) as usize;
+            [pixels[index], pixels[index + 1], pixels[index + 2]]
+        };
+        let center_x = layout.cell_x(1);
+        let center_y = layout.row_top(0) + cell_size.height / 2.0;
+        assert_eq!(at(center_x, center_y), [255, 0, 0]);
+        // The box sides beyond the square stay at the background.
+        let side = (2.0 * cell_size.width - cell_size.height) / 2.0;
+        if side >= 2.0 {
+            assert_eq!(at(layout.cell_x(0) + 0.5, center_y), [0, 0, 0]);
         }
     }
 

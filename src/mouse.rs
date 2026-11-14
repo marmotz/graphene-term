@@ -260,11 +260,12 @@ pub fn divider_icon(axis: Axis) -> CursorIcon {
     }
 }
 
-/// Pointer shape: the hand over a fold chevron (always Graphene's, even while the
-/// application captures the mouse), the arrow while the application captures the
-/// mouse, the I-beam (text selection) otherwise.
-pub fn pointer_icon(mode: TermMode, over_chevron: bool) -> CursorIcon {
-    if over_chevron {
+/// Pointer shape: the hand over something Graphene opens on a click (`clickable`: a
+/// fold chevron or an active link, even while the application captures the mouse), the
+/// arrow while the application captures the mouse, the I-beam (text selection)
+/// otherwise.
+pub fn pointer_icon(mode: TermMode, clickable: bool) -> CursorIcon {
+    if clickable {
         CursorIcon::Pointer
     } else if mode.intersects(TermMode::MOUSE_MODE) {
         CursorIcon::Default

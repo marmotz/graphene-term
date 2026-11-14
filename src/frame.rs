@@ -4,7 +4,8 @@
 //! the renderer then works on this plain data. Each view row takes its cells from its
 //! source: a frozen block's grid, or the session's live grid.
 
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
+use std::sync::Arc;
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Row};
@@ -16,6 +17,8 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::banner::BannerLayout;
+use crate::graphics::placeholder::{self, PLACEHOLDER};
+use crate::graphics::{ImageCell, ImageStore, Pixels, SourceRect};
 use crate::i18n::Lang;
 use crate::palette::Palette;
 use crate::timeline::{BlockId, Phase, Status, Timeline};
@@ -33,6 +36,24 @@ pub struct FrameCell {
     pub strikeout: bool,
     /// Second half of a double-width character: nothing to draw.
     pub spacer: bool,
+    /// Part of an image shown by this cell (a placeholder cell): no text and no
+    /// background, the image is drawn over it.
+    pub image: Option<ImageCell>,
+}
+
+/// What the renderer needs to draw one placement of an image, taken from the image
+/// store when the frame is captured.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameImage {
+    pub image: u32,
+    /// Placement id named by the cells (0 for none).
+    pub placement: u32,
+    /// Size of the placement's box, in cells.
+    pub cols: u32,
+    pub rows: u32,
+    /// Part of `pixels` shown, inside the image.
+    pub source: SourceRect,
+    pub pixels: Arc<Pixels>,
 }
 
 /// Cursor drawn on top of the grid (block cursors are baked into the cells).
@@ -178,6 +199,9 @@ pub struct Frame {
     pub banner: Option<FrameBanner>,
     /// Language of the fold summaries.
     pub lang: Lang,
+    /// The image placements shown by the cells of `rows`, once [`Frame::attach_images`]
+    /// has run. Cells naming an image or placement not listed here draw nothing.
+    pub images: Vec<FrameImage>,
 }
 
 impl Frame {
@@ -283,6 +307,41 @@ impl Frame {
             background,
             banner: None,
             lang: Lang::default(),
+            images: Vec::new(),
+        }
+    }
+
+    /// Looks up in `store` each image placement shown by the cells and records what the
+    /// renderer needs to draw it in [`Self::images`].
+    pub fn attach_images(&mut self, store: &ImageStore) {
+        self.images.clear();
+        for image in self.rows.iter().flatten().filter_map(|cell| cell.image) {
+            let known = self
+                .images
+                .iter()
+                .any(|known| known.image == image.image && known.placement == image.placement);
+            if known {
+                continue;
+            }
+            let Some(stored) = store.get(image.image) else {
+                continue;
+            };
+            let Some(placement) = store.placement(image.image, image.placement) else {
+                continue;
+            };
+            let pixels = stored.frame().clone();
+            let Some(source) = SourceRect::resolve(placement.source, pixels.width, pixels.height)
+            else {
+                continue;
+            };
+            self.images.push(FrameImage {
+                image: image.image,
+                placement: image.placement,
+                cols: placement.cols,
+                rows: placement.rows,
+                source,
+                pixels,
+            });
         }
     }
 }
@@ -298,6 +357,7 @@ impl FrameCell {
             underline: false,
             strikeout: false,
             spacer: false,
+            image: None,
         }
     }
 }
@@ -320,10 +380,22 @@ impl RowStyle<'_> {
         line: Line,
         selection: Option<SelectionRange>,
     ) -> Vec<FrameCell> {
+        let width = self.columns.min(row.len());
+        let images = row[..]
+            .iter()
+            .take(width)
+            .any(|cell| cell.c == PLACEHOLDER)
+            .then(|| placeholder::row_cells(row[..].iter().take(width)));
         (0..self.columns)
             .map(|column| {
                 if column >= row.len() {
                     return self.blank;
+                }
+                if let Some(image) = images.as_ref().and_then(|images| images[column]) {
+                    return FrameCell {
+                        image: Some(image),
+                        ..self.blank
+                    };
                 }
                 let point = Point::new(line, Column(column));
                 let cell = &row[Column(column)];
@@ -350,6 +422,7 @@ impl RowStyle<'_> {
                     underline: flags.intersects(Flags::ALL_UNDERLINES),
                     strikeout: flags.contains(Flags::STRIKEOUT),
                     spacer,
+                    image: None,
                 }
             })
             .collect()
@@ -484,6 +557,36 @@ fn is_selected(range: &SelectionRange, point: Point, flags: Flags) -> bool {
 pub const INACTIVE_PANE_DIM: f32 = 0.3;
 
 impl Frame {
+    /// Underlines the cells of `range` in the grid of `source`, the link under the
+    /// pointer. `view` is the view the frame was captured from.
+    pub fn underline_link(
+        &mut self,
+        view: &[ViewRow],
+        source: RowSource,
+        range: &RangeInclusive<Point>,
+    ) {
+        let (start, end) = (*range.start(), *range.end());
+        for (row, view_row) in self.rows.iter_mut().zip(view) {
+            let line = view_row.line;
+            if view_row.source != source || line < start.line || line > end.line {
+                continue;
+            }
+            let first = if line == start.line {
+                start.column.0
+            } else {
+                0
+            };
+            let last = if line == end.line {
+                end.column.0
+            } else {
+                usize::MAX
+            };
+            for cell in row.iter_mut().take(last.saturating_add(1)).skip(first) {
+                cell.underline = true;
+            }
+        }
+    }
+
     /// This frame with every color moved `factor` (0 to 1) toward the background: cell
     /// text and backgrounds, block marks and the cursor. The banner is left as is, and
     /// a factor of 0 changes nothing.
@@ -571,6 +674,81 @@ mod tests {
         (0..frame.rows.len())
             .map(|line| row_text(frame, line).trim_end().to_owned())
             .collect()
+    }
+
+    fn image_cell(image: u32, placement: u32, row: u32, col: u32) -> Option<ImageCell> {
+        Some(ImageCell {
+            image,
+            placement,
+            row,
+            col,
+        })
+    }
+
+    #[test]
+    fn placeholder_cells_become_image_cells_without_text_or_background() {
+        // Image 9, placement 3: the first cell gives its row and column, the next one
+        // gives nothing and continues it.
+        let session = session_with(&format!(
+            "a\x1b[38;2;0;0;9;48;5;1m\x1b[58;2;0;0;3m{PLACEHOLDER}\u{030D}\u{0305}{PLACEHOLDER}\x1b[0mb"
+        ));
+        let frame = capture(&session, &Palette::default(), true);
+        let cells = &frame.rows[0];
+        assert_eq!(cells[0].image, None);
+        assert_eq!(cells[1].image, image_cell(9, 3, 1, 0));
+        // Column inferred from the left neighbour.
+        assert_eq!(cells[2].image, image_cell(9, 3, 1, 1));
+        assert_eq!(cells[3].image, None);
+        for cell in &cells[1..3] {
+            assert_eq!(cell.c, ' ');
+            assert_eq!(cell.bg, frame.background);
+            assert!(!cell.underline);
+        }
+        assert_eq!(row_text(&frame, 0).trim_end(), "a  b");
+    }
+
+    #[test]
+    fn attach_images_lists_each_shown_placement_once() {
+        use crate::graphics::{self, CursorMove, Placement, PlacementKind};
+
+        let mut session = session_with("");
+        graphics::place(&mut session.term, 9, 3, 2, 2, CursorMove::After);
+        graphics::place(&mut session.term, 8, 1, 1, 1, CursorMove::After);
+        let mut frame = capture(&session, &Palette::default(), true);
+        assert!(frame.images.is_empty());
+
+        let mut store = ImageStore::new();
+        let pixels = Pixels::new(2, 1, vec![0; 8]).unwrap();
+        store.insert(9, vec![pixels.clone()]);
+        store.place(
+            9,
+            3,
+            Placement {
+                cols: 2,
+                rows: 2,
+                source: None,
+                kind: PlacementKind::Internal,
+                z: 0,
+            },
+        );
+        frame.attach_images(&store);
+        // Image 8 is not in the store: its cells draw nothing.
+        assert_eq!(
+            frame.images,
+            vec![FrameImage {
+                image: 9,
+                placement: 3,
+                cols: 2,
+                rows: 2,
+                source: SourceRect {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 1
+                },
+                pixels,
+            }]
+        );
     }
 
     #[test]
@@ -807,6 +985,41 @@ mod tests {
         session.command("false", &[], 1);
         session.feed("$ ");
         session
+    }
+
+    fn underlined(frame: &Frame) -> Vec<String> {
+        frame
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|c| if c.underline { 'u' } else { '.' })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_hovered_link_range_is_underlined_across_wrapped_rows() {
+        let session = session_with("ab https://x.y/z");
+        let rows = view_rows(&session);
+        let mut frame = capture(&session, &Palette::default(), true);
+        let range = Point::new(Line(0), Column(3))..=Point::new(Line(1), Column(5));
+        frame.underline_link(&rows, RowSource::Live, &range);
+        assert_eq!(underlined(&frame), ["...uuuuuuu", "uuuuuu...."]);
+    }
+
+    #[test]
+    fn the_hovered_link_only_underlines_its_own_source() {
+        let session = two_blocks();
+        let rows = view_rows(&session);
+        let mut frame = capture(&session, &Palette::default(), true);
+        let range = Point::new(Line(0), Column(0))..=Point::new(Line(0), Column(2));
+        frame.underline_link(&rows, RowSource::Output(BlockId(0)), &range);
+        assert_eq!(
+            underlined(&frame),
+            ["..........", "uuu.......", "..........", ".........."]
+        );
     }
 
     #[test]

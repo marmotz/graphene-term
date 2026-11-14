@@ -11,17 +11,21 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::term::{self, TermMode};
 use winit::dpi::PhysicalPosition;
 use winit::event::MouseScrollDelta;
 use winit::keyboard::ModifiersState;
 
 use crate::block_actions::{self, Direction, Part};
+use crate::clipboard::{self, Content};
 use crate::frame;
+use crate::graphics;
 use crate::i18n::{self, Lang, Msg};
 use crate::input;
 use crate::input_editor::{self, EditorCommand};
 use crate::layout::{GridLayout, Hit};
+use crate::links::{self, Link};
 use crate::mouse;
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, PaneId, Terminal};
@@ -266,6 +270,43 @@ impl Pane {
         (hit, over_chevron)
     }
 
+    /// Grid cell under the pixel `position`: the grid shown there and the point in it.
+    /// `None` off the cells (margin, chevron, gap, blank space).
+    pub fn cell_under(&self, position: PhysicalPosition<f64>) -> Option<(RowSource, Point)> {
+        match self.pointer_hit(position).0 {
+            Hit::Cell {
+                source,
+                line,
+                column,
+                ..
+            } => Some((source, Point::new(line, Column(column)))),
+            _ => None,
+        }
+    }
+
+    /// The link at `point` of the grid shown by `source` (see [`links::link_at`]).
+    pub fn link_at(&self, source: RowSource, point: Point) -> Option<Link> {
+        let term = self.terminal.term.lock();
+        let timeline = lock(&self.terminal.timeline);
+        match source {
+            RowSource::Live => links::link_at(&*term, point),
+            source => view::frozen_term(&timeline, source).and_then(|t| links::link_at(t, point)),
+        }
+    }
+
+    /// Whether the application captures the mouse over the rows of `source`: it
+    /// enabled mouse reporting, and they are its rows (see [`mouse::reports_at`]).
+    pub fn captures(&self, source: RowSource) -> bool {
+        let mode = self.mode();
+        mode.intersects(TermMode::MOUSE_MODE)
+            && (mode.contains(TermMode::ALT_SCREEN) || source == RowSource::Live)
+    }
+
+    /// Rank of the last left press in its click series: 1, 2 or 3.
+    pub fn last_clicks(&self) -> u8 {
+        self.click_tracker.count()
+    }
+
     /// Whether a mouse event over `hit` goes to the application when it captures the
     /// mouse (see [`mouse::reports_at`]).
     pub fn reports_at(&self, hit: &Hit) -> bool {
@@ -363,6 +404,24 @@ impl Pane {
         }
         self.selection.as_ref()?;
         timeline_selection::text(&*term, &timeline)
+    }
+
+    /// What a copy offers: the selected text, with the selected image when there is
+    /// exactly one (see [`clipboard::content`]). A selected block copies its text only.
+    pub fn copy_content(&self) -> Option<Content> {
+        let text = self.selected_text();
+        let images = if self.selected_block.is_none() && self.selection.is_some() {
+            let term = self.terminal.term.lock();
+            let timeline = lock(&self.terminal.timeline);
+            timeline_selection::images(&*term, &timeline)
+        } else {
+            Vec::new()
+        };
+        clipboard::content(text, &images, |image, placement| {
+            let store = graphics::lock(&self.terminal.images);
+            let source = store.placement(image, placement)?.source;
+            clipboard::encode_png(store.get(image)?.frame(), source)
+        })
     }
 
     /// Text of one part of the target block.
