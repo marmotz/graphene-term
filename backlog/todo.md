@@ -22,12 +22,12 @@ _tâches créées, voir [technical.md](features/config-themes/technical.md)_ —
 
 ## Images and clickable links ·  [overview](features/images-links/overview.md)
 
-_tâches créées, voir [technical.md](features/images-links/technical.md)_ — 1/8 tasks done
+_tâches créées, voir [technical.md](features/images-links/technical.md)_ — 2/8 tasks done
 
 | Done | Issue                                                     | Title                                                    | Blocked by |
 |------|-----------------------------------------------------------|----------------------------------------------------------|------------|
 | [x]  | [#22](https://github.com/marmotz/graphene-term/issues/22) | Images: image sequence splitter in the PTY read path     | #6         |
-| [ ]  | [#23](https://github.com/marmotz/graphene-term/issues/23) | Images: image store, placeholder anchoring and rendering | #22        |
+| [x]  | [#23](https://github.com/marmotz/graphene-term/issues/23) | Images: image store, placeholder anchoring and rendering | #22        |
 | [ ]  | [#24](https://github.com/marmotz/graphene-term/issues/24) | Links: OSC 8 and URL detection, hover and click to open  | —          |
 | [ ]  | [#25](https://github.com/marmotz/graphene-term/issues/25) | Images: kitty graphics protocol, still images            | #22, #23   |
 | [ ]  | [#26](https://github.com/marmotz/graphene-term/issues/26) | Images: sixel                                            | #22, #23   |

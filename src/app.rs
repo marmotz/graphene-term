@@ -25,6 +25,7 @@ use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout,
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
+use crate::graphics;
 use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::input_editor;
@@ -1200,14 +1201,16 @@ impl Session {
                 let term = pane.terminal.term.lock();
                 let mut timeline = pane::lock(&pane.terminal.timeline);
                 let rows = pane::shown_rows(&pane.anchor, &term, &mut timeline);
-                Frame::capture(
+                let mut frame = Frame::capture(
                     &*term,
                     &timeline,
                     &rows,
                     &self.palette,
                     self.focused && is_active,
                     pane.selected_block,
-                )
+                );
+                frame.attach_images(&graphics::lock(&pane.terminal.images));
+                frame
             };
             frame.lang = self.lang;
             if several && !is_active {

@@ -1,10 +1,13 @@
 //! Conversion of a [`Frame`] into GPU-ready primitives (pure, no GPU access).
 
+use std::sync::Arc;
+
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use super::glyphs::GlyphKey;
 use super::rects::{RectInstance, Shape};
-use crate::frame::{self, Card, Fold, Frame, ScrollBar};
+use crate::frame::{self, Card, Fold, Frame, FrameImage, ScrollBar};
+use crate::graphics::{ImageCell, Pixels};
 use crate::i18n::{self, Msg};
 use crate::layout::GridLayout;
 use crate::timeline::Status;
@@ -29,6 +32,18 @@ pub struct GlyphInstance {
     pub color: [f32; 4],
 }
 
+/// A part of an image to draw: a screen rectangle and the texture coordinates of the
+/// part of the image it shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageQuad {
+    /// Top-left corner, in pixels.
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    /// Texture coordinates (0 to 1) of the top-left and bottom-right corners.
+    pub uv: [f32; 4],
+    pub pixels: Arc<Pixels>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Scene {
     /// Clear color (linear or sRGB depending on the target).
@@ -37,6 +52,8 @@ pub struct Scene {
     pub under: Vec<RectInstance>,
     /// Rectangles drawn above the glyphs.
     pub over: Vec<RectInstance>,
+    /// Images, drawn over `under` and below the glyphs.
+    pub images: Vec<ImageQuad>,
     /// Glyphs of the grid cells.
     pub glyphs: Vec<GlyphInstance>,
     /// Rectangles covering the whole window, drawn after every pane and the interface
@@ -196,15 +213,117 @@ fn chevrons(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<RectIn
     rects
 }
 
+/// Quads of the image cells of `cells`, frame row `line`: one per run of cells showing
+/// consecutive columns of one row of one placement. The image is scaled to fit its
+/// placement's box of cells, keeping its aspect ratio, and centered in it; each quad
+/// shows the part of the image that falls in its cells.
+fn image_quads(
+    frame: &Frame,
+    layout: &GridLayout,
+    line: usize,
+    cells: &[frame::FrameCell],
+) -> Vec<ImageQuad> {
+    let cell_size = layout.cell;
+    let y = layout.row_top(frame.row_tops[line]);
+    let mut quads = Vec::new();
+    let mut column = 0;
+    while column < cells.len() {
+        let Some(first) = cells[column].image else {
+            column += 1;
+            continue;
+        };
+        let start = column;
+        column += 1;
+        let continues = |cell: Option<ImageCell>, offset: usize| {
+            cell.is_some_and(|cell| {
+                cell.image == first.image
+                    && cell.placement == first.placement
+                    && cell.row == first.row
+                    && cell.col == first.col + offset as u32
+            })
+        };
+        while column < cells.len() && continues(cells[column].image, column - start) {
+            column += 1;
+        }
+        let Some(image) = frame
+            .images
+            .iter()
+            .find(|image| image.image == first.image && image.placement == first.placement)
+        else {
+            continue;
+        };
+        let run = first.col..first.col + (column - start) as u32;
+        if let Some(quad) = image_quad(image, cell_size.width, cell_size.height, first.row, run) {
+            let x = layout.cell_x(start);
+            quads.push(ImageQuad {
+                position: [x + quad.0[0], y + quad.0[1]],
+                ..quad.1
+            });
+        }
+    }
+    quads
+}
+
+/// The part of `image` shown by the cells `cols` of row `row` of its box: its offset
+/// from the top-left corner of the first cell, and the quad (position left at 0).
+/// `None` when the image does not reach these cells.
+fn image_quad(
+    image: &FrameImage,
+    cell_width: f32,
+    cell_height: f32,
+    row: u32,
+    cols: std::ops::Range<u32>,
+) -> Option<([f32; 2], ImageQuad)> {
+    let source = image.source;
+    let (box_width, box_height) = (
+        image.cols as f32 * cell_width,
+        image.rows as f32 * cell_height,
+    );
+    let scale = (box_width / source.width as f32).min(box_height / source.height as f32);
+    let (width, height) = (source.width as f32 * scale, source.height as f32 * scale);
+    // The image, inside the box.
+    let left = (box_width - width) / 2.0;
+    let top = (box_height - height) / 2.0;
+    // The cells, inside the box.
+    let cells_left = cols.start as f32 * cell_width;
+    let cells_top = row as f32 * cell_height;
+    let cells_right = cols.end as f32 * cell_width;
+    let cells_bottom = cells_top + cell_height;
+
+    let x0 = left.max(cells_left);
+    let y0 = top.max(cells_top);
+    let x1 = (left + width).min(cells_right);
+    let y1 = (top + height).min(cells_bottom);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let (image_width, image_height) = (image.pixels.width as f32, image.pixels.height as f32);
+    let u = |x: f32| (source.x as f32 + (x - left) / scale) / image_width;
+    let v = |y: f32| (source.y as f32 + (y - top) / scale) / image_height;
+    Some((
+        [x0 - cells_left, y0 - cells_top],
+        ImageQuad {
+            position: [0.0, 0.0],
+            size: [x1 - x0, y1 - y0],
+            uv: [u(x0), v(y0), u(x1), v(y1)],
+            pixels: image.pixels.clone(),
+        },
+    ))
+}
+
 pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
     let cell = layout.cell;
     let thickness = (cell.height / 16.0).round().max(1.0);
     let mut under = cards_under(frame, layout, srgb_target);
     let mut over = Vec::new();
     let mut glyphs = Vec::new();
+    let mut images = Vec::new();
 
     for (line, cells) in frame.rows.iter().enumerate() {
         let y = layout.row_top(frame.row_tops[line]);
+        if !frame.images.is_empty() {
+            images.extend(image_quads(frame, layout, line, cells));
+        }
         // Backgrounds: merge consecutive cells with the same non-default color.
         let mut column = 0;
         while column < cells.len() {
@@ -343,6 +462,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         clear: gpu_color(frame.background, srgb_target),
         under,
         over,
+        images,
         glyphs,
         overlay_rects,
         overlay,
@@ -377,6 +497,7 @@ mod tests {
             underline: false,
             strikeout: false,
             spacer: false,
+            image: None,
         }
     }
 
@@ -453,7 +574,89 @@ mod tests {
             background: BG,
             banner: None,
             lang: crate::i18n::Lang::En,
+            images: Vec::new(),
         }
+    }
+
+    fn image_cell(row: u32, col: u32) -> FrameCell {
+        FrameCell {
+            image: Some(ImageCell {
+                image: 7,
+                placement: 1,
+                row,
+                col,
+            }),
+            ..cell(' ')
+        }
+    }
+
+    /// Image 7 placement 1: a 4 x 4 px image in a box of 2 x 2 cells (20 x 40 px).
+    fn with_image(mut frame: Frame) -> Frame {
+        frame.images.push(FrameImage {
+            image: 7,
+            placement: 1,
+            cols: 2,
+            rows: 2,
+            source: crate::graphics::SourceRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            pixels: Pixels::new(4, 4, vec![0; 64]).unwrap(),
+        });
+        frame
+    }
+
+    fn quad_geometry(scene: &Scene) -> Vec<([f32; 2], [f32; 2], [f32; 4])> {
+        scene
+            .images
+            .iter()
+            .map(|quad| (quad.position, quad.size, quad.uv))
+            .collect()
+    }
+
+    #[test]
+    fn image_is_fit_in_its_box_and_centered_one_quad_per_row() {
+        let frame = with_image(frame(vec![
+            vec![cell('a'), image_cell(0, 0), image_cell(0, 1)],
+            vec![cell('b'), image_cell(1, 0), image_cell(1, 1)],
+        ]));
+        let scene = build(&frame, &layout(), false);
+        // Scaled 5 times to 20 x 20 px, 10 px from the box top.
+        assert_eq!(
+            quad_geometry(&scene),
+            vec![
+                ([10.0, 10.0], [20.0, 10.0], [0.0, 0.0, 1.0, 0.5]),
+                ([10.0, 20.0], [20.0, 10.0], [0.0, 0.5, 1.0, 1.0]),
+            ]
+        );
+        // Image cells draw no glyph and no background.
+        let drawn: Vec<char> = scene.glyphs.iter().map(|glyph| glyph.key.c).collect();
+        assert_eq!(drawn, vec!['a', 'b']);
+        assert!(scene.under.is_empty());
+    }
+
+    #[test]
+    fn a_cut_image_shows_the_part_of_its_cells() {
+        // Only the second column of the first row, at the left edge.
+        let frame = with_image(frame(vec![vec![image_cell(0, 1), cell('c')]]));
+        let scene = build(&frame, &layout(), false);
+        assert_eq!(
+            quad_geometry(&scene),
+            vec![([0.0, 10.0], [10.0, 10.0], [0.5, 0.0, 1.0, 0.5])]
+        );
+    }
+
+    #[test]
+    fn image_cells_without_their_image_draw_nothing() {
+        let scene = build(
+            &frame(vec![vec![image_cell(0, 0), image_cell(0, 1)]]),
+            &layout(),
+            false,
+        );
+        assert!(scene.images.is_empty());
+        assert!(scene.glyphs.is_empty());
     }
 
     #[test]

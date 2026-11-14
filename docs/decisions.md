@@ -41,6 +41,23 @@ budget) is dropped up to its terminator; `ESC`, `CAN` or `SUB` inside a payload 
 as in `vte`. `Term` reports no full reset, so the splitter flags `ESC c` in the passed
 bytes.
 
+## Images anchored by placeholder cells
+
+Every image, kitty or sixel, is anchored in the grid by kitty's Unicode placeholder cells
+(`U+10EEEE`, ids in the foreground and underline colors, row and column as diacritics)
+rather than kept in a side table with line anchors. `Term` then handles scrolling,
+scrollback, erase, the alternate screen and the full reset for images exactly as for
+text, which a side table could not follow (`Term` exposes no scroll or erase event), and
+kitty's virtual placements (`U=1`, printed by tmux or editors) render through the same
+path. Accepted limits, inherent to the cell model: text printed over an image replaces
+that part of it (like sixel, unlike kitty which keeps the image above the text); no image
+is drawn under the text (`z < 0` is drawn like `z >= 0`); a column resize reflows the
+placeholder rows like text, which can cut an image on a narrow window (growing it back
+restores it); an image is clipped to 297 rows and columns (the diacritics table). The
+image is scaled to fit its box of cells, so a font zoom rescales it with the text.
+Textures are keyed on the pixels' uid and dropped when no store holds them, so an
+animation frame or a replaced image needs no explicit invalidation.
+
 ## One terminal per block: live grid and frozen blocks
 
 The first implementation cut one grid into blocks with the OSC 133 marks the shell

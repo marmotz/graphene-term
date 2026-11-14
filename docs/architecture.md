@@ -32,8 +32,14 @@ src/
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
   graphics/
-    mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread
+    mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
+                   StoreHandler (clears the image store on a full reset)
     sequence.rs    incremental splitter of the kitty and sixel sequences in the PTY stream (pure)
+    store.rs       ImageStore: images (RGBA frames, generation), placements, 256 MiB budget
+                   with oldest-first eviction, terminal-assigned ids (pure)
+    placeholder.rs Unicode placeholder cells: place an image at the cursor, erase it,
+                   decode a row of cells into image cells (pure, on a Term)
+    diacritics.rs  kitty's row / column diacritics table
   timeline.rs      command blocks: finished blocks frozen in their own Term, current block (pure)
   block_actions.rs target block, block navigation, copied block / command / output (pure)
   view.rs          view rows over the timeline: source grid and line of each row, caps,
@@ -68,6 +74,8 @@ src/
     cell.wgsl      shader for glyphs (mask tinted with the cell color, or color glyph)
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
+    images.rs      textured image quad pipeline, one texture per image frame
+    image.wgsl     shader for images
 themes/            built-in themes, embedded with include_str!
 shell-integration/ zsh, bash and fish scripts (block signals, editor key bindings), embedded with include_str!
 benches/
@@ -75,7 +83,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `graphics/sequence`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
@@ -140,8 +148,10 @@ Renderer::render(pane frames, interface rects)
 
 - `Term` is shared as `Arc<FairMutex<Term<EventProxy>>>`. The UI thread only holds the
   lock to read the mode, scroll, resize or capture a frame.
-- The `Timeline` (`src/timeline.rs`) is shared as `Arc<Mutex<Timeline>>` in `Terminal`.
-  Lock order, everywhere: `Term` first, then `Timeline`.
+- The `Timeline` (`src/timeline.rs`) is shared as `Arc<Mutex<Timeline>>` in `Terminal`,
+  and so is the `graphics::ImageStore` (`Arc<Mutex<ImageStore>>`, written by the PTY
+  thread, read when a frame is captured). Lock order, everywhere: `Term`, then
+  `Timeline`, then `ImageStore`.
 - Terminal events (`Wakeup`, `Title`, `PtyWrite`, clipboard and color queries,
   `ChildExit`...) are forwarded to winit through an `EventLoopProxy<UserEvent>`.
 - When the shell of a pane exits, the pane closes, without confirmation; the last pane
@@ -162,7 +172,8 @@ Renderer::render(pane frames, interface rects)
   the raw bytes, keeping its state across reads and passing every other APC / DCS
   through; for each image sequence, and after each full reset (`ESC c`), a synchronized
   update holding bytes is flushed and the `graphics::Handler` runs with the `Term` lock
-  held (a logging no-op until images are drawn). The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
+  held: `graphics::StoreHandler` clears the pane's `ImageStore` on a full reset (the
+  kitty and sixel decoders, still to come, log and drop the sequences). The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
   into byte chunks, block signals and screen clears; each byte chunk is parsed by
   `pty::feed` (the single parse step), and each signal or clear is applied by
   `Timeline::apply` right after the bytes of its sequence, so the live grid holds
@@ -281,13 +292,20 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    block cards (`Frame::cards`, by `frame::marks`): character, final fg/bg (after DIM, INVERSE, HIDDEN, OSC overrides),
    bold/italic/underline/strikeout, wide-char spacer flag.
    The block cursor is baked into the cell colors; other shapes (beam, underline,
-   hollow when unfocused) are returned separately.
+   hollow when unfocused) are returned separately. A placeholder cell (`U+10EEEE`, see
+   "Images") becomes an image cell (`FrameCell::image`: image, placement, row, column)
+   with no text and no background; `Frame::attach_images` then looks up each shown
+   placement in the pane's `ImageStore` (`Frame::images`: box in cells, source rect,
+   current frame pixels).
 2. `scene::build` converts the frame into:
     - `under` rects: the card backgrounds (radius a quarter of a cell height) and
       status stripes (a sixth of a cell wide, at least 2 px, round ends), then the cell
       backgrounds, consecutive same-color cells merged, default background skipped (it
       is the clear color, so the card shows through); rows are placed at
       `GridLayout::row_top` of their view offset (`Frame::row_tops`, in half-lines);
+    - image quads: one per run of image cells showing consecutive columns of one row of
+      one placement; the image is scaled to fit its placement's box of cells, aspect
+      ratio kept, centered, and each quad shows the part falling in its cells;
     - `over` rects: underline, strikeout, the fold chevrons (disc and triangle, SDF
       shapes of the rect pipeline), non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
@@ -307,7 +325,7 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    the glyph instances through the glyph cache (one group per pane, then the interface
    text, the banner, the overlay text), uploads the newly rasterized glyphs, then draws
    in one pass: clear; for each pane, clipped to its rect by a scissor, `under` rects,
-   glyphs, `over` rects; then over the whole window the interface rects, the interface
+   images, glyphs, `over` rects; then over the whole window the interface rects, the interface
    text, the banner rects and glyphs, and the overlay rects and text, so the dialog
    or the palette covers everything. Colors are linearized when the surface
    format is sRGB.
@@ -330,6 +348,24 @@ and `Session::left_press` hit-tests the banner before starting a selection.
 
 The configuration error banner shows the first error of `config.toml` and the theme
 file ("(+N more)" when there are several); every error is also logged. A click hides it.
+
+### Images
+
+An image is anchored in the grid by placeholder cells, as kitty's Unicode placeholders:
+`graphics::place` writes `U+10EEEE` at the cursor for each cell of the placement, the
+image id in the foreground color (low 24 bits; its high byte in a third diacritic), the
+placement id in the underline color, and the cell's row and column in the image as
+combining diacritics (kitty's table, `graphics/diacritics.rs`). Rows go down from the
+cursor line, scrolling at the bottom like text, and are clipped at the right edge. `Term`
+then scrolls, erases, keeps in history and clears these cells like any other, and
+`graphics::erase` blanks the cells of a deleted image or placement (screen and history).
+A cell without a column diacritic continues its left neighbour (column + 1).
+
+The pixels live in the pane's `ImageStore` as `Pixels` (immutable RGBA, a process-wide
+uid). `ImageRenderer` (`renderer/images.rs`) keys one texture on each uid: uploaded the
+first time a frame is drawn (sRGB format on an sRGB target), dropped once no store holds
+those pixels. Quads of the same texture are drawn in one call. A frame larger than the
+GPU texture limit is not drawn.
 
 ### Glyphs
 
