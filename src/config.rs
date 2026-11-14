@@ -14,6 +14,8 @@ use serde::de::DeserializeOwned;
 use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 
+use crate::keybindings;
+
 /// The fully commented default configuration, written on first launch.
 pub const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
 
@@ -234,8 +236,8 @@ pub struct Config {
     #[allow(dead_code, reason = "applied by the tab bar position task")]
     pub tab_position: TabPosition,
     pub theme: ThemeConfig,
-    /// Raw `"keys" = "action"` pairs, interpreted by the keybindings task.
-    #[allow(dead_code, reason = "applied by the keybindings task")]
+    /// Valid `"keys" = "action"` pairs, applied on top of the default shortcuts by
+    /// [`crate::keybindings::Keybindings`].
     pub keybindings: BTreeMap<String, String>,
     #[allow(dead_code, reason = "applied by the update check thread task")]
     pub updates: UpdatesConfig,
@@ -459,7 +461,12 @@ impl Reader<'_> {
             ("keybindings", keys) => {
                 let previous_action = previous.keybindings.get(keys).cloned();
                 let mut action = previous_action.clone();
-                self.set(value, path, &mut action, &previous_action, |action: String| Checked::Valid(Some(action)));
+                self.set(value, path, &mut action, &previous_action, |action: String| {
+                    match keybindings::parse_binding(keys, &action) {
+                        Ok(_) => Checked::Valid(Some(action)),
+                        Err(message) => Checked::Invalid(message),
+                    }
+                });
                 if let Some(action) = action {
                     config.keybindings.insert(keys.to_owned(), action);
                 }
@@ -767,11 +774,36 @@ interval = "2d"
         let mut previous = Config::default();
         previous
             .keybindings
-            .insert("Ctrl+Q".to_owned(), "quit".to_owned());
+            .insert("Ctrl+Q".to_owned(), "copy".to_owned());
         let text = "[keybindings]\n\"Ctrl+Q\" = 1\n\"Ctrl+W\" = true\n";
         let (config, errors) = Config::parse(text, &previous, &file());
         assert_eq!(config.keybindings, previous.keybindings);
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn unknown_keybinding_keys_or_actions_are_reported() {
+        let mut previous = Config::default();
+        previous
+            .keybindings
+            .insert("Ctrl+Q".to_owned(), "copy".to_owned());
+        let text = "[keybindings]\n\"Ctrl+Q\" = \"quit\"\n\"Ctrl+PgUp\" = \"copy\"\n\"Ctrl+Alt+T\" = \"new_tab\"\n";
+        let (config, errors) = Config::parse(text, &previous, &file());
+        assert_eq!(
+            config.keybindings,
+            BTreeMap::from([
+                ("Ctrl+Q".to_owned(), "copy".to_owned()),
+                ("Ctrl+Alt+T".to_owned(), "new_tab".to_owned()),
+            ])
+        );
+        let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            messages,
+            [
+                "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"quit\"",
+                "config.toml:3: invalid value for `keybindings.Ctrl+PgUp`: unknown key \"PgUp\" in \"Ctrl+PgUp\"",
+            ]
+        );
     }
 
     #[test]

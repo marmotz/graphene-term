@@ -14,6 +14,7 @@ mod graphics;
 mod i18n;
 mod input;
 mod input_editor;
+mod keybindings;
 mod layout;
 mod links;
 mod mouse;

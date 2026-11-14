@@ -555,10 +555,10 @@ mod tests {
             palette_text: DIALOG_TEXT,
             ..tab_colors()
         };
-        let entry = |label: &str, action, shortcut| Entry {
+        let entry = |label: &str, action, shortcut: Option<&str>| Entry {
             command: Command::Action(action),
             label: label.to_owned(),
-            shortcut,
+            shortcut: shortcut.map(str::to_owned),
         };
         let mut palette = CommandPalette::new(
             vec![

@@ -49,7 +49,16 @@
 
 # [keybindings]
 ## "Keys" = "action". The action "none" disables a default shortcut, so the key goes
-## to the shell. Examples:
+## to the shell. Keys: modifiers Ctrl, Shift, Alt, Super joined with "+", then a key
+## name (PageUp, F5, Insert, Left...) or one character. Letters ignore case; Shift is
+## ignored for other characters ("Ctrl++"). Alt+digit uses the digit row on any layout.
+## Actions: copy, paste, scroll_page_up, scroll_page_down, scroll_to_top,
+## scroll_to_bottom, font_size_increase, font_size_decrease, font_size_reset,
+## previous_block, next_block, copy_command, copy_output, toggle_fold, toggle_fold_all,
+## split_right, split_down, close_pane, focus_pane_left (right, up, down),
+## resize_pane_left (right, up, down), next_pane, previous_pane, toggle_zoom,
+## equalise_panes, detach_pane, new_tab, next_tab, previous_tab, go_to_tab_1 (2, 3...),
+## command_palette. Examples:
 ## "Ctrl+Shift+C" = "copy"
 ## "Shift+PageUp" = "none"
 

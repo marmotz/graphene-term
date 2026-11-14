@@ -32,6 +32,7 @@ use crate::graphics;
 use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::input_editor;
+use crate::keybindings::Keybindings;
 use crate::layout::{GridLayout, Hit, Rect};
 use crate::links::{self, Link};
 use crate::mouse;
@@ -139,6 +140,8 @@ struct Session {
     /// Tag the user just chose to ignore, forwarded to the update check thread.
     ignored_tag: Option<String>,
     lang: Lang,
+    /// Shortcuts of the application actions.
+    keybindings: Keybindings,
     /// Logs the first frame drawn after the shell's first output (`graphene::perf`).
     first_frame: perf::FirstFrame,
 }
@@ -412,7 +415,7 @@ impl Session {
         let recent = command_palette::recent_path()
             .map(|path| command_palette::load_recent(&path))
             .unwrap_or_default();
-        let entries = command_palette::entries(&self.workspace, self.lang);
+        let entries = command_palette::entries(&self.workspace, self.lang, &self.keybindings);
         self.overlay = Some(Overlay::Palette(CommandPalette::new(entries, recent)));
         self.window.request_redraw();
         self.update_pointer();
@@ -1211,7 +1214,9 @@ impl Session {
             None => {}
         }
         let modifiers = self.modifiers;
-        let action = input::action_for(&event.logical_key, event.physical_key, modifiers);
+        let action = self
+            .keybindings
+            .action(&event.logical_key, event.physical_key, modifiers);
         // With several panes, the pane focus wins over the editor's `Ctrl+Shift+Arrow`.
         if let Some(action @ Action::FocusPane(_)) = action
             && self
@@ -1621,6 +1626,7 @@ impl App {
             update: UpdateBanner::default(),
             ignored_tag: None,
             lang: Lang::detect(),
+            keybindings: Keybindings::new(&self.config.keybindings),
             first_frame: perf::FirstFrame::default(),
         })
     }

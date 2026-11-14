@@ -121,6 +121,13 @@ two tabs. Closing a pane, a tab or the window asks for confirmation while a prog
 other than the shell runs in it. With several panes in the tab, `Ctrl+Shift+Left /
 Right` moves the focus instead of extending the input selection.
 
+Every key-bound action can be remapped in the `[keybindings]` section of `config.toml`:
+`"Ctrl+Alt+T" = "new_tab"` adds a shortcut, `"Shift+PageUp" = "none"` gives a default
+one back to the shell. Keys are modifiers (`Ctrl`, `Shift`, `Alt`, `Super`) joined with
+`+`, then a key name (`PageUp`, `F5`, `Left`...) or one character; actions are the
+snake_case names of the palette entries (`copy`, `split_right`, `focus_pane_left`,
+`go_to_tab_3`, `command_palette`...). The palette shows the configured shortcut.
+
 At the shell prompt (zsh, bash or fish with the integration, not inside a running
 command or a full-screen application), the command line is edited like in an editor.
 The shell keeps the command line: Graphene sends it key sequences its integration
