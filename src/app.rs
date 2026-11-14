@@ -34,7 +34,7 @@ use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
-use crate::renderer::{Glyphs, PaneFrame, Renderer};
+use crate::renderer::{Glyphs, PaneFrame, Renderer, UiFont};
 use crate::selection;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
@@ -147,10 +147,10 @@ impl Session {
         true
     }
 
-    /// Sizes of the interface text.
-    fn ui_metrics(&self) -> UiMetrics {
+    /// Sizes of the interface text in `font`.
+    fn ui_metrics(&self, font: UiFont) -> UiMetrics {
         UiMetrics {
-            line_height: self.renderer.ui_line_height(),
+            line_height: self.renderer.ui_line_height(font),
             scale: self.window.scale_factor() as f32,
         }
     }
@@ -158,7 +158,7 @@ impl Session {
     /// Height of the tab bar, 0 while it is hidden.
     fn tab_bar_height(&self) -> f32 {
         if tab_bar::shown(self.workspace.tabs().len()) {
-            self.ui_metrics().bar_height()
+            self.ui_metrics(UiFont::Chrome).bar_height()
         } else {
             0.0
         }
@@ -181,7 +181,7 @@ impl Session {
             self.window.inner_size().width as f32,
             &titles,
             self.workspace.active_index(),
-            self.ui_metrics(),
+            self.ui_metrics(UiFont::Chrome),
         ))
     }
 
@@ -350,14 +350,14 @@ impl Session {
             return None;
         };
         let size = self.window.inner_size();
-        let metrics = self.ui_metrics();
+        let metrics = self.ui_metrics(UiFont::Chrome);
         let renderer = &mut self.renderer;
         Some(DialogLayout::new(
             confirm,
             self.lang,
             Rect::from_size(size.width, size.height),
             metrics,
-            |text| renderer.ui_text_width(text),
+            |text| renderer.ui_text_width(UiFont::Chrome, text),
         ))
     }
 
@@ -391,14 +391,14 @@ impl Session {
             return None;
         };
         let size = self.window.inner_size();
-        let metrics = self.ui_metrics();
+        let metrics = self.ui_metrics(UiFont::Palette);
         let renderer = &mut self.renderer;
         Some(PaletteLayout::new(
             palette,
             self.lang,
             Rect::from_size(size.width, size.height),
             metrics,
-            |text| renderer.ui_text_width(text),
+            |text| renderer.ui_text_width(UiFont::Palette, text),
         ))
     }
 
@@ -1038,7 +1038,7 @@ impl Session {
             let rows = match delta {
                 MouseScrollDelta::LineDelta(_, y) => y,
                 MouseScrollDelta::PixelDelta(position) => {
-                    position.y as f32 / self.renderer.ui_line_height()
+                    position.y as f32 / self.renderer.ui_line_height(UiFont::Palette)
                 }
             };
             // Wheel up shows the rows above.

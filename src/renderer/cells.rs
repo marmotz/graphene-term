@@ -380,7 +380,7 @@ mod tests {
                 c,
                 bold: false,
                 italic: false,
-                ui: false,
+                ui: None,
             },
             color: WHITE,
         }
@@ -394,7 +394,7 @@ mod tests {
                 c: 'M',
                 bold: false,
                 italic: false,
-                ui: false,
+                ui: None,
             })
             .unwrap();
         let mut out = Vec::new();
@@ -438,7 +438,7 @@ mod tests {
                 c: 'x',
                 bold: false,
                 italic: false,
-                ui: false,
+                ui: None,
             })
             .unwrap();
         assert_eq!(out[2].uv, [x.region.x as f32, x.region.y as f32]);
@@ -452,7 +452,7 @@ mod tests {
             c,
             bold: false,
             italic: false,
-            ui: false,
+            ui: None,
         };
         // How many of `chars` fit a fresh atlas before it resets.
         let mut probe = Glyphs::with_atlas_size(None, FONT_SIZE, ATLAS);

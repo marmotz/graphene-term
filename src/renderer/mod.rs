@@ -17,7 +17,7 @@ use crate::frame::Frame;
 use crate::layout::{CellSize, GridLayout, Rect};
 use crate::perf;
 use cells::CellRenderer;
-pub use glyphs::{GlyphKey, Glyphs};
+pub use glyphs::{GlyphKey, Glyphs, UiFont};
 pub use rects::RectInstance;
 use rects::RectRenderer;
 use scene::GlyphInstance;
@@ -341,14 +341,14 @@ impl Renderer {
         self.layers.glyphs.set_ui_scale(scale);
     }
 
-    /// Line height of the interface font, in pixels.
-    pub fn ui_line_height(&self) -> f32 {
-        self.layers.glyphs.ui_line_height()
+    /// Line height of the interface font `font`, in pixels.
+    pub fn ui_line_height(&self, font: UiFont) -> f32 {
+        self.layers.glyphs.ui_line_height(font)
     }
 
-    /// Width of `text` in the interface font, in pixels.
-    pub fn ui_text_width(&mut self, text: &str) -> f32 {
-        self.layers.glyphs.shape_ui(text).width
+    /// Width of `text` in the interface font `font`, in pixels.
+    pub fn ui_text_width(&mut self, font: UiFont, text: &str) -> f32 {
+        self.layers.glyphs.shape_ui(font, text).width
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -762,7 +762,7 @@ mod tests {
         };
         let layout = GridLayout::new(Rect::from_size(SIZE, SIZE), renderer.cell_size(), 0.0);
         let frame = blank_frame(vec![vec![cell(' ')]]);
-        let line_height = renderer.layers.glyphs.ui_line_height();
+        let line_height = renderer.layers.glyphs.ui_line_height(UiFont::Chrome);
         let ui = UiLayer {
             rects: Vec::new(),
             texts: vec![UiTextItem {
@@ -771,6 +771,7 @@ mod tests {
                 y: 16.0,
                 color: [1.0; 4],
                 max_width: 32.0,
+                font: UiFont::Chrome,
             }],
             ..UiLayer::default()
         };
@@ -811,6 +812,7 @@ mod tests {
             y: 0.0,
             color,
             max_width: 32.0,
+            font: UiFont::Chrome,
         };
         let half = SIZE as f32 / 2.0;
         // White interface text in both halves; the overlay covers the left half in

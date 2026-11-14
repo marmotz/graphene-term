@@ -238,8 +238,9 @@ function on the frame is free at draw time and unit tested.
 
 ## Interface font separate from the terminal font
 
-The tab bar, the dialog and the command palette use a sans-serif font at a fixed
-13 px times the window scale, independent of the terminal font and its zoom. Their
+The tab bar and the dialog use a sans-serif font at a fixed 13 px times the window
+scale, the command palette the same font at 16 px (it is read and typed in, 13 px was
+too small), independent of the terminal font and its zoom. Their
 text is shaped as lines at free positions, not cells, but its glyphs go through the
 same cache and atlas as the grid (keys marked `ui`), so no second text renderer is
 needed.

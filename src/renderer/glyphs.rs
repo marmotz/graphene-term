@@ -6,9 +6,9 @@
 //! placed glyphs wait in [`Glyphs::take_uploads`] for the GPU side to copy them.
 //!
 //! [`Glyphs`] also owns the font system and the cell metrics, and the interface font:
-//! tab titles and other interface text use a sans-serif font at a fixed size (see
-//! [`UI_FONT_SIZE`]), independent of the terminal font and its zoom. Their glyphs share
-//! the cache and the atlas with the grid's, under keys with `ui` set.
+//! interface text uses a sans-serif font at a fixed size per [`UiFont`], independent of
+//! the terminal font and its zoom. Their glyphs share the cache and the atlas with the
+//! grid's, under keys with `ui` set.
 
 use std::collections::HashMap;
 
@@ -23,8 +23,31 @@ use crate::layout::CellSize;
 /// Side of each atlas page, in pixels.
 const ATLAS_SIZE: u32 = 1024;
 
-/// Size of the interface font, in logical pixels.
+/// Size of the interface font of the chrome (tab bar, dialog), in logical pixels.
 pub const UI_FONT_SIZE: f32 = 13.0;
+
+/// Size of the command palette's font, in logical pixels: larger than the chrome's, the
+/// palette being read and typed in.
+pub const PALETTE_FONT_SIZE: f32 = 16.0;
+
+/// Interface font, by where its text is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UiFont {
+    /// Tab bar and dialog, at [`UI_FONT_SIZE`].
+    Chrome,
+    /// Command palette, at [`PALETTE_FONT_SIZE`].
+    Palette,
+}
+
+impl UiFont {
+    /// Size of the font, in logical pixels.
+    pub fn size(self) -> f32 {
+        match self {
+            Self::Chrome => UI_FONT_SIZE,
+            Self::Palette => PALETTE_FONT_SIZE,
+        }
+    }
+}
 
 /// Line height of a font of `font_size` pixels, for the grid and the interface alike.
 fn line_height(font_size: f32) -> f32 {
@@ -37,18 +60,18 @@ pub struct GlyphKey {
     pub c: char,
     pub bold: bool,
     pub italic: bool,
-    /// Interface font (sans-serif, [`UI_FONT_SIZE`]) instead of the grid font.
-    pub ui: bool,
+    /// Interface font (sans-serif) instead of the grid font.
+    pub ui: Option<UiFont>,
 }
 
 impl GlyphKey {
-    /// A character of the interface font, regular.
-    pub fn ui(c: char) -> Self {
+    /// A character of the interface font `font`, regular.
+    pub fn ui(font: UiFont, c: char) -> Self {
         Self {
             c,
             bold: false,
             italic: false,
-            ui: true,
+            ui: Some(font),
         }
     }
 }
@@ -88,8 +111,8 @@ pub struct Glyphs {
     family: Option<String>,
     metrics: Metrics,
     cell: CellSize,
-    /// Metrics of the interface font, scaled to the window.
-    ui_metrics: Metrics,
+    /// Scale factor of the window, applied to the interface fonts.
+    ui_scale: f32,
     /// `None` for characters with nothing to draw (space, empty bitmap).
     cache: HashMap<GlyphKey, Option<Glyph>>,
     atlas: Atlas,
@@ -138,7 +161,7 @@ impl Glyphs {
             family,
             metrics,
             cell,
-            ui_metrics: ui_metrics(1.0),
+            ui_scale: 1.0,
             cache: HashMap::new(),
             atlas: Atlas::new(atlas_size),
             uploads: Vec::new(),
@@ -197,27 +220,38 @@ impl Glyphs {
     /// Scales the interface font to a window of scale factor `scale`; the cache is
     /// dropped when its size changes.
     pub fn set_ui_scale(&mut self, scale: f32) {
-        let metrics = ui_metrics(scale);
-        if metrics != self.ui_metrics {
-            self.ui_metrics = metrics;
+        if scale != self.ui_scale {
+            self.ui_scale = scale;
             self.clear();
         }
     }
 
-    /// Line height of the interface font, in pixels.
-    pub fn ui_line_height(&self) -> f32 {
-        self.ui_metrics.line_height
+    /// Scale factor the interface fonts are scaled with.
+    pub fn ui_scale(&self) -> f32 {
+        self.ui_scale
     }
 
-    /// Size of the interface font, in pixels.
-    pub fn ui_font_size(&self) -> f32 {
-        self.ui_metrics.font_size
+    /// Line height of the interface font `font`, in pixels.
+    pub fn ui_line_height(&self, font: UiFont) -> f32 {
+        self.ui_metrics(font).line_height
     }
 
-    /// Shapes `text` on one line with the interface font. A cluster of several
+    /// Size of the interface font `font`, in pixels.
+    pub fn ui_font_size(&self, font: UiFont) -> f32 {
+        self.ui_metrics(font).font_size
+    }
+
+    /// Metrics of the interface font `font`, scaled to the window.
+    fn ui_metrics(&self, font: UiFont) -> Metrics {
+        let font_size = font.size() * self.ui_scale;
+        Metrics::new(font_size, line_height(font_size))
+    }
+
+    /// Shapes `text` on one line with the interface font `font`. A cluster of several
     /// characters (ligature, combining mark) keeps its first character only.
-    pub fn shape_ui(&mut self, text: &str) -> UiLine {
-        let mut buffer = Buffer::new(&mut self.font_system, self.ui_metrics);
+    pub fn shape_ui(&mut self, font: UiFont, text: &str) -> UiLine {
+        let metrics = self.ui_metrics(font);
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_text(
             text,
             &Attrs::new().family(Family::SansSerif),
@@ -284,10 +318,9 @@ impl Glyphs {
     }
 
     fn rasterize(&mut self, key: GlyphKey) -> Option<Glyph> {
-        let (family, metrics) = if key.ui {
-            (Family::SansSerif, self.ui_metrics)
-        } else {
-            (family(&self.family), self.metrics)
+        let (family, metrics) = match key.ui {
+            Some(font) => (Family::SansSerif, self.ui_metrics(font)),
+            None => (family(&self.family), self.metrics),
         };
         let mut attrs = Attrs::new().family(family);
         if key.bold {
@@ -351,12 +384,6 @@ impl Glyphs {
     }
 }
 
-/// Metrics of the interface font for a window of scale factor `scale`.
-fn ui_metrics(scale: f32) -> Metrics {
-    let font_size = UI_FONT_SIZE * scale;
-    Metrics::new(font_size, line_height(font_size))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,7 +395,7 @@ mod tests {
             c,
             bold: false,
             italic: false,
-            ui: false,
+            ui: None,
         }
     }
 
@@ -528,13 +555,16 @@ mod tests {
     #[test]
     fn ui_font_has_a_fixed_size_scaled_to_the_window() {
         let mut glyphs = Glyphs::new(None, FONT_SIZE);
-        assert_eq!(glyphs.ui_font_size(), UI_FONT_SIZE);
+        assert_eq!(glyphs.ui_font_size(UiFont::Chrome), UI_FONT_SIZE);
         glyphs.set_font_size(FONT_SIZE * 3.0);
-        assert_eq!(glyphs.ui_font_size(), UI_FONT_SIZE);
+        assert_eq!(glyphs.ui_font_size(UiFont::Chrome), UI_FONT_SIZE);
         let generation = glyphs.generation();
         glyphs.set_ui_scale(2.0);
-        assert_eq!(glyphs.ui_font_size(), UI_FONT_SIZE * 2.0);
-        assert_eq!(glyphs.ui_line_height(), (UI_FONT_SIZE * 2.0 * 1.3).ceil());
+        assert_eq!(glyphs.ui_font_size(UiFont::Chrome), UI_FONT_SIZE * 2.0);
+        assert_eq!(
+            glyphs.ui_line_height(UiFont::Chrome),
+            (UI_FONT_SIZE * 2.0 * 1.3).ceil()
+        );
         assert!(glyphs.generation() > generation);
         // Same scale: the cache is kept.
         let generation = glyphs.generation();
@@ -543,10 +573,28 @@ mod tests {
     }
 
     #[test]
+    fn palette_font_is_larger_than_the_chrome_font() {
+        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        glyphs.set_ui_scale(2.0);
+        assert_eq!(
+            glyphs.ui_font_size(UiFont::Palette),
+            PALETTE_FONT_SIZE * 2.0
+        );
+        assert!(glyphs.ui_line_height(UiFont::Palette) > glyphs.ui_line_height(UiFont::Chrome));
+        let chrome = glyphs.get(GlyphKey::ui(UiFont::Chrome, 'M')).unwrap();
+        let palette = glyphs.get(GlyphKey::ui(UiFont::Palette, 'M')).unwrap();
+        assert!(palette.region.height > chrome.region.height);
+        assert!(
+            glyphs.shape_ui(UiFont::Palette, "abc").width
+                > glyphs.shape_ui(UiFont::Chrome, "abc").width
+        );
+    }
+
+    #[test]
     fn ui_glyphs_are_distinct_from_grid_glyphs() {
         let mut glyphs = Glyphs::new(None, 30.0);
         let grid = glyphs.get(key('a')).unwrap();
-        let ui = glyphs.get(GlyphKey::ui('a')).unwrap();
+        let ui = glyphs.get(GlyphKey::ui(UiFont::Chrome, 'a')).unwrap();
         assert_ne!(grid.region, ui.region);
         // The interface font is smaller than this grid font.
         assert!(ui.region.height < grid.region.height);
@@ -556,12 +604,12 @@ mod tests {
     #[test]
     fn shaped_ui_line_places_each_character() {
         let mut glyphs = Glyphs::new(None, FONT_SIZE);
-        let line = glyphs.shape_ui("ab c");
+        let line = glyphs.shape_ui(UiFont::Chrome, "ab c");
         let chars: Vec<char> = line.glyphs.iter().map(|&(_, c)| c).collect();
         assert_eq!(chars, ['a', 'b', ' ', 'c']);
         assert_eq!(line.glyphs[0].0, 0.0);
         assert!(line.glyphs.windows(2).all(|pair| pair[0].0 < pair[1].0));
         assert!(line.width > line.glyphs[3].0);
-        assert_eq!(glyphs.shape_ui(""), UiLine::default());
+        assert_eq!(glyphs.shape_ui(UiFont::Chrome, ""), UiLine::default());
     }
 }

@@ -9,7 +9,7 @@ use super::tab_bar::TabBarLayout;
 use crate::layout::Rect;
 use crate::palette::UiColors;
 use crate::renderer::scene::gpu_color;
-use crate::renderer::{RectInstance, UiLayer, UiTextItem};
+use crate::renderer::{RectInstance, UiFont, UiLayer, UiTextItem};
 use crate::terminal::PaneId;
 use crate::workspace::tree::Layout;
 
@@ -84,6 +84,7 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
         y: palette.input_text_y,
         color: if palette.placeholder { dim } else { text },
         max_width: palette.text_width,
+        font: UiFont::Palette,
     });
     let matching = color(colors.palette_match);
     for row in &palette.rows {
@@ -94,6 +95,7 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
                 y: row.text_y,
                 color: if run.highlighted { matching } else { text },
                 max_width: run.max_width,
+                font: UiFont::Palette,
             });
         }
         if let Some((shortcut, x)) = &row.shortcut {
@@ -103,6 +105,7 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
                 y: row.text_y,
                 color: dim,
                 max_width: row.rect.x + row.rect.width - x,
+                font: UiFont::Palette,
             });
         }
     }
@@ -129,6 +132,7 @@ fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
             y,
             color: text,
             max_width: dialog.text_width,
+            font: UiFont::Chrome,
         });
     }
     for button in &dialog.buttons {
@@ -144,6 +148,7 @@ fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
             y: dialog.label_y,
             color: label,
             max_width: button.rect.width,
+            font: UiFont::Chrome,
         });
     }
 }
@@ -168,6 +173,7 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
             y: bar.text_y,
             color: text,
             max_width: tab.title_width,
+            font: UiFont::Chrome,
         });
         // The glyph is about half the line height wide: centered in its square.
         ui.texts.push(UiTextItem {
@@ -176,6 +182,7 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
             y: bar.text_y,
             color: text,
             max_width: tab.close.width,
+            font: UiFont::Chrome,
         });
     }
     let plus = bar.new_tab;

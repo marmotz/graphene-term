@@ -201,7 +201,7 @@ fn resolve_glyphs(glyphs: &mut Glyphs, frame: &Frame) -> usize {
                 c: cell.c,
                 bold: cell.bold,
                 italic: cell.italic,
-                ui: false,
+                ui: None,
             })
         })
         .count()

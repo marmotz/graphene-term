@@ -302,11 +302,12 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
    or the palette covers everything. Colors are linearized when the surface
    format is sRGB.
 
-The interface text (`renderer/ui_text.rs`) uses its own font: sans-serif at
-`UI_FONT_SIZE` (13 px) times the window scale factor, independent of the terminal font
-and its zoom. Each line is shaped once per text and maximum width (truncated with `…`),
-and its characters go through the same glyph cache and atlas as the grid, under keys
-marked `ui`.
+The interface text (`renderer/ui_text.rs`) uses its own font: sans-serif, at a size
+per `UiFont` (`Chrome`: `UI_FONT_SIZE`, 13 px, for the tab bar and the dialog;
+`Palette`: `PALETTE_FONT_SIZE`, 16 px, for the command palette) times the window scale
+factor, independent of the terminal font and its zoom. Each line is shaped once per
+font, text and maximum width (truncated with `…`), and its characters go through the
+same glyph cache and atlas as the grid, under keys marked with their `UiFont`.
 
 ### Banner
 

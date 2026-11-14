@@ -1,12 +1,12 @@
-//! Interface text (tab titles, later palette rows and dialog text): lines of the
-//! interface font placed at pixel positions, truncated with `…` to a maximum width.
+//! Interface text (tab titles, palette rows, dialog text): lines of an interface font
+//! placed at pixel positions, truncated with `…` to a maximum width.
 //!
 //! Lines are shaped once per text and width, then turned into glyph instances drawn by
 //! the cell pipeline from the shared atlas.
 
 use std::collections::HashMap;
 
-use super::glyphs::{GlyphKey, Glyphs, UiLine};
+use super::glyphs::{GlyphKey, Glyphs, UiFont, UiLine};
 use super::scene::GlyphInstance;
 
 /// Marks a truncated text.
@@ -26,6 +26,8 @@ pub struct UiTextItem {
     pub color: [f32; 4],
     /// Width the text is truncated to, in pixels.
     pub max_width: f32,
+    /// Font the text is shaped with.
+    pub font: UiFont,
 }
 
 /// `text`, or its longest prefix followed by [`ELLIPSIS`] that `measure` finds no wider
@@ -61,24 +63,24 @@ pub fn truncate(text: &str, max_width: f32, mut measure: impl FnMut(&str) -> f32
 /// Cache of the shaped interface lines.
 #[derive(Default)]
 pub struct UiText {
-    /// Lines by text and maximum width (bits of the `f32`).
-    lines: HashMap<(String, u32), UiLine>,
-    /// Interface font size the cached lines were shaped with.
-    font_size: f32,
+    /// Lines by font, text and maximum width (bits of the `f32`).
+    lines: HashMap<(UiFont, String, u32), UiLine>,
+    /// Scale factor of the interface fonts the cached lines were shaped with.
+    scale: f32,
 }
 
 impl UiText {
-    /// The line of `text` truncated to `max_width`, shaped with the interface font.
-    fn line(&mut self, glyphs: &mut Glyphs, text: &str, max_width: f32) -> &UiLine {
-        if self.font_size != glyphs.ui_font_size() || self.lines.len() >= CACHE_CAPACITY {
+    /// The line of `text` truncated to `max_width`, shaped with the interface font `font`.
+    fn line(&mut self, glyphs: &mut Glyphs, font: UiFont, text: &str, max_width: f32) -> &UiLine {
+        if self.scale != glyphs.ui_scale() || self.lines.len() >= CACHE_CAPACITY {
             self.lines.clear();
-            self.font_size = glyphs.ui_font_size();
+            self.scale = glyphs.ui_scale();
         }
         self.lines
-            .entry((text.to_owned(), max_width.to_bits()))
+            .entry((font, text.to_owned(), max_width.to_bits()))
             .or_insert_with(|| {
-                let shown = truncate(text, max_width, |t| glyphs.shape_ui(t).width);
-                glyphs.shape_ui(&shown)
+                let shown = truncate(text, max_width, |t| glyphs.shape_ui(font, t).width);
+                glyphs.shape_ui(font, &shown)
             })
     }
 
@@ -90,14 +92,14 @@ impl UiText {
         out: &mut Vec<GlyphInstance>,
     ) {
         for item in items {
-            let line = self.line(glyphs, &item.text, item.max_width);
+            let line = self.line(glyphs, item.font, &item.text, item.max_width);
             out.extend(
                 line.glyphs
                     .iter()
                     .filter(|&&(_, c)| !c.is_whitespace())
                     .map(|&(x, c)| GlyphInstance {
                         origin: [item.x + x, item.y],
-                        key: GlyphKey::ui(c),
+                        key: GlyphKey::ui(item.font, c),
                         color: item.color,
                     }),
             );
@@ -146,6 +148,7 @@ mod tests {
             y: 20.0,
             color: [1.0; 4],
             max_width,
+            font: UiFont::Chrome,
         }
     }
 
@@ -157,7 +160,10 @@ mod tests {
         text.glyphs(&mut glyphs, &[item("a b", 1000.0)], &mut out);
         let chars: Vec<char> = out.iter().map(|g| g.key.c).collect();
         assert_eq!(chars, ['a', 'b']);
-        assert!(out.iter().all(|g| g.key.ui && g.origin[1] == 20.0));
+        assert!(
+            out.iter()
+                .all(|g| g.key.ui == Some(UiFont::Chrome) && g.origin[1] == 20.0)
+        );
         assert_eq!(out[0].origin[0], 100.0);
         assert!(out[1].origin[0] > out[0].origin[0]);
     }
@@ -165,7 +171,7 @@ mod tests {
     #[test]
     fn items_are_truncated_to_their_width() {
         let mut glyphs = Glyphs::new(None, 14.0);
-        let full = glyphs.shape_ui("a long tab title").width;
+        let full = glyphs.shape_ui(UiFont::Chrome, "a long tab title").width;
         let mut text = UiText::default();
         let mut out = Vec::new();
         text.glyphs(
@@ -175,5 +181,29 @@ mod tests {
         );
         assert_eq!(out.last().map(|g| g.key.c), Some(ELLIPSIS));
         assert!(out.len() < "a long tab title".len());
+    }
+
+    #[test]
+    fn items_keep_their_font_and_each_font_is_cached_apart() {
+        let mut glyphs = Glyphs::new(None, 14.0);
+        let mut text = UiText::default();
+        let palette = UiTextItem {
+            font: UiFont::Palette,
+            ..item("ab", 1000.0)
+        };
+        let mut out = Vec::new();
+        text.glyphs(&mut glyphs, &[item("ab", 1000.0), palette], &mut out);
+        let fonts: Vec<_> = out.iter().map(|g| g.key.ui).collect();
+        assert_eq!(
+            fonts,
+            [
+                Some(UiFont::Chrome),
+                Some(UiFont::Chrome),
+                Some(UiFont::Palette),
+                Some(UiFont::Palette)
+            ]
+        );
+        // The larger palette font puts its second character further.
+        assert!(out[3].origin[0] > out[1].origin[0]);
     }
 }
