@@ -53,7 +53,7 @@ src/
     rects.rs       instanced solid rectangle pipeline
     rect.wgsl      shader for rectangles
 themes/            built-in themes, embedded with include_str!
-shell-integration/ zsh, bash and fish scripts, embedded with include_str!
+shell-integration/ zsh, bash and fish scripts (block signals, editor key bindings), embedded with include_str!
 benches/
   render.rs        criterion benchmarks: parse, frame, glyphs_cold/warm, gpu_prepare
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script

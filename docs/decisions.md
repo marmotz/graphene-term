@@ -141,3 +141,30 @@ text renderer unaware of the cursor. Non-block shapes are drawn as rects over th
 
 Enabling winit IME risks double input (key event text + IME commit). Deferred until
 it can be handled and tested properly.
+
+## Input editor: shell bindings for private sequences
+
+The shell keeps the command line buffer; Graphene never edits it. Editor moves are
+private `CSI <code> u` sequences (code points 59136 to 59148, Unicode private use
+area, table in `src/input_editor.rs`) bound by the integration scripts in the emacs
+and vi insert keymaps.
+
+- Every move is passive: clamped at both ends of the buffer, never leaving it for the
+  history, never accepting an autosuggestion. A plain `Right` at the end of the buffer
+  would accept it (fish, zsh-autosuggestions).
+- zsh: own widgets calling the builtin (dot) widgets (`.forward-word`,
+  `.end-of-line`, ...), which zsh-autosuggestions does not wrap, so none of them
+  accepts its suggestion. Bound again before each prompt, after the user's files and
+  plugins.
+- bash: `bind -x` functions on `READLINE_LINE` / `READLINE_POINT`, readline
+  functions for words. Verified on bash 5.3: `READLINE_POINT` counts characters in a
+  UTF-8 locale, like `${#READLINE_LINE}` and substring expansion (bytes in the C
+  locale, consistently for both), so the functions never mix units.
+- fish: a raw sequence starting with `\e` keeps the old `bind` syntax in fish 4
+  (verified on 4.9.3, per the 4.0 changelog), so one syntax covers fish 3 and 4.
+  `forward-char-passive` / `backward-char-passive` exist since fish 4.0; older fish
+  falls back to `backward-char` / `forward-char`, detected with
+  `bind --function-names`. `forward-word`, `kill-word`, `end-of-line` and
+  `end-of-buffer` accept the autosuggestion at the end of the buffer, the only place
+  it shows: they only run when the cursor is not there. Bound again before a prompt
+  when gone (`fish_vi_key_bindings` erases bindings).
