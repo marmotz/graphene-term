@@ -7,6 +7,8 @@ mod images;
 mod rects;
 pub mod scene;
 mod ui_text;
+#[cfg(target_os = "linux")]
+mod x11_presenter;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -71,6 +73,8 @@ struct Layers {
     srgb: bool,
     /// Opacity of the clear color, 1.0 when the surface cannot be transparent.
     background_opacity: f32,
+    /// Alpha representation expected by the presentation backend.
+    alpha_mode: SurfaceAlphaMode,
 }
 
 /// What [`Layers::prepare`] uploaded for one pane, as ranges of the rect buffer. Its
@@ -107,6 +111,7 @@ impl Layers {
             ui_text: UiText::default(),
             srgb: format.is_srgb(),
             background_opacity: 1.0,
+            alpha_mode: SurfaceAlphaMode::Premultiplied,
         }
     }
 
@@ -169,9 +174,10 @@ impl Layers {
             .prepare(device, queue, screen, &mut self.glyphs, &groups);
 
         Prepared {
-            clear: scene::premultiplied(
+            clear: background_clear(
                 scenes.first().map_or(NO_PANE_CLEAR, |scene| scene.clear),
                 self.background_opacity,
+                self.alpha_mode,
             ),
             screen,
             panes: prepared_panes,
@@ -229,65 +235,183 @@ impl Layers {
     }
 }
 
-/// Backends tried in order for the window. Vulkan alone skips probing the other
-/// backends (~100 ms less at startup on the measured machine); all backends are the
-/// fallback when Vulkan is missing or has no adapter compatible with the surface.
+/// Backends tried in order for the window. Prefer Vulkan, then probe platform alternatives
+/// if it cannot expose an alpha-capable surface.
+#[cfg(target_os = "linux")]
+const BACKEND_ATTEMPTS: [wgpu::Backends; 2] = [wgpu::Backends::VULKAN, wgpu::Backends::GL];
+#[cfg(not(target_os = "linux"))]
 const BACKEND_ATTEMPTS: [wgpu::Backends; 2] = [wgpu::Backends::VULKAN, wgpu::Backends::all()];
 
-/// Runs `attempt` for each of `backends` in order and returns the first success, or
-/// the last error when every attempt fails.
-async fn first_success<T, F, Fut>(backends: &[wgpu::Backends], mut attempt: F) -> anyhow::Result<T>
+/// Returns the first alpha-capable backend; if none is available, keeps the first
+/// working opaque backend so startup can continue.
+async fn first_transparent<T, F, Fut>(
+    backends: &[wgpu::Backends],
+    mut attempt: F,
+) -> anyhow::Result<(T, bool)>
 where
     F: FnMut(wgpu::Backends) -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<T>>,
+    Fut: std::future::Future<Output = anyhow::Result<(T, bool)>>,
 {
     let mut last_error = anyhow::anyhow!("no GPU backend to try");
+    let mut opaque = None;
     for &b in backends {
         match attempt(b).await {
-            Ok(value) => return Ok(value),
+            Ok((value, true)) => return Ok((value, true)),
+            Ok((value, false)) => {
+                if opaque.is_none() {
+                    opaque = Some(value);
+                }
+            }
             Err(error) => {
                 log::info!("GPU backends {b:?} unusable: {error:#}");
                 last_error = error;
             }
         }
     }
-    Err(last_error)
+    opaque.map_or(Err(last_error), |value| Ok((value, false)))
 }
 
-/// Surface alpha mode for a transparent window, and whether it allows transparency:
-/// `PreMultiplied` when offered, else `Inherit`, else the first mode (opaque).
-fn alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> (wgpu::CompositeAlphaMode, bool) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SurfaceAlphaMode {
+    Premultiplied,
+    PostMultiplied,
+    Inherit,
+    Opaque,
+}
+
+impl SurfaceAlphaMode {
+    fn is_transparent(self) -> bool {
+        self != Self::Opaque
+    }
+}
+
+/// Surface alpha mode and the corresponding pixel representation.
+fn alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> (wgpu::CompositeAlphaMode, SurfaceAlphaMode) {
     [
-        wgpu::CompositeAlphaMode::PreMultiplied,
-        wgpu::CompositeAlphaMode::Inherit,
+        (
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            SurfaceAlphaMode::Premultiplied,
+        ),
+        (
+            wgpu::CompositeAlphaMode::PostMultiplied,
+            SurfaceAlphaMode::PostMultiplied,
+        ),
+        (wgpu::CompositeAlphaMode::Inherit, SurfaceAlphaMode::Inherit),
     ]
     .into_iter()
-    .find(|mode| modes.contains(mode))
-    .map_or_else(
-        || {
-            (
-                modes
-                    .first()
-                    .copied()
-                    .unwrap_or(wgpu::CompositeAlphaMode::Auto),
-                false,
-            )
-        },
-        |mode| (mode, true),
-    )
+    .find(|(mode, _)| modes.contains(mode))
+    .unwrap_or_else(|| {
+        (
+            modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::CompositeAlphaMode::Auto),
+            SurfaceAlphaMode::Opaque,
+        )
+    })
+}
+
+/// Applies opacity using the representation required by the surface. For `Inherit`,
+/// wgpu passes the mode to the native WSI when configuring the surface; winit has
+/// already requested an alpha-capable X11 visual or non-opaque Wayland surface.
+fn background_clear(color: [f32; 4], opacity: f32, alpha_mode: SurfaceAlphaMode) -> [f32; 4] {
+    match alpha_mode {
+        SurfaceAlphaMode::Premultiplied | SurfaceAlphaMode::Inherit => {
+            scene::premultiplied(color, opacity)
+        }
+        SurfaceAlphaMode::PostMultiplied => {
+            let mut color = color;
+            color[3] *= opacity;
+            color
+        }
+        SurfaceAlphaMode::Opaque => scene::premultiplied(color, 1.0),
+    }
 }
 
 pub struct Renderer {
     instance: wgpu::Instance,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
+    surface: Option<wgpu::Surface<'static>>,
+    config: Option<wgpu::SurfaceConfiguration>,
     layers: Layers,
-    /// Whether the surface alpha mode lets the background opacity through.
-    transparent: bool,
+    alpha_mode: SurfaceAlphaMode,
+    size: (u32, u32),
+    offscreen: Option<OffscreenTarget>,
+    #[cfg(target_os = "linux")]
+    x11_presenter: Option<x11_presenter::X11Presenter>,
     // Dropped last: the surface must not outlive the window.
     window: Arc<Window>,
+}
+
+struct OffscreenTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+    format: wgpu::TextureFormat,
+    size: (u32, u32),
+    bytes_per_row: u32,
+}
+
+impl OffscreenTarget {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<Self> {
+        let width = width.max(1);
+        let height = height.max(1);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("X11 ARGB render target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let unpadded_bytes_per_row = width.checked_mul(4).context("X11 ARGB row size overflow")?;
+        let bytes_per_row = unpadded_bytes_per_row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("X11 ARGB readback"),
+            size: u64::from(bytes_per_row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Ok(Self {
+            texture,
+            view,
+            readback,
+            format,
+            size: (width, height),
+            bytes_per_row,
+        })
+    }
+}
+
+fn x11_offscreen_format(adapter: &wgpu::Adapter) -> Option<wgpu::TextureFormat> {
+    let required = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+    [
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ]
+    .into_iter()
+    .find(|format| {
+        adapter
+            .get_texture_format_features(*format)
+            .allowed_usages
+            .contains(required)
+    })
 }
 
 impl Renderer {
@@ -300,71 +424,120 @@ impl Renderer {
         background_opacity: f32,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        let (instance, surface, adapter) = first_success(&BACKEND_ATTEMPTS, |backends| {
-            let window = window.clone();
-            let display = display.clone();
-            async move {
-                let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
-                desc.backends = backends;
-                let instance = wgpu::Instance::new(desc);
-                let surface = instance.create_surface(window)?;
-                perf::mark("GPU instance and surface created");
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        compatible_surface: Some(&surface),
-                        ..Default::default()
-                    })
-                    .await
-                    .with_context(|| format!("no compatible GPU adapter ({backends:?})"))?;
-                Ok((instance, surface, adapter))
-            }
-        })
-        .await?;
+        let ((instance, surface, adapter, caps), _) =
+            first_transparent(&BACKEND_ATTEMPTS, |backends| {
+                let window = window.clone();
+                let display = display.clone();
+                async move {
+                    let mut desc =
+                        wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
+                    desc.backends = backends;
+                    let instance = wgpu::Instance::new(desc);
+                    let surface = instance.create_surface(window)?;
+                    perf::mark("GPU instance and surface created");
+                    let adapter = instance
+                        .request_adapter(&wgpu::RequestAdapterOptions {
+                            compatible_surface: Some(&surface),
+                            ..Default::default()
+                        })
+                        .await
+                        .with_context(|| format!("no compatible GPU adapter ({backends:?})"))?;
+                    let caps = surface.get_capabilities(&adapter);
+                    let (_, alpha) = alpha_mode(&caps.alpha_modes);
+                    Ok(((instance, surface, adapter, caps), alpha.is_transparent()))
+                }
+            })
+            .await?;
         perf::mark("GPU adapter ready");
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await?;
         perf::mark("GPU device ready");
 
-        let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .or_else(|| caps.formats.first().copied())
-            .context("surface has no supported format")?;
-        let (alpha_mode, transparent) = alpha_mode(&caps.alpha_modes);
-        if !transparent {
+        let (native_alpha_mode, mut alpha_mode) = alpha_mode(&caps.alpha_modes);
+        #[cfg(target_os = "linux")]
+        let mut x11_presenter = None;
+        #[cfg(target_os = "linux")]
+        if !alpha_mode.is_transparent() {
+            match x11_presenter::X11Presenter::new(&window, &display) {
+                Ok(presenter) => x11_presenter = presenter,
+                Err(error) => log::warn!("X11 ARGB presentation unavailable: {error:#}"),
+            }
+        }
+        #[cfg(target_os = "linux")]
+        let mut x11_format = x11_presenter
+            .as_ref()
+            .and_then(|_| x11_offscreen_format(&adapter));
+        #[cfg(target_os = "linux")]
+        if x11_presenter.is_some() && x11_format.is_none() {
+            log::warn!("GPU has no renderable 8-bit X11 ARGB offscreen format");
+            x11_presenter = None;
+        }
+        #[cfg(target_os = "linux")]
+        let using_x11_presenter = x11_presenter.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let using_x11_presenter = false;
+
+        let (format, config, offscreen) = if using_x11_presenter {
+            #[cfg(target_os = "linux")]
+            {
+                let format = x11_format.take().context("missing X11 offscreen format")?;
+                let target = OffscreenTarget::new(&device, format, size.width, size.height)?;
+                alpha_mode = SurfaceAlphaMode::Premultiplied;
+                (format, None, Some(target))
+            }
+            #[cfg(not(target_os = "linux"))]
+            unreachable!()
+        } else {
+            let format = caps
+                .formats
+                .iter()
+                .copied()
+                .find(|f| f.is_srgb())
+                .or_else(|| caps.formats.first().copied())
+                .context("surface has no supported format")?;
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                width: size.width.max(1),
+                height: size.height.max(1),
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: native_alpha_mode,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+                color_space: wgpu::SurfaceColorSpace::Auto,
+            };
+            surface.configure(&device, &config);
+            (format, Some(config), None)
+        };
+
+        if using_x11_presenter {
+            log::info!("using native X11 ARGB presentation instead of the opaque GPU surface");
+        } else if !alpha_mode.is_transparent() {
             log::warn!(
-                "the surface does not support transparency ({:?}), background_opacity is ignored",
+                "no GPU backend exposes a transparent surface (selected modes: {:?}); the window will be opaque and window.background_opacity is ignored",
                 caps.alpha_modes
             );
+        } else {
+            log::debug!("using surface alpha mode {native_alpha_mode:?} via {alpha_mode:?}");
         }
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-        };
-        surface.configure(&device, &config);
 
-        let layers = Layers::new(&device, format, glyphs);
+        let mut layers = Layers::new(&device, format, glyphs);
+        layers.alpha_mode = alpha_mode;
         perf::mark("renderer ready");
 
         let mut renderer = Self {
             instance,
             device,
             queue,
-            surface,
+            surface: (!using_x11_presenter).then_some(surface),
             config,
             layers,
-            transparent,
+            alpha_mode,
+            size: (size.width.max(1), size.height.max(1)),
+            offscreen,
+            #[cfg(target_os = "linux")]
+            x11_presenter,
             window,
         };
         renderer.set_background_opacity(background_opacity);
@@ -374,7 +547,11 @@ impl Renderer {
     /// Sets the opacity of the default background, ignored when the surface cannot be
     /// transparent.
     pub fn set_background_opacity(&mut self, opacity: f32) {
-        self.layers.background_opacity = if self.transparent { opacity } else { 1.0 };
+        self.layers.background_opacity = if self.alpha_mode.is_transparent() {
+            opacity
+        } else {
+            1.0
+        };
     }
 
     pub fn cell_size(&self) -> CellSize {
@@ -412,33 +589,73 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.config.width = width.max(1);
-        self.config.height = height.max(1);
-        self.surface.configure(&self.device, &self.config);
+        let size = (width.max(1), height.max(1));
+        if let Some(target) = &self.offscreen {
+            match OffscreenTarget::new(&self.device, target.format, size.0, size.1) {
+                Ok(target) => self.offscreen = Some(target),
+                Err(error) => {
+                    log::error!("could not resize X11 ARGB render target: {error:#}");
+                    return;
+                }
+            }
+        }
+        if let (Some(surface), Some(config)) = (&self.surface, &mut self.config) {
+            config.width = size.0;
+            config.height = size.1;
+            surface.configure(&self.device, config);
+        }
+        self.size = size;
     }
 
     /// Draws `panes`, then the interface `ui` over them. Returns whether it reached the
     /// screen (`false` when the surface was not ready and a new redraw was requested or
     /// will come).
     pub fn render(&mut self, panes: &[PaneFrame<'_>], ui: &UiLayer) -> anyhow::Result<bool> {
-        let screen = (self.config.width, self.config.height);
+        let screen = self.size;
         let prepared = self
             .layers
             .prepare(&self.device, &self.queue, screen, panes, ui);
 
-        let output = match self.surface.get_current_texture() {
+        #[cfg(target_os = "linux")]
+        if self.x11_presenter.is_some() {
+            return self.render_x11(&prepared);
+        }
+
+        self.render_surface(&prepared)
+    }
+
+    fn render_surface(&mut self, prepared: &Prepared) -> anyhow::Result<bool> {
+        let output = self
+            .surface
+            .as_ref()
+            .context("GPU surface is missing")?
+            .get_current_texture();
+
+        let output = match output {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
-                self.surface.configure(&self.device, &self.config);
+                self.surface
+                    .as_ref()
+                    .context("GPU surface is missing")?
+                    .configure(
+                        &self.device,
+                        self.config.as_ref().context("surface config is missing")?,
+                    );
                 self.window.request_redraw();
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self.instance.create_surface(self.window.clone())?;
-                self.surface.configure(&self.device, &self.config);
+                self.surface = Some(self.instance.create_surface(self.window.clone())?);
+                self.surface
+                    .as_ref()
+                    .context("GPU surface is missing")?
+                    .configure(
+                        &self.device,
+                        self.config.as_ref().context("surface config is missing")?,
+                    );
                 self.window.request_redraw();
                 return Ok(false);
             }
@@ -451,11 +668,69 @@ impl Renderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.layers.draw(&mut encoder, &view, &prepared);
+        self.layers.draw(&mut encoder, &view, prepared);
 
         self.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();
         self.queue.present(output);
+        Ok(true)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn render_x11(&mut self, prepared: &Prepared) -> anyhow::Result<bool> {
+        let target = self
+            .offscreen
+            .as_ref()
+            .context("X11 offscreen target is missing")?;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        self.layers.draw(&mut encoder, &target.view, prepared);
+        encoder.copy_texture_to_buffer(
+            target.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &target.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.bytes_per_row),
+                    rows_per_image: Some(target.size.1),
+                },
+            },
+            wgpu::Extent3d {
+                width: target.size.0,
+                height: target.size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        target
+            .readback
+            .map_async(wgpu::MapMode::Read, .., move |result| {
+                let _ = send.send(result);
+            });
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        receive
+            .recv()
+            .context("GPU readback callback was dropped")??;
+
+        let mapped = target.readback.get_mapped_range(..)?;
+        self.window.pre_present_notify();
+        let present_result = self
+            .x11_presenter
+            .as_mut()
+            .context("X11 presenter is missing")?
+            .present(
+                &mapped,
+                target.size.0,
+                target.size.1,
+                target.bytes_per_row,
+                target.format,
+            );
+        drop(mapped);
+        target.readback.unmap();
+        present_result?;
         Ok(true)
     }
 }
@@ -582,15 +857,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn alpha_mode_prefers_premultiplied_then_inherit() {
+    fn alpha_mode_prefers_premultiplied_and_recognizes_other_modes() {
         use wgpu::CompositeAlphaMode::*;
         assert_eq!(
             alpha_mode(&[Opaque, Inherit, PreMultiplied]),
-            (PreMultiplied, true)
+            (PreMultiplied, SurfaceAlphaMode::Premultiplied)
         );
-        assert_eq!(alpha_mode(&[Opaque, Inherit]), (Inherit, true));
-        assert_eq!(alpha_mode(&[Opaque, PostMultiplied]), (Opaque, false));
-        assert_eq!(alpha_mode(&[]), (Auto, false));
+        assert_eq!(
+            alpha_mode(&[Opaque, Inherit]),
+            (Inherit, SurfaceAlphaMode::Inherit)
+        );
+        assert_eq!(
+            alpha_mode(&[Opaque, PostMultiplied]),
+            (PostMultiplied, SurfaceAlphaMode::PostMultiplied)
+        );
+        assert_eq!(alpha_mode(&[Opaque]), (Opaque, SurfaceAlphaMode::Opaque));
+        assert_eq!(alpha_mode(&[]), (Auto, SurfaceAlphaMode::Opaque));
+    }
+
+    #[test]
+    fn clear_alpha_respects_surface_representation_at_opacity_endpoints_and_midpoint() {
+        let color = [0.8, 0.4, 0.2, 1.0];
+        for (opacity, alpha) in [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)] {
+            assert_eq!(
+                background_clear(color, opacity, SurfaceAlphaMode::Premultiplied),
+                [color[0] * alpha, color[1] * alpha, color[2] * alpha, alpha]
+            );
+            assert_eq!(
+                background_clear(color, opacity, SurfaceAlphaMode::PostMultiplied),
+                [color[0], color[1], color[2], alpha]
+            );
+            assert_eq!(
+                background_clear(color, opacity, SurfaceAlphaMode::Inherit),
+                [color[0] * alpha, color[1] * alpha, color[2] * alpha, alpha]
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_surface_ignores_configured_background_opacity() {
+        assert_eq!(
+            background_clear([0.8, 0.4, 0.2, 1.0], 0.25, SurfaceAlphaMode::Opaque),
+            [0.8, 0.4, 0.2, 1.0]
+        );
     }
     use crate::frame::{BlockColors, FrameCell};
     use crate::layout::Rect;
@@ -978,7 +1287,17 @@ mod tests {
     }
 
     #[test]
-    fn vulkan_is_tried_first_then_all_backends() {
+    #[cfg(target_os = "linux")]
+    fn vulkan_is_tried_before_opengl() {
+        assert_eq!(
+            BACKEND_ATTEMPTS,
+            [wgpu::Backends::VULKAN, wgpu::Backends::GL]
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn vulkan_is_tried_before_other_backends() {
         assert_eq!(
             BACKEND_ATTEMPTS,
             [wgpu::Backends::VULKAN, wgpu::Backends::all()]
@@ -986,41 +1305,47 @@ mod tests {
     }
 
     #[test]
-    fn first_success_stops_at_the_first_working_backends() {
+    fn first_transparent_prefers_transparency_over_a_working_opaque_backend() {
         let mut tried = Vec::new();
-        let result = pollster::block_on(first_success(&BACKEND_ATTEMPTS, |b| {
+        let result = pollster::block_on(first_transparent(&BACKEND_ATTEMPTS, |b| {
             tried.push(b);
-            async move { Ok(b) }
+            async move { Ok((b, b == wgpu::Backends::GL)) }
         }));
-        assert_eq!(result.unwrap(), wgpu::Backends::VULKAN);
-        assert_eq!(tried, [wgpu::Backends::VULKAN]);
-    }
-
-    #[test]
-    fn first_success_falls_back_when_vulkan_fails() {
-        let mut tried = Vec::new();
-        let result = pollster::block_on(first_success(&BACKEND_ATTEMPTS, |b| {
-            tried.push(b);
-            async move {
-                if b == wgpu::Backends::VULKAN {
-                    anyhow::bail!("no Vulkan adapter")
-                }
-                Ok(b)
-            }
-        }));
-        assert_eq!(result.unwrap(), wgpu::Backends::all());
+        assert_eq!(result.unwrap(), (wgpu::Backends::GL, true));
         assert_eq!(tried, BACKEND_ATTEMPTS);
     }
 
     #[test]
-    fn first_success_returns_the_last_error_when_all_fail() {
-        let result: anyhow::Result<()> =
-            pollster::block_on(first_success(&BACKEND_ATTEMPTS, |b| async move {
+    fn first_transparent_uses_opaque_backend_when_none_support_transparency() {
+        let mut tried = Vec::new();
+        let result = pollster::block_on(first_transparent(&BACKEND_ATTEMPTS, |b| {
+            tried.push(b);
+            async move { Ok((b, false)) }
+        }));
+        assert_eq!(result.unwrap(), (wgpu::Backends::VULKAN, false));
+        assert_eq!(tried, BACKEND_ATTEMPTS);
+    }
+
+    #[test]
+    fn first_transparent_falls_back_when_vulkan_fails() {
+        let result = pollster::block_on(first_transparent(&BACKEND_ATTEMPTS, |b| async move {
+            if b == wgpu::Backends::VULKAN {
+                anyhow::bail!("no Vulkan adapter")
+            }
+            Ok((b, true))
+        }));
+        assert_eq!(result.unwrap(), (wgpu::Backends::GL, true));
+    }
+
+    #[test]
+    fn first_transparent_returns_the_last_error_when_all_fail() {
+        let result: anyhow::Result<((), bool)> =
+            pollster::block_on(first_transparent(&BACKEND_ATTEMPTS, |b| async move {
                 anyhow::bail!("failed with {b:?}")
             }));
         let message = result.unwrap_err().to_string();
         assert!(
-            message.contains(&format!("{:?}", wgpu::Backends::all())),
+            message.contains(&format!("{:?}", wgpu::Backends::GL)),
             "{message}"
         );
     }
