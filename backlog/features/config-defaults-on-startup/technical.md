@@ -4,10 +4,11 @@ Product decisions: [overview.md](overview.md).
 
 ## Current State
 
-- `Config::load` delegates to `load_from` ([src/config.rs:77](../../../src/config.rs)). If
-  `config.toml` is missing, `load_from` creates the directory and writes `DEFAULT_CONFIG`;
-  if the file exists, it parses it without modifying it
-  ([src/config.rs:117](../../../src/config.rs)).
+- `Config::load` delegates to `load_from` ([src/config.rs:84](../../../src/config.rs)). On
+  initial load, an existing file is passed through `config_edit::complete_defaults` and
+  atomically replaced only if completion changes it ([src/config.rs:122-136](../../../src/config.rs)).
+  A missing file is created from the completed embedded template
+  ([src/config.rs:138-150](../../../src/config.rs)).
 - The configuration template is embedded from
   [config.default.toml](../../../config.default.toml) ([src/config.rs:21](../../../src/config.rs)).
   It documents options as commented lines with their default values
@@ -15,19 +16,19 @@ Product decisions: [overview.md](overview.md).
   commented out. `README.md` confirms that users uncomment a line to change it
   ([README.md:12](../../../README.md)).
 - `Config::default` contains the effective default values
-  ([src/config.rs:336](../../../src/config.rs)). `Config::parse` reads the TOML keys that
+  ([src/config.rs:359](../../../src/config.rs)). `Config::parse` reads the TOML keys that
   are present, initializes the others with those defaults, ignores unknown keys while
   reporting an error, and leaves the previous configuration unchanged if the TOML syntax
-  is invalid ([src/config.rs:381](../../../src/config.rs)). Section and key recognition
+  is invalid ([src/config.rs:408](../../../src/config.rs)). Section and key recognition
   is implemented in `Config::parse` and `Reader::read_section_key`
-  ([src/config.rs:399](../../../src/config.rs), [src/config.rs:495](../../../src/config.rs)).
+  ([src/config.rs:408](../../../src/config.rs), [src/config.rs:563](../../../src/config.rs)).
 - Built-in shortcuts are defined separately in the `DEFAULTS` table
-  ([src/keybindings.rs:93](../../../src/keybindings.rs)); each `Action` provides its
-  configuration ID (`Action::id`, [src/input.rs:93](../../../src/input.rs)). The current
+  ([src/keybindings.rs:95](../../../src/keybindings.rs)); each `Action` provides its
+  configuration ID (`Action::id`, [src/input.rs:96](../../../src/input.rs)). The current
   template only documents examples for `[keybindings]`
   ([config.default.toml:59](../../../config.default.toml)).
 - The `uncommented_default` test turns the commented template into active TOML to verify
-  that it parses and matches `Config::default` ([src/config.rs:663](../../../src/config.rs)).
+  that it parses and matches `Config::default` ([src/config.rs:739-747](../../../src/config.rs)).
   This provides a basis for checking that the template remains consistent with the
   configuration schema.
 - At graphical startup, `app::run` loads the configuration before starting the watcher
@@ -36,9 +37,8 @@ Product decisions: [overview.md](overview.md).
   reports changes to `config.toml` ([src/watcher.rs:83](../../../src/watcher.rs)).
 - The binary currently handles only `--version`; all other arguments launch the graphical
   application ([src/main.rs:1](../../../src/main.rs)).
-- `toml_edit` is not a direct dependency in `Cargo.toml`, but version `0.25.19` is already
-  present in `Cargo.lock` as a transitive dependency
-  ([Cargo.lock:2895](../../../Cargo.lock)).
+- `toml_edit = "0.25.19"` is a direct dependency ([Cargo.toml:36](../../../Cargo.toml)); it
+  preserves source spans for pruning and validates TOML before startup edits.
 
 ## Technical Decisions
 
@@ -51,17 +51,28 @@ Product decisions: [overview.md](overview.md).
   matches `Config::default`.
 - During initialization (`load_from`), compare the supported options in the template
   with the existing file. An option that is already present, either active **or
-  commented**, must not be added again. Add only absent options as commented lines that
-  follow the template, grouped under commented section headers. For `[keybindings]`,
-  include every built-in shortcut, not just the examples currently in
-  `config.default.toml`; each line shows the corresponding action (`Action::id`).
+  commented**, must not be added again. Add absent options as commented lines under their
+  existing section, before the next section starts. Reuse either an active section header
+  or an existing commented template header; do not append a second header for a section
+  already present. Add one commented header only when the file has no corresponding
+  section. For `[keybindings]`, include every built-in shortcut, not just the examples
+  currently in `config.default.toml`; each line shows the corresponding action
+  (`Action::id`).
 - Expose the built-in key/action pairs through a `pub(crate)` iterator in
   `keybindings.rs`, derived from `DEFAULTS`, so configuration lines can be generated
   without maintaining a second hard-coded list. Existing shortcuts, whether active or
   commented, are neither duplicated nor replaced.
-- Append additions at the end of the file in a commented block. Do not reformat or
-  reorder the original text; append only the necessary lines and, if needed, a line
-  separator. Preserve unknown keys and their values.
+- Root-level options are inserted in the root section, before the first table. Preserve
+  active values, unknown keys, ordering, formatting, and custom comments. Normalize known
+  legacy template/generated help and malformed commented settings to the current concise
+  wording, rather than leaving duplicate or stale help.
+- `config.default.toml` is the documentation source for option lines. Give each setting
+  one concise comment that combines its format, range, and finite allowed values as
+  applicable. `option_lines` retains the concise comments before each template setting;
+  copy them when inserting a missing option. For existing settings, add help only when no
+  nearby description exists, preserving user values and custom comments. The keybindings
+  section states the shared key/action format and allowed action set once instead of
+  repeating them for every shortcut ([src/config_edit.rs:890-937](../../../src/config_edit.rs)).
 - Do not add a schema version: each startup can fill in missing options. This avoids
   maintaining a migration table for a file whose missing options already use the values
   from `Config::default`.
@@ -74,23 +85,44 @@ Product decisions: [overview.md](overview.md).
 
 Alternatives:
 
-- *Serialize the entire document or `Config` again*: rejected because it would rewrite
-  user content and could lose comments, key order, and formatting.
+- *Regenerate the whole file from the template*: rejected for this implementation because
+  reliable in-place insertion is feasible and avoids losing user comments, key order, and
+  formatting. Keep regeneration as a fallback only if future schema changes make safe
+  in-place completion impractical; such a fallback must carry forward active supported
+  values and unknown entries.
 - *Add active TOML lines*: rejected because the current configuration file documents
   options as commented examples that users can uncomment to customize.
-- **Add only absent options as commented lines**: retained because it follows the current
-  template and does not replace user-configured values. Generate the full built-in
-  shortcut list from `DEFAULTS`.
+- **Insert only absent options as commented lines in their existing sections**: retained
+  because it follows the current template, avoids duplicate section headers, and does not
+  replace user-configured values. Generate the full built-in shortcut list from
+  `DEFAULTS`.
 
 ### Editing and Preserving Text
 
-- Create a private `src/config_edit.rs` module to isolate template analysis, detection of
-  existing options, insertion of commented lines, and pruning.
-- Declare `toml_edit = "0.25.19"` as a direct dependency; this version is already in the
-  lockfile. Use its syntax tree and spans to recognize active keys and remove only the
-  targeted TOML entries without serializing the entire document. For commented template
-  options, compare key paths with the original text to avoid duplicating comments that
-  are already present.
+- `src/config_edit.rs` owns template analysis, detection of existing options, insertion of
+  commented lines, and pruning. `complete_defaults` checks active TOML nodes plus
+  commented options, then inserts additions in existing section blocks or creates a
+  single commented header for an absent section
+  ([src/config_edit.rs:24-143](../../../src/config_edit.rs)). The previous implementation
+  appended every missing option at EOF, which caused the repeated section headers
+  observed in existing files.
+- Use the direct `toml_edit = "0.25.19"` dependency and its syntax tree and spans to
+  recognize active keys and remove only the targeted TOML entries without serializing
+  the entire document. For commented template options and section headers, scan the
+  original text while tracking both active and commented table headers (`section_blocks`
+  and `commented_options`, [src/config_edit.rs:383-410](../../../src/config_edit.rs),
+  [src/config_edit.rs:938-968](../../../src/config_edit.rs)). Parse quoted keys using TOML
+  syntax where possible; tolerate a leading stray quote on a commented known key so
+  malformed examples such as `# "shape = "block"` are normalized in place rather than
+  duplicated. Normalize repetitive help from the prior template and generated `Type:`
+  lines without rewriting unrelated comments
+  ([src/config_edit.rs:422-597](../../../src/config_edit.rs)).
+- Group missing options by section and apply insertions from the end of the file toward
+  the beginning so earlier byte offsets remain valid. Place each insertion at the end of
+  the existing active or commented section block. For an absent section, append one
+  commented section header and its missing options. For root-level keys, insert before
+  the first table header. Preserve unaffected source slices exactly, except for recognized
+  legacy help that is deliberately canonicalized.
 - Return unknown keys as structured data (path and span) from configuration parsing
   instead of deriving them from `ConfigError` messages. Reuse the same recognition
   branches as `Config::parse` so that parsing and pruning agree on which keys are valid.
@@ -133,23 +165,26 @@ Alternatives:
 ### Tests and Documentation
 
 - Add unit tests to `config_edit` for active and commented options being present or
-  absent, insertion of multiple options, duplicate avoidance, exact preservation of
-  existing text, preservation of custom values and unknown keys during startup, no write
-  on invalid TOML, and no write when nothing is missing. Also verify that each entry in
-  `keybindings::DEFAULTS` is exposed as a commented line with the correct `Action::id`
-  when absent.
+  absent, insertion into existing active and commented sections, no duplicate section
+  headers, root-level insertion, normalization of a malformed commented known option,
+  concise help on supported active/commented settings and every inserted setting, finite
+  allowed values in the template, duplicate avoidance, exact preservation of unaffected
+  text, custom values and unknown keys, no write on invalid TOML, and no write when
+  nothing is missing. Also verify that each entry in `keybindings::DEFAULTS`
+  is exposed as a commented line with the correct `Action::id` when absent.
 - Test pruning of unknown root-level and nested keys, preservation of recognized keys
   with invalid values, no write on syntax errors, confirmation/refusal/`--yes` paths, and
   creation of the default file when it is missing.
 - Extend the existing missing-file test in `src/config.rs` and add argument-dispatch
   tests to verify that `--prune-config` does not launch the graphical application.
 - Update the README configuration section to explain automatic completion of missing
-  options and document `graphene --prune-config` and `--yes`.
+  options inside existing sections, and document `graphene --prune-config` and `--yes`.
 
 ## Verified Consequences
 
 - Existing files retain their settings and text content; only supported options absent
-  from the file are added. User-configured options must never be replaced by defaults.
+  from the file are inserted, in their matching section. User-configured options must
+  never be replaced by defaults, and a section must not gain a duplicate header.
 - Unknown entries continue to be reported by the parser and preserved at startup; only
   explicit cleanup may remove them.
 - `Config::parse` remains read-only. The startup migration is integrated into
@@ -157,7 +192,7 @@ Alternatives:
 - Tests must cover any addition to the static schema or `keybindings::DEFAULTS`, ensuring
   that new options and shortcuts appear in existing configuration files.
 
-## Implementation Tasks
+## Découpage en tâches d'implémentation
 
 1. [#93](https://github.com/marmotz/graphene-term/issues/93) Automatically complete
    missing configuration options at startup.

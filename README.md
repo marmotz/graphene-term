@@ -13,7 +13,20 @@ cargo run --release
 
 Settings live in `~/.config/graphene/config.toml` (`$XDG_CONFIG_HOME/graphene/` when
 set). The file is created on first launch, fully commented, with the default values:
-uncomment a line to change it. See [config.default.toml](config.default.toml).
+uncomment a line to change it. On startup, Graphene adds comments for supported options
+missing from an existing file inside their existing sections, creating a section only
+when needed. It preserves configured settings, unknown keys, custom comments and formatting;
+legacy template help and malformed comments for supported settings are normalized. The
+comments explain each setting's format and range, and list finite allowed values
+without repeating the same help. Automatically added settings include their matching
+documentation. The file also lists the built-in keybindings. See
+[config.default.toml](config.default.toml).
+
+Run `graphene --prune-config` to list and remove keys not recognized by this version.
+The command asks for confirmation in a terminal; when run non-interactively it makes no
+changes unless `--yes` is also provided (`graphene --prune-config --yes`). Recognized
+settings are preserved even if their values are invalid, and a file with invalid TOML is
+never rewritten.
 
 Themes are set with `name` in the `[theme]` section. Eight are built in (see
 [themes/](themes/)); a file `themes/<name>.toml` in the config directory is used first,

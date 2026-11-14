@@ -10,6 +10,7 @@ mod build_version;
 mod chrome;
 mod clipboard;
 mod config;
+mod config_edit;
 mod cursor_blink;
 mod frame;
 mod graphics;
@@ -46,6 +47,11 @@ pub const VERSION: &str = env!("GRAPHENE_VERSION");
 /// Opens the window and runs the event loop until the shell exits.
 pub fn run() -> anyhow::Result<()> {
     app::run()
+}
+
+/// Lists and optionally removes unknown entries from the user's configuration file.
+pub fn prune_config(yes: bool) -> anyhow::Result<()> {
+    config_edit::prune_config(yes)
 }
 
 /// Starts the startup clock used by the `graphene::perf` logs. Call it first in `main`.
