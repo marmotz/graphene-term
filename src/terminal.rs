@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,32 +15,41 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use winit::event_loop::EventLoopProxy;
 
+use crate::process;
 use crate::pty::{self, Msg, PtyLoop};
 use crate::shell_integration;
 use crate::timeline::Timeline;
 
+/// Identifies a pane, and so the terminal running in it, for the whole session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PaneId(pub u64);
+
 /// Events sent from the PTY and update check threads to the UI thread.
 #[derive(Debug)]
 pub enum UserEvent {
-    Terminal(Event),
+    /// An event from the terminal of a pane.
+    Terminal(PaneId, Event),
     /// Release to show in the update banner, `None` to hide it.
     Update(Option<crate::update::Release>),
 }
 
-/// Forwards terminal events to the winit event loop.
+/// Forwards the terminal events of one pane to the winit event loop.
 #[derive(Clone)]
-pub struct EventProxy(EventLoopProxy<UserEvent>);
+pub struct EventProxy {
+    proxy: EventLoopProxy<UserEvent>,
+    pane: PaneId,
+}
 
 impl EventProxy {
-    pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
-        Self(proxy)
+    pub fn new(proxy: EventLoopProxy<UserEvent>, pane: PaneId) -> Self {
+        Self { proxy, pane }
     }
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         // The event loop may already be closed during shutdown.
-        let _ = self.0.send_event(UserEvent::Terminal(event));
+        let _ = self.proxy.send_event(UserEvent::Terminal(self.pane, event));
     }
 }
 
@@ -49,11 +59,23 @@ pub struct Terminal {
     /// The command blocks. Lock order: `term` first, then `timeline`.
     pub timeline: Arc<Mutex<Timeline>>,
     sender: pty::Sender,
+    /// Process id of the shell.
+    #[allow(
+        dead_code,
+        reason = "read by the close confirmation and new pane tasks"
+    )]
+    shell_pid: u32,
 }
 
 impl Terminal {
-    /// Spawns the user's shell in a new PTY.
-    pub fn spawn(proxy: EventProxy, size: WindowSize, config: Config) -> anyhow::Result<Self> {
+    /// Spawns the user's shell in a new PTY, in `cwd` when given (else the current
+    /// directory of this process).
+    pub fn spawn(
+        proxy: EventProxy,
+        size: WindowSize,
+        config: Config,
+        cwd: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
         let mut env = HashMap::from([
             ("TERM".to_owned(), "xterm-256color".to_owned()),
             ("COLORTERM".to_owned(), "truecolor".to_owned()),
@@ -70,9 +92,11 @@ impl Terminal {
         let options = tty::Options {
             shell,
             env,
+            working_directory: cwd,
             ..Default::default()
         };
         let pty = tty::new(&options, size, 0)?;
+        let shell_pid = pty.child().id();
 
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
         let timeline = Arc::new(Mutex::new(Timeline::new(config.scrolling_history)));
@@ -86,7 +110,21 @@ impl Terminal {
             term,
             timeline,
             sender,
+            shell_pid,
         })
+    }
+
+    /// The shell's current directory, `None` when it cannot be read.
+    #[allow(dead_code, reason = "used by the new pane task")]
+    pub fn current_dir(&self) -> Option<PathBuf> {
+        process::current_dir(self.shell_pid)
+    }
+
+    /// The program running in the foreground of this terminal, `None` when it is the
+    /// shell itself or it cannot be read.
+    #[allow(dead_code, reason = "used by the close confirmation task")]
+    pub fn foreground_program(&self) -> Option<String> {
+        process::foreground_program(self.shell_pid)
     }
 
     /// Sends bytes to the shell.

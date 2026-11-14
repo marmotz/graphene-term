@@ -49,11 +49,11 @@ _terminé — voir [technical.md](features/rich-input-editor/technical.md)_ — 
 
 ## Tabs, splits and command palette ·  [overview](features/tabs-splits-palette/overview.md)
 
-_tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md)_ — 1/10 tasks done
+_tâches créées, voir [technical.md](features/tabs-splits-palette/technical.md)_ — 2/10 tasks done
 
 | Done | Issue                                                     | Title                                                                         | Blocked by |
 |------|-----------------------------------------------------------|-------------------------------------------------------------------------------|------------|
-| [ ]  | [#36](https://github.com/marmotz/graphene-term/issues/36) | Tabs: pane identity in terminal events, shell pid, cwd and foreground program | —          |
+| [x]  | [#36](https://github.com/marmotz/graphene-term/issues/36) | Tabs: pane identity in terminal events, shell pid, cwd and foreground program | —          |
 | [ ]  | [#37](https://github.com/marmotz/graphene-term/issues/37) | Tabs: grid layout inside a pane rectangle                                     | —          |
 | [ ]  | [#38](https://github.com/marmotz/graphene-term/issues/38) | Tabs: binary split tree                                                       | #37        |
 | [ ]  | [#39](https://github.com/marmotz/graphene-term/issues/39) | Tabs: Pane extracted from Session, workspace model and event routing          | #36, #38   |

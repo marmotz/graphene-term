@@ -30,7 +30,7 @@ use crate::palette::Palette;
 use crate::perf;
 use crate::renderer::{Glyphs, Renderer};
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
-use crate::terminal::{EventProxy, Terminal, UserEvent};
+use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::timeline::{BlockId, Timeline};
 use crate::timeline_selection::{self, End, TimelineSelection};
@@ -38,6 +38,8 @@ use crate::update::checker::Checker;
 use crate::view::{self, Anchor, RowSource, ScrollTarget, ViewRow};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
+/// The only pane until the workspace holds several.
+const MAIN_PANE: PaneId = PaneId(0);
 
 struct Session {
     window: Arc<Window>,
@@ -965,9 +967,10 @@ impl App {
             self.config.window.padding * scale,
         );
         let terminal = Terminal::spawn(
-            EventProxy::new(self.proxy.clone()),
+            EventProxy::new(self.proxy.clone(), MAIN_PANE),
             layout.window_size(),
             self.config.term_config(),
+            None,
         )?;
         perf::mark("shell spawned");
 
@@ -1046,7 +1049,7 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         };
         match event {
-            UserEvent::Terminal(event) => session.handle_terminal_event(event, event_loop),
+            UserEvent::Terminal(_pane, event) => session.handle_terminal_event(event, event_loop),
             UserEvent::Update(release) => {
                 session.update.set(release);
                 session.window.request_redraw();

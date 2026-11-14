@@ -16,6 +16,7 @@ mod mouse;
 mod opener;
 mod palette;
 mod perf;
+mod process;
 mod pty;
 mod renderer;
 mod selection;
