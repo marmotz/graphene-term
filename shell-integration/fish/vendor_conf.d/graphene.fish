@@ -76,6 +76,9 @@ if status is-interactive; and test -n "$__graphene_token"
             bind -M $mode \e\[59146u beginning-of-buffer
             bind -M $mode \e\[59147u '__graphene_forward end-of-buffer'
             bind -M $mode \e\[59148u 'commandline -i \n'
+            # forward-word already stops at the end of the word (forward-word-end
+            # stops on its last character).
+            bind -M $mode \e\[59149u '__graphene_forward forward-word'
         end
     end
 

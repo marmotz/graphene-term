@@ -107,7 +107,7 @@ script binds, and completion (`Tab`) and history (`Up` / `Down`) stay the shell'
 | Shift+Left / Shift+Right      | Extend the selection by a character             |
 | Shift+Up / Shift+Down         | Extend the selection by a line                  |
 | Shift+Home / Shift+End        | Extend the selection to the line start / end    |
-| Ctrl+Shift+Left / Right       | Extend the selection by a word                  |
+| Ctrl+Shift+Left / Right       | Extend the selection to the word start / end    |
 | Ctrl+A                        | Select the whole input                          |
 | Shift+Enter                   | New line, without running the command           |
 

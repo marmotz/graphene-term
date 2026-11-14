@@ -37,7 +37,7 @@ compatibility with shells and full-screen programs.
   - Lines: `Home` / `End` go to line start / end, `Ctrl+Home` / `Ctrl+End` go to the
     start / end of a multi-line input.
   - Keyboard selection: `Shift+arrows`, `Ctrl+Shift+Left` / `Ctrl+Shift+Right` extend
-    by a word, `Ctrl+A` selects the whole input. `Ctrl+Shift+Up/Down` are not used.
+    to the start of the word / the end of the word, `Ctrl+A` selects the whole input. `Ctrl+Shift+Up/Down` are not used.
     At the prompt this takes `Ctrl+Shift+Left/Right` from pane focus
     ([tabs-splits-palette](../tabs-splits-palette/overview.md)).
 - **Copy**: an input selection is copied exactly like any other selection, with the

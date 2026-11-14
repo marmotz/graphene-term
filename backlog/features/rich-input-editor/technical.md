@@ -74,6 +74,7 @@ table in `src/input_editor.rs`, mirrored in the three scripts:
 | `LineUp` / `LineDown` | `CSI 59144 u` / `CSI 59145 u` | `up-line` / `down-line` (no history) | `bind -x`: same column on the previous / next line | `up-line` / `down-line` |
 | `BufferStart` / `BufferEnd` | `CSI 59146 u` / `CSI 59147 u` | widget `CURSOR=0` / `CURSOR=$#BUFFER` | `bind -x` on `READLINE_POINT` | `beginning-of-buffer` / `end-of-buffer` |
 | `InsertNewline` | `CSI 59148 u` | widget `LBUFFER+=$'\n'` | `bind -x`, insert `\n` at `READLINE_POINT` | `commandline -i \n` |
+| `WordEnd` | `CSI 59149 u` | `emacs-forward-word` | `forward-word` | `forward-word` |
 
 Bindings are installed in the emacs and vi insert keymaps (zsh `emacs`, `viins`;
 bash `emacs`, `vi-insert`; fish default and insert modes).
@@ -92,7 +93,7 @@ Unit-tested, no window or PTY access.
   with a direction.
 - `editor_command(key, mods) -> Option<EditorCommand>`: the v1 shortcut table of the
   overview (`Ctrl+Left/Right`, `Ctrl+Backspace/Delete`, `Home/End`, `Ctrl+Home/End`,
-  `Shift+` arrows, `Ctrl+Shift+Left/Right` (extend by a word), `Shift+Home/End`,
+  `Shift+` arrows, `Ctrl+Shift+Left/Right` (extend to the word start / end), `Shift+Home/End`,
   `Ctrl+A`, `Shift+Enter`; `Ctrl+Shift+Up/Down` are not bound). Keys not
   in the table return `None` and follow the normal path (`Tab`, `Up/Down`, `Enter`,
   `Backspace` reach the shell unchanged).

@@ -159,6 +159,8 @@ if [[ -n $_graphene_token ]]; then
       builtin bind -m "$_graphene_keymap" -x '"\e[59146u": _graphene_buffer_start'
       builtin bind -m "$_graphene_keymap" -x '"\e[59147u": _graphene_buffer_end'
       builtin bind -m "$_graphene_keymap" -x '"\e[59148u": _graphene_insert_newline'
+      # Readline's forward-word already stops at the end of the word.
+      builtin bind -m "$_graphene_keymap" '"\e[59149u": forward-word'
     } 2>/dev/null
   done
   unset _graphene_keymap

@@ -145,7 +145,7 @@ it can be handled and tested properly.
 ## Input editor: shell bindings for private sequences
 
 The shell keeps the command line buffer; Graphene never edits it. Editor moves are
-private `CSI <code> u` sequences (code points 59136 to 59148, Unicode private use
+private `CSI <code> u` sequences (code points 59136 to 59149, Unicode private use
 area, table in `src/input_editor.rs`) bound by the integration scripts in the emacs
 and vi insert keymaps.
 

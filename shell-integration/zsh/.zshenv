@@ -54,6 +54,7 @@ if [[ -o interactive && -n $_graphene_token ]]; then
   _graphene_char_right() { (( CURSOR < $#BUFFER )) && CURSOR=$(( CURSOR + 1 )); return 0 }
   _graphene_word_left() { zle .backward-word; return 0 }
   _graphene_word_right() { zle .forward-word; return 0 }
+  _graphene_word_end() { zle .emacs-forward-word; return 0 }
   _graphene_delete_word_left() { zle .backward-kill-word; return 0 }
   _graphene_delete_word_right() { zle .kill-word; return 0 }
   _graphene_line_start() { zle .beginning-of-line; return 0 }
@@ -79,6 +80,7 @@ if [[ -o interactive && -n $_graphene_token ]]; then
     $'\e[59146u' _graphene_buffer_start
     $'\e[59147u' _graphene_buffer_end
     $'\e[59148u' _graphene_insert_newline
+    $'\e[59149u' _graphene_word_end
   )
 
   # Run before each prompt, after the user's files: a keymap reset by the user's

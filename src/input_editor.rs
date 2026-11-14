@@ -132,8 +132,10 @@ pub enum Direction {
 pub enum Motion {
     /// One character left or right.
     Char(Direction),
-    /// One word left or right.
+    /// One word left or right: the start of the previous or next word.
     Word(Direction),
+    /// The end of the current word, or of the next one between words.
+    WordEnd,
     /// Start or end of the current line.
     Line(Direction),
     /// Same column on the previous or next line of a multi-line input.
@@ -161,7 +163,8 @@ pub enum EditorCommand {
 ///
 /// Every other key returns `None` and follows the normal path: `Tab`, `Up` / `Down`,
 /// `Enter` and `Backspace` reach the shell unchanged. `Ctrl+Shift+Left/Right` extend the
-/// selection by a word; `Ctrl+Shift+Up/Down` are not bound.
+/// selection to the start of the previous word / the end of the word;
+/// `Ctrl+Shift+Up/Down` are not bound.
 pub fn editor_command(key: &Key, mods: ModifiersState) -> Option<EditorCommand> {
     use Direction::{Backward, Forward};
     use EditorCommand::{DeleteWord, Extend, InsertNewline, Move, SelectAll};
@@ -188,7 +191,7 @@ pub fn editor_command(key: &Key, mods: ModifiersState) -> Option<EditorCommand> 
                 (NamedKey::Home, SHIFT) => Extend(Motion::Line(Backward)),
                 (NamedKey::End, SHIFT) => Extend(Motion::Line(Forward)),
                 (NamedKey::ArrowLeft, m) if m == CTRL | SHIFT => Extend(Motion::Word(Backward)),
-                (NamedKey::ArrowRight, m) if m == CTRL | SHIFT => Extend(Motion::Word(Forward)),
+                (NamedKey::ArrowRight, m) if m == CTRL | SHIFT => Extend(Motion::WordEnd),
                 (NamedKey::Enter, SHIFT) => InsertNewline,
                 _ => return None,
             };
@@ -215,12 +218,13 @@ pub enum Sequence {
     BufferStart,
     BufferEnd,
     InsertNewline,
+    WordEnd,
 }
 
 /// Every private sequence with its bytes: `CSI <code> u`, code points taken from the
 /// Unicode private use area so no real key collides. Mirrored in the integration
 /// scripts under `shell-integration/`.
-pub const SEQUENCES: [(Sequence, &[u8]); 13] = [
+pub const SEQUENCES: [(Sequence, &[u8]); 14] = [
     (Sequence::CharLeft, b"\x1b[59136u"),
     (Sequence::CharRight, b"\x1b[59137u"),
     (Sequence::WordLeft, b"\x1b[59138u"),
@@ -234,6 +238,7 @@ pub const SEQUENCES: [(Sequence, &[u8]); 13] = [
     (Sequence::BufferStart, b"\x1b[59146u"),
     (Sequence::BufferEnd, b"\x1b[59147u"),
     (Sequence::InsertNewline, b"\x1b[59148u"),
+    (Sequence::WordEnd, b"\x1b[59149u"),
 ];
 
 impl Sequence {
@@ -251,6 +256,7 @@ pub fn motion_sequence(motion: Motion) -> Sequence {
         Motion::Char(Forward) => Sequence::CharRight,
         Motion::Word(Backward) => Sequence::WordLeft,
         Motion::Word(Forward) => Sequence::WordRight,
+        Motion::WordEnd => Sequence::WordEnd,
         Motion::Line(Backward) => Sequence::LineStart,
         Motion::Line(Forward) => Sequence::LineEnd,
         Motion::LineVertical(Backward) => Sequence::LineUp,
@@ -554,7 +560,7 @@ mod tests {
             (
                 named(NamedKey::ArrowRight),
                 CTRL | SHIFT,
-                Extend(Motion::Word(Forward)),
+                Extend(Motion::WordEnd),
             ),
             (character("a"), CTRL, SelectAll),
             (character("A"), CTRL, SelectAll),
@@ -613,6 +619,7 @@ mod tests {
             (Motion::Char(Forward), Sequence::CharRight),
             (Motion::Word(Backward), Sequence::WordLeft),
             (Motion::Word(Forward), Sequence::WordRight),
+            (Motion::WordEnd, Sequence::WordEnd),
             (Motion::Line(Backward), Sequence::LineStart),
             (Motion::Line(Forward), Sequence::LineEnd),
             (Motion::LineVertical(Backward), Sequence::LineUp),

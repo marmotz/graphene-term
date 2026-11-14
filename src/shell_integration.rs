@@ -863,6 +863,20 @@ mod tests {
                     ],
                     "<one>\r\n<YQ>",
                 ),
+                // Word end: inside a word it stops at its end, between words at the
+                // end of the next one.
+                (
+                    vec![
+                        Text(PRINT),
+                        Text("ab cd"),
+                        Repeat(WordLeft, 2),
+                        Seq(WordEnd),
+                        Text("X"),
+                        Seq(WordEnd),
+                        Text("Y"),
+                    ],
+                    "<abX>\r\n<cdY>",
+                ),
                 // Newline, vertical moves (clamped column, nothing past the first and
                 // last lines, no history), line start, buffer end.
                 (
