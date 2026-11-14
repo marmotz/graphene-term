@@ -44,6 +44,11 @@ pub fn config_dir() -> Option<PathBuf> {
     )
 }
 
+/// Path of the user's configuration file, if a config directory can be resolved.
+pub(crate) fn config_file() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join(CONFIG_FILE))
+}
+
 fn config_dir_from(xdg_config_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     // The XDG spec ignores an empty or relative `XDG_CONFIG_HOME`.
     let xdg = xdg_config_home
@@ -117,11 +122,29 @@ fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
 fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
     let file = dir.join(CONFIG_FILE);
     match std::fs::read_to_string(&file) {
-        Ok(text) => Config::parse(&text, &Config::default(), &file),
+        Ok(text) => {
+            let text = match crate::config_edit::complete_defaults(&text) {
+                Ok(Some(updated)) => match crate::config_edit::write_atomic(&file, &updated) {
+                    Ok(()) => updated,
+                    Err(error) => {
+                        log::warn!("cannot update {}: {error}", file.display());
+                        text
+                    }
+                },
+                Ok(None) | Err(_) => text,
+            };
+            Config::parse(&text, &Config::default(), &file)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if let Err(error) =
-                std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, DEFAULT_CONFIG))
-            {
+            if let Err(error) = std::fs::create_dir_all(dir) {
+                log::warn!("cannot create {}: {error}", dir.display());
+                return (Config::default(), Vec::new());
+            }
+            let defaults = crate::config_edit::complete_defaults(DEFAULT_CONFIG)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| DEFAULT_CONFIG.to_owned());
+            if let Err(error) = crate::config_edit::write_atomic(&file, &defaults) {
                 log::warn!("cannot write {}: {error}", file.display());
             }
             (Config::default(), Vec::new())
@@ -383,16 +406,28 @@ impl Config {
     /// value keeps the one of `previous`, an unknown key is ignored; each problem is
     /// reported as an error. A TOML syntax error returns `previous` unchanged.
     pub fn parse(text: &str, previous: &Config, file: &Path) -> (Config, Vec<ConfigError>) {
+        let (config, errors, _) = Self::parse_with_unknown_keys(text, previous, file);
+        (config, errors)
+    }
+
+    /// Parses a file and returns the unknown keys as structured paths for explicit
+    /// cleanup. Value validation errors do not classify a recognized key as unknown.
+    pub(crate) fn parse_with_unknown_keys(
+        text: &str,
+        previous: &Config,
+        file: &Path,
+    ) -> (Config, Vec<ConfigError>, Vec<UnknownConfigKey>) {
         let mut reader = Reader {
             text,
             file,
             errors: Vec::new(),
+            unknown_keys: Vec::new(),
         };
         let root = match DeTable::parse(text) {
             Ok(root) => root.into_inner(),
             Err(error) => {
                 reader.error(error.span(), error.message().trim_end().to_owned());
-                return (previous.clone(), reader.errors);
+                return (previous.clone(), reader.errors, reader.unknown_keys);
             }
         };
 
@@ -417,12 +452,18 @@ impl Config {
                         reader.read_section_key(name, sub_key, sub_value, &mut config, previous);
                     }
                 }
-                _ => reader.error(Some(key.span()), format!("unknown key `{name}`")),
+                _ => reader.unknown_key(
+                    None,
+                    name,
+                    matches!(value.get_ref(), DeValue::Table(_)),
+                    Some(key.span()),
+                    format!("unknown key `{name}`"),
+                ),
             }
         }
         // Keys are visited in alphabetical order: report errors in file order.
         reader.errors.sort_by_key(|error| error.line);
-        (config, reader.errors)
+        (config, reader.errors, reader.unknown_keys)
     }
 
     /// The part of the configuration handled by `alacritty_terminal`.
@@ -443,9 +484,36 @@ struct Reader<'a> {
     text: &'a str,
     file: &'a Path,
     errors: Vec<ConfigError>,
+    unknown_keys: Vec<UnknownConfigKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnknownConfigKey {
+    pub section: Option<String>,
+    pub key: String,
+    pub path: String,
+    pub whole_section: bool,
 }
 
 impl Reader<'_> {
+    fn unknown_key(
+        &mut self,
+        section: Option<&str>,
+        key: &str,
+        whole_section: bool,
+        span: Option<Range<usize>>,
+        message: String,
+    ) {
+        let path = section.map_or_else(|| key.to_owned(), |section| format!("{section}.{key}"));
+        self.unknown_keys.push(UnknownConfigKey {
+            section: section.map(str::to_owned),
+            key: key.to_owned(),
+            path,
+            whole_section,
+        });
+        self.error(span, message);
+    }
+
     fn error(&mut self, span: Option<Range<usize>>, message: String) {
         let line = span.map(|span| {
             let end = span.start.min(self.text.len());
@@ -574,7 +642,13 @@ impl Reader<'_> {
                     config.keybindings.insert(keys.to_owned(), action);
                 }
             }
-            _ => self.error(Some(key.span()), format!("unknown key `{path}`")),
+            _ => self.unknown_key(
+                Some(section),
+                name,
+                matches!(value.get_ref(), DeValue::Table(_)),
+                Some(key.span()),
+                format!("unknown key `{path}`"),
+            ),
         }
     }
 }
@@ -1069,10 +1143,84 @@ interval = "2d"
 
         assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
         let written = std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap();
-        assert_eq!(written, DEFAULT_CONFIG);
+        assert!(written.starts_with("## Graphene Term configuration.\n"));
+        assert_eq!(written.matches("# [keybindings]").count(), 1);
+        for (key, action) in keybindings::defaults() {
+            assert!(written.contains(&format!("# {key:?} = {:?}\n", action.id())));
+        }
+        assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
+        assert_eq!(
+            std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap(),
+            written
+        );
 
         std::fs::write(nested.join(CONFIG_FILE), "[font]\nsize = 9\n").unwrap();
         assert_eq!(load_from(&nested).0.font.size, 9.0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn initial_load_completes_existing_sections_without_duplicate_headers() {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-config-complete-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        let original = concat!(
+            "[window]\n",
+            "# width = 960\n",
+            "background_opacity = 0.9\n",
+            "# [scrollback]\n",
+            "# lines = 10000\n",
+            "[cursor]\n",
+            "# \"shape = \"block\"\n",
+            "blinking = true\n",
+        );
+        std::fs::write(&path, original).unwrap();
+
+        let (config, errors) = load_from(&dir);
+        let updated = std::fs::read_to_string(&path).unwrap();
+
+        assert!(errors.is_empty());
+        assert_eq!(config.window.background_opacity, 0.9);
+        assert!(config.cursor.blinking);
+        assert_eq!(updated.matches("[window]").count(), 1);
+        assert_eq!(updated.matches("# [window]").count(), 0);
+        assert_eq!(updated.matches("# startup_mode = \"default\"").count(), 1);
+        assert_eq!(updated.matches("[cursor]").count(), 1);
+        assert_eq!(updated.matches("# shape = \"block\"").count(), 1);
+        assert!(updated.contains(
+            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.\nbackground_opacity = 0.9\n"
+        ));
+        assert!(updated.contains(
+            "## Cursor blinking: true or false. Applications can still change this (DECSCUSR).\nblinking = true\n"
+        ));
+        assert!(updated.contains("background_opacity = 0.9"));
+        assert!(updated.contains("blinking = true"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn initial_load_does_not_rewrite_invalid_toml() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-config-invalid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        let invalid =
+            "# keep this\n## Type: finite number in the range 6..=72.\n[font\nsize = 12\n";
+        std::fs::write(&path, invalid).unwrap();
+
+        let (_, errors) = load_from(&dir);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1098,6 +1246,24 @@ interval = "2d"
         let (config, errors) = reload_from(&dir, &previous);
         assert_eq!(config, previous);
         assert_eq!(errors.len(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_does_not_complete_or_write_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-config-reload-read-only-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        let original = "# keep me\n[font]\nsize = 9\n";
+        std::fs::write(&path, original).unwrap();
+
+        let _ = reload_from(&dir, &Config::default());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
