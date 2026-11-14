@@ -88,7 +88,7 @@ first output.
 | Middle click                  | Paste the primary selection                     |
 | Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)      |
 | Shift+PageUp / Shift+PageDown | Scroll the selected block, or the history       |
-| Shift+Home / Shift+End        | Top / bottom of the history                     |
+| Shift+Home / Shift+End        | Top / bottom of the history (not at the prompt) |
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
 | Mouse wheel                   | Scroll the block under the pointer, or history  |
 
@@ -104,7 +104,14 @@ script binds, and completion (`Tab`) and history (`Up` / `Down`) stay the shell'
 | Ctrl+Backspace / Ctrl+Delete  | Erase the word before / after the cursor        |
 | Home / End                    | Start / end of the line                         |
 | Ctrl+Home / Ctrl+End          | Start / end of a multi-line input               |
+| Shift+Left / Shift+Right      | Extend the selection by a character             |
+| Shift+Up / Shift+Down         | Extend the selection by a line                  |
+| Shift+Home / Shift+End        | Extend the selection to the line start / end    |
+| Ctrl+A                        | Select the whole input                          |
 | Shift+Enter                   | New line, without running the command           |
+
+The input selection is an ordinary selection: `Ctrl+Shift+C` copies it and it fills the
+primary selection. `Ctrl+Shift+` arrows are not editor keys.
 
 ## Documentation
 

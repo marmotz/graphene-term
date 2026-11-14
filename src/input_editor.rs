@@ -8,13 +8,16 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point};
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, TermMode};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::selection;
-use crate::timeline::Phase;
+use crate::timeline::{Phase, Timeline};
+use crate::timeline_selection::{End, TimelineSelection};
+use crate::view::RowSource;
 
 /// Whether the rich input editor is active: the shell's line editor reads a command
 /// line with Graphene's key bindings (`prompt` signalled, no command running), the
@@ -37,15 +40,83 @@ pub fn prompt_command(key: &Key, mods: ModifiersState, rich: bool) -> Option<Edi
     }
 }
 
-/// Bytes an editor command writes to the PTY. `None` for the selection commands
-/// (`Extend`, `SelectAll`), not handled yet: their key follows the normal path.
-pub fn command_bytes(command: EditorCommand) -> Option<&'static [u8]> {
+/// Bytes an editor command writes to the PTY: the motion of a move or an extension,
+/// the move to the buffer end for `SelectAll`.
+pub fn command_bytes(command: EditorCommand) -> &'static [u8] {
     match command {
-        EditorCommand::Move(motion) => Some(motion_bytes(motion)),
-        EditorCommand::InsertNewline => Some(Sequence::InsertNewline.bytes()),
-        EditorCommand::DeleteWord(direction) => Some(delete_word_bytes(direction)),
-        EditorCommand::Extend(_) | EditorCommand::SelectAll => None,
+        EditorCommand::Move(motion) | EditorCommand::Extend(motion) => motion_bytes(motion),
+        EditorCommand::SelectAll => Sequence::BufferEnd.bytes(),
+        EditorCommand::InsertNewline => Sequence::InsertNewline.bytes(),
+        EditorCommand::DeleteWord(direction) => delete_word_bytes(direction),
     }
+}
+
+/// An `Extend` or a `SelectAll` written to the shell, waiting for the cursor move it
+/// causes: the live cursor when the sequence was written, its line counted from the top
+/// of the live history so the screen scrolling is not taken for a move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingExtend {
+    line: i32,
+    column: Column,
+}
+
+impl PendingExtend {
+    /// Waits for the cursor of the live grid `term` to leave where it stands now.
+    pub fn at<L>(term: &Term<L>) -> Self {
+        let (line, column) = absolute_cursor(term);
+        PendingExtend { line, column }
+    }
+
+    /// The cursor point of `term` once it moved, `None` while it has not.
+    pub fn moved<L>(self, term: &Term<L>) -> Option<Point> {
+        (absolute_cursor(term) != (self.line, self.column)).then(|| term.grid().cursor.point)
+    }
+}
+
+fn absolute_cursor<L>(term: &Term<L>) -> (i32, Column) {
+    let grid = term.grid();
+    let cursor = grid.cursor.point;
+    (grid.history_size() as i32 + cursor.line.0, cursor.column)
+}
+
+/// Selection end at the live grid point `point`, before its cell: a keyboard selection
+/// covers the characters between the two cursor positions.
+pub fn cursor_end(point: Point) -> End {
+    End {
+        source: RowSource::Live,
+        point,
+        side: Side::Left,
+    }
+}
+
+/// Selection an `Extend` grows: `selection` while it covers the content of the live
+/// grid, otherwise an empty one at the cursor of `term`. Successive extensions keep
+/// the first one's anchor.
+pub fn extend_selection<L>(
+    selection: Option<TimelineSelection>,
+    timeline: &Timeline,
+    term: &Term<L>,
+) -> TimelineSelection {
+    match selection {
+        Some(selection) if selection.covers_live(timeline) && !selection.is_stale(timeline) => {
+            selection
+        }
+        _ => {
+            let cursor = cursor_end(term.grid().cursor.point);
+            TimelineSelection::new(SelectionType::Simple, cursor, timeline, term)
+        }
+    }
+}
+
+/// Selection of `SelectAll`: anchored where the prompt starts (the cursor without a
+/// prompt), up to the cursor of `term` until the move to the buffer end extends it.
+pub fn select_all<L>(timeline: &Timeline, term: &Term<L>) -> TimelineSelection {
+    let cursor = term.grid().cursor.point;
+    let anchor = timeline.current().prompt_start(term).unwrap_or(cursor);
+    let mut selection =
+        TimelineSelection::new(SelectionType::Simple, cursor_end(anchor), timeline, term);
+    selection.update(cursor_end(cursor), term);
+    selection
 }
 
 /// Direction of a motion or a word deletion: backward is left (or up), forward is right
@@ -608,9 +679,11 @@ mod tests {
     fn ctrl_a_still_sends_0x01_outside_rich_mode() {
         let key = character("a");
         assert_eq!(prompt_command(&key, CTRL, false), None);
-        // In rich mode it selects the input, not handled yet: the key goes on too.
-        let select_all = prompt_command(&key, CTRL, true).unwrap();
-        assert_eq!(command_bytes(select_all), None);
+        // In rich mode it selects the input instead.
+        assert_eq!(
+            prompt_command(&key, CTRL, true),
+            Some(EditorCommand::SelectAll)
+        );
         assert_eq!(
             crate::input::key_to_bytes(&key, Some("a"), CTRL, TermMode::empty()).as_deref(),
             Some(&[0x01][..])
@@ -622,22 +695,30 @@ mod tests {
         use EditorCommand::*;
         assert_eq!(
             command_bytes(Move(Motion::Word(Backward))),
-            Some(Sequence::WordLeft.bytes())
+            Sequence::WordLeft.bytes()
         );
         assert_eq!(
             command_bytes(Move(Motion::Buffer(Forward))),
-            Some(Sequence::BufferEnd.bytes())
+            Sequence::BufferEnd.bytes()
         );
         assert_eq!(
             command_bytes(InsertNewline),
-            Some(Sequence::InsertNewline.bytes())
+            Sequence::InsertNewline.bytes()
         );
         assert_eq!(
             command_bytes(DeleteWord(Forward)),
-            Some(Sequence::DeleteWordRight.bytes())
+            Sequence::DeleteWordRight.bytes()
         );
-        assert_eq!(command_bytes(Extend(Motion::Char(Forward))), None);
-        assert_eq!(command_bytes(SelectAll), None);
+        // An extension moves like the plain move; `SelectAll` goes to the buffer end.
+        assert_eq!(
+            command_bytes(Extend(Motion::Char(Forward))),
+            Sequence::CharRight.bytes()
+        );
+        assert_eq!(
+            command_bytes(Extend(Motion::Line(Backward))),
+            Sequence::LineStart.bytes()
+        );
+        assert_eq!(command_bytes(SelectAll), Sequence::BufferEnd.bytes());
     }
 
     #[test]
@@ -710,5 +791,174 @@ mod tests {
             click_moves(&term, cursor, point(0, 8), None),
             repeat(Forward, 2)
         );
+    }
+
+    // Keyboard selection: a session whose prompt `$ ` was signalled, `typed` after it.
+
+    fn editing(typed: &str) -> crate::timeline::testing::Session {
+        let mut session = crate::timeline::testing::Session::new(100);
+        session.feed(&format!(
+            "motd\r\n{}$ {typed}",
+            crate::timeline::testing::prompt()
+        ));
+        session
+    }
+
+    /// Text of the selection over the session's grids.
+    fn selected(session: &crate::timeline::testing::Session) -> Option<String> {
+        crate::timeline_selection::text(&session.term, &session.timeline)
+    }
+
+    /// Applies an extension the way the app does once the cursor moved.
+    fn finish(
+        session: &mut crate::timeline::testing::Session,
+        pending: PendingExtend,
+        selection: &mut TimelineSelection,
+    ) -> bool {
+        let Some(cursor) = pending.moved(&session.term) else {
+            return false;
+        };
+        selection.update(cursor_end(cursor), &session.term);
+        crate::timeline_selection::apply(Some(selection), &mut session.term, &mut session.timeline);
+        true
+    }
+
+    #[test]
+    fn extension_waits_for_the_cursor_to_move() {
+        let mut session = editing("echo hi");
+        let pending = PendingExtend::at(&session.term);
+        assert_eq!(pending.moved(&session.term), None);
+        // Output that leaves the cursor in place is no move.
+        session.feed("\x1b[s\x1b[u");
+        assert_eq!(pending.moved(&session.term), None);
+        // The shell moves it two characters left.
+        session.feed("\x08\x08");
+        assert_eq!(pending.moved(&session.term), Some(point(1, 7)));
+    }
+
+    #[test]
+    fn screen_scroll_alone_is_no_move() {
+        let mut session = editing("ls");
+        let pending = PendingExtend::at(&session.term);
+        // A line feed at the bottom, the cursor back on the same text: same absolute
+        // place, the view line changed.
+        session.feed("\r\n\r\n\r\n\r\n\x1b[4A\x1b[4C");
+        assert!(session.term.grid().history_size() > 0);
+        assert_eq!(pending.moved(&session.term), None);
+    }
+
+    #[test]
+    fn extension_starts_at_the_cursor_and_follows_it() {
+        let mut session = editing("echo hello");
+        let mut selection = extend_selection(None, &session.timeline, &session.term);
+        assert!(selection.is_empty(&session.timeline, &session.term));
+        let pending = PendingExtend::at(&session.term);
+        // Not applied before the cursor moved.
+        assert!(!finish(&mut session, pending, &mut selection));
+        session.feed("\x08\x08\x08");
+        assert!(finish(&mut session, pending, &mut selection));
+        assert_eq!(selected(&session).as_deref(), Some("llo"));
+    }
+
+    #[test]
+    fn successive_extensions_keep_the_anchor() {
+        let mut session = editing("echo hello");
+        let selection = extend_selection(None, &session.timeline, &session.term);
+        let pending = PendingExtend::at(&session.term);
+        session.feed("\x08");
+        let mut selection = Some(selection);
+        assert!(finish(&mut session, pending, selection.as_mut().unwrap()));
+        assert_eq!(selected(&session).as_deref(), Some("o"));
+
+        // The next `Shift+Left` grows the same selection.
+        let mut selection = extend_selection(selection, &session.timeline, &session.term);
+        let pending = PendingExtend::at(&session.term);
+        session.feed("\x08\x08");
+        assert!(finish(&mut session, pending, &mut selection));
+        assert_eq!(selected(&session).as_deref(), Some("llo"));
+
+        // Back right onto the anchor: nothing selected any more.
+        let mut selection = extend_selection(Some(selection), &session.timeline, &session.term);
+        let pending = PendingExtend::at(&session.term);
+        session.feed("\x1b[3C");
+        assert!(finish(&mut session, pending, &mut selection));
+        assert!(selection.is_empty(&session.timeline, &session.term));
+    }
+
+    #[test]
+    fn extension_past_the_anchor_flips_to_its_other_side() {
+        // Cursor on "w" of "echo hello world", anchor there.
+        let mut session = editing("echo hello world\x1b[5D");
+        let mut selection = extend_selection(None, &session.timeline, &session.term);
+        let pending = PendingExtend::at(&session.term);
+        session.feed("\x1b[3D");
+        assert!(finish(&mut session, pending, &mut selection));
+        // "lo " selected, copied without its trailing blank.
+        assert_eq!(selected(&session).as_deref(), Some("lo"));
+
+        let mut selection = extend_selection(Some(selection), &session.timeline, &session.term);
+        let pending = PendingExtend::at(&session.term);
+        session.feed("\x1b[6C");
+        assert!(finish(&mut session, pending, &mut selection));
+        assert_eq!(selected(&session).as_deref(), Some("wor"));
+    }
+
+    #[test]
+    fn extension_restarts_once_the_command_ran() {
+        let mut session = editing("ls");
+        let selection = extend_selection(None, &session.timeline, &session.term);
+        session.feed(&format!(
+            "\r\n{}{}{}$ ",
+            crate::timeline::testing::start("ls"),
+            crate::timeline::testing::end(0),
+            crate::timeline::testing::prompt()
+        ));
+        assert!(selection.is_stale(&session.timeline));
+        let fresh = extend_selection(Some(selection), &session.timeline, &session.term);
+        assert!(!fresh.is_stale(&session.timeline));
+        assert!(fresh.is_empty(&session.timeline, &session.term));
+    }
+
+    #[test]
+    fn select_all_is_anchored_at_the_prompt_start() {
+        let mut session = editing("echo a\x1b[3D");
+        let mut selection = select_all(&session.timeline, &session.term);
+        crate::timeline_selection::apply(
+            Some(&selection),
+            &mut session.term,
+            &mut session.timeline,
+        );
+        // Up to the cursor before the shell moved it.
+        assert_eq!(selected(&session).as_deref(), Some("$ ech"));
+        let pending = PendingExtend::at(&session.term);
+        session.feed("\x1b[3C");
+        assert!(finish(&mut session, pending, &mut selection));
+        assert_eq!(selected(&session).as_deref(), Some("$ echo a"));
+    }
+
+    #[test]
+    fn select_all_with_the_cursor_at_the_end_is_complete_at_once() {
+        let mut session = editing("pwd");
+        let selection = select_all(&session.timeline, &session.term);
+        crate::timeline_selection::apply(
+            Some(&selection),
+            &mut session.term,
+            &mut session.timeline,
+        );
+        assert_eq!(selected(&session).as_deref(), Some("$ pwd"));
+    }
+
+    #[test]
+    fn keyboard_selection_keeps_its_snapshot_text() {
+        let mut session = editing("echo hello");
+        let mut selection = extend_selection(None, &session.timeline, &session.term);
+        let pending = PendingExtend::at(&session.term);
+        session.feed("\x08\x08");
+        assert!(finish(&mut session, pending, &mut selection));
+        let mut snapshot = crate::selection::SelectionSnapshot::capture(&session.term).unwrap();
+        // The shell redraws the line unchanged: the selection survives.
+        session.feed("\r\x1b[K$ echo hello\x1b[2D");
+        assert!(snapshot.validate(&mut session.term));
+        assert_eq!(selected(&session).as_deref(), Some("lo"));
     }
 }

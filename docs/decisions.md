@@ -187,3 +187,12 @@ and vi insert keymaps.
 - The prompt and the input are not told apart in the grid (bash has no hook between
   drawing the prompt and reading the line): a click on the prompt counts its
   characters, all absorbed by the clamp.
+- Keyboard selection follows the shell's cursor: `Shift+` motions start a selection at
+  the cursor (or grow the one on the live grid), write the motion, and move the
+  selection end to the cursor on the first PTY wakeup where the cursor moved (compared
+  with its line from the top of the live history, so a scroll is not a move). The text
+  is then kept (`SelectionSnapshot`) and written to the primary selection, as a mouse
+  release does. A motion clamped by the shell moves nothing: the selection stays.
+- `Ctrl+A` anchors the selection where the prompt starts, the only point known in the
+  grid, and writes `BufferEnd`: the selection covers the prompt text too. It ends at
+  the cursor at once, so a cursor already at the end selects without waiting.

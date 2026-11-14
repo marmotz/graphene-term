@@ -570,6 +570,10 @@ pub(crate) mod testing {
         format!("\x1b]6973;{TOKEN};end;{status}\x07")
     }
 
+    pub fn prompt() -> String {
+        format!("\x1b]6973;{TOKEN};prompt\x07")
+    }
+
     /// Every row of `term`, history first, trailing spaces trimmed.
     pub fn texts<L>(term: &Term<L>) -> Vec<String> {
         let grid = term.grid();
@@ -666,10 +670,6 @@ mod tests {
         assert_eq!(current.id, BlockId(2));
         assert_eq!(current.phase, Phase::Prompt);
         assert!(current.header.is_none());
-    }
-
-    fn prompt() -> String {
-        format!("\x1b]6973;{TOKEN};prompt\x07")
     }
 
     #[test]

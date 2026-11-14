@@ -33,7 +33,7 @@ src/
   frame.rs         snapshot of the visible grid with resolved colors and block marks
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
-  input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves (pure)
+  input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection (pure)
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
@@ -266,7 +266,11 @@ is reset with the glyph cache, and the frame is resolved again.
   selection, and each command writes its private sequence (`CSI <code> u`, bound by the
   integration scripts). A simple click on the live grid writes
   `input_editor::click_moves` (`CharLeft` / `CharRight` over the buffer distance from
-  the cursor, the click bounded by `Current::prompt_start`) on release.
+  the cursor, the click bounded by `Current::prompt_start`) on release. `Extend` and
+  `SelectAll` set the selection (`input_editor::extend_selection` / `select_all`) and
+  an `input_editor::PendingExtend`; the next `Wakeup` where the cursor moved updates the
+  selection end there, recaptures the `SelectionSnapshot` and writes the primary
+  selection.
 - Mouse wheel: block or timeline scrolling on the primary screen (see Command blocks),
   arrow keys on the alternate screen when the application enabled alternate scroll.
 - Mouse reporting only covers the live grid's rows (`mouse::reports_at`: a

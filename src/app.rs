@@ -66,6 +66,8 @@ struct Session {
     auto_scroll_deadline: Option<Instant>,
     /// Finished selection of the live grid kept while its text is unchanged.
     selection_snapshot: Option<SelectionSnapshot>,
+    /// Keyboard selection at the prompt waiting for the shell to move its cursor.
+    extend_pending: Option<input_editor::PendingExtend>,
     /// Text selection over the timeline, set on the grids it covers.
     selection: Option<TimelineSelection>,
     /// Block selected whole by a margin click or a block navigation, shown as a
@@ -163,14 +165,72 @@ impl Session {
         input_editor::rich_mode(current.phase, current.editing, *term.mode(), self.modifiers)
     }
 
-    /// Runs an editor command at the prompt: a move clears the selection; every command
-    /// writes its private sequence, which the shell binds.
-    fn run_editor_command(&mut self, command: EditorCommand, bytes: &'static [u8]) {
-        if matches!(command, EditorCommand::Move(_)) {
-            self.clear_selection();
+    /// Runs an editor command at the prompt: a move clears the selection, an extension
+    /// or `SelectAll` starts the keyboard selection; every command writes its private
+    /// sequence, which the shell binds.
+    fn run_editor_command(&mut self, command: EditorCommand) {
+        match command {
+            EditorCommand::Move(_) => self.clear_selection(),
+            EditorCommand::Extend(_) => self.start_extend(false),
+            EditorCommand::SelectAll => self.start_extend(true),
+            EditorCommand::InsertNewline | EditorCommand::DeleteWord(_) => {}
         }
         self.scroll_to_bottom();
-        self.terminal.write(bytes);
+        self.terminal.write(input_editor::command_bytes(command));
+    }
+
+    /// Before an extension sequence is written: the selection to grow (a new one at the
+    /// cursor without one, the whole input for `select_all`), extended once the shell
+    /// moved its cursor (see [`Session::finish_extend`]).
+    fn start_extend(&mut self, select_all: bool) {
+        self.selected_block = None;
+        let text = {
+            let mut term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let selection = if select_all {
+                input_editor::select_all(&timeline, &*term)
+            } else {
+                input_editor::extend_selection(self.selection.take(), &timeline, &*term)
+            };
+            timeline_selection::apply(Some(&selection), &mut *term, &mut timeline);
+            self.selection = Some(selection);
+            self.selection_snapshot = SelectionSnapshot::capture(&*term);
+            self.extend_pending = Some(input_editor::PendingExtend::at(&*term));
+            timeline_selection::text(&*term, &timeline)
+        };
+        self.window.request_redraw();
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.set_primary(text);
+        }
+    }
+
+    /// After new PTY output: once the shell moved its cursor for a pending extension,
+    /// moves the selection end there, then keeps its text and writes it to the primary
+    /// selection, as a mouse release does.
+    fn finish_extend(&mut self) {
+        let Some(pending) = self.extend_pending else {
+            return;
+        };
+        let text = {
+            let mut term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let Some(cursor) = pending.moved(&*term) else {
+                return;
+            };
+            let Some(selection) = self.selection.as_mut() else {
+                self.extend_pending = None;
+                return;
+            };
+            selection.update(input_editor::cursor_end(cursor), &*term);
+            timeline_selection::apply(Some(selection), &mut *term, &mut timeline);
+            self.selection_snapshot = SelectionSnapshot::capture(&*term);
+            timeline_selection::text(&*term, &timeline)
+        };
+        self.extend_pending = None;
+        self.window.request_redraw();
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.set_primary(text);
+        }
     }
 
     /// Hand over a fold chevron, arrow while the application captures the mouse under
@@ -415,6 +475,7 @@ impl Session {
     /// Clears the text selection and the selected block.
     fn clear_selection(&mut self) {
         self.selection_snapshot = None;
+        self.extend_pending = None;
         let had_block = self.selected_block.take().is_some();
         let had_text = self.selection.take().is_some() && {
             let mut term = self.terminal.term.lock();
@@ -579,6 +640,7 @@ impl Session {
         }
         // The selection changes until the release: no text to keep meanwhile.
         self.selection_snapshot = None;
+        self.extend_pending = None;
         if self.selected_block.take().is_some() {
             self.window.request_redraw();
         }
@@ -801,6 +863,7 @@ impl Session {
                     perf::mark("first PTY output");
                 }
                 self.validate_selection();
+                self.finish_extend();
                 self.update_pointer();
                 self.window.request_redraw()
             }
@@ -915,6 +978,7 @@ impl App {
             pointer: None,
             auto_scroll_deadline: None,
             selection_snapshot: None,
+            extend_pending: None,
             selection: None,
             selected_block: None,
             anchor: Cell::default(),
@@ -998,9 +1062,8 @@ impl ApplicationHandler<UserEvent> for App {
                 let rich = session.rich_mode();
                 if let Some(command) =
                     input_editor::prompt_command(&event.logical_key, session.modifiers, rich)
-                    && let Some(bytes) = input_editor::command_bytes(command)
                 {
-                    session.run_editor_command(command, bytes);
+                    session.run_editor_command(command);
                     return;
                 }
                 if let Some(action) = input::action_for(&event.logical_key, session.modifiers) {
