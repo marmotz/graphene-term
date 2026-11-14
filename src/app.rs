@@ -16,8 +16,9 @@ use winit::window::{Window, WindowId};
 
 use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::block_actions::{Direction, Part};
+use crate::chrome;
 use crate::config::{self, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
-use crate::frame::{Frame, FrameBanner};
+use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::input_editor;
@@ -27,7 +28,7 @@ use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
-use crate::renderer::{Glyphs, Renderer};
+use crate::renderer::{Glyphs, PaneFrame, Renderer};
 use crate::selection;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
@@ -563,31 +564,56 @@ impl Session {
     }
 
     /// Draws the active pane of the shown tab.
+    /// Draws every pane of the shown tab, inactive ones dimmed when it shows several,
+    /// then the dividers and the active pane border, then the banner.
     fn redraw(&mut self) {
-        let banner = self.shown_banner().map(|shown| FrameBanner {
+        let mut banner = self.shown_banner().map(|shown| FrameBanner {
             layout: self.banner_layout(&shown),
             background: self.palette.ui.banner_background,
             text: self.palette.ui.banner_text,
         });
-        let Some(pane) = self.workspace.active_pane() else {
+        let layout = self
+            .workspace
+            .layout(self.workspace.active_index(), self.geometry());
+        let active = self.workspace.active_pane_id();
+        let several = layout.panes.len() > 1;
+        let mut frames = Vec::with_capacity(layout.panes.len());
+        for &(id, _) in &layout.panes {
+            let Some(pane) = self.workspace.pane(id) else {
+                continue;
+            };
+            let is_active = Some(id) == active;
+            let mut frame = {
+                let term = pane.terminal.term.lock();
+                let mut timeline = pane::lock(&pane.terminal.timeline);
+                let rows = pane::shown_rows(&pane.anchor, &term, &mut timeline);
+                Frame::capture(
+                    &*term,
+                    &timeline,
+                    &rows,
+                    &self.palette,
+                    self.focused && is_active,
+                    pane.selected_block,
+                )
+            };
+            frame.lang = self.lang;
+            if several && !is_active {
+                frame = frame.dimmed(INACTIVE_PANE_DIM);
+            }
+            if is_active {
+                frame.banner = banner.take();
+            }
+            frames.push((frame, &pane.layout));
+        }
+        if frames.is_empty() {
             return;
-        };
-        let mut frame = {
-            let term = pane.terminal.term.lock();
-            let mut timeline = pane::lock(&pane.terminal.timeline);
-            let rows = pane::shown_rows(&pane.anchor, &term, &mut timeline);
-            Frame::capture(
-                &*term,
-                &timeline,
-                &rows,
-                &self.palette,
-                self.focused,
-                pane.selected_block,
-            )
-        };
-        frame.lang = self.lang;
-        frame.banner = banner;
-        match self.renderer.render(&frame, &pane.layout) {
+        }
+        let panes: Vec<_> = frames
+            .iter()
+            .map(|(frame, layout)| PaneFrame { frame, layout })
+            .collect();
+        let ui = chrome::scene::build(&layout, active, &self.palette.ui, self.renderer.is_srgb());
+        match self.renderer.render(&panes, &ui) {
             Ok(true) if self.first_frame.frame_drawn() => {
                 perf::mark("first frame drawn after PTY output");
             }

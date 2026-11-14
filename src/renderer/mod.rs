@@ -6,17 +6,41 @@ mod glyphs;
 mod rects;
 pub mod scene;
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use anyhow::Context;
 use winit::window::Window;
 
 use crate::frame::Frame;
-use crate::layout::{CellSize, GridLayout};
+use crate::layout::{CellSize, GridLayout, Rect};
 use crate::perf;
 use cells::CellRenderer;
 pub use glyphs::{GlyphKey, Glyphs};
+pub use rects::RectInstance;
 use rects::RectRenderer;
+use scene::GlyphInstance;
+
+/// One pane to draw: its frame and the layout placing its grid in the window.
+#[derive(Clone, Copy)]
+pub struct PaneFrame<'a> {
+    pub frame: &'a Frame,
+    pub layout: &'a GridLayout,
+}
+
+/// Clear color when there is no pane to take it from.
+const NO_PANE_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+/// Scissor rectangle `[x, y, width, height]` covering `rect`, in whole pixels and
+/// inside the `screen`. `None` when nothing of `rect` is on screen.
+fn scissor(rect: Rect, screen: (u32, u32)) -> Option<[u32; 4]> {
+    let clamp = |value: f32, max: u32| (value.max(0.0) as u32).min(max);
+    let left = clamp(rect.x.floor(), screen.0);
+    let top = clamp(rect.y.floor(), screen.1);
+    let right = clamp((rect.x + rect.width).ceil(), screen.0);
+    let bottom = clamp((rect.y + rect.height).ceil(), screen.1);
+    (right > left && bottom > top).then(|| [left, top, right - left, bottom - top])
+}
 
 /// GPU pipelines drawing a [`Frame`], shared by the window [`Renderer`] and the
 /// [`Headless`] one used by the benchmarks.
@@ -28,11 +52,24 @@ struct Layers {
     srgb: bool,
 }
 
+/// What [`Layers::prepare`] uploaded for one pane, as ranges of the rect buffer. Its
+/// glyphs are the glyph group of the same index.
+struct PreparedPane {
+    /// Clip of everything the pane draws; `None` when the pane is off screen.
+    scissor: Option<[u32; 4]>,
+    under: Range<u32>,
+    over: Range<u32>,
+}
+
 /// What [`Layers::prepare`] uploaded, needed to record the draw calls.
 struct Prepared {
     clear: [f32; 4],
-    under_count: u32,
-    total: u32,
+    screen: (u32, u32),
+    panes: Vec<PreparedPane>,
+    /// Interface rects (dividers, active pane border), over every pane.
+    ui: Range<u32>,
+    /// Window overlay rects (banner), last; their glyphs are the last glyph group.
+    overlay: Range<u32>,
 }
 
 impl Layers {
@@ -45,38 +82,65 @@ impl Layers {
         }
     }
 
-    /// Builds the scene of `frame` and uploads it.
+    /// Builds the scene of each pane and uploads them with the interface rects `ui`.
     fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen: (u32, u32),
-        frame: &Frame,
-        layout: &GridLayout,
+        panes: &[PaneFrame<'_>],
+        ui: &[RectInstance],
     ) -> Prepared {
-        let scene = scene::build(frame, layout, self.srgb);
+        let scenes: Vec<_> = panes
+            .iter()
+            .map(|pane| scene::build(pane.frame, pane.layout, self.srgb))
+            .collect();
 
-        let mut rects = scene.under;
-        let under_count = rects.len() as u32;
-        rects.extend(scene.over);
-        let total = rects.len() as u32;
+        let mut rects = Vec::new();
+        let mut push = |items: &[RectInstance]| {
+            let start = rects.len() as u32;
+            rects.extend_from_slice(items);
+            start..rects.len() as u32
+        };
+        let prepared_panes = panes
+            .iter()
+            .zip(&scenes)
+            .map(|(pane, scene)| PreparedPane {
+                scissor: scissor(pane.layout.rect, screen),
+                under: push(&scene.under),
+                over: push(&scene.over),
+            })
+            .collect();
+        let ui = push(ui);
+        let overlay_rects: Vec<_> = scenes
+            .iter()
+            .flat_map(|scene| scene.overlay_rects.iter().copied())
+            .collect();
+        let overlay = push(&overlay_rects);
         self.rects.prepare(device, queue, screen, &rects);
-        self.cells.prepare(
-            device,
-            queue,
-            screen,
-            &mut self.glyphs,
-            &scene.glyphs,
-            &scene.overlay,
-        );
+
+        let overlay_glyphs: Vec<GlyphInstance> = scenes
+            .iter()
+            .flat_map(|scene| scene.overlay.iter().copied())
+            .collect();
+        let mut groups: Vec<&[GlyphInstance]> =
+            scenes.iter().map(|scene| scene.glyphs.as_slice()).collect();
+        groups.push(&overlay_glyphs);
+        self.cells
+            .prepare(device, queue, screen, &mut self.glyphs, &groups);
+
         Prepared {
-            clear: scene.clear,
-            under_count,
-            total,
+            clear: scenes.first().map_or(NO_PANE_CLEAR, |scene| scene.clear),
+            screen,
+            panes: prepared_panes,
+            ui,
+            overlay,
         }
     }
 
-    /// Records the render pass drawing what [`Self::prepare`] uploaded into `view`.
+    /// Records the render pass drawing what [`Self::prepare`] uploaded into `view`:
+    /// clear, then each pane clipped to its rectangle (`under` rects, grid glyphs,
+    /// `over` rects), then the interface rects and the overlay over the whole window.
     fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -100,11 +164,20 @@ impl Layers {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        self.rects.render(&mut pass, 0..prepared.under_count);
-        self.cells.render(&mut pass);
-        self.rects
-            .render(&mut pass, prepared.under_count..prepared.total);
-        self.cells.render_overlay(&mut pass);
+        for (index, pane) in prepared.panes.iter().enumerate() {
+            let Some([x, y, width, height]) = pane.scissor else {
+                continue;
+            };
+            pass.set_scissor_rect(x, y, width, height);
+            self.rects.render(&mut pass, pane.under.clone());
+            self.cells.render(&mut pass, index);
+            self.rects.render(&mut pass, pane.over.clone());
+        }
+        let (width, height) = prepared.screen;
+        pass.set_scissor_rect(0, 0, width, height);
+        self.rects.render(&mut pass, prepared.ui.clone());
+        self.rects.render(&mut pass, prepared.overlay.clone());
+        self.cells.render(&mut pass, prepared.panes.len());
     }
 }
 
@@ -218,6 +291,12 @@ impl Renderer {
         self.layers.glyphs.cell_size()
     }
 
+    /// Whether the surface is sRGB, so colors must be linearized for it (see
+    /// [`scene::gpu_color`]).
+    pub fn is_srgb(&self) -> bool {
+        self.layers.srgb
+    }
+
     pub fn set_font_size(&mut self, font_size: f32) {
         self.layers.glyphs.set_font_size(font_size);
     }
@@ -228,13 +307,14 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Draws `frame`. Returns whether it reached the screen (`false` when the surface was
-    /// not ready and a new redraw was requested or will come).
-    pub fn render(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<bool> {
+    /// Draws `panes`, then the interface rects `ui` over them. Returns whether it
+    /// reached the screen (`false` when the surface was not ready and a new redraw was
+    /// requested or will come).
+    pub fn render(&mut self, panes: &[PaneFrame<'_>], ui: &[RectInstance]) -> anyhow::Result<bool> {
         let screen = (self.config.width, self.config.height);
         let prepared = self
             .layers
-            .prepare(&self.device, &self.queue, screen, frame, layout);
+            .prepare(&self.device, &self.queue, screen, panes, ui);
 
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -323,11 +403,21 @@ impl Headless {
         self.layers.glyphs.cell_size()
     }
 
-    /// Prepares, draws and submits `frame`, without waiting for the GPU.
+    /// Prepares, draws and submits `frame` alone, without waiting for the GPU.
     pub fn render(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<()> {
+        self.render_panes(&[PaneFrame { frame, layout }], &[])
+    }
+
+    /// Prepares, draws and submits `panes` and the interface rects `ui`, without
+    /// waiting for the GPU.
+    pub fn render_panes(
+        &mut self,
+        panes: &[PaneFrame<'_>],
+        ui: &[RectInstance],
+    ) -> anyhow::Result<()> {
         let prepared = self
             .layers
-            .prepare(&self.device, &self.queue, self.screen, frame, layout);
+            .prepare(&self.device, &self.queue, self.screen, panes, ui);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -504,6 +594,115 @@ mod tests {
         // fully covered.
         assert_eq!(red(left, 0.0), 0);
         assert_eq!(red(left + 6.0, cell_size.height / 2.0), 255);
+    }
+
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn scissor_covers_the_pane_in_whole_pixels() {
+        assert_eq!(
+            scissor(rect(10.5, 20.2, 30.0, 40.0), (800, 600)),
+            Some([10, 20, 31, 41])
+        );
+        assert_eq!(
+            scissor(rect(0.0, 0.0, 800.0, 600.0), (800, 600)),
+            Some([0, 0, 800, 600])
+        );
+    }
+
+    #[test]
+    fn scissor_stays_inside_the_screen() {
+        assert_eq!(
+            scissor(rect(-5.0, 590.0, 100.0, 50.0), (800, 600)),
+            Some([0, 590, 95, 10])
+        );
+        assert_eq!(scissor(rect(900.0, 0.0, 10.0, 10.0), (800, 600)), None);
+        assert_eq!(scissor(rect(10.0, 10.0, 0.0, 10.0), (800, 600)), None);
+    }
+
+    fn blank_frame(rows: Vec<Vec<FrameCell>>) -> Frame {
+        Frame {
+            row_tops: (0..rows.len() as u32).map(|row| 2 * row).collect(),
+            decorations: vec![Default::default(); rows.len()],
+            rows,
+            cards: Vec::new(),
+            block_colors: BlockColors {
+                success: WHITE,
+                failure: WHITE,
+                running: WHITE,
+                dim: WHITE,
+                card: WHITE,
+                card_selected: WHITE,
+            },
+            cursor: None,
+            background: BLACK,
+            banner: None,
+            lang: crate::i18n::Lang::En,
+        }
+    }
+
+    #[test]
+    fn each_pane_is_clipped_to_its_rect_and_the_ui_drawn_over_all() {
+        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let cell_size = renderer.cell_size();
+        let half = SIZE as f32 / 2.0;
+        // The left pane's row of white backgrounds is far wider than its rect.
+        let left = GridLayout::new(rect(0.0, 0.0, half, SIZE as f32), cell_size, 0.0);
+        let right = GridLayout::new(rect(half, 0.0, half, SIZE as f32), cell_size, 0.0);
+        let mut wide = vec![cell(' '); 20];
+        for c in &mut wide {
+            c.bg = WHITE;
+        }
+        let left_frame = blank_frame(vec![wide]);
+        let right_frame = blank_frame(vec![vec![cell(' ')]]);
+        // A full-width interface rect along the bottom row.
+        let ui = [RectInstance::new(
+            [0.0, SIZE as f32 - 1.0],
+            [SIZE as f32, 1.0],
+            [1.0; 4],
+        )];
+        renderer
+            .render_panes(
+                &[
+                    PaneFrame {
+                        frame: &left_frame,
+                        layout: &left,
+                    },
+                    PaneFrame {
+                        frame: &right_frame,
+                        layout: &right,
+                    },
+                ],
+                &ui,
+            )
+            .unwrap();
+        let pixels = renderer.read_pixels();
+        let red = |x: u32, y: u32| pixels[((y * SIZE + x) * 4) as usize];
+
+        let y = (cell_size.height / 2.0) as u32;
+        assert_eq!(
+            red(half as u32 - 1, y),
+            255,
+            "left pane drawn up to its edge"
+        );
+        assert!(
+            (half as u32..SIZE).all(|x| red(x, y) == 0),
+            "left pane leaked into the right one"
+        );
+        assert!(
+            (0..SIZE).all(|x| red(x, SIZE - 1) == 255),
+            "ui rect clipped"
+        );
     }
 
     #[test]

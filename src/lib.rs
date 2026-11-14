@@ -6,6 +6,7 @@ mod banner;
 mod block_actions;
 #[cfg(test)]
 mod build_version;
+mod chrome;
 mod config;
 mod frame;
 mod i18n;

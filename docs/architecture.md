@@ -72,11 +72,11 @@ keyboard / mouse  --pty::Sender(Msg)-->   writes to PTY (WriteQueue)
                                           pty::feed parses VT into Term,
                                           Timeline::apply handles each signal
 request_redraw   <--UserEvent::Terminal-- EventProxy::send_event(Wakeup, Title, ...)
-RedrawRequested:
+RedrawRequested, for each pane shown by the active tab:
   lock Term (FairMutex), then Timeline
   view::prepare + Frame::capture  (short critical section)
   unlock
-  Renderer::render(frame)
+Renderer::render(pane frames, interface rects)
 ```
 
 - `Term` is shared as `Arc<FairMutex<Term<EventProxy>>>`. The UI thread only holds the
@@ -221,17 +221,26 @@ Design and rationale: [command-blocks technical design](../backlog/features/comm
       shapes of the rect pipeline), non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
       anchored at the cell origin, plus the fold summaries (one character per cell);
-    - overlay glyph instances at pixel positions (banner).
-3. `Renderer::render` resolves the glyph instances through the glyph cache, uploads the
-   newly rasterized glyphs, then draws in one pass: clear, `under` rects, glyphs,
-   `over` rects, overlay glyphs. Colors are linearized when the surface format is sRGB.
+    - overlay rects and glyph instances at pixel positions (banner).
+3. `Session::redraw` captures one frame per pane shown by the active tab. When the tab
+   shows several panes, the inactive ones go through `Frame::dimmed(INACTIVE_PANE_DIM)`
+   (every color mixed 30 % toward the background) and `chrome::scene::build` adds the
+   interface rects: the dividers (`ui.pane_border`) and a 2 px border inside the active
+   pane (`ui.palette_match`, the accent color).
+4. `Renderer::render` builds the scene of each pane with its own `GridLayout`, resolves
+   the glyph instances through the glyph cache (one group per pane, then the overlay),
+   uploads the newly rasterized glyphs, then draws in one pass: clear; for each pane,
+   clipped to its rect by a scissor, `under` rects, glyphs, `over` rects; then over the
+   whole window the interface rects, the overlay rects and the overlay glyphs. Colors
+   are linearized when the surface format is sRGB.
 
 ### Banner
 
 `Frame.banner` holds a `BannerLayout` (from `banner.rs`) and its theme colors
 (`ui.banner_background`, `ui.banner_text`). It covers the top of the window, over the
-grid (the grid does not move): its rect is the last `over` rect and its text goes to the
-overlay glyphs (one character per cell width), drawn after it. The layout gives the pixel rect of each action,
+grid (the grid does not move), in the frame of the active pane: its rect goes to the
+overlay rects and its text to the overlay glyphs (one character per cell width), drawn
+after every pane and the interface, unclipped. The layout gives the pixel rect of each action,
 and `Session::left_press` hit-tests the banner before starting a selection.
 
 The configuration error banner shows the first error of `config.toml` and the theme
