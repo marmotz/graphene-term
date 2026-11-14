@@ -107,6 +107,7 @@ impl Terminal {
             timeline.clone(),
             token,
             images.clone(),
+            size,
             proxy,
             pty,
         )?;

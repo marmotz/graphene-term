@@ -132,6 +132,9 @@ pub struct Placement {
     /// Part of the image shown, the whole image when `None`.
     pub source: Option<SourceRect>,
     pub kind: PlacementKind,
+    /// Stacking order requested by the client (kitty `z`), only used to select
+    /// placements to delete: images are always drawn over the cell background.
+    pub z: i32,
 }
 
 /// The images of one terminal and their placements.
@@ -283,6 +286,16 @@ impl ImageStore {
             .map(|((_, placement), value)| (*placement, value))
     }
 
+    /// Every placement, by (image id, placement id).
+    pub fn placements(&self) -> impl Iterator<Item = ((u32, u32), &Placement)> {
+        self.placements.iter().map(|(key, value)| (*key, value))
+    }
+
+    /// Ids of the images stored, in no particular order.
+    pub fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.images.keys().copied()
+    }
+
     /// Removes placement `placement` of image `id`; `false` when there was none.
     pub fn remove_placement(&mut self, id: u32, placement: u32) -> bool {
         self.placements.remove(&(id, placement)).is_some()
@@ -340,6 +353,7 @@ mod tests {
             rows: 1,
             source: None,
             kind: PlacementKind::Internal,
+            z: 0,
         }
     }
 

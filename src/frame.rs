@@ -728,6 +728,7 @@ mod tests {
                 rows: 2,
                 source: None,
                 kind: PlacementKind::Internal,
+                z: 0,
             },
         );
         frame.attach_images(&store);

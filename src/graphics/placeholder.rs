@@ -6,13 +6,11 @@
 //! diacritics. `Term` then scrolls, erases, keeps in history and clears these cells like
 //! text, and the renderer draws the image over them.
 
-// `place` and `erase` are called by the kitty and sixel handlers, which land after the
-// store and the rendering.
-#![cfg_attr(not(test), allow(dead_code))]
+use std::collections::BTreeSet;
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::vte::ansi::{Color, Handler as _, Rgb};
@@ -145,6 +143,7 @@ pub enum CursorMove {
     /// After the image's last column, on its last row (kitty).
     After,
     /// On the line below the image, at its first column (sixel).
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by the sixel handler"))]
     Below,
 }
 
@@ -254,6 +253,23 @@ pub fn erase<L>(term: &mut Term<L>, image: u32, placement: Option<u32>) -> usize
         line += 1;
     }
     erased
+}
+
+/// Image and placement ids of the placeholder cells of the screen (not the history)
+/// at the points `select` accepts.
+pub fn on_screen<L>(term: &Term<L>, mut select: impl FnMut(Point) -> bool) -> BTreeSet<(u32, u32)> {
+    let grid = term.grid();
+    let mut ids = BTreeSet::new();
+    for line in 0..grid.screen_lines() as i32 {
+        for (column, cell) in row_cells(&grid[Line(line)]).into_iter().enumerate() {
+            if let Some(cell) = cell
+                && select(Point::new(Line(line), Column(column)))
+            {
+                ids.insert((cell.image, cell.placement));
+            }
+        }
+    }
+    ids
 }
 
 #[cfg(test)]
@@ -486,5 +502,28 @@ mod tests {
         let mut plain = super::tests::term(8, 2);
         feed(&mut plain, &PLACEHOLDER.to_string());
         assert_eq!(line_cells(&plain, 0)[0], None);
+    }
+
+    #[test]
+    fn on_screen_lists_the_selected_cells_of_the_screen_only() {
+        let mut term = term(8, 3);
+        place(&mut term, 4, 1, 2, 2, CursorMove::After);
+        place(&mut term, 0x0100_0005, 2, 1, 1, CursorMove::After);
+        assert_eq!(
+            on_screen(&term, |_| true),
+            BTreeSet::from([(4, 1), (0x0100_0005, 2)])
+        );
+        assert_eq!(
+            on_screen(&term, |point| point == Point::new(Line(1), Column(1))),
+            BTreeSet::from([(4, 1)])
+        );
+        assert_eq!(
+            on_screen(&term, |point| point.column == Column(2)),
+            BTreeSet::from([(0x0100_0005, 2)])
+        );
+
+        // Scrolled into the history: no longer on the screen.
+        feed(&mut term, "\r\n\r\n\r\n");
+        assert!(on_screen(&term, |_| true).is_empty());
     }
 }

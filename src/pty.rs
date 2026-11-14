@@ -200,6 +200,8 @@ pub struct PtyLoop<T, L: EventListener> {
     token: String,
     /// Locked after `term` and `timeline`, never before.
     images: Arc<Mutex<ImageStore>>,
+    /// Size at spawn: the pixel size of a cell sizes the kitty placements.
+    size: WindowSize,
     event_proxy: L,
 }
 
@@ -222,6 +224,7 @@ where
         timeline: Arc<Mutex<Timeline>>,
         token: String,
         images: Arc<Mutex<ImageStore>>,
+        size: WindowSize,
         event_proxy: L,
         pty: T,
     ) -> io::Result<Self> {
@@ -235,6 +238,7 @@ where
             timeline,
             token,
             images,
+            size,
             event_proxy,
         })
     }
@@ -258,6 +262,9 @@ where
             scanner: Scanner::new(&self.token),
             graphics: StoreHandler::new(self.images.clone()),
         };
+        state
+            .graphics
+            .set_cell_size(self.size.cell_width, self.size.cell_height);
         let mut buf = vec![0u8; READ_BUFFER_SIZE];
         let mode = PollMode::Level;
         let mut interest = PollingEvent::readable(0);
@@ -380,7 +387,12 @@ where
             };
             match msg {
                 Msg::Input(bytes) => state.writes.push(bytes),
-                Msg::Resize(size) => self.pty.on_resize(size),
+                Msg::Resize(size) => {
+                    state
+                        .graphics
+                        .set_cell_size(size.cell_width, size.cell_height);
+                    self.pty.on_resize(size);
+                }
                 Msg::Shutdown => return false,
             }
         }
@@ -430,6 +442,10 @@ where
                 term,
                 &buf[..unprocessed],
             );
+            // Kitty graphics replies, written once the poller says the PTY is writable.
+            if let Some(replies) = state.graphics.take_replies() {
+                state.writes.push(Cow::Owned(replies));
+            }
             processed += unprocessed;
             unprocessed = 0;
 
@@ -755,20 +771,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn real_pty_round_trip_until_child_exit() {
+    /// Runs `script` with `sh -c` in a real PTY driven by `PtyLoop`, sends `input`, and
+    /// returns the screen text once the child exits.
+    fn run_in_pty(script: &str, input: &'static [u8]) -> String {
         use std::time::Duration;
 
         // Like alacritty's loop without `drain_on_exit`, the loop stops on the child
-        // exit without reading what is left: the child waits a little after its output
-        // so the test does not depend on the order of the two poll events under load.
+        // exit without reading what is left: the scripts wait a little after their
+        // output so the tests do not depend on the order of the two poll events under
+        // load.
         let options = tty::Options {
             shell: Some(tty::Shell::new(
                 "sh".to_owned(),
-                vec![
-                    "-c".to_owned(),
-                    "read l; printf 'got:%s' \"$l\"; sleep 0.3".to_owned(),
-                ],
+                vec!["-c".to_owned(), script.to_owned()],
             )),
             ..Default::default()
         };
@@ -791,6 +806,7 @@ mod tests {
             timeline,
             "0123456789abcdef0123456789abcdef".to_owned(),
             Arc::new(Mutex::new(ImageStore::new())),
+            size,
             Events(tx),
             pty,
         )
@@ -798,7 +814,9 @@ mod tests {
         let sender = pty_loop.sender();
         let handle = pty_loop.spawn();
 
-        sender.send(Msg::Input(Cow::Borrowed(b"abc\n")));
+        if !input.is_empty() {
+            sender.send(Msg::Input(Cow::Borrowed(input)));
+        }
 
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -811,10 +829,28 @@ mod tests {
         handle.join().unwrap();
 
         let term = term.lock();
-        let text: String = (0..5)
+        (0..5)
             .flat_map(|line| (0..20).map(move |column| (line, column)))
             .map(|(line, column)| term.grid()[Point::new(Line(line), Column(column))].c)
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn real_pty_round_trip_until_child_exit() {
+        let text = run_in_pty("read l; printf 'got:%s' \"$l\"; sleep 0.3", b"abc\n");
         assert!(text.contains("got:abc"), "{text:?}");
+    }
+
+    #[test]
+    fn real_pty_kitty_query_gets_its_reply() {
+        // The reply is 12 bytes: `ESC _ G i=31;OK ESC \`, printed with `ESC` as `E`.
+        let text = run_in_pty(
+            "stty -icanon -echo; \
+             printf '\\033_Ga=q,i=31,f=24,s=1,v=1;AAAA\\033\\\\'; \
+             r=$(dd bs=1 count=12 2>/dev/null); \
+             printf 'got:%s' \"$r\" | tr '\\033' E; sleep 0.3",
+            b"",
+        );
+        assert!(text.contains("got:E_Gi=31;OKE\\"), "{text:?}");
     }
 }

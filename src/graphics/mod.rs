@@ -8,6 +8,7 @@
 //! placeholder cells ([`place`]), which the renderer draws the images over.
 
 mod diacritics;
+pub mod kitty;
 pub mod placeholder;
 pub mod sequence;
 pub mod store;
@@ -18,12 +19,8 @@ use alacritty_terminal::event::EventListener;
 use alacritty_terminal::term::Term;
 use log::debug;
 
-pub use placeholder::ImageCell;
-#[allow(unused_imports, reason = "used by the kitty and sixel handlers")]
-pub use placeholder::{CursorMove, erase, place};
-pub use store::{ImageStore, Pixels, SourceRect};
-#[allow(unused_imports, reason = "used by the kitty and sixel handlers")]
-pub use store::{Placement, PlacementKind};
+pub use placeholder::{CursorMove, ImageCell, erase, place};
+pub use store::{ImageStore, Pixels, Placement, PlacementKind, SourceRect};
 
 /// An image sequence cut out of the PTY stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,16 +41,35 @@ pub trait Handler {
     fn reset<L: EventListener>(&mut self, term: &mut Term<L>);
 }
 
-/// The handler of a terminal's PTY loop: keeps its [`ImageStore`] in step with the
-/// stream. Sequences are logged and dropped until the kitty and sixel decoders land.
+/// The handler of a terminal's PTY loop: runs the kitty commands against its
+/// [`ImageStore`] and keeps their replies for the PTY. Sixel sequences are logged and
+/// dropped until the sixel decoder lands.
 #[derive(Debug, Clone)]
 pub struct StoreHandler {
     store: Arc<Mutex<ImageStore>>,
+    kitty: kitty::Kitty,
+    /// Replies to write to the PTY, in order.
+    replies: Vec<u8>,
 }
 
 impl StoreHandler {
     pub fn new(store: Arc<Mutex<ImageStore>>) -> Self {
-        Self { store }
+        Self {
+            store,
+            kitty: kitty::Kitty::new(),
+            replies: Vec::new(),
+        }
+    }
+
+    /// Pixel size of a cell, to size the images placed without a cell count.
+    pub fn set_cell_size(&mut self, width: u16, height: u16) {
+        self.kitty
+            .set_cell_size(u32::from(width), u32::from(height));
+    }
+
+    /// The replies to write to the PTY since the last call, `None` when there is none.
+    pub fn take_replies(&mut self) -> Option<Vec<u8>> {
+        (!self.replies.is_empty()).then(|| std::mem::take(&mut self.replies))
     }
 }
 
@@ -66,10 +82,13 @@ pub fn lock(store: &Mutex<ImageStore>) -> std::sync::MutexGuard<'_, ImageStore> 
 }
 
 impl Handler for StoreHandler {
-    fn image<L: EventListener>(&mut self, _term: &mut Term<L>, image: Image) {
+    fn image<L: EventListener>(&mut self, term: &mut Term<L>, image: Image) {
         match image {
             Image::Kitty(payload) => {
-                debug!("kitty graphics sequence ignored ({} bytes)", payload.len())
+                let mut store = lock(&self.store);
+                if let Some(reply) = self.kitty.handle(term, &mut store, &payload) {
+                    self.replies.extend_from_slice(&reply);
+                }
             }
             Image::Sixel(body) => debug!("sixel sequence ignored ({} bytes)", body.len()),
         }
@@ -78,6 +97,7 @@ impl Handler for StoreHandler {
     /// A full reset cleared the grid: no cell shows an image any more.
     fn reset<L: EventListener>(&mut self, _term: &mut Term<L>) {
         lock(&self.store).clear();
+        self.kitty.reset();
     }
 }
 

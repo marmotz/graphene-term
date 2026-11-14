@@ -58,6 +58,17 @@ image is scaled to fit its box of cells, so a font zoom rescales it with the tex
 Textures are keyed on the pixels' uid and dropped when no store holds them, so an
 animation frame or a replaced image needs no explicit invalidation.
 
+## Kitty graphics: unnamed placements and replies
+
+A kitty direct placement without `p` gets its own placement id, counting down from
+`0xFFFFFF` (the placement id travels in a 24-bit underline color), instead of sharing
+placement 0: each unnamed placement keeps its own box and source rectangle, as kitty
+keeps them apart, and deleting one does not erase the others. Client placement ids above
+`0xFFFFFF` are refused (`EINVAL`) rather than truncated into another placement's cells.
+Replies are kept by the graphics handler and pushed to the PTY write queue after each
+parsed read, so the handler needs no access to the loop's writer and stays testable on
+a plain `Term`.
+
 ## One terminal per block: live grid and frozen blocks
 
 The first implementation cut one grid into blocks with the OSC 133 marks the shell

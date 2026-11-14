@@ -12,6 +12,7 @@
 | Config file                       | `toml` + `serde`                                         | 1       |
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
+| Kitty graphics: PNG, zlib, base64 | `png` + `flate2` + `base64`                              | 0.18, 1, 0.22 |
 
 ## Modules
 
@@ -33,7 +34,11 @@ src/
   signals.rs       incremental scanner of the private block signals and screen clears (pure)
   graphics/
     mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
-                   StoreHandler (clears the image store on a full reset)
+                   StoreHandler (runs kitty commands, keeps their PTY replies, clears the
+                   image store on a full reset)
+    kitty.rs       kitty graphics protocol, still images: control keys, chunked transfer,
+                   media (direct, file, temp file, shared memory), base64 / zlib / PNG /
+                   raw decoding, transmit / put / query / delete, replies
     sequence.rs    incremental splitter of the kitty and sixel sequences in the PTY stream (pure)
     store.rs       ImageStore: images (RGBA frames, generation), placements, 256 MiB budget
                    with oldest-first eviction, terminal-assigned ids (pure)
@@ -173,8 +178,11 @@ Renderer::render(pane frames, interface rects)
   the raw bytes, keeping its state across reads and passing every other APC / DCS
   through; for each image sequence, and after each full reset (`ESC c`), a synchronized
   update holding bytes is flushed and the `graphics::Handler` runs with the `Term` lock
-  held: `graphics::StoreHandler` clears the pane's `ImageStore` on a full reset (the
-  kitty and sixel decoders, still to come, log and drop the sequences). The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
+  held: `graphics::StoreHandler` runs the kitty commands (`graphics::kitty::Kitty`)
+  against the grid and the pane's `ImageStore`, and clears the store on a full reset
+  (sixel sequences are still logged and dropped). The kitty replies it keeps are pushed to
+  the `WriteQueue` after each parsed read. The cell pixel size given at spawn and on each
+  `Msg::Resize` sizes the kitty placements without `c` / `r`. The VT bytes go through `pty::process`: `signals::Scanner` (built with the session token) splits it
   into byte chunks, block signals and screen clears; each byte chunk is parsed by
   `pty::feed` (the single parse step), and each signal or clear is applied by
   `Timeline::apply` right after the bytes of its sequence, so the live grid holds
@@ -361,6 +369,35 @@ cursor line, scrolling at the bottom like text, and are clipped at the right edg
 then scrolls, erases, keeps in history and clears these cells like any other, and
 `graphics::erase` blanks the cells of a deleted image or placement (screen and history).
 A cell without a column diacritic continues its left neighbour (column + 1).
+
+Kitty graphics (`graphics/kitty.rs`): a command is parsed from its control keys; a
+chunked transfer (`m=1`) collects the base64 data of every chunk until `m=0` and runs the
+first chunk's command (a later `q` applies to the reply). The data is base64 (padding
+optional), or names a file (`t=f`, not under `/proc`, `/sys`, `/dev`), a temporary file
+(`t=t`, only under the temp directory with `tty-graphics-protocol` in its path, deleted
+after reading) or a POSIX shared memory object (`t=s`, unlinked after reading), with `S`
+and `O` selecting a range. It is inflated when `o=z`, then decoded as PNG (`f=100`) or
+raw RGB / RGBA (`f=24` / `f=32` with `s`, `v`). Every decoded or read size is capped at
+the 256 MiB store budget.
+
+- `a=t` stores the image; `a=T` also places it; `a=q` decodes without storing. A client
+  id `i` replaces the image of that id and erases its direct placements; an image
+  number `I` gets a terminal id from the top of the 32-bit range, and `a=p` / `d=n` with
+  `I` address the newest image of that number.
+- `a=p` places an image. A direct placement writes its cells at the cursor through
+  `graphics::place` (cursor after the image, kept with `C=1`); without `p` it gets its own
+  placement id counting down from `0xFFFFFF`, so several unnamed placements of one image
+  coexist, and a reused `p` erases the old cells. A virtual placement (`U=1`) is only
+  recorded. Its box is `c` x `r`, the missing one keeping the aspect ratio, or the cells
+  the source rectangle (`x`, `y`, `w`, `h`) covers.
+- `a=d` removes placements (lowercase) or also frees the images left without placement
+  (uppercase): all on screen (`a`), by id (`i`, with `p`), by number (`n`), at the cursor
+  (`c`), at a cell (`p`, `q` with `z`), in a column (`x`) or row (`y`), by `z`, by id
+  range (`r`). Position deletes scan the placeholder cells of the screen; the cells of a
+  virtual placement, printed by the client, stay.
+- A command naming an image (`i` or `I`) gets `ESC _ G i=..,I=..,p=..;OK ESC \` or
+  `CODE:message` (`EINVAL`, `ENOENT`, `ENODATA`, `EFBIG`, `EBADF`); `q=1` mutes `OK`,
+  `q=2` mutes errors too. Animation commands (`a=f`, `a`, `c`, `d=f`) are ignored.
 
 The pixels live in the pane's `ImageStore` as `Pixels` (immutable RGBA, a process-wide
 uid). `ImageRenderer` (`renderer/images.rs`) keys one texture on each uid: uploaded the
