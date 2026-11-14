@@ -1,9 +1,5 @@
 //! What a pane's shell is doing, read from `/proc`: its current directory and the
 //! program in the foreground of its terminal.
-#![allow(
-    dead_code,
-    reason = "read by the close confirmation and new pane tasks"
-)]
 
 use std::fs;
 use std::path::PathBuf;
@@ -26,10 +22,17 @@ pub fn foreground_group(shell_pid: u32, tpgid: i32) -> Option<u32> {
 
 /// The name of the program running in the foreground of the shell's terminal, `None`
 /// when the shell itself is in the foreground or `/proc` cannot be read.
+#[allow(dead_code, reason = "read by the close confirmation task")]
 pub fn foreground_program(shell_pid: u32) -> Option<String> {
     let stat = fs::read_to_string(format!("/proc/{shell_pid}/stat")).ok()?;
     let group = foreground_group(shell_pid, parse_tpgid(&stat)?)?;
-    let comm = fs::read_to_string(format!("/proc/{group}/comm")).ok()?;
+    program_name(group)
+}
+
+/// The program name of the process `pid` (`/proc/<pid>/comm`), `None` when it cannot
+/// be read.
+pub fn program_name(pid: u32) -> Option<String> {
+    let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
     let name = comm.trim();
     (!name.is_empty()).then(|| name.to_owned())
 }
@@ -96,5 +99,13 @@ mod tests {
         let pid = 4_194_305 + 1000;
         assert_eq!(current_dir(pid), None);
         assert_eq!(foreground_program(pid), None);
+        assert_eq!(program_name(pid), None);
+    }
+
+    #[test]
+    fn own_process_has_a_program_name() {
+        let name = program_name(std::process::id()).expect("own comm is readable");
+        assert!(!name.is_empty());
+        assert!(!name.ends_with('\n'));
     }
 }

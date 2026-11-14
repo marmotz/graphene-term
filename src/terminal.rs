@@ -60,10 +60,6 @@ pub struct Terminal {
     pub timeline: Arc<Mutex<Timeline>>,
     sender: pty::Sender,
     /// Process id of the shell.
-    #[allow(
-        dead_code,
-        reason = "read by the close confirmation and new pane tasks"
-    )]
     shell_pid: u32,
 }
 
@@ -115,9 +111,13 @@ impl Terminal {
     }
 
     /// The shell's current directory, `None` when it cannot be read.
-    #[allow(dead_code, reason = "used by the new pane task")]
     pub fn current_dir(&self) -> Option<PathBuf> {
         process::current_dir(self.shell_pid)
+    }
+
+    /// Name of the shell program, `None` when it cannot be read.
+    pub fn shell_name(&self) -> Option<String> {
+        process::program_name(self.shell_pid)
     }
 
     /// The program running in the foreground of this terminal, `None` when it is the
