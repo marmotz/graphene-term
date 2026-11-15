@@ -2,6 +2,7 @@
 //! egui and redrawn on demand. Each change is written to `config.toml` at once; the
 //! hot reload applies it to the terminal window and refreshes this one.
 
+mod fonts;
 mod model;
 mod view;
 mod visuals;
@@ -28,8 +29,8 @@ pub use model::LoadErrors;
 use model::{Change, SettingsModel};
 use view::View;
 
-const INITIAL_SIZE: LogicalSize<u32> = LogicalSize::new(760, 520);
-const MIN_SIZE: LogicalSize<u32> = LogicalSize::new(520, 360);
+const INITIAL_SIZE: LogicalSize<u32> = LogicalSize::new(1000, 700);
+const MIN_SIZE: LogicalSize<u32> = LogicalSize::new(640, 420);
 
 /// What the owner of a settings window does after one of its events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,10 +113,16 @@ impl SettingsWindow {
             Some(max_texture_side),
         );
 
-        let mut fonts = cosmic_text::fontdb::Database::new();
-        fonts.load_system_fonts();
+        // The database cosmic-text builds, so the sans-serif family is the palette's.
+        let system = cosmic_text::FontSystem::new();
+        let fonts = system.db();
+        let ctx = egui.egui_ctx();
+        if let Some(font) = fonts::sans_serif(fonts) {
+            fonts::install(ctx, font);
+        }
+        ctx.all_styles_mut(|style| style.text_styles = fonts::text_styles());
         let mut model = SettingsModel::new(config, errors);
-        model.set_font_families(model::monospace_families(&fonts));
+        model.set_font_families(model::monospace_families(fonts));
 
         let mut settings = Self {
             window,

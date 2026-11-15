@@ -71,13 +71,13 @@ pub enum CloseTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SettingsSection {
     #[default]
+    Language,
     Font,
     Window,
     Scrollback,
     Cursor,
     Selection,
     Tabs,
-    Language,
     Theme,
     KeyboardShortcuts,
     Updates,
@@ -86,13 +86,13 @@ pub enum SettingsSection {
 impl SettingsSection {
     /// Every section, in sidebar order.
     pub const ALL: [SettingsSection; 10] = [
+        SettingsSection::Language,
         SettingsSection::Font,
         SettingsSection::Window,
         SettingsSection::Scrollback,
         SettingsSection::Cursor,
         SettingsSection::Selection,
         SettingsSection::Tabs,
-        SettingsSection::Language,
         SettingsSection::Theme,
         SettingsSection::KeyboardShortcuts,
         SettingsSection::Updates,
