@@ -8,13 +8,13 @@ use super::context_menu::{MenuLayout, MenuRow};
 use super::dialog::DialogLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
-use alacritty_terminal::vte::ansi::Rgb;
 use crate::layout::Rect;
 use crate::palette::UiColors;
 use crate::renderer::scene::gpu_color;
 use crate::renderer::{RectInstance, UiFont, UiLayer, UiTextItem};
 use crate::terminal::PaneId;
 use crate::workspace::tree::Layout;
+use alacritty_terminal::vte::ansi::Rgb;
 
 /// Thickness of the active pane border, in physical pixels.
 pub const ACTIVE_BORDER: f32 = 2.0;
