@@ -56,7 +56,9 @@ if [[ -n $_graphene_token ]]; then
       _graphene_command_ran=0
       builtin printf '\e]6973;%s;end;%s\e\\' "$_graphene_token" "$ret"
     fi
-    builtin printf '\e]6973;%s;prompt\e\\' "$_graphene_token"
+    if [[ $_graphene_rich_input == 1 ]]; then
+      builtin printf '\e]6973;%s;prompt\e\\' "$_graphene_token"
+    fi
     _graphene_histcmd=$HISTCMD
     return "$ret"
   }
@@ -95,11 +97,14 @@ if [[ -n $_graphene_token ]]; then
 
   # PS0 (Bash 4.4+) is shown when a command line is read, empty ones excepted. Older
   # system Bash versions, including macOS's Bash 3.2, use DEBUG to report the first
-  # command after each prompt instead.
+  # command after each prompt instead. Their Readline cannot run Graphene's editor
+  # callbacks, so keep command blocks but leave prompt editing to the shell.
+  _graphene_rich_input=1
   if [[ ${GRAPHENE_BASH_DEBUG_FALLBACK-} != 1 ]] \
     && ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))); then
     PS0="${PS0-}"'${_graphene_unset[_graphene_command_ran=1]-}$(_graphene_start)'
   else
+    _graphene_rich_input=0
     _graphene_in_prompt=0
     _graphene_debug() {
       ((BASH_SUBSHELL == 0)) || return 0
@@ -185,26 +190,28 @@ if [[ -n $_graphene_token ]]; then
     READLINE_POINT=$((READLINE_POINT + 1))
   }
 
-  for _graphene_keymap in emacs vi-insert; do
-    {
-      builtin bind -m "$_graphene_keymap" -x '"\e[59136u": _graphene_char_left'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59137u": _graphene_char_right'
-      builtin bind -m "$_graphene_keymap" '"\e[59138u": backward-word'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59139u": _graphene_word_right'
-      builtin bind -m "$_graphene_keymap" '"\e[59140u": backward-kill-word'
-      builtin bind -m "$_graphene_keymap" '"\e[59141u": kill-word'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59142u": _graphene_line_start'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59143u": _graphene_line_end'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59144u": _graphene_line_up'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59145u": _graphene_line_down'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59146u": _graphene_buffer_start'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59147u": _graphene_buffer_end'
-      builtin bind -m "$_graphene_keymap" -x '"\e[59148u": _graphene_insert_newline'
-      # Readline's forward-word already stops at the end of the word.
-      builtin bind -m "$_graphene_keymap" '"\e[59149u": forward-word'
-    } 2>/dev/null
-  done
-  unset _graphene_keymap
+  if [[ $_graphene_rich_input == 1 ]]; then
+    for _graphene_keymap in emacs vi-insert; do
+      {
+        builtin bind -m "$_graphene_keymap" -x '"\e[59136u": _graphene_char_left'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59137u": _graphene_char_right'
+        builtin bind -m "$_graphene_keymap" '"\e[59138u": backward-word'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59139u": _graphene_word_right'
+        builtin bind -m "$_graphene_keymap" '"\e[59140u": backward-kill-word'
+        builtin bind -m "$_graphene_keymap" '"\e[59141u": kill-word'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59142u": _graphene_line_start'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59143u": _graphene_line_end'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59144u": _graphene_line_up'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59145u": _graphene_line_down'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59146u": _graphene_buffer_start'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59147u": _graphene_buffer_end'
+        builtin bind -m "$_graphene_keymap" -x '"\e[59148u": _graphene_insert_newline'
+        # Readline's forward-word already stops at the end of the word.
+        builtin bind -m "$_graphene_keymap" '"\e[59149u": forward-word'
+      } 2>/dev/null
+    done
+    unset _graphene_keymap
+  fi
   if [[ -n ${_graphene_install_debug_trap-} ]]; then
     unset GRAPHENE_BASH_DEBUG_FALLBACK _graphene_install_debug_trap
     trap '_graphene_debug' DEBUG

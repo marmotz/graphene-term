@@ -101,6 +101,8 @@ folder of the system temporary directory when that variable is unset). Other she
 and shells started by hand inside Graphene, are left as they are. Set
 `GRAPHENE_SHELL_INTEGRATION=0` in Graphene's environment to start the shell without
 integration.
+On macOS's system Bash 3.2, command blocks still work, but the rich prompt editor stays
+disabled because that Bash version cannot run Readline callbacks; Zsh has full support.
 
 ## Performance
 

@@ -470,6 +470,10 @@ mod tests {
                 .is_ok_and(|status| status.success())
         }
 
+        fn bash_rich_input_available() -> bool {
+            bash_supports_ps0() && std::env::var_os("GRAPHENE_TEST_BASH_DEBUG_FALLBACK").is_none()
+        }
+
         /// A shell in a PTY, with the integration installed in `home` and `home` as
         /// `HOME` and XDG folders, so the user's real configuration stays out.
         struct Session {
@@ -680,8 +684,13 @@ mod tests {
                 String::from_utf8_lossy(&session.output)
             );
             // One `prompt` per prompt, the one after the empty line included.
-            session.read_until("the prompt signals", |s| s.prompt_signals >= s.prompts());
-            assert_eq!(session.prompt_signals, session.prompts(), "{shell}");
+            let prompt_signals = if shell == "bash" && !bash_rich_input_available() {
+                0
+            } else {
+                session.prompts()
+            };
+            session.read_until("the prompt signals", |s| s.prompt_signals >= prompt_signals);
+            assert_eq!(session.prompt_signals, prompt_signals, "{shell}");
             assert_eq!(session.prompts(), 6, "{shell}");
             let output = String::from_utf8_lossy(&session.output);
             assert!(output.contains(expected), "{shell}: {output:?}");
@@ -795,9 +804,7 @@ mod tests {
                 eprintln!("bash not installed, skipped");
                 return;
             }
-            if !bash_supports_ps0()
-                || std::env::var_os("GRAPHENE_TEST_BASH_DEBUG_FALLBACK").is_some()
-            {
+            if !bash_rich_input_available() {
                 eprintln!("Bash PS0 is required to test the ignored-history command text, skipped");
                 return;
             }
@@ -1039,8 +1046,8 @@ mod tests {
 
         #[test]
         fn bash_editor_sequences() {
-            if find("bash").is_none() {
-                eprintln!("bash not installed, skipped");
+            if !bash_rich_input_available() {
+                eprintln!("Bash PS0 is required for Readline editor callbacks, skipped");
                 return;
             }
             for (name, mode) in [("emacs", "set -o emacs"), ("vi", "set -o vi")] {
