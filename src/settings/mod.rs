@@ -156,13 +156,8 @@ impl SettingsWindow {
     pub fn apply(&mut self, palette: &Palette, lang: Lang, config: &Config, errors: &LoadErrors) {
         self.model.refresh(config, errors);
         self.view.reset_inputs();
-        let user_themes = self
-            .file
-            .parent()
-            .map(model::user_themes)
-            .unwrap_or_default();
         self.model
-            .set_theme_choices(model::theme_choices(user_themes));
+            .set_theme_choices(crate::theme::available(self.file.parent()));
         let ctx = self.egui.egui_ctx();
         ctx.set_theme(visuals::theme(palette.background));
         ctx.set_visuals(visuals::visuals(palette));
