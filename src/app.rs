@@ -23,13 +23,18 @@ use crate::chrome;
 use crate::chrome::command_palette::{
     self, Command, CommandPalette, Outcome, PaletteHit, PaletteLayout,
 };
+use crate::chrome::context_menu::{
+    self, BlockState, Command as MenuCommand, ContextMenu, MenuContext, MenuHit, MenuLayout,
+};
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
 use crate::config::{
-    self, Config, ConfigError, FontConfig, MAX_FONT_SIZE, MIN_FONT_SIZE, StartupMode, WindowConfig,
+    self, Config, ConfigError, FontConfig, MAX_FONT_SIZE, MIN_FONT_SIZE, StartupMode, ThemeConfig,
+    WindowConfig,
 };
+use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
@@ -103,6 +108,8 @@ enum Overlay {
     Confirm(ConfirmClose),
     /// The command palette.
     Palette(CommandPalette),
+    /// A context menu.
+    Menu(ContextMenu),
 }
 
 struct Session {
@@ -118,6 +125,9 @@ struct Session {
     /// Box open over the window, taking the keyboard and the mouse.
     overlay: Option<Overlay>,
     palette: Palette,
+    /// Theme settings and system appearance used by the menu.
+    theme: ThemeConfig,
+    appearance: Appearance,
     clipboard: Option<arboard::Clipboard>,
     focused: bool,
     /// Blink phase of the active pane's cursor.
@@ -503,6 +513,173 @@ impl Session {
         ))
     }
 
+    /// The open context menu laid out in the window.
+    fn menu_layout(&mut self) -> Option<MenuLayout> {
+        let Some(Overlay::Menu(menu)) = &self.overlay else {
+            return None;
+        };
+        let size = self.window.inner_size();
+        let metrics = self.ui_metrics(UiFont::Palette);
+        let renderer = &mut self.renderer;
+        Some(MenuLayout::new(
+            menu,
+            Rect::from_size(size.width, size.height),
+            metrics,
+            |text| renderer.ui_text_width(UiFont::Palette, text),
+        ))
+    }
+
+    /// Opens a pane menu at the pointer, retaining the pane's text selection.
+    fn open_pane_menu(&mut self, pane_id: PaneId, hit: Hit) {
+        let tab_index = self
+            .workspace
+            .tab_of(pane_id)
+            .unwrap_or(self.workspace.active_index());
+        let Some(pane) = self.workspace.pane(pane_id) else {
+            return;
+        };
+        let block = pane.block_at(&hit).and_then(|id| {
+            let timeline = pane::lock(&pane.terminal.timeline);
+            let block = timeline.block(id)?;
+            Some(BlockState {
+                id,
+                command_copyable: crate::block_actions::text(
+                    &timeline,
+                    id,
+                    crate::block_actions::Part::Command,
+                )
+                .is_some(),
+                output_copyable: crate::block_actions::text(
+                    &timeline,
+                    id,
+                    crate::block_actions::Part::Output,
+                )
+                .is_some(),
+                folded: block.folded,
+            })
+        });
+        let items = {
+            let tab = self.workspace.tabs().get(tab_index);
+            let themes = theme::available(config::config_dir().as_deref());
+            let active_theme = self.theme.active(self.appearance).to_owned();
+            let context = MenuContext {
+                copyable: pane.copy_content().is_some(),
+                last_pane: self
+                    .workspace
+                    .tabs()
+                    .iter()
+                    .map(|tab| tab.tree.leaves().len())
+                    .sum::<usize>()
+                    == 1,
+                single_pane_tab: tab.is_some_and(|tab| tab.is_single()),
+                zoomed: tab.is_some_and(|tab| tab.zoomed),
+                only_tab: self.workspace.tabs().len() == 1,
+                block,
+                themes: &themes,
+                active_theme: &active_theme,
+            };
+            context_menu::pane_menu(&context, &self.keybindings, self.lang)
+        };
+        self.open_menu(items);
+    }
+
+    /// Opens a tab menu at the pointer without selecting the clicked tab.
+    fn open_tab_menu(&mut self, index: usize) {
+        let Some(tab) = self.workspace.tabs().get(index) else {
+            return;
+        };
+        let themes = theme::available(config::config_dir().as_deref());
+        let active_theme = self.theme.active(self.appearance).to_owned();
+        let context = MenuContext {
+            copyable: false,
+            last_pane: self
+                .workspace
+                .tabs()
+                .iter()
+                .map(|tab| tab.tree.leaves().len())
+                .sum::<usize>()
+                == 1,
+            single_pane_tab: tab.is_single(),
+            zoomed: tab.zoomed,
+            only_tab: self.workspace.tabs().len() == 1,
+            block: None,
+            themes: &themes,
+            active_theme: &active_theme,
+        };
+        let items = context_menu::tab_menu(index, &context, &self.keybindings, self.lang);
+        self.open_menu(items);
+    }
+
+    fn open_menu(&mut self, items: Vec<context_menu::Item>) {
+        let (x, y) = self.mouse_pixel();
+        let active_theme = self.theme.active(self.appearance).to_owned();
+        self.overlay = Some(Overlay::Menu(
+            ContextMenu::new((x, y), items).with_active_theme(active_theme),
+        ));
+        self.window.request_redraw();
+        self.update_pointer();
+    }
+
+    /// Applies a menu outcome, closing the menu before running its command.
+    fn menu_outcome(
+        &mut self,
+        outcome: context_menu::Outcome,
+        default_font_size: f32,
+        event_loop: &ActiveEventLoop,
+    ) {
+        if !matches!(self.overlay, Some(Overlay::Menu(_))) {
+            return;
+        }
+        self.overlay = None;
+        self.window.request_redraw();
+        self.update_pointer();
+        let context_menu::Outcome::Run(command) = outcome else {
+            return;
+        };
+        match command {
+            MenuCommand::Action(action) => self.run_action(action, default_font_size, event_loop),
+            MenuCommand::CloseTab(index) => {
+                if let Some(target) = Target::tab(&self.workspace, index) {
+                    self.request_close(target, event_loop);
+                }
+            }
+            MenuCommand::BlockCopy(id, part) => {
+                let text = self
+                    .workspace
+                    .active_pane()
+                    .and_then(|pane| pane.block_text_of(id, part));
+                self.set_clipboard(text);
+            }
+            MenuCommand::BlockFold(id) => {
+                if let Some(pane) = self.workspace.active_pane_mut() {
+                    pane.toggle_fold_of(id);
+                }
+            }
+            MenuCommand::Theme(name) => self.write_theme(&name),
+        }
+    }
+
+    fn write_theme(&mut self, name: &str) {
+        let Some(file) = config::config_file() else {
+            let error = ConfigError::read(
+                PathBuf::from("config.toml"),
+                "cannot resolve the configuration file path".to_owned(),
+            );
+            self.show_config_error(error);
+            return;
+        };
+        let key = theme_key(&self.theme, self.appearance);
+        if let Err(error) = config_edit::write(&file, |edit: &mut ConfigEdit| edit.set(key, name)) {
+            self.show_config_error(error);
+        }
+    }
+
+    fn show_config_error(&mut self, error: ConfigError) {
+        log::warn!("{error}");
+        self.config_banner = Banner::config_errors(std::slice::from_ref(&error));
+        self.relayout();
+    }
+
     /// Applies what a key or a click on the open palette asks: closes it, then runs the
     /// chosen entry. An action run is remembered in the recent file.
     fn palette_outcome(
@@ -544,6 +721,23 @@ impl Session {
         event_loop: &ActiveEventLoop,
     ) {
         let (x, y) = self.mouse_pixel();
+        if matches!(self.overlay, Some(Overlay::Menu(_))) {
+            let hit = self
+                .menu_layout()
+                .map_or(MenuHit::Outside, |layout| layout.hit(x, y));
+            let outcome = match &self.overlay {
+                Some(Overlay::Menu(menu))
+                    if button == mouse::Button::Left || hit == MenuHit::Outside =>
+                {
+                    menu.choose(hit)
+                }
+                _ => None,
+            };
+            if let Some(outcome) = outcome {
+                self.menu_outcome(outcome, default_font_size, event_loop);
+            }
+            return;
+        }
         if !matches!(self.overlay, Some(Overlay::Palette(_))) {
             if button == mouse::Button::Left
                 && let Some(DialogHit::Button(answer)) =
@@ -592,6 +786,9 @@ impl Session {
                 }
             }
             (mouse::Button::Left, TabBarHit::NewTab) => self.new_tab(),
+            (mouse::Button::Right, TabBarHit::Tab(index) | TabBarHit::Close(index)) => {
+                self.open_tab_menu(index);
+            }
             _ => {}
         }
     }
@@ -643,6 +840,7 @@ impl Session {
         self.renderer
             .set_background_opacity(new.window.background_opacity);
         self.palette = palette.clone();
+        self.theme = new.theme.clone();
         self.keybindings = Keybindings::new(&new.keybindings);
         self.lang = new.language.resolve(Lang::detect);
         self.tab_position = new.tab_position.into();
@@ -1068,7 +1266,7 @@ impl Session {
                 }
             }
             mouse::Button::Middle => self.paste_primary(),
-            mouse::Button::Right => {}
+            mouse::Button::Right => self.open_pane_menu(target, hit),
         }
     }
 
@@ -1126,6 +1324,13 @@ impl Session {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_position = position;
+        let menu_layout = self.menu_layout();
+        if let (Some(Overlay::Menu(menu)), Some(layout)) = (&mut self.overlay, menu_layout) {
+            menu.hover_at(&layout, position.x as f32, position.y as f32);
+            self.window.request_redraw();
+            self.update_pointer();
+            return;
+        }
         if std::mem::take(&mut self.tooltip_hidden) && self.tooltip_uri().is_some() {
             self.window.request_redraw();
         }
@@ -1350,6 +1555,14 @@ impl Session {
                 }
                 return;
             }
+            Some(Overlay::Menu(menu)) => {
+                if let Some(outcome) = menu.key(&event.logical_key) {
+                    self.menu_outcome(outcome, default_font_size, event_loop);
+                } else {
+                    self.window.request_redraw();
+                }
+                return;
+            }
             None => {}
         }
         let modifiers = self.modifiers;
@@ -1401,6 +1614,23 @@ impl Session {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if matches!(&self.overlay, Some(Overlay::Menu(_))) {
+            let rows = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(position) => {
+                    position.y as f32 / self.renderer.ui_line_height(UiFont::Palette)
+                }
+            };
+            let visible = self
+                .menu_layout()
+                .and_then(|layout| layout.submenu.map(|submenu| submenu.visible_rows))
+                .unwrap_or(0);
+            if let Some(Overlay::Menu(menu)) = &mut self.overlay {
+                menu.scroll_submenu(-rows.round() as isize, visible);
+            }
+            self.window.request_redraw();
+            return;
+        }
         if let Some(Overlay::Palette(palette)) = &mut self.overlay {
             let rows = match delta {
                 MouseScrollDelta::LineDelta(_, y) => y,
@@ -1555,10 +1785,12 @@ impl Session {
     fn redraw(&mut self) {
         let dialog = self.dialog_layout();
         let palette = self.palette_layout();
+        let menu = self.menu_layout();
         let tooltip = self.tooltip_layout();
-        let overlay = match (&dialog, &palette) {
-            (Some(dialog), _) => Some(chrome::scene::Overlay::Dialog(dialog)),
-            (_, Some(palette)) => Some(chrome::scene::Overlay::Palette(palette)),
+        let overlay = match (&dialog, &palette, &menu) {
+            (Some(dialog), _, _) => Some(chrome::scene::Overlay::Dialog(dialog)),
+            (_, Some(palette), _) => Some(chrome::scene::Overlay::Palette(palette)),
+            (_, _, Some(menu)) => Some(chrome::scene::Overlay::Menu(menu)),
             _ => None,
         };
         let mut banner = self.shown_banner().map(|shown| FrameBanner {
@@ -1809,6 +2041,8 @@ impl App {
             drag: None,
             overlay: None,
             palette: self.palette.clone(),
+            theme: self.config.theme.clone(),
+            appearance: self.appearance,
             clipboard,
             focused: true,
             cursor_blink: CursorBlink::new(Instant::now()),
@@ -2125,6 +2359,17 @@ fn with_theme(
     (config, palette, Banner::config_errors(&all), load_errors)
 }
 
+fn theme_key(theme: &ThemeConfig, appearance: Appearance) -> &'static [&'static str] {
+    if theme.follows_appearance() {
+        match appearance {
+            Appearance::Light => &["theme", "light"],
+            Appearance::Dark => &["theme", "dark"],
+        }
+    } else {
+        &["theme", "name"]
+    }
+}
+
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
@@ -2302,5 +2547,41 @@ mod tests {
             initial_window(&config, None),
             (LogicalSize::new(960, 600), false)
         );
+    }
+
+    #[test]
+    fn theme_menu_writes_the_matching_appearance_key_when_following_system() {
+        let theme = ThemeConfig {
+            name: "base".to_owned(),
+            light: Some("day".to_owned()),
+            dark: Some("night".to_owned()),
+        };
+        assert_eq!(theme_key(&theme, Appearance::Light), &["theme", "light"]);
+        assert_eq!(theme_key(&theme, Appearance::Dark), &["theme", "dark"]);
+    }
+
+    #[test]
+    fn theme_menu_writes_name_when_not_following_system_appearance() {
+        for theme in [
+            ThemeConfig {
+                name: "base".to_owned(),
+                light: None,
+                dark: None,
+            },
+            ThemeConfig {
+                name: "base".to_owned(),
+                light: Some("day".to_owned()),
+                dark: None,
+            },
+            ThemeConfig {
+                name: "base".to_owned(),
+                light: None,
+                dark: Some("night".to_owned()),
+            },
+        ] {
+            for appearance in [Appearance::Light, Appearance::Dark] {
+                assert_eq!(theme_key(&theme, appearance), &["theme", "name"]);
+            }
+        }
     }
 }

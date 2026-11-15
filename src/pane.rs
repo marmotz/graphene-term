@@ -271,6 +271,15 @@ impl Pane {
         (hit, over_chevron)
     }
 
+    /// Finished block under a hit. Blank space, gaps, the current block and the
+    /// alternate screen have no block target.
+    pub fn block_at(&self, hit: &Hit) -> Option<BlockId> {
+        let term = self.terminal.term.lock();
+        let mut timeline = lock(&self.terminal.timeline);
+        let rows = shown_rows(&self.anchor, &term, &mut timeline);
+        block_for_hit(hit, &rows, &timeline)
+    }
+
     /// Grid cell under the pixel `position`: the grid shown there and the point in it.
     /// `None` off the cells (margin, chevron, gap, blank space).
     pub fn cell_under(&self, position: PhysicalPosition<f64>) -> Option<(RowSource, Point)> {
@@ -442,6 +451,22 @@ impl Pane {
         let timeline = lock(&self.terminal.timeline);
         block_actions::target(&timeline, self.selected_block)
             .and_then(|id| block_actions::text(&timeline, id, part))
+    }
+
+    /// Text of `part` from finished block `id`, without changing either selection.
+    pub fn block_text_of(&self, id: BlockId, part: Part) -> Option<String> {
+        let timeline = lock(&self.terminal.timeline);
+        block_text_of(&timeline, id, part)
+    }
+
+    /// Folds or unfolds finished block `id`, leaving the text and block selections
+    /// untouched. Returns whether the block still existed.
+    pub fn toggle_fold_of(&mut self, id: BlockId) -> bool {
+        let changed = toggle_fold_of(&mut lock(&self.terminal.timeline), id);
+        if changed {
+            self.request_redraw();
+        }
+        changed
     }
 
     /// Selects the neighbour block in `direction` and scrolls it into view.
@@ -778,6 +803,27 @@ impl Pane {
     }
 }
 
+fn block_for_hit(hit: &Hit, rows: &[ViewRow], timeline: &Timeline) -> Option<BlockId> {
+    let id = match *hit {
+        Hit::Cell { block, .. } => block,
+        Hit::Margin { row } | Hit::Chevron { row } => rows.get(row).and_then(|row| row.block),
+        Hit::Gap | Hit::Blank => None,
+    }?;
+    timeline.block(id).map(|block| block.id)
+}
+
+fn block_text_of(timeline: &Timeline, id: BlockId, part: Part) -> Option<String> {
+    block_actions::text(timeline, id, part)
+}
+
+fn toggle_fold_of(timeline: &mut Timeline, id: BlockId) -> bool {
+    if timeline.block(id).is_none() {
+        return false;
+    }
+    timeline.toggle_fold(id);
+    true
+}
+
 /// Whether a fallback title last read at `checked` is due for a new read at `now`.
 fn refresh_due(checked: Option<Instant>, now: Instant) -> bool {
     checked.is_none_or(|checked| now.saturating_duration_since(checked) >= TITLE_REFRESH)
@@ -812,6 +858,12 @@ pub fn shown_rows(
 mod tests {
     use super::*;
     use crate::layout::{CellSize, Rect};
+    use crate::timeline::BlockId;
+    use crate::timeline::testing::Session as TimelineSession;
+    use crate::timeline_selection::{End, TimelineSelection};
+    use crate::view::RowSource;
+    use alacritty_terminal::index::{Line, Side};
+    use alacritty_terminal::selection::SelectionType;
 
     fn layout(width: u32, height: u32) -> GridLayout {
         let cell = CellSize {
@@ -856,5 +908,92 @@ mod tests {
             8.0,
         );
         assert!(!cells_changed(&layout(800, 600), &moved));
+    }
+
+    fn finished_block() -> TimelineSession {
+        let mut session = TimelineSession::new(100);
+        session.command("echo hello", &["hello"], 0);
+        session
+    }
+
+    #[test]
+    fn block_at_accepts_only_finished_blocks_for_each_hit_kind() {
+        let session = finished_block();
+        let id = BlockId(0);
+        let current_id = session.timeline.current().id;
+        let rows = [ViewRow {
+            source: RowSource::Header(id),
+            block: Some(id),
+            line: Line(0),
+            hidden: 0,
+            top: 0,
+            gap_before: false,
+        }];
+        assert_eq!(
+            block_for_hit(
+                &Hit::Cell {
+                    column: 0,
+                    row: 0,
+                    side: Side::Left,
+                    source: RowSource::Header(id),
+                    line: Line(0),
+                    block: Some(id),
+                },
+                &rows,
+                &session.timeline,
+            ),
+            Some(id)
+        );
+        for hit in [Hit::Margin { row: 0 }, Hit::Chevron { row: 0 }] {
+            assert_eq!(block_for_hit(&hit, &rows, &session.timeline), Some(id));
+        }
+        for hit in [
+            Hit::Gap,
+            Hit::Blank,
+            Hit::Cell {
+                column: 0,
+                row: 0,
+                side: Side::Left,
+                source: RowSource::Live,
+                line: Line(0),
+                block: Some(current_id),
+            },
+            Hit::Cell {
+                column: 0,
+                row: 0,
+                side: Side::Left,
+                source: RowSource::Live,
+                line: Line(0),
+                block: None,
+            },
+            Hit::Margin { row: 1 },
+            Hit::Chevron { row: 1 },
+        ] {
+            assert_eq!(block_for_hit(&hit, &rows, &session.timeline), None);
+        }
+    }
+
+    #[test]
+    fn block_copy_and_fold_operations_leave_text_selection_unchanged() {
+        let mut session = finished_block();
+        let selection = TimelineSelection::new(
+            SelectionType::Simple,
+            End {
+                source: RowSource::Live,
+                point: Point::new(Line(0), Column(0)),
+                side: Side::Left,
+            },
+            &session.timeline,
+            &session.term,
+        );
+        let before = selection.clone();
+        assert_eq!(
+            block_text_of(&session.timeline, BlockId(0), Part::Command),
+            Some("echo hello".to_owned())
+        );
+        assert_eq!(selection, before);
+        assert!(toggle_fold_of(&mut session.timeline, BlockId(0)));
+        assert!(session.timeline.is_folded(BlockId(0)));
+        assert_eq!(selection, before);
     }
 }

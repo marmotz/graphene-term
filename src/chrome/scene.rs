@@ -8,6 +8,7 @@ use super::context_menu::{MenuLayout, MenuRow};
 use super::dialog::DialogLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
+use alacritty_terminal::vte::ansi::Rgb;
 use crate::layout::Rect;
 use crate::palette::UiColors;
 use crate::renderer::scene::gpu_color;
@@ -26,6 +27,9 @@ const PLUS_STROKE: f32 = 1.0 / 15.0;
 
 /// Thickness of the dialog border, in physical pixels.
 const DIALOG_BORDER: f32 = 1.0;
+
+/// Opacity of the hovered context-menu row, matching the shortcuts table in settings.
+const MENU_HOVER_HIGHLIGHT: f32 = 0.45;
 
 /// The box drawn over everything, laid out.
 #[derive(Debug, Clone, Copy)]
@@ -92,9 +96,15 @@ fn draw_menu_rows(rows: &[MenuRow], colors: &UiColors, srgb_target: bool, ui: &m
             ui.overlay_rects.push(rect(line, color(colors.pane_border)));
             continue;
         }
-        if row.hovered && row.enabled {
-            ui.overlay_rects
-                .push(rect(row.rect, color(colors.tab_active_background)));
+        if row.hovered {
+            ui.overlay_rects.push(rect(
+                row.rect,
+                color(blend(
+                    colors.palette_background,
+                    colors.palette_selection_background,
+                    MENU_HOVER_HIGHLIGHT,
+                )),
+            ));
         }
         if let Some(label) = &row.label {
             ui.overlay_texts.push(UiTextItem {
@@ -132,6 +142,17 @@ fn draw_menu_rows(rows: &[MenuRow], colors: &UiColors, srgb_target: bool, ui: &m
                 font: UiFont::Palette,
             });
         }
+    }
+}
+
+fn blend(background: Rgb, highlight: Rgb, opacity: f32) -> Rgb {
+    let channel = |background: u8, highlight: u8| {
+        (f32::from(background) * (1.0 - opacity) + f32::from(highlight) * opacity).round() as u8
+    };
+    Rgb {
+        r: channel(background.r, highlight.r),
+        g: channel(background.g, highlight.g),
+        b: channel(background.b, highlight.b),
     }
 }
 
@@ -754,8 +775,14 @@ mod tests {
             Command, ContextMenu, Item, MenuHit, MenuLayout, MenuLevel,
         };
         use crate::input::Action;
+        const HOVER_SELECTION: Rgb = Rgb {
+            r: 150,
+            g: 100,
+            b: 50,
+        };
         let colors = UiColors {
             palette_background: DIALOG_BACKGROUND,
+            palette_selection_background: HOVER_SELECTION,
             palette_text: DIALOG_TEXT,
             tab_active_background: ACTIVE_TAB,
             tab_inactive_text: INACTIVE_TEXT,
@@ -795,7 +822,14 @@ mod tests {
         let color = |c| gpu_color(c, false);
         assert_eq!(ui.overlay_rects[0].color, color(DIALOG_BACKGROUND));
         assert_eq!(ui.overlay_rects[1].color, color(BORDER));
-        assert_eq!(ui.overlay_rects[5].color, color(ACTIVE_TAB));
+        assert_eq!(
+            ui.overlay_rects[5].color,
+            color(Rgb {
+                r: 95,
+                g: 45,
+                b: 23,
+            })
+        );
         let texts: Vec<_> = ui
             .overlay_texts
             .iter()
