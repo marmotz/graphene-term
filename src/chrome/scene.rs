@@ -59,7 +59,7 @@ pub fn build(
 }
 
 /// The command palette, in the overlay: its box and border, the search field and its
-/// text cursor, the selected row, then the texts: the query or its hint, and each row's
+/// text cursor, the selected row and its accent bar, then the texts: the query or its hint, and each row's
 /// label (matching characters in the accent color) and shortcut.
 fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
     let color = |c| gpu_color(c, srgb_target);
@@ -79,6 +79,10 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
         ui.overlay_rects
             .push(rect(row.rect, color(colors.palette_selection_background)));
     }
+    let matching = color(colors.palette_match);
+    if let Some(marker) = palette.marker {
+        ui.overlay_rects.push(rect(marker, matching));
+    }
     ui.overlay_texts.push(UiTextItem {
         text: palette.input_text.clone(),
         x: palette.text_x,
@@ -87,7 +91,6 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
         max_width: palette.text_width,
         font: UiFont::Palette,
     });
-    let matching = color(colors.palette_match);
     for row in &palette.rows {
         for run in &row.runs {
             ui.overlay_texts.push(UiTextItem {
@@ -597,8 +600,9 @@ mod tests {
             false,
         );
         let color = |c| gpu_color(c, false);
-        // Box, its 4 border sides, the search field, the text cursor, the selected row.
-        assert_eq!(ui.overlay_rects.len(), 8);
+        // Box, its 4 border sides, the search field, the text cursor, the selected row
+        // and its accent bar.
+        assert_eq!(ui.overlay_rects.len(), 9);
         assert_eq!(ui.overlay_rects[0].color, color(DIALOG_BACKGROUND));
         assert_eq!(ui.overlay_rects[5].color, color(BAR));
         assert_eq!(ui.overlay_rects[6].color, color(DIALOG_TEXT));
@@ -612,6 +616,13 @@ mod tests {
             ui.overlay_rects[7].position,
             [layout.rows[0].rect.x, layout.rows[0].rect.y]
         );
+        let marker = layout.marker.expect("marker");
+        assert_eq!(ui.overlay_rects[8].color, color(ACCENT));
+        assert_eq!(
+            ui.overlay_rects[8].position,
+            [layout.rows[0].rect.x, layout.rows[0].rect.y]
+        );
+        assert_eq!(ui.overlay_rects[8].size, [marker.width, marker.height]);
         let texts: Vec<(&str, [f32; 4])> = ui
             .overlay_texts
             .iter()
