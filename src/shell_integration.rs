@@ -123,6 +123,11 @@ fn injection(
             save("ZDOTDIR", "GRAPHENE_ZDOTDIR");
             env.push(("ZDOTDIR".to_owned(), path(ZSH_DIR)));
         }
+        #[cfg(target_os = "macos")]
+        "bash" => {
+            args.extend(["--rcfile".to_owned(), path(BASH_SCRIPT)]);
+        }
+        #[cfg(not(target_os = "macos"))]
         "bash" => {
             save("ENV", "GRAPHENE_BASH_ENV");
             args.push("--posix".to_owned());
@@ -288,6 +293,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn bash_through_posix_env() {
         let inj = injection("/bin/bash", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
         assert_eq!(inj.args, ["--posix"]);
@@ -310,6 +316,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(env_of(&inj)["GRAPHENE_BASH_ENV"], "/home/me/.shrc");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn bash_uses_rcfile_on_macos() {
+        let inj = injection("/bin/bash", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
+        assert_eq!(
+            inj.args,
+            [
+                "--rcfile",
+                "/run/user/1000/graphene/shell-integration/bash/graphene.bash"
+            ]
+        );
+        assert_eq!(env_of(&inj), HashMap::from([(TOKEN_VAR, TOKEN)]));
     }
 
     #[test]
@@ -415,6 +435,7 @@ mod tests {
         use alacritty_terminal::event::WindowSize;
         use alacritty_terminal::tty::{self, EventedReadWrite};
         use std::io::{Read, Write};
+        use std::process::Command;
         use std::time::{Duration, Instant};
 
         const TIMEOUT: Duration = Duration::from_secs(10);
@@ -434,6 +455,23 @@ mod tests {
                 .flat_map(std::env::split_paths)
                 .map(|dir| dir.join(shell))
                 .find(|path| path.is_file())
+        }
+
+        fn bash_supports_ps0() -> bool {
+            let Some(bash) = find("bash") else {
+                return false;
+            };
+            Command::new(bash)
+                .args([
+                    "-c",
+                    "((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)))",
+                ])
+                .status()
+                .is_ok_and(|status| status.success())
+        }
+
+        fn bash_rich_input_available() -> bool {
+            bash_supports_ps0() && std::env::var_os("GRAPHENE_TEST_BASH_DEBUG_FALLBACK").is_none()
         }
 
         /// A shell in a PTY, with the integration installed in `home` and `home` as
@@ -488,6 +526,11 @@ mod tests {
                 let mut env: HashMap<String, String> = injection.env.into_iter().collect();
                 env.insert("HOME".to_owned(), home_str.clone());
                 env.insert("TERM".to_owned(), "xterm-256color".to_owned());
+                if shell == "bash"
+                    && std::env::var_os("GRAPHENE_TEST_BASH_DEBUG_FALLBACK").is_some()
+                {
+                    env.insert("GRAPHENE_BASH_DEBUG_FALLBACK".to_owned(), "1".to_owned());
+                }
                 for (var, sub) in [
                     ("XDG_CONFIG_HOME", ".config"),
                     ("XDG_DATA_HOME", ".local/share"),
@@ -641,8 +684,13 @@ mod tests {
                 String::from_utf8_lossy(&session.output)
             );
             // One `prompt` per prompt, the one after the empty line included.
-            session.read_until("the prompt signals", |s| s.prompt_signals >= s.prompts());
-            assert_eq!(session.prompt_signals, session.prompts(), "{shell}");
+            let prompt_signals = if shell == "bash" && !bash_rich_input_available() {
+                0
+            } else {
+                session.prompts()
+            };
+            session.read_until("the prompt signals", |s| s.prompt_signals >= prompt_signals);
+            assert_eq!(session.prompt_signals, prompt_signals, "{shell}");
             assert_eq!(session.prompts(), 6, "{shell}");
             let output = String::from_utf8_lossy(&session.output);
             assert!(output.contains(expected), "{shell}: {output:?}");
@@ -754,6 +802,10 @@ mod tests {
         fn bash_command_line_outside_the_history() {
             if find("bash").is_none() {
                 eprintln!("bash not installed, skipped");
+                return;
+            }
+            if !bash_rich_input_available() {
+                eprintln!("Bash PS0 is required to test the ignored-history command text, skipped");
                 return;
             }
             let home = TempDir::new("bash-history");
@@ -994,8 +1046,8 @@ mod tests {
 
         #[test]
         fn bash_editor_sequences() {
-            if find("bash").is_none() {
-                eprintln!("bash not installed, skipped");
+            if !bash_rich_input_available() {
+                eprintln!("Bash PS0 is required for Readline editor callbacks, skipped");
                 return;
             }
             for (name, mode) in [("emacs", "set -o emacs"), ("vi", "set -o vi")] {
