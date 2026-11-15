@@ -3,7 +3,11 @@
 
 use std::collections::BTreeMap;
 
-use egui::{CentralPanel, ComboBox, Grid, Panel, RichText, ScrollArea, Slider, TextEdit, Ui};
+use egui::{
+    Align, Button, CentralPanel, Color32, ComboBox, FontId, Frame, Grid, Label, Layout, Margin,
+    Panel, Pos2, Rect, RichText, ScrollArea, Shape, Slider, TextEdit, TextStyle, Ui, UiBuilder,
+    Vec2,
+};
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
 use super::model::{self, Change, Input, InputError, SettingsModel, Widget};
@@ -15,6 +19,14 @@ use crate::keybindings::Shortcut;
 const SIDEBAR_WIDTH: f32 = 180.0;
 /// Width of the field widgets, in points.
 const FIELD_WIDTH: f32 = 260.0;
+/// Space between the action label and its shortcuts, in points.
+const SHORTCUTS_GAP: f32 = 16.0;
+/// Vertical margin of a shortcut row, in points.
+const ROW_MARGIN: i8 = 3;
+/// Largest share of the row width taken by the action labels, which wrap beyond it.
+const LABEL_SHARE: f32 = 0.45;
+/// Strength of the highlight of the shortcut row under the pointer or being edited.
+const HIGHLIGHT: f32 = 0.45;
 
 /// State of the view kept between frames.
 #[derive(Debug, Default)]
@@ -31,6 +43,8 @@ pub struct View {
     capturing: Option<Action>,
     /// A captured shortcut bound to another action, waiting for "Replace" or "Cancel".
     conflict: Option<Conflict>,
+    /// Shortcuts added in this window, oldest first, shown last in their row.
+    added: Vec<Shortcut>,
 }
 
 /// A captured shortcut already bound to `other`.
@@ -76,7 +90,10 @@ impl View {
         };
         self.capturing = None;
         match model.add_shortcut(action, shortcut) {
-            Ok(changes) => changes,
+            Ok(changes) => {
+                self.mark_added(shortcut);
+                changes
+            }
             Err(other) => {
                 self.conflict = Some(Conflict {
                     action,
@@ -217,8 +234,9 @@ impl View {
         }
     }
 
-    /// One row per action: its shortcuts, each removable, and the "Add" button that
-    /// captures a new one.
+    /// One row per action: its label, its shortcuts in aligned slots, each removable,
+    /// and the "Add" button that captures a new one on the right. The row under the
+    /// pointer, or being edited, is highlighted.
     fn shortcuts(
         &mut self,
         ui: &mut Ui,
@@ -227,21 +245,70 @@ impl View {
         changes: &mut Vec<Change>,
     ) {
         let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
-        Grid::new("settings_shortcuts")
-            .num_columns(2)
-            .spacing([16.0, 8.0])
-            .striped(true)
-            .show(ui, |ui| {
-                for (action, shortcuts) in model.shortcut_rows() {
-                    ui.label(label(action.label()));
-                    ui.vertical(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            if shortcuts.is_empty() {
-                                ui.weak(label(Msg::NoShortcut));
+        let rows = model.shortcut_rows();
+        let body = TextStyle::Body.resolve(ui.style());
+        let button = TextStyle::Button.resolve(ui.style());
+        let width = |text: String, font: &FontId| {
+            ui.painter()
+                .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
+                .size()
+                .x
+        };
+        let label_width = rows
+            .iter()
+            .map(|(action, _)| width(label(action.label()), &body))
+            .fold(0.0, f32::max);
+        let slot_width = rows
+            .iter()
+            .flat_map(|(_, shortcuts)| shortcuts)
+            .map(|shortcut| width(chip_text(*shortcut), &button))
+            .fold(width(label(Msg::NoShortcut), &body), f32::max)
+            + 2.0 * ui.spacing().button_padding.x;
+        let add_width = [label(Msg::AddShortcut), label(Msg::Cancel)]
+            .into_iter()
+            .map(|text| width(text, &button))
+            .fold(0.0, f32::max)
+            + 2.0 * ui.spacing().button_padding.x;
+        let row_gap = ui.spacing().item_spacing.y;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (index, (action, mut shortcuts)) in rows.into_iter().enumerate() {
+            self.added_last(&mut shortcuts);
+            let background = ui.painter().add(Shape::Noop);
+            let row = Frame::NONE
+                .inner_margin(Margin::symmetric(6, ROW_MARGIN))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = row_gap;
+                    let total = ui.available_width();
+                    let name_width = label_width.min(total * LABEL_SHARE);
+                    let slots_width =
+                        (total - name_width - add_width - 2.0 * SHORTCUTS_GAP).max(0.0);
+                    let slot_width = slot_width.min(slots_width);
+                    let text_offset = ui.spacing().button_padding.y;
+                    let top = ui.cursor().top();
+                    let left = ui.max_rect().left();
+                    let mut bottom =
+                        column(ui, left, name_width, Layout::top_down(Align::Min), |ui| {
+                            ui.add_space(text_offset);
+                            ui.add(Label::new(label(action.label())).wrap());
+                        });
+                    let slots = Layout::left_to_right(Align::Min).with_main_wrap(true);
+                    bottom = bottom.max(column(
+                        ui,
+                        left + name_width + SHORTCUTS_GAP,
+                        slots_width,
+                        slots,
+                        |ui| {
+                            if shortcuts.is_empty() && self.capturing != Some(action) {
+                                ui.add_sized(
+                                    [slot_width, ui.spacing().interact_size.y],
+                                    Label::new(RichText::new(label(Msg::NoShortcut)).weak()),
+                                );
                             }
                             for shortcut in shortcuts {
+                                let chip = Button::new(chip_text(shortcut))
+                                    .min_size(Vec2::new(slot_width, 0.0));
                                 if ui
-                                    .button(format!("{} \u{00d7}", shortcut.label()))
+                                    .add(chip)
                                     .on_hover_text(label(Msg::RemoveShortcut))
                                     .clicked()
                                 {
@@ -250,7 +317,18 @@ impl View {
                                 }
                             }
                             if self.capturing == Some(action) {
+                                ui.add_space(text_offset);
                                 ui.strong(label(Msg::PressShortcut));
+                            }
+                        },
+                    ));
+                    bottom = bottom.max(column(
+                        ui,
+                        left + total - add_width,
+                        add_width,
+                        Layout::top_down(Align::Max),
+                        |ui| {
+                            if self.capturing == Some(action) {
                                 if ui.button(label(Msg::Cancel)).clicked() {
                                     self.capturing = None;
                                 }
@@ -258,14 +336,49 @@ impl View {
                                 self.capturing = Some(action);
                                 self.conflict = None;
                             }
-                        });
-                        if let Some(conflict) = self.conflict.filter(|c| c.action == action) {
-                            self.conflict_row(ui, lang, model, conflict, changes);
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
+                        },
+                    ));
+                    ui.advance_cursor_after_rect(Rect::from_min_max(
+                        Pos2::new(left, top),
+                        Pos2::new(left + total, bottom),
+                    ));
+                    if let Some(conflict) = self.conflict.filter(|c| c.action == action) {
+                        self.conflict_row(ui, lang, model, conflict, changes);
+                    }
+                });
+            let rect = Rect::from_x_y_ranges(ui.max_rect().x_range(), row.response.rect.y_range());
+            let edited =
+                self.capturing == Some(action) || self.conflict.is_some_and(|c| c.action == action);
+            let visuals = ui.visuals();
+            let fill = if edited || ui.rect_contains_pointer(rect) {
+                visuals.selection.bg_fill.gamma_multiply(HIGHLIGHT)
+            } else if index % 2 == 1 {
+                visuals.faint_bg_color
+            } else {
+                Color32::TRANSPARENT
+            };
+            ui.painter().set(
+                background,
+                Shape::rect_filled(rect, visuals.widgets.noninteractive.corner_radius, fill),
+            );
+        }
+    }
+
+    /// Moves the shortcuts added in this window to the end, in the order they were
+    /// added.
+    fn added_last(&self, shortcuts: &mut [Shortcut]) {
+        shortcuts.sort_by_key(|shortcut| {
+            self.added
+                .iter()
+                .position(|added| added == shortcut)
+                .map_or(0, |position| position + 1)
+        });
+    }
+
+    /// Records `shortcut` as the last one added.
+    fn mark_added(&mut self, shortcut: Shortcut) {
+        self.added.retain(|added| *added != shortcut);
+        self.added.push(shortcut);
     }
 
     /// "Already used by <action>" with "Replace" and "Cancel".
@@ -290,6 +403,7 @@ impl View {
         ui.horizontal(|ui| {
             if ui.button(label(Msg::Replace)).clicked() {
                 self.conflict = None;
+                self.mark_added(conflict.shortcut);
                 changes.extend(model.replace_shortcut(conflict.action, conflict.shortcut));
             }
             if ui.button(label(Msg::Cancel)).clicked() {
@@ -314,7 +428,24 @@ impl View {
     }
 }
 
+/// A column of `width` at `x` on the cursor's line, laid out with `layout` and as tall
+/// as its contents; returns its bottom. The cursor does not move.
+fn column(ui: &mut Ui, x: f32, width: f32, layout: Layout, add: impl FnOnce(&mut Ui)) -> f32 {
+    let rect = Rect::from_min_size(Pos2::new(x, ui.cursor().top()), Vec2::new(width, 0.0));
+    let mut child = ui.new_child(UiBuilder::new().max_rect(rect).layout(layout));
+    child.set_width(width);
+    add(&mut child);
+    child.min_rect().bottom()
+}
+
+/// Text of a shortcut's removal button.
+fn chip_text(shortcut: Shortcut) -> String {
+    format!("{} \u{00d7}", shortcut.label())
+}
+
 /// A combo box of the field's choices; returns the picked value when it changed.
+/// While it is open, typing the start of a choice highlights it and scrolls to it, and
+/// `Enter` picks it.
 fn choice(ui: &mut Ui, lang: Lang, model: &SettingsModel, field: Field) -> Option<String> {
     let current = model.text(field);
     let choices = model.choices(field);
@@ -322,27 +453,88 @@ fn choice(ui: &mut Ui, lang: Lang, model: &SettingsModel, field: Field) -> Optio
         Some(msg) => i18n::text(lang, msg).into_owned(),
         None => choice.value.clone(),
     };
+    let labels: Vec<String> = choices.iter().map(label_of).collect();
     let selected = choices
         .iter()
-        .find(|choice| choice.value == current)
-        .map(label_of)
+        .position(|choice| choice.value == current)
+        .map(|index| labels[index].clone())
         .unwrap_or_default();
+    let search_id = ui.make_persistent_id(("settings_choice_search", field));
     let mut picked = None;
-    ComboBox::from_id_salt(("settings_choice", field))
+    let popup = ComboBox::from_id_salt(("settings_choice", field))
         .width(FIELD_WIDTH)
         .selected_text(selected)
         .show_ui(ui, |ui| {
-            for choice in &choices {
-                if ui
-                    .selectable_label(choice.value == current, label_of(choice))
-                    .clicked()
-                    && choice.value != current
-                {
+            let mut search: Search = ui.data(|data| data.get_temp(search_id)).unwrap_or_default();
+            let (typed, now, enter) = ui.input(|input| {
+                let typed: String = input
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                (typed, input.time, input.key_pressed(egui::Key::Enter))
+            });
+            let moved = search.type_text(&typed, now, &labels);
+            for (index, choice) in choices.iter().enumerate() {
+                let found = search.found == Some(index);
+                let response =
+                    ui.selectable_label(choice.value == current || found, &labels[index]);
+                if found && moved {
+                    response.scroll_to_me(Some(Align::Center));
+                }
+                if (response.clicked() || (found && enter)) && choice.value != current {
                     picked = Some(choice.value.clone());
                 }
+                if found && enter {
+                    ui.close();
+                }
             }
+            ui.data_mut(|data| data.insert_temp(search_id, search));
         });
+    if popup.inner.is_none() || picked.is_some() {
+        ui.data_mut(|data| data.remove::<Search>(search_id));
+    }
     picked
+}
+
+/// Seconds without typing after which the next character starts a new search.
+const SEARCH_TIMEOUT: f64 = 1.0;
+
+/// Text typed in an open combo box and the choice it found.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Search {
+    text: String,
+    /// When the last character was typed, in egui's input time.
+    at: f64,
+    /// Index of the first choice starting with `text`.
+    found: Option<usize>,
+}
+
+impl Search {
+    /// Adds `typed` at `now` to the search, after a pause starting over; returns
+    /// whether a choice was found by it. A search finding nothing keeps the last
+    /// found choice.
+    fn type_text(&mut self, typed: &str, now: f64, labels: &[String]) -> bool {
+        if typed.is_empty() {
+            return false;
+        }
+        if now - self.at > SEARCH_TIMEOUT {
+            self.text.clear();
+        }
+        self.text.push_str(typed);
+        self.at = now;
+        let text = self.text.to_lowercase();
+        let found = labels
+            .iter()
+            .position(|label| label.to_lowercase().starts_with(&text));
+        if found.is_some() {
+            self.found = found;
+        }
+        found.is_some()
+    }
 }
 
 /// The problems of the whole file: why it is locked, a failed write, unknown keys and
@@ -506,6 +698,80 @@ mod tests {
         let (key, physical) = letter("d", KeyCode::KeyD);
         assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT), vec![]);
         assert!(!view.capturing());
+    }
+
+    #[test]
+    fn added_shortcuts_come_last_in_the_order_they_were_added() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Action::Copy),
+            ..View::default()
+        };
+        let (key, physical) = letter("a", KeyCode::KeyA);
+        assert!(
+            !view
+                .captured_key(&model, &key, physical, CTRL_ALT)
+                .is_empty()
+        );
+        let added = Shortcut::parse("Ctrl+Alt+A").unwrap();
+        let (f7, copy, ctrl_shift_c) = (
+            Shortcut::parse("F7").unwrap(),
+            Shortcut::parse("Copy").unwrap(),
+            Shortcut::parse("Ctrl+Shift+C").unwrap(),
+        );
+        // The file sorts its keys: "Ctrl+Alt+A" would come before "F7".
+        let mut shortcuts = vec![ctrl_shift_c, copy, added, f7];
+        view.added_last(&mut shortcuts);
+        assert_eq!(shortcuts, [ctrl_shift_c, copy, f7, added]);
+        // Added again, it moves after the newer ones.
+        view.mark_added(f7);
+        view.mark_added(added);
+        let mut shortcuts = vec![added, f7, copy];
+        view.added_last(&mut shortcuts);
+        assert_eq!(shortcuts, [copy, f7, added]);
+    }
+
+    #[test]
+    fn a_conflict_marks_nothing_added_before_replace() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Action::NextTab),
+            ..View::default()
+        };
+        let (key, physical) = letter("T", KeyCode::KeyT);
+        let mods = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        view.captured_key(&model, &key, physical, mods);
+        assert!(view.added.is_empty(), "nothing written before Replace");
+    }
+
+    fn labels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn typing_finds_the_first_choice_starting_with_the_text() {
+        let labels = labels(&["DejaVu Sans Mono", "Fira Code", "Fira Mono", "Hack"]);
+        let mut search = Search::default();
+        assert!(!search.type_text("", 10.0, &labels));
+        assert_eq!(search.found, None);
+        assert!(search.type_text("f", 10.0, &labels));
+        assert_eq!(search.found, Some(1));
+        assert!(search.type_text("IRA M", 10.5, &labels));
+        assert_eq!(search.found, Some(2));
+        // Nothing starts with the text: the last choice found stays.
+        assert!(!search.type_text("x", 10.8, &labels));
+        assert_eq!(search.found, Some(2));
+        assert_eq!(search.text, "fIRA Mx");
+    }
+
+    #[test]
+    fn typing_after_a_pause_starts_a_new_search() {
+        let labels = labels(&["Fira Code", "Hack"]);
+        let mut search = Search::default();
+        search.type_text("f", 1.0, &labels);
+        assert!(search.type_text("h", 1.0 + SEARCH_TIMEOUT + 0.1, &labels));
+        assert_eq!(search.text, "h");
+        assert_eq!(search.found, Some(1));
     }
 
     #[test]

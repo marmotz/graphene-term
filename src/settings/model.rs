@@ -1224,7 +1224,7 @@ interval = "1w"
         let m = model(
             "[keybindings]\n\"Ctrl+Alt+C\" = \"copy\"\n\"Copy\" = \"none\"\n\"Alt+0\" = \"go_to_tab_10\"\n",
         );
-        assert_eq!(labels(&m, Action::Copy), ["Ctrl+Alt+C", "Ctrl+Shift+C"]);
+        assert_eq!(labels(&m, Action::Copy), ["Ctrl+Shift+C", "Ctrl+Alt+C"]);
         assert_eq!(labels(&m, Action::GoToTab(10)), ["Alt+0"]);
         assert_eq!(m.bound(shortcut("Copy")), None);
     }
@@ -1248,7 +1248,7 @@ interval = "1w"
         let (text, m) = apply(file, &changes);
         assert!(text.starts_with("# mine\n"), "{text}");
         assert_eq!(labels(&m, Action::NewTab), ["Ctrl+Shift+T"]);
-        assert_eq!(labels(&m, Action::Copy), ["F7", "Ctrl+Shift+C", "Copy"]);
+        assert_eq!(labels(&m, Action::Copy), ["Ctrl+Shift+C", "Copy", "F7"]);
         // A shortcut not bound to the action changes nothing.
         assert_eq!(m.remove_shortcut(Action::Paste, shortcut("F7")), vec![]);
     }
@@ -1310,7 +1310,7 @@ interval = "1w"
         assert!(labels(&m, Action::NewTab).is_empty());
         assert_eq!(
             labels(&m, Action::NextTab),
-            ["Ctrl+Shift+T", "Ctrl+Tab", "Ctrl+PageDown"]
+            ["Ctrl+Tab", "Ctrl+PageDown", "Ctrl+Shift+T"]
         );
     }
 

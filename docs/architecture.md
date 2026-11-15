@@ -32,6 +32,7 @@ src/
     model.rs       SettingsModel: field values from Config, errors by key, locked state,
                    edits -> changes to write (pure)
     view.rs        egui drawing: sections sidebar, file problems, section fields (thin)
+    fonts.rs       the palette's sans-serif font and sizes for egui
     visuals.rs     egui Visuals from the active theme's colors (pure)
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
   process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
@@ -182,9 +183,13 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   `SettingsWindow::window_event`; `CloseRequested` drops it. Closing the terminal window
   exits the event loop as before, which closes the settings window too.
 - Layout (`settings/view.rs`): a sidebar with the ten sections (`i18n::SettingsSection`:
-  Font, Window, Scrollback, Cursor, Selection, Tabs, Language, Theme, Keyboard shortcuts,
+  Language, Font, Window, Scrollback, Cursor, Selection, Tabs, Theme, Keyboard shortcuts,
   Updates) and the selected section's fields (label, widget, errors under it); labels
-  in the configuration's resolved language (`Msg::Field(SettingsField)`).
+  in the configuration's resolved language (`Msg::Field(SettingsField)`). Text uses the
+  command palette's font (`settings/fonts.rs`: the sans-serif face of cosmic-text's font
+  database, in front of egui's fonts) at the palette's size. In an open combo box,
+  typing the start of a choice highlights it and scrolls to it, `Enter` picks it; the
+  typed text starts over after a one-second pause.
 - Fields (`settings/model.rs`): one per setting except the shortcuts, read from the
   applied `Config`. Choices and ranges come from `config.rs` (`Language::VALUES`,
   `StartupMode::VALUES`, `CursorShape::VALUES`, `TabPosition::VALUES`,
@@ -202,7 +207,10 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   edit.
 - Keyboard shortcuts section: one row per action (`Action::ALL`, the palette, tabs 1 to
   9, then any other action the file binds), with its effective shortcuts
-  (`Keybindings::shortcuts`: the configured ones first). Removing a configured shortcut
+  (`Keybindings::shortcuts`: its defaults, then the configured ones; the ones added in
+  the window come last, in the order added). Labels, shortcut slots of equal width and
+  the right-aligned "Add" button line up across rows; the row under the pointer, or
+  being captured or in conflict, is highlighted. Removing a configured shortcut
   deletes its `[keybindings]` entries (every spelling that parses to it); removing a
   default one writes `"<keys>" = "none"`. "Add" captures the next key press: the winit
   `KeyEvent` is taken by `SettingsWindow::window_event` before egui sees it and turned

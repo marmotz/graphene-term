@@ -389,7 +389,8 @@ impl Keybindings {
         }
     }
 
-    /// The shortcuts bound to `action`, the configured ones first, each once.
+    /// The shortcuts bound to `action`, each once: its defaults still bound, then the
+    /// configured ones, so a shortcut added to the file comes last.
     pub fn shortcuts(&self, action: Action) -> Vec<Shortcut> {
         let mut shortcuts: Vec<Shortcut> = Vec::new();
         for &shortcut in &self.order {
@@ -397,6 +398,8 @@ impl Keybindings {
                 shortcuts.push(shortcut);
             }
         }
+        // Stable: the defaults keep their order, the configured ones the file's.
+        shortcuts.sort_by_key(|&shortcut| default_action(shortcut) != Some(action));
         shortcuts
     }
 
@@ -968,8 +971,8 @@ mod tests {
         ]);
         assert_eq!(
             labels(&bindings, Action::Copy),
-            // In the file's key order: lowercase keys come last.
-            ["Ctrl+Alt+C", "Ctrl+Shift+V", "Ctrl+Shift+C"]
+            // The default first, then the file's keys in order: lowercase keys come last.
+            ["Ctrl+Shift+C", "Ctrl+Alt+C", "Ctrl+Shift+V"]
         );
         assert_eq!(labels(&bindings, Action::Paste), ["Shift+Insert", "Paste"]);
         assert_eq!(bindings.bound(shortcut("Ctrl+Shift+V")), Some(Action::Copy));
