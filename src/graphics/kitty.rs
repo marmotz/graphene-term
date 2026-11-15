@@ -1431,9 +1431,14 @@ mod tests {
             )
         };
         assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+        let bytes = b"shared";
+        // POSIX shared memory is created with length zero on macOS; size it before writing.
+        // SAFETY: `fd` is a live shared-memory descriptor and the requested size is small.
+        let result = unsafe { libc::ftruncate(fd, bytes.len() as libc::off_t) };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
         // SAFETY: `fd` was just opened.
         let mut file = unsafe { File::from_raw_fd(fd) };
-        file.write_all(b"shared").unwrap();
+        file.write_all(bytes).unwrap();
         drop(file);
 
         let data = BASE64.encode(name.as_bytes());

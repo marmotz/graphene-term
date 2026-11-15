@@ -1348,11 +1348,12 @@ mod tests {
     #[test]
     fn first_transparent_prefers_transparency_over_a_working_opaque_backend() {
         let mut tried = Vec::new();
+        let transparent_backend = BACKEND_ATTEMPTS[1];
         let result = pollster::block_on(first_transparent(&BACKEND_ATTEMPTS, |b| {
             tried.push(b);
-            async move { Ok((b, b == wgpu::Backends::GL)) }
+            async move { Ok((b, b == transparent_backend)) }
         }));
-        assert_eq!(result.unwrap(), (wgpu::Backends::GL, true));
+        assert_eq!(result.unwrap(), (transparent_backend, true));
         assert_eq!(tried, BACKEND_ATTEMPTS);
     }
 
@@ -1369,13 +1370,14 @@ mod tests {
 
     #[test]
     fn first_transparent_falls_back_when_vulkan_fails() {
+        let fallback_backend = BACKEND_ATTEMPTS[1];
         let result = pollster::block_on(first_transparent(&BACKEND_ATTEMPTS, |b| async move {
             if b == wgpu::Backends::VULKAN {
                 anyhow::bail!("no Vulkan adapter")
             }
             Ok((b, true))
         }));
-        assert_eq!(result.unwrap(), (wgpu::Backends::GL, true));
+        assert_eq!(result.unwrap(), (fallback_backend, true));
     }
 
     #[test]
@@ -1386,7 +1388,7 @@ mod tests {
             }));
         let message = result.unwrap_err().to_string();
         assert!(
-            message.contains(&format!("{:?}", wgpu::Backends::GL)),
+            message.contains(&format!("{:?}", BACKEND_ATTEMPTS[1])),
             "{message}"
         );
     }

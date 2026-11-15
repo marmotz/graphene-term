@@ -415,6 +415,7 @@ mod tests {
         use alacritty_terminal::event::WindowSize;
         use alacritty_terminal::tty::{self, EventedReadWrite};
         use std::io::{Read, Write};
+        use std::process::Command;
         use std::time::{Duration, Instant};
 
         const TIMEOUT: Duration = Duration::from_secs(10);
@@ -434,6 +435,19 @@ mod tests {
                 .flat_map(std::env::split_paths)
                 .map(|dir| dir.join(shell))
                 .find(|path| path.is_file())
+        }
+
+        fn bash_supports_ps0() -> bool {
+            let Some(bash) = find("bash") else {
+                return false;
+            };
+            Command::new(bash)
+                .args([
+                    "-c",
+                    "((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)))",
+                ])
+                .status()
+                .is_ok_and(|status| status.success())
         }
 
         /// A shell in a PTY, with the integration installed in `home` and `home` as
@@ -488,6 +502,11 @@ mod tests {
                 let mut env: HashMap<String, String> = injection.env.into_iter().collect();
                 env.insert("HOME".to_owned(), home_str.clone());
                 env.insert("TERM".to_owned(), "xterm-256color".to_owned());
+                if shell == "bash"
+                    && std::env::var_os("GRAPHENE_TEST_BASH_DEBUG_FALLBACK").is_some()
+                {
+                    env.insert("GRAPHENE_BASH_DEBUG_FALLBACK".to_owned(), "1".to_owned());
+                }
                 for (var, sub) in [
                     ("XDG_CONFIG_HOME", ".config"),
                     ("XDG_DATA_HOME", ".local/share"),
@@ -754,6 +773,12 @@ mod tests {
         fn bash_command_line_outside_the_history() {
             if find("bash").is_none() {
                 eprintln!("bash not installed, skipped");
+                return;
+            }
+            if !bash_supports_ps0()
+                || std::env::var_os("GRAPHENE_TEST_BASH_DEBUG_FALLBACK").is_some()
+            {
+                eprintln!("Bash PS0 is required to test the ignored-history command text, skipped");
                 return;
             }
             let home = TempDir::new("bash-history");

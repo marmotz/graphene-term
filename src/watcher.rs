@@ -47,6 +47,14 @@ pub fn spawn(dir: PathBuf, on_change: impl Fn() + Send + 'static) {
 /// Runs the watcher until its channel closes.
 fn watch(dir: &Path, on_change: impl Fn()) -> notify::Result<()> {
     let (sender, receiver) = mpsc::channel();
+    // FSEvents can coalesce atomic editor renames on macOS without reporting the new
+    // path reliably. Poll the small settings directory instead so replace saves reload.
+    #[cfg(target_os = "macos")]
+    let mut watcher = notify::PollWatcher::new(
+        sender,
+        notify::Config::default().with_poll_interval(Duration::from_millis(100)),
+    )?;
+    #[cfg(not(target_os = "macos"))]
     let mut watcher = notify::recommended_watcher(sender)?;
     watcher.watch(dir, RecursiveMode::NonRecursive)?;
     let themes = dir.join(THEMES_DIR);
@@ -258,6 +266,9 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         spawn(dir.clone(), move || sender.send(()).unwrap());
         // Let the watcher start before touching the files.
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(Duration::from_millis(500));
+        #[cfg(not(target_os = "macos"))]
         std::thread::sleep(Duration::from_millis(200));
 
         // What `sed -i` does: a temporary file renamed over the original.

@@ -49,6 +49,9 @@ if [[ -n $_graphene_token ]]; then
   # Graphene may send its key sequences.
   _graphene_prompt() {
     local ret=$?
+    if [[ -n ${_graphene_in_prompt+set} ]]; then
+      _graphene_in_prompt=1
+    fi
     if ((_graphene_command_ran)); then
       _graphene_command_ran=0
       builtin printf '\e]6973;%s;end;%s\e\\' "$_graphene_token" "$ret"
@@ -71,19 +74,48 @@ if [[ -n $_graphene_token ]]; then
       else
         entry=
       fi
-      encoded=$(builtin printf '%s' "$entry" | command base64 -w0 2>/dev/null)
+      encoded=$(builtin printf '%s' "$entry" | command base64 2>/dev/null | command tr -d '\r\n')
     fi
     builtin printf '\e]6973;%s;start;%s\e\\' "$_graphene_token" "$encoded"
   }
+  _graphene_start_text() {
+    local encoded=
+    encoded=$(builtin printf '%s' "$1" | command base64 2>/dev/null | command tr -d '\r\n')
+    builtin printf '\e]6973;%s;start;%s\e\\' "$_graphene_token" "$encoded"
+  }
 
-  if [[ ${PROMPT_COMMAND@a} == *a* ]]; then
+  _graphene_user_prompt_command=${PROMPT_COMMAND-}
+  _graphene_prompt_command_decl=$(declare -p PROMPT_COMMAND 2>/dev/null || :)
+  if [[ $_graphene_prompt_command_decl == "declare -a PROMPT_COMMAND="* ]]; then
     PROMPT_COMMAND=(_graphene_prompt "${PROMPT_COMMAND[@]}")
   else
     PROMPT_COMMAND="_graphene_prompt${PROMPT_COMMAND:+$'\n'$PROMPT_COMMAND}"
   fi
-  # PS0 is shown when a command line is read, empty ones excepted. The subscript of the
-  # unset array sets the flag as a side effect of the expansion and expands to nothing.
-  PS0="${PS0-}"'${_graphene_unset[_graphene_command_ran=1]-}$(_graphene_start)'
+  unset _graphene_prompt_command_decl
+
+  # PS0 (Bash 4.4+) is shown when a command line is read, empty ones excepted. Older
+  # system Bash versions, including macOS's Bash 3.2, use DEBUG to report the first
+  # command after each prompt instead.
+  if [[ ${GRAPHENE_BASH_DEBUG_FALLBACK-} != 1 ]] \
+    && ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))); then
+    PS0="${PS0-}"'${_graphene_unset[_graphene_command_ran=1]-}$(_graphene_start)'
+  else
+    _graphene_in_prompt=0
+    _graphene_debug() {
+      ((BASH_SUBSHELL == 0)) || return 0
+      [[ $_graphene_in_prompt == 1 || $_graphene_command_ran == 1 ]] && return 0
+      [[ $BASH_COMMAND == _graphene_prompt* || $BASH_COMMAND == _graphene_prompt_ready* ]] && return 0
+      [[ -n $_graphene_user_prompt_command
+        && $_graphene_user_prompt_command == *"$BASH_COMMAND"* ]] && return 0
+      _graphene_command_ran=1
+      _graphene_start_text "$BASH_COMMAND"
+    }
+    _graphene_prompt_ready() {
+      _graphene_in_prompt=0
+    }
+    PROMPT_COMMAND=$PROMPT_COMMAND$'\n'_graphene_prompt_ready
+    _graphene_install_debug_trap=1
+  fi
 
   # Rich input editor: Graphene sends private sequences (CSI <code> u, code points from
   # the Unicode private use area) for the editor moves, mirrored from
@@ -173,4 +205,8 @@ if [[ -n $_graphene_token ]]; then
     } 2>/dev/null
   done
   unset _graphene_keymap
+  if [[ -n ${_graphene_install_debug_trap-} ]]; then
+    unset GRAPHENE_BASH_DEBUG_FALLBACK _graphene_install_debug_trap
+    trap '_graphene_debug' DEBUG
+  fi
 fi
