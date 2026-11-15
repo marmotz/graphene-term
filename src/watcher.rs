@@ -166,6 +166,8 @@ mod tests {
         for path in [
             "config.toml~",
             ".config.toml.swp",
+            "config.toml.tmp",
+            ".config.toml.4242.0.tmp",
             "4913",
             "themes",
             "themes/notes.txt",

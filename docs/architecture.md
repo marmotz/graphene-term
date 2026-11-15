@@ -11,6 +11,7 @@
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
 | Clipboard with an image           | `wl-clipboard-rs` (Wayland) + `x11rb` (X11 selection owner) | 0.9, 0.13 |
 | Config file                       | `toml` + `serde`                                         | 1       |
+| Config file edits (comments kept) | `toml_edit`                                              | 0.25    |
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
 | Kitty graphics: PNG, zlib, base64 | `png` + `flate2` + `base64`                              | 0.18, 1, 0.22 |
@@ -30,6 +31,8 @@ src/
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
+  config_edit.rs   text-preserving config.toml edits (toml_edit): completion of missing options,
+                   --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
   watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
   appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)

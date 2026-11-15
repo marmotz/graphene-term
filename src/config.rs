@@ -139,10 +139,7 @@ fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
                 log::warn!("cannot create {}: {error}", dir.display());
                 return (Config::default(), Vec::new());
             }
-            let defaults = crate::config_edit::complete_defaults(DEFAULT_CONFIG)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| DEFAULT_CONFIG.to_owned());
+            let defaults = crate::config_edit::default_file_text();
             if let Err(error) = crate::config_edit::write_atomic(&file, &defaults) {
                 log::warn!("cannot write {}: {error}", file.display());
             }
@@ -182,6 +179,8 @@ pub enum ConfigErrorKind {
     UnknownKey,
     /// A known key with a rejected, clamped or otherwise unusable value.
     InvalidValue,
+    /// The file cannot be written.
+    Write,
 }
 
 impl ConfigError {
