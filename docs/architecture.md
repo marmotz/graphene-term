@@ -29,7 +29,9 @@ src/
   settings/
     mod.rs         SettingsWindow: winit window, surface on the shared Gpu, egui_winit::State,
                    egui_wgpu::Renderer, redraw on demand
-    view.rs        egui drawing: sections sidebar, selected section panel (thin)
+    model.rs       SettingsModel: field values from Config, errors by key, locked state,
+                   edits -> changes to write (pure)
+    view.rs        egui drawing: sections sidebar, file problems, section fields (thin)
     visuals.rs     egui Visuals from the active theme's colors (pure)
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
   process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
@@ -111,7 +113,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`) hold the logic
+Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`, `settings/model`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
@@ -181,8 +183,29 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   exits the event loop as before, which closes the settings window too.
 - Layout (`settings/view.rs`): a sidebar with the ten sections (`i18n::SettingsSection`:
   Font, Window, Scrollback, Cursor, Selection, Tabs, Language, Theme, Keyboard shortcuts,
-  Updates) and the selected section's panel; labels in the configuration's resolved
-  language.
+  Updates) and the selected section's fields (label, widget, errors under it); labels
+  in the configuration's resolved language (`Msg::Field(SettingsField)`).
+- Fields (`settings/model.rs`): one per setting except the shortcuts, read from the
+  applied `Config`. Choices and ranges come from `config.rs` (`Language::VALUES`,
+  `StartupMode::VALUES`, `CursorShape::VALUES`, `TabPosition::VALUES`,
+  `UpdateInterval::VALUES`, `MIN_FONT_SIZE`...). Font families: "System monospace"
+  (empty) then the monospaced families of the system font database, loaded when the
+  window opens. Themes: the `themes/*.toml` stems, then the `theme::BUILT_IN` names they
+  do not shadow. The "Follow the system appearance" toggle shows `name`, or `light` and
+  `dark`; turning it on sets both (to the current theme when unset), off removes both.
+- Writes: combo and toggle on change, text and number on `Enter` or focus loss (a
+  number out of range is shown under its field, not written), slider when the drag ends
+  and on each click or keyboard step. Each edit is one `config_edit::write`; the file
+  read back is parsed at once so the window shows the result before the reload. The
+  watcher sees the rename and `UserEvent::ConfigChanged` applies it to the terminal
+  window and refreshes the settings window (`SettingsWindow::apply`), as for a hand
+  edit.
+- Errors (`App.load_errors`: the configuration's and the theme's, kept apart): a value
+  error under its field (by `ConfigError.key`), a key of a section with no field
+  (`font = 3`, a keybinding) at the top of its section, theme errors in the Theme
+  section, unknown keys and a failed write at the top of the window. A syntax or read
+  error shows the error, the file path and a "fix it by hand" note, and disables every
+  field until a reload reads the file again.
 - Look: egui's bundled fonts; `settings::visuals` maps the active palette to egui
   `Visuals` (dark or light base from the background's luma, panels from the background,
   text from the foreground, accent from `ui.palette_match`, borders from

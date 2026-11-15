@@ -1,9 +1,12 @@
 //! The settings window: a second winit window on the shared GPU context, drawn with
-//! egui and redrawn on demand.
+//! egui and redrawn on demand. Each change is written to `config.toml` at once; the
+//! hot reload applies it to the terminal window and refreshes this one.
 
+mod model;
 mod view;
 mod visuals;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -14,10 +17,14 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
+use crate::config::{Config, ConfigError};
+use crate::config_edit::{self, ConfigEdit};
 use crate::i18n::{self, Lang, Msg};
 use crate::palette::Palette;
 use crate::renderer::Gpu;
 
+pub use model::LoadErrors;
+use model::{Change, SettingsModel};
 use view::View;
 
 const INITIAL_SIZE: LogicalSize<u32> = LogicalSize::new(760, 520);
@@ -39,18 +46,25 @@ pub struct SettingsWindow {
     egui: egui_winit::State,
     renderer: egui_wgpu::Renderer,
     view: View,
+    model: SettingsModel,
+    /// The `config.toml` edited.
+    file: PathBuf,
     lang: Lang,
     /// When egui asked for the next frame, for a delayed repaint (tooltips, animations).
     repaint_at: Option<Instant>,
 }
 
 impl SettingsWindow {
-    /// Opens the window on `gpu`, colored by `palette` and labelled in `lang`.
+    /// Opens the window on `gpu`, colored by `palette` and labelled in `lang`, showing
+    /// `config` and the `errors` of its last load; changes are written to `file`.
     pub fn open(
         event_loop: &ActiveEventLoop,
         gpu: Arc<Gpu>,
         palette: &Palette,
         lang: Lang,
+        config: &Config,
+        errors: &LoadErrors,
+        file: PathBuf,
     ) -> anyhow::Result<Self> {
         let attributes = Window::default_attributes()
             .with_title(i18n::text(lang, &Msg::OpenSettings))
@@ -70,7 +84,7 @@ impl SettingsWindow {
             .or_else(|| caps.alpha_modes.first().copied())
             .context("settings surface has no alpha mode")?;
         let size = window.inner_size();
-        let config = wgpu::SurfaceConfiguration {
+        let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
@@ -81,7 +95,7 @@ impl SettingsWindow {
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
-        surface.configure(&gpu.device, &config);
+        surface.configure(&gpu.device, &surface_config);
 
         let renderer =
             egui_wgpu::Renderer::new(&gpu.device, format, egui_wgpu::RendererOptions::default());
@@ -95,18 +109,25 @@ impl SettingsWindow {
             Some(max_texture_side),
         );
 
+        let mut fonts = cosmic_text::fontdb::Database::new();
+        fonts.load_system_fonts();
+        let mut model = SettingsModel::new(config, errors);
+        model.set_font_families(model::monospace_families(&fonts));
+
         let mut settings = Self {
             window,
             gpu,
             surface,
-            config,
+            config: surface_config,
             egui,
             renderer,
             view: View::default(),
+            model,
+            file,
             lang,
             repaint_at: None,
         };
-        settings.apply(palette, lang);
+        settings.apply(palette, lang, config, errors);
         Ok(settings)
     }
 
@@ -119,8 +140,18 @@ impl SettingsWindow {
         self.window.focus_window();
     }
 
-    /// Recolors the window with `palette` and relabels it in `lang`, after a reload.
-    pub fn apply(&mut self, palette: &Palette, lang: Lang) {
+    /// Recolors the window with `palette`, relabels it in `lang` and shows `config`
+    /// and its `errors`, after a reload.
+    pub fn apply(&mut self, palette: &Palette, lang: Lang, config: &Config, errors: &LoadErrors) {
+        self.model.refresh(config, errors);
+        self.view.reset_inputs();
+        let user_themes = self
+            .file
+            .parent()
+            .map(model::user_themes)
+            .unwrap_or_default();
+        self.model
+            .set_theme_choices(model::theme_choices(user_themes));
         let ctx = self.egui.egui_ctx();
         ctx.set_theme(visuals::theme(palette.background));
         ctx.set_visuals(visuals::visuals(palette));
@@ -162,6 +193,24 @@ impl SettingsWindow {
         Outcome::Keep
     }
 
+    /// Writes `changes` to the file, and shows the result before the reload reports it.
+    fn write(&mut self, changes: &[Change]) {
+        match write_changes(&self.file, changes) {
+            Ok(()) => match std::fs::read_to_string(&self.file) {
+                Ok(text) => {
+                    let (config, errors) = Config::parse(&text, self.model.config(), &self.file);
+                    self.model.written(config, errors);
+                }
+                Err(error) => log::warn!("cannot read {}: {error}", self.file.display()),
+            },
+            Err(error) => {
+                log::warn!("{error}");
+                self.model.write_failed(&error);
+            }
+        }
+        self.window.request_redraw();
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -175,8 +224,13 @@ impl SettingsWindow {
         let input = self.egui.take_egui_input(&self.window);
         let ctx = self.egui.egui_ctx().clone();
         let view = &mut self.view;
+        let model = &self.model;
         let lang = self.lang;
-        let mut output = ctx.run_ui(input, |ui| view.show(ui, lang));
+        let mut changes = Vec::new();
+        let mut output = ctx.run_ui(input, |ui| changes.extend(view.show(ui, lang, model)));
+        if !changes.is_empty() {
+            self.write(&changes);
+        }
         self.egui.handle_platform_output_with_event_loop(
             &self.window,
             event_loop,
@@ -288,5 +342,83 @@ impl SettingsWindow {
         self.window.pre_present_notify();
         queue.present(frame);
         Ok(())
+    }
+}
+
+/// Applies `changes` to `file` in one write.
+fn write_changes(file: &Path, changes: &[Change]) -> Result<(), ConfigError> {
+    config_edit::write(file, |edit: &mut ConfigEdit| {
+        for change in changes {
+            match change {
+                Change::Set(path, value) => {
+                    let path: Vec<&str> = path.iter().map(String::as_str).collect();
+                    edit.set(&path, value.clone())?;
+                }
+                Change::Remove(path) => {
+                    let path: Vec<&str> = path.iter().map(String::as_str).collect();
+                    edit.remove(&path);
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config;
+    use model::Value;
+
+    #[test]
+    fn changes_are_written_in_one_write_keeping_the_file() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-settings-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(config::CONFIG_FILE);
+        std::fs::write(
+            &file,
+            "# mine\n[theme]\nname = \"gruvbox-dark\"\nlight = \"x\"\n",
+        )
+        .unwrap();
+        let path = |segments: &[&str]| segments.iter().map(|s| (*s).to_owned()).collect();
+        write_changes(
+            &file,
+            &[
+                Change::Set(path(&["font", "size"]), Value::Float(16.0)),
+                Change::Remove(path(&["theme", "light"])),
+            ],
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.starts_with("# mine\n"), "{text}");
+        assert!(!text.contains("light"), "{text}");
+        let (config, errors) = Config::parse(&text, &Config::default(), &file);
+        assert_eq!(errors, vec![]);
+        assert_eq!(config.font.size, 16.0);
+        assert_eq!(config.theme.name, "gruvbox-dark");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_change_that_fails_is_an_error() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-settings-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(config::CONFIG_FILE);
+        std::fs::write(&file, "font = 3\n").unwrap();
+        let error = write_changes(
+            &file,
+            &[Change::Set(
+                vec!["font".into(), "size".into()],
+                Value::Float(16.0),
+            )],
+        )
+        .unwrap_err();
+        assert_eq!(error.key.as_deref(), Some("font"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "font = 3\n");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

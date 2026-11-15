@@ -13,7 +13,7 @@ terminé — voir [technical.md](features/config-defaults-on-startup/technical.m
 
 ## Settings screen ·  [overview](features/settings-screen/overview.md)
 
-tâches créées — voir [technical.md](features/settings-screen/technical.md) — 4/6 tasks done
+tâches créées — voir [technical.md](features/settings-screen/technical.md) — 5/6 tasks done
 
 | Done | Issue                                                     | Title                                                       | Blocked by    |
 |------|-----------------------------------------------------------|-------------------------------------------------------------|---------------|
@@ -21,7 +21,7 @@ tâches créées — voir [technical.md](features/settings-screen/technical.md) 
 | [x]  | [#86](https://github.com/marmotz/graphene-term/issues/86) | Settings: write config.toml preserving comments (toml_edit) | —             |
 | [x]  | [#87](https://github.com/marmotz/graphene-term/issues/87) | Settings: shared GPU context and window routing             | —             |
 | [x]  | [#88](https://github.com/marmotz/graphene-term/issues/88) | Settings: settings window with egui, action and Ctrl+,      | #87           |
-| [ ]  | [#89](https://github.com/marmotz/graphene-term/issues/89) | Settings: settings fields, immediate writes and errors      | #85, #86, #88 |
+| [x]  | [#89](https://github.com/marmotz/graphene-term/issues/89) | Settings: settings fields, immediate writes and errors      | #85, #86, #88 |
 | [ ]  | [#90](https://github.com/marmotz/graphene-term/issues/90) | Settings: keyboard shortcuts section                        | #89           |
 
 ## Bugs

@@ -68,7 +68,7 @@ pub enum CloseTarget {
 }
 
 /// A section of the settings window, in sidebar order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SettingsSection {
     #[default]
     Font,
@@ -96,6 +96,57 @@ impl SettingsSection {
         SettingsSection::Theme,
         SettingsSection::KeyboardShortcuts,
         SettingsSection::Updates,
+    ];
+}
+
+/// A field of the settings window, one per setting of the file but the keyboard
+/// shortcuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SettingsField {
+    Language,
+    FontFamily,
+    FontSize,
+    StartupMode,
+    WindowWidth,
+    WindowHeight,
+    Padding,
+    BackgroundOpacity,
+    ScrollbackLines,
+    CursorShape,
+    CursorBlinking,
+    WordSeparators,
+    TabPosition,
+    /// "Follow the system appearance": sets or removes `theme.light` and `theme.dark`.
+    ThemeFollow,
+    ThemeName,
+    ThemeLight,
+    ThemeDark,
+    UpdatesCheck,
+    UpdatesInterval,
+}
+
+impl SettingsField {
+    /// Every field.
+    pub const ALL: [SettingsField; 19] = [
+        SettingsField::Language,
+        SettingsField::FontFamily,
+        SettingsField::FontSize,
+        SettingsField::StartupMode,
+        SettingsField::WindowWidth,
+        SettingsField::WindowHeight,
+        SettingsField::Padding,
+        SettingsField::BackgroundOpacity,
+        SettingsField::ScrollbackLines,
+        SettingsField::CursorShape,
+        SettingsField::CursorBlinking,
+        SettingsField::WordSeparators,
+        SettingsField::TabPosition,
+        SettingsField::ThemeFollow,
+        SettingsField::ThemeName,
+        SettingsField::ThemeLight,
+        SettingsField::ThemeDark,
+        SettingsField::UpdatesCheck,
+        SettingsField::UpdatesInterval,
     ];
 }
 
@@ -140,6 +191,26 @@ pub enum Msg {
     OpenSettings,
     /// Sidebar entry of the settings window.
     Section(SettingsSection),
+    /// Label of a settings field.
+    Field(SettingsField),
+    /// Font family choice that leaves `font.family` empty.
+    SystemMonospace,
+    /// Heading of the unknown keys of the file.
+    UnknownKeys,
+    /// 1-based line of the file.
+    AtLine(usize),
+    /// Note shown when the file cannot be parsed and the settings are disabled.
+    FixFileByHand,
+    /// Prefix of an error writing the file.
+    CannotSave,
+    /// A number field holds text that is not a number.
+    NotANumber,
+    /// An integer field holds a fractional number.
+    NotAWholeNumber,
+    /// A number field is below its minimum.
+    AtLeast(String),
+    /// A number field is above its maximum.
+    AtMost(String),
     /// Hint shown in the command palette's empty search field.
     PalettePlaceholder,
     // Command palette entries for open tabs and panes (1-based numbers).
@@ -229,6 +300,38 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::KeyboardShortcuts => "Keyboard shortcuts",
             SettingsSection::Updates => "Updates",
         },
+        Msg::Field(field) => match field {
+            SettingsField::Language => "Language",
+            SettingsField::FontFamily => "Family",
+            SettingsField::FontSize => "Size",
+            SettingsField::StartupMode => "Startup mode",
+            SettingsField::WindowWidth => "Width",
+            SettingsField::WindowHeight => "Height",
+            SettingsField::Padding => "Padding",
+            SettingsField::BackgroundOpacity => "Background opacity",
+            SettingsField::ScrollbackLines => "Lines kept",
+            SettingsField::CursorShape => "Shape",
+            SettingsField::CursorBlinking => "Blinking",
+            SettingsField::WordSeparators => "Word separators",
+            SettingsField::TabPosition => "Position",
+            SettingsField::ThemeFollow => "Follow the system appearance",
+            SettingsField::ThemeName => "Theme",
+            SettingsField::ThemeLight => "Light theme",
+            SettingsField::ThemeDark => "Dark theme",
+            SettingsField::UpdatesCheck => "Check for updates",
+            SettingsField::UpdatesInterval => "Check interval",
+        },
+        Msg::SystemMonospace => "System monospace",
+        Msg::UnknownKeys => "Unknown keys",
+        Msg::AtLine(line) => return format!("line {line}").into(),
+        Msg::FixFileByHand => {
+            "The file cannot be read: fix it by hand. The settings stay disabled until then."
+        }
+        Msg::CannotSave => "Cannot save the change",
+        Msg::NotANumber => "Enter a number",
+        Msg::NotAWholeNumber => "Enter a whole number",
+        Msg::AtLeast(min) => return format!("Must be at least {min}").into(),
+        Msg::AtMost(max) => return format!("Must be at most {max}").into(),
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
         Msg::PalettePlaceholder => "Type a command, a tab or a pane",
@@ -316,6 +419,38 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::KeyboardShortcuts => "Raccourcis clavier",
             SettingsSection::Updates => "Mises à jour",
         },
+        Msg::Field(field) => match field {
+            SettingsField::Language => "Langue",
+            SettingsField::FontFamily => "Famille",
+            SettingsField::FontSize => "Taille",
+            SettingsField::StartupMode => "Mode au démarrage",
+            SettingsField::WindowWidth => "Largeur",
+            SettingsField::WindowHeight => "Hauteur",
+            SettingsField::Padding => "Marge intérieure",
+            SettingsField::BackgroundOpacity => "Opacité du fond",
+            SettingsField::ScrollbackLines => "Lignes conservées",
+            SettingsField::CursorShape => "Forme",
+            SettingsField::CursorBlinking => "Clignotement",
+            SettingsField::WordSeparators => "Séparateurs de mots",
+            SettingsField::TabPosition => "Emplacement",
+            SettingsField::ThemeFollow => "Suivre l'apparence du système",
+            SettingsField::ThemeName => "Thème",
+            SettingsField::ThemeLight => "Thème clair",
+            SettingsField::ThemeDark => "Thème sombre",
+            SettingsField::UpdatesCheck => "Rechercher les mises à jour",
+            SettingsField::UpdatesInterval => "Intervalle de recherche",
+        },
+        Msg::SystemMonospace => "Monospace du système",
+        Msg::UnknownKeys => "Clés inconnues",
+        Msg::AtLine(line) => return format!("ligne {line}").into(),
+        Msg::FixFileByHand => {
+            "Le fichier est illisible : corrigez-le à la main. Les paramètres restent désactivés d'ici là."
+        }
+        Msg::CannotSave => "Impossible d'enregistrer la modification",
+        Msg::NotANumber => "Saisissez un nombre",
+        Msg::NotAWholeNumber => "Saisissez un nombre entier",
+        Msg::AtLeast(min) => return format!("Doit valoir au moins {min}").into(),
+        Msg::AtMost(max) => return format!("Doit valoir au plus {max}").into(),
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
         Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
@@ -410,9 +545,19 @@ mod tests {
             Msg::LinesHidden(_) => 39,
             Msg::OpenSettings => 41,
             Msg::Section(_) => 42,
+            Msg::Field(_) => 43,
+            Msg::SystemMonospace => 44,
+            Msg::UnknownKeys => 45,
+            Msg::AtLine(_) => 46,
+            Msg::FixFileByHand => 47,
+            Msg::CannotSave => 48,
+            Msg::NotANumber => 49,
+            Msg::NotAWholeNumber => 50,
+            Msg::AtLeast(_) => 51,
+            Msg::AtMost(_) => 52,
         }
     }
-    const VARIANT_COUNT: usize = 43;
+    const VARIANT_COUNT: usize = 53;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -465,11 +610,21 @@ mod tests {
             Msg::IgnoreVersion,
             Msg::LinesHidden(1),
             Msg::LinesHidden(42),
+            Msg::SystemMonospace,
+            Msg::UnknownKeys,
+            Msg::AtLine(12),
+            Msg::FixFileByHand,
+            Msg::CannotSave,
+            Msg::NotANumber,
+            Msg::NotAWholeNumber,
+            Msg::AtLeast("6".into()),
+            Msg::AtMost("72".into()),
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
         messages.extend(TARGETS.map(Msg::ConfirmCloseTitle));
         messages.extend(SettingsSection::ALL.map(Msg::Section));
+        messages.extend(SettingsField::ALL.map(Msg::Field));
         messages
     }
 
@@ -554,6 +709,20 @@ mod tests {
             labels.dedup();
             assert_eq!(labels.len(), SettingsSection::ALL.len(), "{lang:?}");
         }
+        assert_eq!(text(Lang::En, &Msg::AtLine(12)), "line 12");
+        assert_eq!(text(Lang::Fr, &Msg::AtLine(12)), "ligne 12");
+        assert_eq!(
+            text(Lang::En, &Msg::AtLeast("6".into())),
+            "Must be at least 6"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::AtMost("72".into())),
+            "Doit valoir au plus 72"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::Field(SettingsField::ThemeFollow)),
+            "Suivre l'apparence du système"
+        );
     }
 
     #[test]

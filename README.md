@@ -48,6 +48,12 @@ Errors in these files are logged and shown in a banner at the top of the window 
 to hide it); the faulty settings keep their default value, or their previous value on a
 reload.
 
+The settings window (`Ctrl+,`, or "Settings" in the command palette) edits the same
+file: each change is written at once, keeping the file's comments, and applied like a
+hand edit. Errors are shown under the faulty setting, unknown keys at the top; while the
+file has a syntax error, the window shows it and stays read-only until the file is fixed
+by hand.
+
 Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
 builds, every 24 hours for stable builds) and caches the result in
 `~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only

@@ -1038,14 +1038,12 @@ pub(crate) fn default_file_text() -> String {
 
 /// A `config.toml` document edited key by key, keeping comments, whitespace and key
 /// order: only the edited items change.
-#[cfg_attr(not(test), allow(dead_code, reason = "used by the settings window"))]
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigEdit {
     document: DocumentMut,
     file: PathBuf,
 }
 
-#[cfg_attr(not(test), allow(dead_code, reason = "used by the settings window"))]
 impl ConfigEdit {
     /// Parses `text`, the contents of `file`. Invalid TOML is a
     /// [`ConfigErrorKind::Syntax`] error.
@@ -1164,7 +1162,6 @@ impl std::fmt::Display for ConfigEdit {
 /// Applies `change` to `file`: the file is read again first so hand edits made meanwhile
 /// are kept (a missing file starts from [`default_file_text`]), then written next to it
 /// and renamed over it, which the watcher sees as one change.
-#[cfg_attr(not(test), allow(dead_code, reason = "used by the settings window"))]
 pub(crate) fn write(
     file: &Path,
     change: impl FnOnce(&mut ConfigEdit) -> Result<(), ConfigError>,

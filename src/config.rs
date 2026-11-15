@@ -241,6 +241,15 @@ pub enum Language {
 }
 
 impl Language {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, Language); 3] = [
+        ("auto", Language::Auto),
+        ("en", Language::En),
+        ("fr", Language::Fr),
+    ];
+}
+
+impl Language {
     /// Language of the interface: the forced one, or `detected` (the locale's) for
     /// `auto`.
     pub fn resolve(self, detected: impl FnOnce() -> Lang) -> Lang {
@@ -259,6 +268,15 @@ pub enum CursorShape {
     Block,
     Beam,
     Underline,
+}
+
+impl CursorShape {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, CursorShape); 3] = [
+        ("block", CursorShape::Block),
+        ("beam", CursorShape::Beam),
+        ("underline", CursorShape::Underline),
+    ];
 }
 
 impl From<CursorShape> for TermCursorShape {
@@ -281,6 +299,16 @@ pub enum TabPosition {
     Right,
 }
 
+impl TabPosition {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, TabPosition); 4] = [
+        ("top", TabPosition::Top),
+        ("bottom", TabPosition::Bottom),
+        ("left", TabPosition::Left),
+        ("right", TabPosition::Right),
+    ];
+}
+
 /// `window.startup_mode`: size and state of a new window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -292,6 +320,15 @@ pub enum StartupMode {
     Maximized,
     /// The size and maximized state of the last window closed.
     Remember,
+}
+
+impl StartupMode {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, StartupMode); 3] = [
+        ("default", StartupMode::Default),
+        ("maximized", StartupMode::Maximized),
+        ("remember", StartupMode::Remember),
+    ];
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -825,6 +862,30 @@ mod tests {
             .map(|line| line.strip_prefix("# ").unwrap_or(line))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn choice_values_are_the_accepted_names() {
+        for (name, language) in Language::VALUES {
+            let (config, errors) = parse(&format!("language = \"{name}\""));
+            assert_eq!((config.language, errors), (language, vec![]), "{name}");
+        }
+        for (name, mode) in StartupMode::VALUES {
+            let (config, errors) = parse(&format!("[window]\nstartup_mode = \"{name}\""));
+            assert_eq!(
+                (config.window.startup_mode, errors),
+                (mode, vec![]),
+                "{name}"
+            );
+        }
+        for (name, shape) in CursorShape::VALUES {
+            let (config, errors) = parse(&format!("[cursor]\nshape = \"{name}\""));
+            assert_eq!((config.cursor.shape, errors), (shape, vec![]), "{name}");
+        }
+        for (name, position) in TabPosition::VALUES {
+            let (config, errors) = parse(&format!("[tabs]\nposition = \"{name}\""));
+            assert_eq!((config.tab_position, errors), (position, vec![]), "{name}");
+        }
     }
 
     #[test]

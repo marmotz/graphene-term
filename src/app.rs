@@ -46,7 +46,7 @@ use crate::pane::{self, Pane};
 use crate::perf;
 use crate::renderer::{Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection;
-use crate::settings::{self, SettingsWindow};
+use crate::settings::{self, LoadErrors, SettingsWindow};
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
@@ -1705,6 +1705,9 @@ pub struct App {
     error: Option<anyhow::Error>,
     /// Banner reporting the errors of the configuration and theme files.
     config_banner: Option<Banner>,
+    /// Errors of the last load of the configuration and theme files, shown by the
+    /// settings window.
+    load_errors: LoadErrors,
     /// System appearance, which picks the `light` or `dark` theme.
     appearance: Appearance,
     /// Whether the appearance thread runs: started once a configuration needs it.
@@ -1814,13 +1817,19 @@ impl App {
     /// them to the open window.
     fn reload_config(&mut self) {
         let (config, errors) = config::reload(&self.config);
-        let (config, palette, banner) = with_theme(config, errors, self.appearance);
+        let (config, palette, banner, load_errors) = with_theme(config, errors, self.appearance);
         let old = std::mem::replace(&mut self.config, config);
         self.watch_appearance();
         self.palette = palette;
         self.config_banner = banner.clone();
+        self.load_errors = load_errors;
         if let Some(settings) = self.settings.as_mut() {
-            settings.apply(&self.palette, self.config.language.resolve(Lang::detect));
+            settings.apply(
+                &self.palette,
+                self.config.language.resolve(Lang::detect),
+                &self.config,
+                &self.load_errors,
+            );
         }
         if let Some(session) = self.session.as_mut() {
             session.apply_config(&old, &self.config, &self.palette, banner);
@@ -1868,8 +1877,20 @@ impl App {
         let Some(gpu) = self.gpu.clone() else {
             return;
         };
+        let Some(file) = config::config_file() else {
+            log::warn!("neither XDG_CONFIG_HOME nor HOME is set: no settings window");
+            return;
+        };
         let lang = self.config.language.resolve(Lang::detect);
-        match SettingsWindow::open(event_loop, gpu, &self.palette, lang) {
+        match SettingsWindow::open(
+            event_loop,
+            gpu,
+            &self.palette,
+            lang,
+            &self.config,
+            &self.load_errors,
+            file,
+        ) {
             Ok(settings) => self.settings = Some(settings),
             Err(error) => log::error!("cannot open the settings window: {error:#}"),
         }
@@ -2058,31 +2079,35 @@ impl App {
 
 /// Loads the configuration file and its theme. Errors are logged and reported by the
 /// returned banner.
-fn load_config() -> (Config, Palette, Option<Banner>) {
+fn load_config() -> (Config, Palette, Option<Banner>, LoadErrors) {
     let (config, errors) = config::load();
     with_theme(config, errors, Appearance::default())
 }
 
 /// Loads the theme of `config`; `errors`, those of the configuration file, and the
-/// theme's are logged and reported by the returned banner.
+/// theme's are logged, reported by the returned banner and returned apart.
 fn with_theme(
     config: Config,
-    mut errors: Vec<ConfigError>,
+    errors: Vec<ConfigError>,
     appearance: Appearance,
-) -> (Config, Palette, Option<Banner>) {
+) -> (Config, Palette, Option<Banner>, LoadErrors) {
     let name = config.theme.active(appearance);
     let (palette, theme_errors) = theme::load(name, config::config_dir().as_deref());
-    errors.extend(theme_errors);
-    for error in &errors {
+    let all: Vec<ConfigError> = errors.iter().chain(&theme_errors).cloned().collect();
+    for error in &all {
         log::warn!("{error}");
     }
-    (config, palette, Banner::config_errors(&errors))
+    let load_errors = LoadErrors {
+        config: errors,
+        theme: theme_errors,
+    };
+    (config, palette, Banner::config_errors(&all), load_errors)
 }
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
-    let (config, palette, config_banner) = load_config();
+    let (config, palette, config_banner, load_errors) = load_config();
     if let Some(dir) = config::config_dir() {
         let proxy = event_loop.create_proxy();
         watcher::spawn(dir, move || {
@@ -2103,6 +2128,7 @@ pub fn run() -> anyhow::Result<()> {
         settings: None,
         error: None,
         config_banner,
+        load_errors,
         appearance: Appearance::default(),
         appearance_watched: false,
     };
