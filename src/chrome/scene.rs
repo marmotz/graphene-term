@@ -4,6 +4,7 @@
 //! several panes, the bar while there are several tabs.
 
 use super::command_palette::PaletteLayout;
+use super::context_menu::{MenuLayout, MenuRow};
 use super::dialog::DialogLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
@@ -13,6 +14,7 @@ use crate::renderer::scene::gpu_color;
 use crate::renderer::{RectInstance, UiFont, UiLayer, UiTextItem};
 use crate::terminal::PaneId;
 use crate::workspace::tree::Layout;
+use alacritty_terminal::vte::ansi::Rgb;
 
 /// Thickness of the active pane border, in physical pixels.
 pub const ACTIVE_BORDER: f32 = 2.0;
@@ -26,11 +28,16 @@ const PLUS_STROKE: f32 = 1.0 / 15.0;
 /// Thickness of the dialog border, in physical pixels.
 const DIALOG_BORDER: f32 = 1.0;
 
+/// Opacity of the hovered context-menu row, matching the shortcuts table in settings.
+const MENU_HOVER_HIGHLIGHT: f32 = 0.45;
+
 /// The box drawn over everything, laid out.
 #[derive(Debug, Clone, Copy)]
 pub enum Overlay<'a> {
     Dialog(&'a DialogLayout),
     Palette(&'a PaletteLayout),
+    #[allow(dead_code)] // Instantiated when menu opening is wired in issue #103.
+    Menu(&'a MenuLayout),
 }
 
 /// The interface over the panes of `layout`: the pane rectangles (see [`panes`]), then
@@ -53,9 +60,100 @@ pub fn build(
     match overlay {
         Some(Overlay::Dialog(layout)) => dialog(layout, colors, srgb_target, &mut ui),
         Some(Overlay::Palette(layout)) => palette(layout, colors, srgb_target, &mut ui),
+        Some(Overlay::Menu(layout)) => menu(layout, colors, srgb_target, &mut ui),
         None => {}
     }
     ui
+}
+
+/// A context menu: its box and border, hovered rows, separators, labels and shortcuts.
+fn menu(layout: &MenuLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    let background = color(colors.palette_background);
+    let border_color = color(colors.pane_border);
+    ui.overlay_rects.push(rect(layout.rect, background));
+    ui.overlay_rects
+        .extend(border(layout.rect, DIALOG_BORDER, border_color));
+    draw_menu_rows(&layout.rows, colors, srgb_target, ui);
+    if let Some(submenu) = &layout.submenu {
+        ui.overlay_rects.push(rect(submenu.rect, background));
+        ui.overlay_rects
+            .extend(border(submenu.rect, DIALOG_BORDER, border_color));
+        draw_menu_rows(&submenu.rows, colors, srgb_target, ui);
+    }
+}
+
+fn draw_menu_rows(rows: &[MenuRow], colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    for row in rows {
+        if row.separator {
+            let line = Rect {
+                x: row.rect.x + 1.0,
+                y: row.rect.y + row.rect.height / 2.0,
+                width: (row.rect.width - 2.0).max(0.0),
+                height: 1.0,
+            };
+            ui.overlay_rects.push(rect(line, color(colors.pane_border)));
+            continue;
+        }
+        if row.hovered {
+            ui.overlay_rects.push(rect(
+                row.rect,
+                color(blend(
+                    colors.palette_background,
+                    colors.palette_selection_background,
+                    MENU_HOVER_HIGHLIGHT,
+                )),
+            ));
+        }
+        if let Some(label) = &row.label {
+            ui.overlay_texts.push(UiTextItem {
+                text: label.clone(),
+                x: row.text_x,
+                y: row.text_y,
+                color: if row.active_theme {
+                    color(colors.palette_match)
+                } else if row.enabled {
+                    color(colors.palette_text)
+                } else {
+                    color(colors.tab_inactive_text)
+                },
+                max_width: row.max_width,
+                font: UiFont::Palette,
+            });
+        }
+        if let Some((shortcut, x)) = &row.shortcut {
+            ui.overlay_texts.push(UiTextItem {
+                text: shortcut.clone(),
+                x: *x,
+                y: row.text_y,
+                color: color(colors.tab_inactive_text),
+                max_width: (row.rect.x + row.rect.width - x).max(0.0),
+                font: UiFont::Palette,
+            });
+        }
+        if row.submenu_arrow {
+            ui.overlay_texts.push(UiTextItem {
+                text: "›".to_owned(),
+                x: row.rect.x + row.rect.width - 14.0,
+                y: row.text_y,
+                color: color(colors.tab_inactive_text),
+                max_width: 12.0,
+                font: UiFont::Palette,
+            });
+        }
+    }
+}
+
+fn blend(background: Rgb, highlight: Rgb, opacity: f32) -> Rgb {
+    let channel = |background: u8, highlight: u8| {
+        (f32::from(background) * (1.0 - opacity) + f32::from(highlight) * opacity).round() as u8
+    };
+    Rgb {
+        r: channel(background.r, highlight.r),
+        g: channel(background.g, highlight.g),
+        b: channel(background.b, highlight.b),
+    }
 }
 
 /// The command palette, in the overlay: its box and border, the search field and its
@@ -669,6 +767,81 @@ mod tests {
         assert_eq!(ui.overlay_texts[0].color, gpu_color(INACTIVE_TEXT, false));
         // No row, so no selected row: box, border, field and cursor.
         assert_eq!(ui.overlay_rects.len(), 7);
+    }
+
+    #[test]
+    fn context_menu_uses_chrome_colors_and_palette_font() {
+        use crate::chrome::context_menu::{
+            Command, ContextMenu, Item, MenuHit, MenuLayout, MenuLevel,
+        };
+        use crate::input::Action;
+        const HOVER_SELECTION: Rgb = Rgb {
+            r: 150,
+            g: 100,
+            b: 50,
+        };
+        let colors = UiColors {
+            palette_background: DIALOG_BACKGROUND,
+            palette_selection_background: HOVER_SELECTION,
+            palette_text: DIALOG_TEXT,
+            tab_active_background: ACTIVE_TAB,
+            tab_inactive_text: INACTIVE_TEXT,
+            ..colors()
+        };
+        let mut menu = ContextMenu::new(
+            (20.0, 20.0),
+            vec![Item::Entry {
+                label: "Copy".into(),
+                shortcut: Some("Ctrl+C".into()),
+                enabled: true,
+                command: Command::Action(Action::Copy),
+            }],
+        );
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let layout = MenuLayout::new(&menu, area(0.0, 0.0, 300.0, 200.0), metrics, |text| {
+            text.chars().count() as f32 * 8.0
+        });
+        menu.hover(MenuHit::Entry {
+            level: MenuLevel::Main,
+            index: layout.rows[0].index,
+        });
+        let layout = MenuLayout::new(&menu, area(0.0, 0.0, 300.0, 200.0), metrics, |text| {
+            text.chars().count() as f32 * 8.0
+        });
+        let ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            None,
+            Some(Overlay::Menu(&layout)),
+            &colors,
+            false,
+        );
+        let color = |c| gpu_color(c, false);
+        assert_eq!(ui.overlay_rects[0].color, color(DIALOG_BACKGROUND));
+        assert_eq!(ui.overlay_rects[1].color, color(BORDER));
+        assert_eq!(
+            ui.overlay_rects[5].color,
+            color(Rgb {
+                r: 95,
+                g: 45,
+                b: 23,
+            })
+        );
+        let texts: Vec<_> = ui
+            .overlay_texts
+            .iter()
+            .map(|text| (text.text.as_str(), text.color, text.font))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("Copy", color(DIALOG_TEXT), UiFont::Palette),
+                ("Ctrl+C", color(INACTIVE_TEXT), UiFont::Palette)
+            ]
+        );
     }
 
     #[test]

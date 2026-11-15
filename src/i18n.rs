@@ -172,6 +172,7 @@ pub enum Msg {
     ToggleFoldAll,
     // Tabs and panes actions.
     NewTab,
+    CloseTab,
     ClosePane,
     NextTab,
     PreviousTab,
@@ -184,11 +185,26 @@ pub enum Msg {
     NextPane,
     PreviousPane,
     ToggleZoom,
+    #[allow(dead_code)] // Used by the context menu; its event integration is issue #103.
+    ZoomPane,
+    #[allow(dead_code)]
+    UnzoomPane,
+    #[allow(dead_code)]
+    SplitVertical,
+    #[allow(dead_code)]
+    SplitHorizontal,
+    #[allow(dead_code)]
+    Themes,
+    #[allow(dead_code)]
+    FoldBlock,
+    #[allow(dead_code)]
+    UnfoldBlock,
     CommandPalette,
     EqualisePanes,
     DetachPane,
     /// The settings action, and the settings window's title.
     OpenSettings,
+    Quit,
     /// Sidebar entry of the settings window.
     Section(SettingsSection),
     /// Label of a settings field.
@@ -277,6 +293,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::ToggleFold => "Fold / unfold block",
         Msg::ToggleFoldAll => "Fold / unfold all blocks",
         Msg::NewTab => "New tab",
+        Msg::CloseTab => "Close the tab",
         Msg::ClosePane => "Close pane",
         Msg::NextTab => "Next tab",
         Msg::PreviousTab => "Previous tab",
@@ -298,8 +315,16 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::NextPane => "Next pane",
         Msg::PreviousPane => "Previous pane",
         Msg::ToggleZoom => "Zoom / unzoom pane",
+        Msg::ZoomPane => "Zoom the pane",
+        Msg::UnzoomPane => "Unzoom the pane",
+        Msg::SplitVertical => "Split vertically",
+        Msg::SplitHorizontal => "Split horizontally",
+        Msg::Themes => "Themes",
+        Msg::FoldBlock => "Fold block",
+        Msg::UnfoldBlock => "Unfold block",
         Msg::CommandPalette => "Command palette",
         Msg::OpenSettings => "Settings",
+        Msg::Quit => "Quit Graphene",
         Msg::Section(section) => match section {
             SettingsSection::Font => "Font",
             SettingsSection::Window => "Window",
@@ -402,6 +427,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::ToggleFold => "Replier / déplier le bloc",
         Msg::ToggleFoldAll => "Replier / déplier tous les blocs",
         Msg::NewTab => "Nouvel onglet",
+        Msg::CloseTab => "Fermer l'onglet",
         Msg::ClosePane => "Fermer le panneau",
         Msg::NextTab => "Onglet suivant",
         Msg::PreviousTab => "Onglet précédent",
@@ -423,8 +449,16 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::NextPane => "Panneau suivant",
         Msg::PreviousPane => "Panneau précédent",
         Msg::ToggleZoom => "Agrandir / réduire le panneau",
+        Msg::ZoomPane => "Agrandir le panneau",
+        Msg::UnzoomPane => "Réduire le panneau",
+        Msg::SplitVertical => "Diviser verticalement",
+        Msg::SplitHorizontal => "Diviser horizontalement",
+        Msg::Themes => "Thèmes",
+        Msg::FoldBlock => "Replier le bloc",
+        Msg::UnfoldBlock => "Déplier le bloc",
         Msg::CommandPalette => "Palette de commandes",
         Msg::OpenSettings => "Paramètres",
+        Msg::Quit => "Quitter Graphene",
         Msg::Section(section) => match section {
             SettingsSection::Font => "Police",
             SettingsSection::Window => "Fenêtre",
@@ -553,6 +587,13 @@ mod tests {
             Msg::NextPane => 24,
             Msg::PreviousPane => 25,
             Msg::ToggleZoom => 26,
+            Msg::ZoomPane => 61,
+            Msg::UnzoomPane => 62,
+            Msg::SplitVertical => 63,
+            Msg::SplitHorizontal => 64,
+            Msg::Themes => 65,
+            Msg::FoldBlock => 66,
+            Msg::UnfoldBlock => 67,
             Msg::CommandPalette => 27,
             Msg::EqualisePanes => 28,
             Msg::DetachPane => 29,
@@ -568,6 +609,8 @@ mod tests {
             Msg::IgnoreVersion => 38,
             Msg::LinesHidden(_) => 39,
             Msg::OpenSettings => 41,
+            Msg::CloseTab => 59,
+            Msg::Quit => 60,
             Msg::Section(_) => 42,
             Msg::Field(_) => 43,
             Msg::SystemMonospace => 44,
@@ -587,7 +630,7 @@ mod tests {
             Msg::Replace => 58,
         }
     }
-    const VARIANT_COUNT: usize = 59;
+    const VARIANT_COUNT: usize = 68;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -608,6 +651,7 @@ mod tests {
             Msg::ToggleFold,
             Msg::ToggleFoldAll,
             Msg::NewTab,
+            Msg::CloseTab,
             Msg::ClosePane,
             Msg::NextTab,
             Msg::PreviousTab,
@@ -617,10 +661,18 @@ mod tests {
             Msg::NextPane,
             Msg::PreviousPane,
             Msg::ToggleZoom,
+            Msg::ZoomPane,
+            Msg::UnzoomPane,
+            Msg::SplitVertical,
+            Msg::SplitHorizontal,
+            Msg::Themes,
+            Msg::FoldBlock,
+            Msg::UnfoldBlock,
             Msg::CommandPalette,
             Msg::EqualisePanes,
             Msg::DetachPane,
             Msg::OpenSettings,
+            Msg::Quit,
             Msg::PalettePlaceholder,
             Msg::TabEntry {
                 tab: 2,
@@ -767,6 +819,14 @@ mod tests {
             text(Lang::Fr, &Msg::Field(SettingsField::ThemeFollow)),
             "Suivre l'apparence du système"
         );
+    }
+
+    #[test]
+    fn tab_and_quit_action_texts() {
+        assert_eq!(text(Lang::En, &Msg::CloseTab), "Close the tab");
+        assert_eq!(text(Lang::Fr, &Msg::CloseTab), "Fermer l'onglet");
+        assert_eq!(text(Lang::En, &Msg::Quit), "Quit Graphene");
+        assert_eq!(text(Lang::Fr, &Msg::Quit), "Quitter Graphene");
     }
 
     #[test]

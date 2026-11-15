@@ -75,6 +75,30 @@ pub fn built_in(name: &str) -> Option<&'static str> {
         .map(|(_, text)| *text)
 }
 
+/// Lists user themes (`themes/*.toml`) before built-in themes, without duplicates.
+///
+/// If `config_dir` is absent or its themes directory cannot be read, only built-in
+/// themes are returned.
+pub fn available(config_dir: Option<&Path>) -> Vec<String> {
+    let mut themes: Vec<String> = config_dir
+        .and_then(|dir| std::fs::read_dir(dir.join(THEMES_DIR)).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "toml"))
+        .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
+        .collect();
+    themes.sort();
+    themes.dedup();
+    for (name, _) in BUILT_IN {
+        if !themes.iter().any(|theme| theme == name) {
+            themes.push((*name).to_owned());
+        }
+    }
+    themes
+}
+
 /// Resolves a theme name: `<config_dir>/themes/<name>.toml` first, then the built-in
 /// themes. An unknown name yields an error and `graphene-night`.
 pub fn load(name: &str, config_dir: Option<&Path>) -> (Palette, Vec<ConfigError>) {
@@ -623,6 +647,85 @@ banner = "#000000"
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(THEMES_DIR)).unwrap();
         dir
+    }
+
+    #[test]
+    fn available_lists_sorted_user_themes_before_built_ins() {
+        let dir = temp_dir("available-sorted");
+        let themes_dir = dir.join(THEMES_DIR);
+        std::fs::write(themes_dir.join("zebra.toml"), "").unwrap();
+        std::fs::write(themes_dir.join("amber.toml"), "").unwrap();
+
+        let available = available(Some(&dir));
+        assert_eq!(&available[..2], ["amber", "zebra"]);
+        assert_eq!(
+            &available[2..],
+            BUILT_IN.iter().map(|(name, _)| *name).collect::<Vec<_>>()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn available_deduplicates_user_themes_that_shadow_built_ins() {
+        let dir = temp_dir("available-collision");
+        std::fs::write(dir.join(THEMES_DIR).join("gruvbox-dark.toml"), "").unwrap();
+
+        let available = available(Some(&dir));
+        assert_eq!(
+            available
+                .iter()
+                .filter(|name| *name == "gruvbox-dark")
+                .count(),
+            1
+        );
+        assert_eq!(available[0], "gruvbox-dark");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn available_ignores_non_toml_files_and_directories() {
+        let dir = temp_dir("available-file-types");
+        let themes_dir = dir.join(THEMES_DIR);
+        std::fs::write(themes_dir.join("readme.txt"), "").unwrap();
+        std::fs::write(themes_dir.join("backup.toml.bak"), "").unwrap();
+        std::fs::create_dir(themes_dir.join("folder.toml")).unwrap();
+        std::fs::write(themes_dir.join("mine.toml"), "").unwrap();
+
+        let available = available(Some(&dir));
+        assert_eq!(available[0], "mine");
+        assert!(
+            !available
+                .iter()
+                .any(|name| { ["readme", "backup", "folder"].contains(&name.as_str()) })
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn available_without_a_config_directory_returns_built_ins() {
+        assert_eq!(
+            available(None),
+            BUILT_IN
+                .iter()
+                .map(|(name, _)| (*name).to_owned())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn available_with_a_missing_themes_directory_returns_built_ins() {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-theme-available-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            available(Some(&dir)),
+            BUILT_IN
+                .iter()
+                .map(|(name, _)| (*name).to_owned())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

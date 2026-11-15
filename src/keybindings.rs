@@ -128,6 +128,7 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Ctrl+Shift+B", Action::PreviousPane),
     ("Ctrl+Shift+Z", Action::ToggleZoom),
     ("Ctrl+Shift+T", Action::NewTab),
+    ("Ctrl+Alt+W", Action::CloseTab),
     ("Ctrl+Tab", Action::NextTab),
     ("Ctrl+PageDown", Action::NextTab),
     ("Ctrl+Shift+Tab", Action::PreviousTab),
@@ -144,6 +145,7 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Ctrl+Shift+P", Action::CommandPalette),
     // Not `Ctrl+Shift+,`: Shift is dropped for a symbol (see `Shortcut::character`).
     ("Ctrl+,", Action::OpenSettings),
+    ("Ctrl+Shift+Q", Action::Quit),
 ];
 
 /// Built-in key/action pairs, in the order shown in the default configuration.
@@ -599,6 +601,20 @@ mod tests {
     }
 
     #[test]
+    fn close_tab_and_quit_have_their_default_shortcuts() {
+        assert_eq!(
+            DEFAULTS
+                .iter()
+                .find(|(_, action)| *action == Action::CloseTab),
+            Some(&("Ctrl+Alt+W", Action::CloseTab))
+        );
+        assert_eq!(
+            DEFAULTS.iter().find(|(_, action)| *action == Action::Quit),
+            Some(&("Ctrl+Shift+Q", Action::Quit))
+        );
+    }
+
+    #[test]
     fn app_actions() {
         let bindings = defaults();
         let get = |key: &Key, mods| action_for(&bindings, key, mods);
@@ -808,7 +824,7 @@ mod tests {
 
     #[test]
     fn invalid_entries_are_skipped() {
-        let bindings = with(&[("Ctrl+Hyper+T", "new_tab"), ("Ctrl+T", "quit")]);
+        let bindings = with(&[("Ctrl+Hyper+T", "new_tab"), ("Ctrl+T", "not_an_action")]);
         assert_eq!(action_for(&bindings, &ch("t"), CTRL), None);
         assert_eq!(action_for(&bindings, &ch("T"), cs()), Some(Action::NewTab));
     }
@@ -989,8 +1005,8 @@ mod tests {
         );
         assert_eq!(parse_binding("Ctrl+T", "none").map(|(_, a)| a), Ok(None));
         assert_eq!(
-            parse_binding("Ctrl+T", "quit"),
-            Err("unknown action \"quit\"".to_owned())
+            parse_binding("Ctrl+T", "not_an_action"),
+            Err("unknown action \"not_an_action\"".to_owned())
         );
         assert!(parse_binding("Hyper+T", "copy").is_err());
     }
