@@ -48,6 +48,14 @@ Errors in these files are logged and shown in a banner at the top of the window 
 to hide it); the faulty settings keep their default value, or their previous value on a
 reload.
 
+The settings window (`Ctrl+,`, or "Settings" in the command palette) edits the same
+file: each change is written at once, keeping the file's comments, and applied like a
+hand edit. Its keyboard shortcuts section lists every action with its shortcuts: add
+one by pressing it (`Escape` cancels), remove a default one (written as `"none"`) or a
+configured one. Errors are shown under the faulty setting, unknown keys at the top; while the
+file has a syntax error, the window shows it and stays read-only until the file is fixed
+by hand.
+
 Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
 builds, every 24 hours for stable builds) and caches the result in
 `~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only
@@ -116,6 +124,7 @@ first output.
 | Shift+PageUp / Shift+PageDown | Scroll the selected block, or the history       |
 | Shift+Home / Shift+End        | Top / bottom of the history (not at the prompt) |
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
+| Ctrl+,                        | Open the settings window                        |
 | Mouse wheel                   | Scroll the block under the pointer, or history  |
 
 Tabs and split panes:
@@ -153,7 +162,7 @@ Every key-bound action can be remapped in the `[keybindings]` section of `config
 one back to the shell. Keys are modifiers (`Ctrl`, `Shift`, `Alt`, `Super`) joined with
 `+`, then a key name (`PageUp`, `F5`, `Left`...) or one character; actions are the
 snake_case names of the palette entries (`copy`, `split_right`, `focus_pane_left`,
-`go_to_tab_3`, `command_palette`...). The palette shows the configured shortcut.
+`go_to_tab_3`, `command_palette`, `open_settings`...). The palette shows the configured shortcut.
 
 At the shell prompt (zsh, bash or fish with the integration, not inside a running
 command or a full-screen application), the command line is edited like in an editor.
