@@ -1,5 +1,6 @@
 //! Runs `scripts/package.sh` on a fake binary with stubbed packaging tools and checks
 //! the produced file names and package versions.
+#![cfg(target_os = "linux")]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
