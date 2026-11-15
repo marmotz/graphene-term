@@ -91,8 +91,8 @@ pub fn set_image(clipboard: &mut arboard::Clipboard, png: &[u8]) -> Result<()> {
     );
     buffer.truncate(info.buffer_size());
     clipboard.set_image(arboard::ImageData {
-        width: info.width,
-        height: info.height,
+        width: usize::try_from(info.width)?,
+        height: usize::try_from(info.height)?,
         bytes: buffer.into(),
     })?;
     Ok(())
