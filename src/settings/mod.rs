@@ -16,7 +16,7 @@ use egui::ViewportId;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::config::{Config, ConfigError};
@@ -214,12 +214,30 @@ impl SettingsWindow {
                 self.window.request_redraw();
                 return Outcome::Keep;
             }
+            // Escape alone closes the window, unless egui uses it (an open popup, a
+            // focused field) or it dismisses a shortcut conflict.
+            WindowEvent::KeyboardInput { event: key, .. }
+                if closes_on_escape(&key.logical_key, key.state, self.modifiers)
+                    && !self.egui_takes_escape() =>
+            {
+                if self.view.escape() {
+                    self.window.request_redraw();
+                    return Outcome::Keep;
+                }
+                return Outcome::Close;
+            }
             _ => {}
         }
         if self.egui.on_window_event(&self.window, event).repaint {
             self.window.request_redraw();
         }
         Outcome::Keep
+    }
+
+    /// Whether egui handles `Escape` itself: it closes a popup or drops a field's focus.
+    fn egui_takes_escape(&self) -> bool {
+        let ctx = self.egui.egui_ctx();
+        egui::Popup::is_any_open(ctx) || ctx.memory(|memory| memory.focused().is_some())
     }
 
     /// Writes `changes` to the file, and shows the result before the reload reports it.
@@ -374,6 +392,11 @@ impl SettingsWindow {
     }
 }
 
+/// Whether a key event is a press of `Escape` with no modifier held.
+fn closes_on_escape(key: &Key, state: ElementState, mods: ModifiersState) -> bool {
+    state == ElementState::Pressed && mods.is_empty() && *key == Key::Named(NamedKey::Escape)
+}
+
 /// Applies `changes` to `file` in one write.
 fn write_changes(file: &Path, changes: &[Change]) -> Result<(), ConfigError> {
     config_edit::write(file, |edit: &mut ConfigEdit| {
@@ -428,6 +451,24 @@ mod tests {
         assert_eq!(config.font.size, 16.0);
         assert_eq!(config.theme.name, "gruvbox-dark");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn escape_alone_pressed_closes() {
+        let escape = Key::Named(NamedKey::Escape);
+        let none = ModifiersState::empty();
+        assert!(closes_on_escape(&escape, ElementState::Pressed, none));
+        assert!(!closes_on_escape(&escape, ElementState::Released, none));
+        assert!(!closes_on_escape(
+            &escape,
+            ElementState::Pressed,
+            ModifiersState::SHIFT
+        ));
+        assert!(!closes_on_escape(
+            &Key::Named(NamedKey::Enter),
+            ElementState::Pressed,
+            none
+        ));
     }
 
     #[test]
