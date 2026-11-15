@@ -110,11 +110,10 @@ fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
         }
         Err(error) => (
             previous.clone(),
-            vec![ConfigError {
+            vec![ConfigError::read(
                 file,
-                line: None,
-                message: format!("cannot read the file: {error}"),
-            }],
+                format!("cannot read the file: {error}"),
+            )],
         ),
     }
 }
@@ -151,11 +150,10 @@ fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
         }
         Err(error) => (
             Config::default(),
-            vec![ConfigError {
+            vec![ConfigError::read(
                 file,
-                line: None,
-                message: format!("cannot read the file: {error}"),
-            }],
+                format!("cannot read the file: {error}"),
+            )],
         ),
     }
 }
@@ -166,7 +164,58 @@ pub struct ConfigError {
     pub file: PathBuf,
     /// 1-based line of the faulty key or value, when known.
     pub line: Option<usize>,
+    /// Dotted TOML path of the faulty key (`font.size`, `keybindings."Ctrl+X"`), `None`
+    /// for an error not tied to a key (syntax or read error).
+    pub key: Option<String>,
+    pub kind: ConfigErrorKind,
     pub message: String,
+}
+
+/// What a [`ConfigError`] is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigErrorKind {
+    /// The file cannot be read.
+    Read,
+    /// The file is not valid TOML.
+    Syntax,
+    /// A key the application does not know.
+    UnknownKey,
+    /// A known key with a rejected, clamped or otherwise unusable value.
+    InvalidValue,
+}
+
+impl ConfigError {
+    /// An error reading `file`, tied to no line nor key.
+    pub fn read(file: PathBuf, message: String) -> Self {
+        Self {
+            file,
+            line: None,
+            key: None,
+            kind: ConfigErrorKind::Read,
+            message,
+        }
+    }
+}
+
+/// Joins key segments into a dotted TOML path, quoting each segment that is not a bare
+/// key (`keybindings."Ctrl+X"`).
+pub fn key_path(segments: &[&str]) -> String {
+    segments
+        .iter()
+        .map(|segment| {
+            let bare = !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+            if bare {
+                (*segment).to_owned()
+            } else {
+                let escaped = segment.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("\"{escaped}\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 impl fmt::Display for ConfigError {
@@ -426,7 +475,12 @@ impl Config {
         let root = match DeTable::parse(text) {
             Ok(root) => root.into_inner(),
             Err(error) => {
-                reader.error(error.span(), error.message().trim_end().to_owned());
+                reader.error(
+                    error.span(),
+                    None,
+                    ConfigErrorKind::Syntax,
+                    error.message().trim_end().to_owned(),
+                );
                 return (previous.clone(), reader.errors, reader.unknown_keys);
             }
         };
@@ -437,6 +491,7 @@ impl Config {
             match name {
                 "language" => reader.set(
                     value,
+                    &[name],
                     name,
                     &mut config.language,
                     &previous.language,
@@ -445,7 +500,12 @@ impl Config {
                 "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
                 | "keybindings" | "updates" => {
                     let DeValue::Table(table) = value.get_ref() else {
-                        reader.error(Some(value.span()), format!("`{name}` must be a table"));
+                        reader.error(
+                            Some(value.span()),
+                            Some(key_path(&[name])),
+                            ConfigErrorKind::InvalidValue,
+                            format!("`{name}` must be a table"),
+                        );
                         continue;
                     };
                     for (sub_key, sub_value) in table.iter() {
@@ -505,16 +565,28 @@ impl Reader<'_> {
         message: String,
     ) {
         let path = section.map_or_else(|| key.to_owned(), |section| format!("{section}.{key}"));
+        let segments: Vec<&str> = section.into_iter().chain([key]).collect();
         self.unknown_keys.push(UnknownConfigKey {
             section: section.map(str::to_owned),
             key: key.to_owned(),
             path,
             whole_section,
         });
-        self.error(span, message);
+        self.error(
+            span,
+            Some(key_path(&segments)),
+            ConfigErrorKind::UnknownKey,
+            message,
+        );
     }
 
-    fn error(&mut self, span: Option<Range<usize>>, message: String) {
+    fn error(
+        &mut self,
+        span: Option<Range<usize>>,
+        key: Option<String>,
+        kind: ConfigErrorKind,
+        message: String,
+    ) {
         let line = span.map(|span| {
             let end = span.start.min(self.text.len());
             self.text.as_bytes()[..end]
@@ -526,6 +598,8 @@ impl Reader<'_> {
         self.errors.push(ConfigError {
             file: self.file.to_path_buf(),
             line,
+            key,
+            kind,
             message,
         });
     }
@@ -535,6 +609,7 @@ impl Reader<'_> {
     fn set<T: DeserializeOwned, U: Clone>(
         &mut self,
         value: &Spanned<DeValue<'_>>,
+        key: &[&str],
         path: &str,
         target: &mut U,
         previous: &U,
@@ -547,12 +622,19 @@ impl Reader<'_> {
         match checked {
             Checked::Valid(v) => *target = v,
             Checked::Clamped(v, message) => {
-                self.error(Some(value.span()), format!("`{path}`: {message}"));
+                self.error(
+                    Some(value.span()),
+                    Some(key_path(key)),
+                    ConfigErrorKind::InvalidValue,
+                    format!("`{path}`: {message}"),
+                );
                 *target = v;
             }
             Checked::Invalid(message) => {
                 self.error(
                     Some(value.span()),
+                    Some(key_path(key)),
+                    ConfigErrorKind::InvalidValue,
                     format!("invalid value for `{path}`: {message}"),
                 );
                 *target = previous.clone();
@@ -571,11 +653,13 @@ impl Reader<'_> {
         let name = key.get_ref().as_ref();
         let path = format!("{section}.{name}");
         let path = path.as_str();
+        let segments = [section, name];
+        let key_segments = segments.as_slice();
         match (section, name) {
-            ("font", "family") => self.set(value, path, &mut config.font.family, &previous.font.family, |family: String| {
+            ("font", "family") => self.set(value, key_segments, path, &mut config.font.family, &previous.font.family, |family: String| {
                 Checked::Valid(Some(family).filter(|f| !f.is_empty()))
             }),
-            ("font", "size") => self.set(value, path, &mut config.font.size, &previous.font.size, |size: f32| {
+            ("font", "size") => self.set(value, key_segments, path, &mut config.font.size, &previous.font.size, |size: f32| {
                 if !size.is_finite() {
                     Checked::Invalid("not a number".to_owned())
                 } else if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&size) {
@@ -585,17 +669,17 @@ impl Reader<'_> {
                     Checked::Clamped(clamped, format!("{size} is out of {MIN_FONT_SIZE}..={MAX_FONT_SIZE}, using {clamped}"))
                 }
             }),
-            ("window", "startup_mode") => self.set(value, path, &mut config.window.startup_mode, &previous.window.startup_mode, Checked::Valid),
-            ("window", "width") => self.set(value, path, &mut config.window.width, &previous.window.width, positive_size),
-            ("window", "height") => self.set(value, path, &mut config.window.height, &previous.window.height, positive_size),
-            ("window", "padding") => self.set(value, path, &mut config.window.padding, &previous.window.padding, |padding: f32| {
+            ("window", "startup_mode") => self.set(value, key_segments, path, &mut config.window.startup_mode, &previous.window.startup_mode, Checked::Valid),
+            ("window", "width") => self.set(value, key_segments, path, &mut config.window.width, &previous.window.width, positive_size),
+            ("window", "height") => self.set(value, key_segments, path, &mut config.window.height, &previous.window.height, positive_size),
+            ("window", "padding") => self.set(value, key_segments, path, &mut config.window.padding, &previous.window.padding, |padding: f32| {
                 if padding.is_finite() && padding >= 0.0 {
                     Checked::Valid(padding)
                 } else {
                     Checked::Invalid("must be a non-negative number".to_owned())
                 }
             }),
-            ("window", "background_opacity") => self.set(value, path, &mut config.window.background_opacity, &previous.window.background_opacity, |opacity: f32| {
+            ("window", "background_opacity") => self.set(value, key_segments, path, &mut config.window.background_opacity, &previous.window.background_opacity, |opacity: f32| {
                 if !opacity.is_finite() {
                     Checked::Invalid("not a number".to_owned())
                 } else if (0.0..=1.0).contains(&opacity) {
@@ -605,22 +689,22 @@ impl Reader<'_> {
                     Checked::Clamped(clamped, format!("{opacity} is out of 0.0..=1.0, using {clamped}"))
                 }
             }),
-            ("scrollback", "lines") => self.set(value, path, &mut config.scrollback_lines, &previous.scrollback_lines, |lines: usize| {
+            ("scrollback", "lines") => self.set(value, key_segments, path, &mut config.scrollback_lines, &previous.scrollback_lines, |lines: usize| {
                 if lines <= MAX_SCROLLBACK_LINES {
                     Checked::Valid(lines)
                 } else {
                     Checked::Clamped(MAX_SCROLLBACK_LINES, format!("{lines} is above the maximum, using {MAX_SCROLLBACK_LINES}"))
                 }
             }),
-            ("cursor", "shape") => self.set(value, path, &mut config.cursor.shape, &previous.cursor.shape, Checked::Valid),
-            ("cursor", "blinking") => self.set(value, path, &mut config.cursor.blinking, &previous.cursor.blinking, Checked::Valid),
-            ("selection", "word_separators") => self.set(value, path, &mut config.word_separators, &previous.word_separators, Checked::Valid),
-            ("tabs", "position") => self.set(value, path, &mut config.tab_position, &previous.tab_position, Checked::Valid),
-            ("theme", "name") => self.set(value, path, &mut config.theme.name, &previous.theme.name, non_empty),
-            ("theme", "light") => self.set(value, path, &mut config.theme.light, &previous.theme.light, |name: String| non_empty(name).map(Some)),
-            ("theme", "dark") => self.set(value, path, &mut config.theme.dark, &previous.theme.dark, |name: String| non_empty(name).map(Some)),
-            ("updates", "check") => self.set(value, path, &mut config.updates.check, &previous.updates.check, Checked::Valid),
-            ("updates", "interval") => self.set(value, path, &mut config.updates.interval, &previous.updates.interval, |interval: String| {
+            ("cursor", "shape") => self.set(value, key_segments, path, &mut config.cursor.shape, &previous.cursor.shape, Checked::Valid),
+            ("cursor", "blinking") => self.set(value, key_segments, path, &mut config.cursor.blinking, &previous.cursor.blinking, Checked::Valid),
+            ("selection", "word_separators") => self.set(value, key_segments, path, &mut config.word_separators, &previous.word_separators, Checked::Valid),
+            ("tabs", "position") => self.set(value, key_segments, path, &mut config.tab_position, &previous.tab_position, Checked::Valid),
+            ("theme", "name") => self.set(value, key_segments, path, &mut config.theme.name, &previous.theme.name, non_empty),
+            ("theme", "light") => self.set(value, key_segments, path, &mut config.theme.light, &previous.theme.light, |name: String| non_empty(name).map(Some)),
+            ("theme", "dark") => self.set(value, key_segments, path, &mut config.theme.dark, &previous.theme.dark, |name: String| non_empty(name).map(Some)),
+            ("updates", "check") => self.set(value, key_segments, path, &mut config.updates.check, &previous.updates.check, Checked::Valid),
+            ("updates", "interval") => self.set(value, key_segments, path, &mut config.updates.interval, &previous.updates.interval, |interval: String| {
                 match UpdateInterval::parse(&interval) {
                     Some(interval) => Checked::Valid(interval),
                     None => {
@@ -632,7 +716,7 @@ impl Reader<'_> {
             ("keybindings", keys) => {
                 let previous_action = previous.keybindings.get(keys).cloned();
                 let mut action = previous_action.clone();
-                self.set(value, path, &mut action, &previous_action, |action: String| {
+                self.set(value, key_segments, path, &mut action, &previous_action, |action: String| {
                     match keybindings::parse_binding(keys, &action) {
                         Ok(_) => Checked::Valid(Some(action)),
                         Err(message) => Checked::Invalid(message),
@@ -1008,6 +1092,100 @@ interval = "2d"
         assert_eq!(config, Config::default());
         assert_eq!(errors[0].line, Some(1));
         assert_eq!(errors[0].message, "`font` must be a table");
+    }
+
+    fn keys(errors: &[ConfigError]) -> Vec<(Option<&str>, ConfigErrorKind)> {
+        errors
+            .iter()
+            .map(|error| (error.key.as_deref(), error.kind))
+            .collect()
+    }
+
+    #[test]
+    fn invalid_value_error_carries_its_key_path() {
+        let (_, errors) = parse("[window]\nwidth = 0\n");
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("window.width"), ConfigErrorKind::InvalidValue)]
+        );
+    }
+
+    #[test]
+    fn clamped_value_error_carries_its_key_path() {
+        let (_, errors) = parse("[font]\nsize = 200\n");
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("font.size"), ConfigErrorKind::InvalidValue)]
+        );
+    }
+
+    #[test]
+    fn unknown_keys_carry_their_key_path() {
+        let (_, errors) = parse("colour = 1\n[font]\nsise = 12\n[nope]\n");
+        assert_eq!(
+            keys(&errors),
+            vec![
+                (Some("colour"), ConfigErrorKind::UnknownKey),
+                (Some("font.sise"), ConfigErrorKind::UnknownKey),
+                (Some("nope"), ConfigErrorKind::UnknownKey),
+            ]
+        );
+    }
+
+    #[test]
+    fn keybinding_error_carries_a_quoted_key_path() {
+        let (_, errors) = parse("[keybindings]\n\"Ctrl+Q\" = \"quit\"\n");
+        assert_eq!(
+            keys(&errors),
+            vec![(
+                Some("keybindings.\"Ctrl+Q\""),
+                ConfigErrorKind::InvalidValue
+            )]
+        );
+        // The banner text keeps the unquoted path.
+        assert_eq!(
+            errors[0].to_string(),
+            "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"quit\""
+        );
+    }
+
+    #[test]
+    fn section_that_is_not_a_table_carries_its_key_path() {
+        let (_, errors) = parse("font = 1\n");
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("font"), ConfigErrorKind::InvalidValue)]
+        );
+    }
+
+    #[test]
+    fn syntax_error_has_no_key_path() {
+        let (_, errors) = parse("[font]\nsize = 12\nfamily = \n");
+        assert_eq!(keys(&errors), vec![(None, ConfigErrorKind::Syntax)]);
+    }
+
+    #[test]
+    fn read_error_has_no_key_path() {
+        let error = ConfigError::read(file(), "cannot read the file: denied".to_owned());
+        assert_eq!(
+            (error.key.as_deref(), error.kind),
+            (None, ConfigErrorKind::Read)
+        );
+        assert_eq!(
+            error.to_string(),
+            "config.toml: cannot read the file: denied"
+        );
+    }
+
+    #[test]
+    fn key_path_quotes_segments_that_are_not_bare_keys() {
+        assert_eq!(key_path(&["font", "size"]), "font.size");
+        assert_eq!(
+            key_path(&["keybindings", "Ctrl+X"]),
+            "keybindings.\"Ctrl+X\""
+        );
+        assert_eq!(key_path(&["a", "b c", ""]), "a.\"b c\".\"\"");
+        assert_eq!(key_path(&["k", "q\"u\\o"]), "k.\"q\\\"u\\\\o\"");
     }
 
     #[test]
