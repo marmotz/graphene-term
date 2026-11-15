@@ -328,10 +328,66 @@ fn background_clear(color: [f32; 4], opacity: f32, alpha_mode: SurfaceAlphaMode)
     }
 }
 
+/// GPU context shared by every window of the process: one instance, adapter, device
+/// and queue, so a second window does not pay the GPU initialisation again.
+pub struct Gpu {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+impl Gpu {
+    /// Creates the GPU context with the surface of the first window: the adapter must be
+    /// compatible with it, so the backends of [`BACKEND_ATTEMPTS`] are tried in order on
+    /// that surface. Returns the context and the surface, for [`Renderer::new`].
+    pub async fn new(
+        window: Arc<Window>,
+        display: winit::event_loop::OwnedDisplayHandle,
+    ) -> anyhow::Result<(Arc<Self>, wgpu::Surface<'static>)> {
+        let ((instance, surface, adapter), _) = first_transparent(&BACKEND_ATTEMPTS, |backends| {
+            let window = window.clone();
+            let display = display.clone();
+            async move {
+                let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
+                desc.backends = backends;
+                let instance = wgpu::Instance::new(desc);
+                let surface = instance.create_surface(window)?;
+                perf::mark("GPU instance and surface created");
+                let adapter = instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        compatible_surface: Some(&surface),
+                        ..Default::default()
+                    })
+                    .await
+                    .with_context(|| format!("no compatible GPU adapter ({backends:?})"))?;
+                let caps = surface.get_capabilities(&adapter);
+                let (_, alpha) = alpha_mode(&caps.alpha_modes);
+                Ok(((instance, surface, adapter), alpha.is_transparent()))
+            }
+        })
+        .await?;
+        perf::mark("GPU adapter ready");
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await?;
+        perf::mark("GPU device ready");
+        let gpu = Self {
+            instance,
+            adapter,
+            device,
+            queue,
+        };
+        Ok((Arc::new(gpu), surface))
+    }
+
+    /// Creates a surface for another window on this context.
+    pub fn create_surface(&self, window: Arc<Window>) -> anyhow::Result<wgpu::Surface<'static>> {
+        Ok(self.instance.create_surface(window)?)
+    }
+}
+
 pub struct Renderer {
-    instance: wgpu::Instance,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
     layers: Layers,
@@ -340,6 +396,8 @@ pub struct Renderer {
     offscreen: Option<OffscreenTarget>,
     #[cfg(target_os = "linux")]
     x11_presenter: Option<x11_presenter::X11Presenter>,
+    // After the surface: a surface must not outlive its instance.
+    gpu: Arc<Gpu>,
     // Dropped last: the surface must not outlive the window.
     window: Arc<Window>,
 }
@@ -415,45 +473,21 @@ fn x11_offscreen_format(adapter: &wgpu::Adapter) -> Option<wgpu::TextureFormat> 
 }
 
 impl Renderer {
-    /// Does the GPU work for `window`. `glyphs` is created beforehand (CPU only), so
-    /// the cell size is known and the shell spawned before this slow step.
-    pub async fn new(
+    /// Prepares the drawing of `window` on `gpu`, with `surface`, created for that
+    /// window on `gpu` (by [`Gpu::new`] for the first window). `glyphs` is created
+    /// beforehand (CPU only), so the cell size is known and the shell spawned before
+    /// the slow GPU step.
+    pub fn new(
+        gpu: Arc<Gpu>,
+        surface: wgpu::Surface<'static>,
         window: Arc<Window>,
         display: winit::event_loop::OwnedDisplayHandle,
         glyphs: Glyphs,
         background_opacity: f32,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        let ((instance, surface, adapter, caps), _) =
-            first_transparent(&BACKEND_ATTEMPTS, |backends| {
-                let window = window.clone();
-                let display = display.clone();
-                async move {
-                    let mut desc =
-                        wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
-                    desc.backends = backends;
-                    let instance = wgpu::Instance::new(desc);
-                    let surface = instance.create_surface(window)?;
-                    perf::mark("GPU instance and surface created");
-                    let adapter = instance
-                        .request_adapter(&wgpu::RequestAdapterOptions {
-                            compatible_surface: Some(&surface),
-                            ..Default::default()
-                        })
-                        .await
-                        .with_context(|| format!("no compatible GPU adapter ({backends:?})"))?;
-                    let caps = surface.get_capabilities(&adapter);
-                    let (_, alpha) = alpha_mode(&caps.alpha_modes);
-                    Ok(((instance, surface, adapter, caps), alpha.is_transparent()))
-                }
-            })
-            .await?;
-        perf::mark("GPU adapter ready");
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await?;
-        perf::mark("GPU device ready");
-
+        let device = &gpu.device;
+        let caps = surface.get_capabilities(&gpu.adapter);
         let (native_alpha_mode, mut alpha_mode) = alpha_mode(&caps.alpha_modes);
         #[cfg(target_os = "linux")]
         let mut x11_presenter = None;
@@ -467,7 +501,7 @@ impl Renderer {
         #[cfg(target_os = "linux")]
         let mut x11_format = x11_presenter
             .as_ref()
-            .and_then(|_| x11_offscreen_format(&adapter));
+            .and_then(|_| x11_offscreen_format(&gpu.adapter));
         #[cfg(target_os = "linux")]
         if x11_presenter.is_some() && x11_format.is_none() {
             log::warn!("GPU has no renderable 8-bit X11 ARGB offscreen format");
@@ -482,7 +516,7 @@ impl Renderer {
             #[cfg(target_os = "linux")]
             {
                 let format = x11_format.take().context("missing X11 offscreen format")?;
-                let target = OffscreenTarget::new(&device, format, size.width, size.height)?;
+                let target = OffscreenTarget::new(device, format, size.width, size.height)?;
                 alpha_mode = SurfaceAlphaMode::Premultiplied;
                 (format, None, Some(target))
             }
@@ -507,7 +541,7 @@ impl Renderer {
                 desired_maximum_frame_latency: 2,
                 color_space: wgpu::SurfaceColorSpace::Auto,
             };
-            surface.configure(&device, &config);
+            surface.configure(device, &config);
             (format, Some(config), None)
         };
 
@@ -522,14 +556,11 @@ impl Renderer {
             log::debug!("using surface alpha mode {native_alpha_mode:?} via {alpha_mode:?}");
         }
 
-        let mut layers = Layers::new(&device, format, glyphs);
+        let mut layers = Layers::new(device, format, glyphs);
         layers.alpha_mode = alpha_mode;
         perf::mark("renderer ready");
 
         let mut renderer = Self {
-            instance,
-            device,
-            queue,
             surface: (!using_x11_presenter).then_some(surface),
             config,
             layers,
@@ -538,10 +569,16 @@ impl Renderer {
             offscreen,
             #[cfg(target_os = "linux")]
             x11_presenter,
+            gpu,
             window,
         };
         renderer.set_background_opacity(background_opacity);
         Ok(renderer)
+    }
+
+    /// GPU context this renderer draws with, shared with the other windows.
+    pub fn gpu(&self) -> &Arc<Gpu> {
+        &self.gpu
     }
 
     /// Sets the opacity of the default background, ignored when the surface cannot be
@@ -591,7 +628,7 @@ impl Renderer {
     pub fn resize(&mut self, width: u32, height: u32) {
         let size = (width.max(1), height.max(1));
         if let Some(target) = &self.offscreen {
-            match OffscreenTarget::new(&self.device, target.format, size.0, size.1) {
+            match OffscreenTarget::new(&self.gpu.device, target.format, size.0, size.1) {
                 Ok(target) => self.offscreen = Some(target),
                 Err(error) => {
                     log::error!("could not resize X11 ARGB render target: {error:#}");
@@ -602,7 +639,7 @@ impl Renderer {
         if let (Some(surface), Some(config)) = (&self.surface, &mut self.config) {
             config.width = size.0;
             config.height = size.1;
-            surface.configure(&self.device, config);
+            surface.configure(&self.gpu.device, config);
         }
         self.size = size;
     }
@@ -614,7 +651,7 @@ impl Renderer {
         let screen = self.size;
         let prepared = self
             .layers
-            .prepare(&self.device, &self.queue, screen, panes, ui);
+            .prepare(&self.gpu.device, &self.gpu.queue, screen, panes, ui);
 
         #[cfg(target_os = "linux")]
         if self.x11_presenter.is_some() {
@@ -641,19 +678,19 @@ impl Renderer {
                     .as_ref()
                     .context("GPU surface is missing")?
                     .configure(
-                        &self.device,
+                        &self.gpu.device,
                         self.config.as_ref().context("surface config is missing")?,
                     );
                 self.window.request_redraw();
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = Some(self.instance.create_surface(self.window.clone())?);
+                self.surface = Some(self.gpu.create_surface(self.window.clone())?);
                 self.surface
                     .as_ref()
                     .context("GPU surface is missing")?
                     .configure(
-                        &self.device,
+                        &self.gpu.device,
                         self.config.as_ref().context("surface config is missing")?,
                     );
                 self.window.request_redraw();
@@ -666,13 +703,14 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
+            .gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         self.layers.draw(&mut encoder, &view, prepared);
 
-        self.queue.submit(Some(encoder.finish()));
+        self.gpu.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();
-        self.queue.present(output);
+        self.gpu.queue.present(output);
         Ok(true)
     }
 
@@ -683,6 +721,7 @@ impl Renderer {
             .as_ref()
             .context("X11 offscreen target is missing")?;
         let mut encoder = self
+            .gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         self.layers.draw(&mut encoder, &target.view, prepared);
@@ -702,7 +741,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        self.queue.submit([encoder.finish()]);
+        self.gpu.queue.submit([encoder.finish()]);
 
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         target
@@ -710,7 +749,7 @@ impl Renderer {
             .map_async(wgpu::MapMode::Read, .., move |result| {
                 let _ = send.send(result);
             });
-        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        self.gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
         receive
             .recv()
             .context("GPU readback callback was dropped")??;

@@ -29,6 +29,7 @@ mod process;
 mod pty;
 mod renderer;
 mod selection;
+mod settings;
 mod shell_integration;
 mod signals;
 mod terminal;

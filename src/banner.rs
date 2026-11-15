@@ -289,6 +289,8 @@ mod tests {
         ConfigError {
             file: PathBuf::from("/home/me/.config/graphene/config.toml"),
             line: Some(line),
+            key: None,
+            kind: crate::config::ConfigErrorKind::InvalidValue,
             message: message.to_owned(),
         }
     }

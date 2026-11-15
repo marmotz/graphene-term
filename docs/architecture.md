@@ -11,9 +11,11 @@
 | Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
 | Clipboard with an image           | `wl-clipboard-rs` (Wayland) + `x11rb` (X11 selection owner) | 0.9, 0.13 |
 | Config file                       | `toml` + `serde`                                         | 1       |
+| Config file edits (comments kept) | `toml_edit`                                              | 0.25    |
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
 | Kitty graphics: PNG, zlib, base64 | `png` + `flate2` + `base64`                              | 0.18, 1, 0.22 |
+| Settings window widgets           | `egui` + `egui-winit` + `egui-wgpu`                      | 0.37    |
 
 ## Modules
 
@@ -22,7 +24,16 @@ src/
   main.rs          binary entry point: --version, logger setup, calls lib::run
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup timing logs (`graphene::perf` target)
-  app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay)
+  app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay),
+                   window event routing (terminal or settings window)
+  settings/
+    mod.rs         SettingsWindow: winit window, surface on the shared Gpu, egui_winit::State,
+                   egui_wgpu::Renderer, redraw on demand
+    model.rs       SettingsModel: field values from Config, errors by key, locked state,
+                   edits -> changes to write (pure)
+    view.rs        egui drawing: sections sidebar, file problems, section fields (thin)
+    fonts.rs       the palette's sans-serif font and sizes for egui
+    visuals.rs     egui Visuals from the active theme's colors (pure)
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
   process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
   workspace/
@@ -30,6 +41,8 @@ src/
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
+  config_edit.rs   text-preserving config.toml edits (toml_edit): completion of missing options,
+                   --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
   watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
   appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
@@ -82,7 +95,7 @@ src/
     state.rs       update.json state file (last check, latest release, ignored tag)
     checker.rs     update-check thread, pure tick (check or reuse the cache, next wake-up)
   renderer/
-    mod.rs         wgpu device/surface, frame orchestration, headless renderer (benches)
+    mod.rs         Gpu context (shared), per-window surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + glyph instances (pure, no GPU)
     glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic, ui) -> atlas slot,
                    interface font shaping
@@ -101,11 +114,18 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`, `settings/model`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
 
+- `App` routes each window event by `WindowId` (`app::route`): the terminal window's
+  events go to the session, those of an unknown window are dropped. The GPU context
+  (`renderer::Gpu`: instance, adapter, device, queue) is created with the terminal
+  window, whose surface picks the adapter (backends of `BACKEND_ATTEMPTS` in order),
+  and is kept in `App` as an `Arc<Gpu>` for the other windows. Each `Renderer` keeps
+  its own surface, configuration and layers, and recreates a lost surface on the
+  shared instance.
 - `Session` owns the window and what is shared by every pane: the renderer, the
   clipboard, the modifiers, the font size, the banners, the mouse gesture in progress
   (`Drag`) and the open overlay. Its `Workspace<Pane>` holds the tabs; each tab is a
@@ -144,6 +164,72 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   `$XDG_STATE_HOME/graphene/palette-recent` (default `~/.local/state/graphene/`), one id
   per line, at most 50; the file is read each time the palette opens, and a missing or
   unreadable file means no recent actions. Tab and pane entries are not stored.
+
+## Settings window
+
+- `Ctrl+,` (`Action::OpenSettings`, also in the palette) opens it. Not `Ctrl+Shift+,`:
+  Shift is dropped for a symbol (`Shortcut::character`), so it would never match.
+- `Session::run_action` cannot create a window, which `App` owns: the action sets
+  `Session.settings_requested`, read by `App` after each terminal window event and user
+  event (`App::open_settings`). A second request focuses the open window
+  (`Window::focus_window`).
+- Same process, second winit window: its surface is created on the shared
+  `renderer::Gpu`, in the format egui prefers (`egui_wgpu::preferred_framebuffer_format`,
+  gamma-space), opaque. `egui_winit::State` takes its window events and applies the
+  platform output (cursor, clipboard, IME); `egui_wgpu::Renderer` paints the tessellated
+  frame. It is drawn only on demand: when egui says an event needs a repaint, or after
+  the delay egui asks for (`repaint_delay`, folded into `about_to_wait`'s deadline).
+- `App::window_event` routes by `WindowId`: the settings window's events go to
+  `SettingsWindow::window_event`; `CloseRequested` drops it. Closing the terminal window
+  exits the event loop as before, which closes the settings window too.
+- Layout (`settings/view.rs`): a sidebar with the ten sections (`i18n::SettingsSection`:
+  Language, Font, Window, Scrollback, Cursor, Selection, Tabs, Theme, Keyboard shortcuts,
+  Updates) and the selected section's fields (label, widget, errors under it); labels
+  in the configuration's resolved language (`Msg::Field(SettingsField)`). Text uses the
+  command palette's font (`settings/fonts.rs`: the sans-serif face of cosmic-text's font
+  database, in front of egui's fonts) at the palette's size. In an open combo box,
+  typing the start of a choice highlights it and scrolls to it, `Enter` picks it; the
+  typed text starts over after a one-second pause.
+- Fields (`settings/model.rs`): one per setting except the shortcuts, read from the
+  applied `Config`. Choices and ranges come from `config.rs` (`Language::VALUES`,
+  `StartupMode::VALUES`, `CursorShape::VALUES`, `TabPosition::VALUES`,
+  `UpdateInterval::VALUES`, `MIN_FONT_SIZE`...). Font families: "System monospace"
+  (empty) then the monospaced families of the system font database, loaded when the
+  window opens. Themes: the `themes/*.toml` stems, then the `theme::BUILT_IN` names they
+  do not shadow. The "Follow the system appearance" toggle shows `name`, or `light` and
+  `dark`; turning it on sets both (to the current theme when unset), off removes both.
+- Writes: combo and toggle on change, text and number on `Enter` or focus loss (a
+  number out of range is shown under its field, not written), slider when the drag ends
+  and on each click or keyboard step. Each edit is one `config_edit::write`; the file
+  read back is parsed at once so the window shows the result before the reload. The
+  watcher sees the rename and `UserEvent::ConfigChanged` applies it to the terminal
+  window and refreshes the settings window (`SettingsWindow::apply`), as for a hand
+  edit.
+- Keyboard shortcuts section: one row per action (`Action::ALL`, the palette, tabs 1 to
+  9, then any other action the file binds), with its effective shortcuts
+  (`Keybindings::shortcuts`: its defaults, then the configured ones; the ones added in
+  the window come last, in the order added). Labels, shortcut slots of equal width and
+  the right-aligned "Add" button line up across rows; the row under the pointer, or
+  being captured or in conflict, is highlighted. Removing a configured shortcut
+  deletes its `[keybindings]` entries (every spelling that parses to it); removing a
+  default one writes `"<keys>" = "none"`. "Add" captures the next key press: the winit
+  `KeyEvent` is taken by `SettingsWindow::window_event` before egui sees it and turned
+  into a shortcut by `Shortcut::from_event`, the inverse of `Keybindings::action`; its
+  label is the key written (`"<label>" = "<action id>"`, or the `none` entry removed
+  when it restores a default). `Escape` alone cancels, a modifier alone keeps waiting. A
+  shortcut bound to another action shows "Already used by <action>" with "Replace"
+  (writes the new binding over it) and "Cancel".
+- Errors (`App.load_errors`: the configuration's and the theme's, kept apart): a value
+  error under its field (by `ConfigError.key`), a key of a section with no field
+  (`font = 3`, a keybinding) at the top of its section, theme errors in the Theme
+  section, unknown keys and a failed write at the top of the window. A syntax or read
+  error shows the error, the file path and a "fix it by hand" note, and disables every
+  field until a reload reads the file again.
+- Look: egui's bundled fonts; `settings::visuals` maps the active palette to egui
+  `Visuals` (dark or light base from the background's luma, panels from the background,
+  text from the foreground, accent from `ui.palette_match`, borders from
+  `ui.pane_border`, controls from the tab bar colors). Rebuilt by `App::reload_config`,
+  so on `UserEvent::ConfigChanged` and on a system appearance change.
 
 ## Threads
 

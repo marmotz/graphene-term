@@ -67,6 +67,89 @@ pub enum CloseTarget {
     Window,
 }
 
+/// A section of the settings window, in sidebar order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SettingsSection {
+    #[default]
+    Language,
+    Font,
+    Window,
+    Scrollback,
+    Cursor,
+    Selection,
+    Tabs,
+    Theme,
+    KeyboardShortcuts,
+    Updates,
+}
+
+impl SettingsSection {
+    /// Every section, in sidebar order.
+    pub const ALL: [SettingsSection; 10] = [
+        SettingsSection::Language,
+        SettingsSection::Font,
+        SettingsSection::Window,
+        SettingsSection::Scrollback,
+        SettingsSection::Cursor,
+        SettingsSection::Selection,
+        SettingsSection::Tabs,
+        SettingsSection::Theme,
+        SettingsSection::KeyboardShortcuts,
+        SettingsSection::Updates,
+    ];
+}
+
+/// A field of the settings window, one per setting of the file but the keyboard
+/// shortcuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SettingsField {
+    Language,
+    FontFamily,
+    FontSize,
+    StartupMode,
+    WindowWidth,
+    WindowHeight,
+    Padding,
+    BackgroundOpacity,
+    ScrollbackLines,
+    CursorShape,
+    CursorBlinking,
+    WordSeparators,
+    TabPosition,
+    /// "Follow the system appearance": sets or removes `theme.light` and `theme.dark`.
+    ThemeFollow,
+    ThemeName,
+    ThemeLight,
+    ThemeDark,
+    UpdatesCheck,
+    UpdatesInterval,
+}
+
+impl SettingsField {
+    /// Every field.
+    pub const ALL: [SettingsField; 19] = [
+        SettingsField::Language,
+        SettingsField::FontFamily,
+        SettingsField::FontSize,
+        SettingsField::StartupMode,
+        SettingsField::WindowWidth,
+        SettingsField::WindowHeight,
+        SettingsField::Padding,
+        SettingsField::BackgroundOpacity,
+        SettingsField::ScrollbackLines,
+        SettingsField::CursorShape,
+        SettingsField::CursorBlinking,
+        SettingsField::WordSeparators,
+        SettingsField::TabPosition,
+        SettingsField::ThemeFollow,
+        SettingsField::ThemeName,
+        SettingsField::ThemeLight,
+        SettingsField::ThemeDark,
+        SettingsField::UpdatesCheck,
+        SettingsField::UpdatesInterval,
+    ];
+}
+
 /// A translatable label. Messages carrying a value have fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
@@ -104,6 +187,42 @@ pub enum Msg {
     CommandPalette,
     EqualisePanes,
     DetachPane,
+    /// The settings action, and the settings window's title.
+    OpenSettings,
+    /// Sidebar entry of the settings window.
+    Section(SettingsSection),
+    /// Label of a settings field.
+    Field(SettingsField),
+    /// Font family choice that leaves `font.family` empty.
+    SystemMonospace,
+    /// Heading of the unknown keys of the file.
+    UnknownKeys,
+    /// 1-based line of the file.
+    AtLine(usize),
+    /// Note shown when the file cannot be parsed and the settings are disabled.
+    FixFileByHand,
+    /// Prefix of an error writing the file.
+    CannotSave,
+    /// A number field holds text that is not a number.
+    NotANumber,
+    /// An integer field holds a fractional number.
+    NotAWholeNumber,
+    /// A number field is below its minimum.
+    AtLeast(String),
+    /// A number field is above its maximum.
+    AtMost(String),
+    /// Button adding a shortcut to an action.
+    AddShortcut,
+    /// Tooltip of the button removing a shortcut.
+    RemoveShortcut,
+    /// An action without shortcut.
+    NoShortcut,
+    /// Shown while the next key press is captured as a shortcut.
+    PressShortcut,
+    /// A captured shortcut is bound to this other action (its label).
+    AlreadyUsedBy(String),
+    /// Button binding a captured shortcut over the other action.
+    Replace,
     /// Hint shown in the command palette's empty search field.
     PalettePlaceholder,
     // Command palette entries for open tabs and panes (1-based numbers).
@@ -180,6 +299,57 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::PreviousPane => "Previous pane",
         Msg::ToggleZoom => "Zoom / unzoom pane",
         Msg::CommandPalette => "Command palette",
+        Msg::OpenSettings => "Settings",
+        Msg::Section(section) => match section {
+            SettingsSection::Font => "Font",
+            SettingsSection::Window => "Window",
+            SettingsSection::Scrollback => "Scrollback",
+            SettingsSection::Cursor => "Cursor",
+            SettingsSection::Selection => "Selection",
+            SettingsSection::Tabs => "Tabs",
+            SettingsSection::Language => "Language",
+            SettingsSection::Theme => "Theme",
+            SettingsSection::KeyboardShortcuts => "Keyboard shortcuts",
+            SettingsSection::Updates => "Updates",
+        },
+        Msg::Field(field) => match field {
+            SettingsField::Language => "Language",
+            SettingsField::FontFamily => "Family",
+            SettingsField::FontSize => "Size",
+            SettingsField::StartupMode => "Startup mode",
+            SettingsField::WindowWidth => "Width",
+            SettingsField::WindowHeight => "Height",
+            SettingsField::Padding => "Padding",
+            SettingsField::BackgroundOpacity => "Background opacity",
+            SettingsField::ScrollbackLines => "Lines kept",
+            SettingsField::CursorShape => "Shape",
+            SettingsField::CursorBlinking => "Blinking",
+            SettingsField::WordSeparators => "Word separators",
+            SettingsField::TabPosition => "Position",
+            SettingsField::ThemeFollow => "Follow the system appearance",
+            SettingsField::ThemeName => "Theme",
+            SettingsField::ThemeLight => "Light theme",
+            SettingsField::ThemeDark => "Dark theme",
+            SettingsField::UpdatesCheck => "Check for updates",
+            SettingsField::UpdatesInterval => "Check interval",
+        },
+        Msg::SystemMonospace => "System monospace",
+        Msg::UnknownKeys => "Unknown keys",
+        Msg::AtLine(line) => return format!("line {line}").into(),
+        Msg::FixFileByHand => {
+            "The file cannot be read: fix it by hand. The settings stay disabled until then."
+        }
+        Msg::CannotSave => "Cannot save the change",
+        Msg::NotANumber => "Enter a number",
+        Msg::NotAWholeNumber => "Enter a whole number",
+        Msg::AtLeast(min) => return format!("Must be at least {min}").into(),
+        Msg::AtMost(max) => return format!("Must be at most {max}").into(),
+        Msg::AddShortcut => "Add",
+        Msg::RemoveShortcut => "Remove this shortcut",
+        Msg::NoShortcut => "No shortcut",
+        Msg::PressShortcut => "Press a shortcut · Esc to cancel",
+        Msg::AlreadyUsedBy(action) => return format!("Already used by {action}").into(),
+        Msg::Replace => "Replace",
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
         Msg::PalettePlaceholder => "Type a command, a tab or a pane",
@@ -254,6 +424,57 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::PreviousPane => "Panneau précédent",
         Msg::ToggleZoom => "Agrandir / réduire le panneau",
         Msg::CommandPalette => "Palette de commandes",
+        Msg::OpenSettings => "Paramètres",
+        Msg::Section(section) => match section {
+            SettingsSection::Font => "Police",
+            SettingsSection::Window => "Fenêtre",
+            SettingsSection::Scrollback => "Historique",
+            SettingsSection::Cursor => "Curseur",
+            SettingsSection::Selection => "Sélection",
+            SettingsSection::Tabs => "Onglets",
+            SettingsSection::Language => "Langue",
+            SettingsSection::Theme => "Thème",
+            SettingsSection::KeyboardShortcuts => "Raccourcis clavier",
+            SettingsSection::Updates => "Mises à jour",
+        },
+        Msg::Field(field) => match field {
+            SettingsField::Language => "Langue",
+            SettingsField::FontFamily => "Famille",
+            SettingsField::FontSize => "Taille",
+            SettingsField::StartupMode => "Mode au démarrage",
+            SettingsField::WindowWidth => "Largeur",
+            SettingsField::WindowHeight => "Hauteur",
+            SettingsField::Padding => "Marge intérieure",
+            SettingsField::BackgroundOpacity => "Opacité du fond",
+            SettingsField::ScrollbackLines => "Lignes conservées",
+            SettingsField::CursorShape => "Forme",
+            SettingsField::CursorBlinking => "Clignotement",
+            SettingsField::WordSeparators => "Séparateurs de mots",
+            SettingsField::TabPosition => "Emplacement",
+            SettingsField::ThemeFollow => "Suivre l'apparence du système",
+            SettingsField::ThemeName => "Thème",
+            SettingsField::ThemeLight => "Thème clair",
+            SettingsField::ThemeDark => "Thème sombre",
+            SettingsField::UpdatesCheck => "Rechercher les mises à jour",
+            SettingsField::UpdatesInterval => "Intervalle de recherche",
+        },
+        Msg::SystemMonospace => "Monospace du système",
+        Msg::UnknownKeys => "Clés inconnues",
+        Msg::AtLine(line) => return format!("ligne {line}").into(),
+        Msg::FixFileByHand => {
+            "Le fichier est illisible : corrigez-le à la main. Les paramètres restent désactivés d'ici là."
+        }
+        Msg::CannotSave => "Impossible d'enregistrer la modification",
+        Msg::NotANumber => "Saisissez un nombre",
+        Msg::NotAWholeNumber => "Saisissez un nombre entier",
+        Msg::AtLeast(min) => return format!("Doit valoir au moins {min}").into(),
+        Msg::AtMost(max) => return format!("Doit valoir au plus {max}").into(),
+        Msg::AddShortcut => "Ajouter",
+        Msg::RemoveShortcut => "Supprimer ce raccourci",
+        Msg::NoShortcut => "Aucun raccourci",
+        Msg::PressShortcut => "Appuyez sur un raccourci · Échap pour annuler",
+        Msg::AlreadyUsedBy(action) => return format!("Déjà utilisé par {action}").into(),
+        Msg::Replace => "Remplacer",
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
         Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
@@ -346,9 +567,27 @@ mod tests {
             Msg::OpenRelease => 37,
             Msg::IgnoreVersion => 38,
             Msg::LinesHidden(_) => 39,
+            Msg::OpenSettings => 41,
+            Msg::Section(_) => 42,
+            Msg::Field(_) => 43,
+            Msg::SystemMonospace => 44,
+            Msg::UnknownKeys => 45,
+            Msg::AtLine(_) => 46,
+            Msg::FixFileByHand => 47,
+            Msg::CannotSave => 48,
+            Msg::NotANumber => 49,
+            Msg::NotAWholeNumber => 50,
+            Msg::AtLeast(_) => 51,
+            Msg::AtMost(_) => 52,
+            Msg::AddShortcut => 53,
+            Msg::RemoveShortcut => 54,
+            Msg::NoShortcut => 55,
+            Msg::PressShortcut => 56,
+            Msg::AlreadyUsedBy(_) => 57,
+            Msg::Replace => 58,
         }
     }
-    const VARIANT_COUNT: usize = 41;
+    const VARIANT_COUNT: usize = 59;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -381,6 +620,7 @@ mod tests {
             Msg::CommandPalette,
             Msg::EqualisePanes,
             Msg::DetachPane,
+            Msg::OpenSettings,
             Msg::PalettePlaceholder,
             Msg::TabEntry {
                 tab: 2,
@@ -400,10 +640,27 @@ mod tests {
             Msg::IgnoreVersion,
             Msg::LinesHidden(1),
             Msg::LinesHidden(42),
+            Msg::SystemMonospace,
+            Msg::UnknownKeys,
+            Msg::AtLine(12),
+            Msg::FixFileByHand,
+            Msg::CannotSave,
+            Msg::NotANumber,
+            Msg::NotAWholeNumber,
+            Msg::AtLeast("6".into()),
+            Msg::AtMost("72".into()),
+            Msg::AddShortcut,
+            Msg::RemoveShortcut,
+            Msg::NoShortcut,
+            Msg::PressShortcut,
+            Msg::AlreadyUsedBy("Copy".into()),
+            Msg::Replace,
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
         messages.extend(TARGETS.map(Msg::ConfirmCloseTitle));
+        messages.extend(SettingsSection::ALL.map(Msg::Section));
+        messages.extend(SettingsField::ALL.map(Msg::Field));
         messages
     }
 
@@ -435,6 +692,14 @@ mod tests {
     #[test]
     fn messages_with_values_include_them() {
         assert_eq!(text(Lang::En, &Msg::GoToTab(4)), "Go to tab 4");
+        assert_eq!(
+            text(Lang::En, &Msg::AlreadyUsedBy("New tab".into())),
+            "Already used by New tab"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::AlreadyUsedBy("Nouvel onglet".into())),
+            "Déjà utilisé par Nouvel onglet"
+        );
         assert_eq!(text(Lang::En, &Msg::LinesHidden(1)), "1 line hidden");
         assert_eq!(text(Lang::En, &Msg::LinesHidden(12)), "12 lines hidden");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(1)), "1 ligne masquée");
@@ -464,6 +729,43 @@ mod tests {
         assert_eq!(
             text(Lang::Fr, &Msg::UpdateAvailable("v0.2.0".into())),
             "Graphene v0.2.0 est disponible"
+        );
+    }
+
+    #[test]
+    fn settings_texts() {
+        assert_eq!(text(Lang::En, &Msg::OpenSettings), "Settings");
+        assert_eq!(text(Lang::Fr, &Msg::OpenSettings), "Paramètres");
+        assert_eq!(
+            text(Lang::En, &Msg::Section(SettingsSection::KeyboardShortcuts)),
+            "Keyboard shortcuts"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::Section(SettingsSection::Updates)),
+            "Mises à jour"
+        );
+        // Sidebar entries are distinct within a language.
+        for lang in LANGS {
+            let mut labels: Vec<_> = SettingsSection::ALL
+                .map(|section| text(lang, &Msg::Section(section)))
+                .to_vec();
+            labels.sort();
+            labels.dedup();
+            assert_eq!(labels.len(), SettingsSection::ALL.len(), "{lang:?}");
+        }
+        assert_eq!(text(Lang::En, &Msg::AtLine(12)), "line 12");
+        assert_eq!(text(Lang::Fr, &Msg::AtLine(12)), "ligne 12");
+        assert_eq!(
+            text(Lang::En, &Msg::AtLeast("6".into())),
+            "Must be at least 6"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::AtMost("72".into())),
+            "Doit valoir au plus 72"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::Field(SettingsField::ThemeFollow)),
+            "Suivre l'apparence du système"
         );
     }
 

@@ -142,6 +142,8 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Alt+8", Action::GoToTab(8)),
     ("Alt+9", Action::GoToTab(9)),
     ("Ctrl+Shift+P", Action::CommandPalette),
+    // Not `Ctrl+Shift+,`: Shift is dropped for a symbol (see `Shortcut::character`).
+    ("Ctrl+,", Action::OpenSettings),
 ];
 
 /// Built-in key/action pairs, in the order shown in the default configuration.
@@ -210,6 +212,53 @@ impl Shortcut {
         }
     }
 
+    /// The shortcut a key event triggers, the inverse of [`Keybindings::action`]: a
+    /// digit with `Alt` by its physical key, a named key by its logical value, a Latin
+    /// letter or another character by the character typed, any other letter (and a key
+    /// typing no single character) by its physical letter key. `None` for a key a
+    /// shortcut cannot name: a modifier alone, an unnamed key.
+    pub fn from_event(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Option<Shortcut> {
+        if mods.alt_key()
+            && let Some(digit) = physical_digit(physical)
+        {
+            return Some(Shortcut {
+                key: KeyId::Digit(digit),
+                mods,
+            });
+        }
+        let by_physical_letter = || {
+            physical_letter(physical).map(|letter| Shortcut {
+                key: KeyId::Char(letter),
+                mods,
+            })
+        };
+        match key {
+            Key::Named(named) => NAMED_KEYS
+                .iter()
+                .any(|&(_, known)| known == *named)
+                .then_some(Shortcut {
+                    key: KeyId::Named(*named),
+                    mods,
+                }),
+            Key::Character(text) => {
+                let mut chars = text.chars();
+                let (Some(c), None) = (chars.next(), chars.next()) else {
+                    return by_physical_letter();
+                };
+                if c.is_alphabetic() && !c.is_ascii_alphabetic() {
+                    // A letter of a non-Latin layout: the physical key, as matched.
+                    if let Some(shortcut) = by_physical_letter() {
+                        return Some(shortcut);
+                    }
+                }
+                let shortcut = Shortcut::character(c, mods);
+                // A digit with `Alt` off the digit row (keypad) is never matched.
+                (!matches!(shortcut.key, KeyId::Digit(_))).then_some(shortcut)
+            }
+            _ => None,
+        }
+    }
+
     /// The shortcut as the command palette shows it (`Ctrl+Shift+C`).
     pub fn label(self) -> String {
         let mut label = String::new();
@@ -237,6 +286,14 @@ impl Shortcut {
         }
         label
     }
+}
+
+/// The action `shortcut` is bound to by default, if any.
+pub fn default_action(shortcut: Shortcut) -> Option<Action> {
+    DEFAULTS
+        .iter()
+        .find(|(keys, _)| Shortcut::parse(keys).ok() == Some(shortcut))
+        .map(|&(_, action)| action)
 }
 
 /// Parses one `"keys" = "action"` entry of the configuration; `None` for `"none"`.
@@ -330,6 +387,25 @@ impl Keybindings {
             }
             _ => None,
         }
+    }
+
+    /// The shortcuts bound to `action`, each once: its defaults still bound, then the
+    /// configured ones, so a shortcut added to the file comes last.
+    pub fn shortcuts(&self, action: Action) -> Vec<Shortcut> {
+        let mut shortcuts: Vec<Shortcut> = Vec::new();
+        for &shortcut in &self.order {
+            if self.actions.get(&shortcut) == Some(&action) && !shortcuts.contains(&shortcut) {
+                shortcuts.push(shortcut);
+            }
+        }
+        // Stable: the defaults keep their order, the configured ones the file's.
+        shortcuts.sort_by_key(|&shortcut| default_action(shortcut) != Some(action));
+        shortcuts
+    }
+
+    /// The action bound to `shortcut`, if any.
+    pub fn bound(&self, shortcut: Shortcut) -> Option<Action> {
+        self.actions.get(&shortcut).copied()
     }
 
     /// The shortcut of `action` as the command palette shows it, `None` when no key is
@@ -543,6 +619,11 @@ mod tests {
         assert_eq!(get(&named(NamedKey::Copy), NONE), Some(Action::Copy));
         assert_eq!(get(&ch("P"), cs()), Some(Action::CommandPalette));
         assert_eq!(get(&ch("p"), cs()), Some(Action::CommandPalette));
+        assert_eq!(get(&ch(","), CTRL), Some(Action::OpenSettings));
+        assert_eq!(
+            bindings.label(Action::OpenSettings).as_deref(),
+            Some("Ctrl+,")
+        );
     }
 
     #[test]
@@ -757,6 +838,147 @@ mod tests {
         assert_eq!(parse("Ctrl+"), Err("missing key in \"Ctrl+\"".to_owned()));
         assert_eq!(parse(""), Err("missing key in \"\"".to_owned()));
         assert!(parse("Ctrl++C").is_err());
+    }
+
+    /// The shortcut of an event, checked to trigger the action it is bound to.
+    fn captured(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Option<String> {
+        let shortcut = Shortcut::from_event(key, physical, mods)?;
+        let label = shortcut.label();
+        assert_eq!(Shortcut::parse(&label), Ok(shortcut), "{label}");
+        let bindings = with(&[(label.as_str(), "new_tab")]);
+        assert_eq!(
+            bindings.action(key, physical, mods),
+            Some(Action::NewTab),
+            "{label}"
+        );
+        Some(label)
+    }
+
+    #[test]
+    fn from_event_is_the_inverse_of_action() {
+        let code = |code| PhysicalKey::Code(code);
+        assert_eq!(
+            captured(&ch("C"), code(KeyCode::KeyC), cs()).as_deref(),
+            Some("Ctrl+Shift+C")
+        );
+        assert_eq!(
+            captured(&ch("t"), code(KeyCode::KeyT), CTRL | ALT).as_deref(),
+            Some("Ctrl+Alt+T")
+        );
+        // AZERTY: the letter typed, not its physical place.
+        assert_eq!(
+            captured(&ch("z"), code(KeyCode::KeyW), cs()).as_deref(),
+            Some("Ctrl+Shift+Z")
+        );
+        // A non-Latin layout: the physical letter key.
+        assert_eq!(
+            captured(&ch("У"), code(KeyCode::KeyE), cs()).as_deref(),
+            Some("Ctrl+Shift+E")
+        );
+        assert_eq!(
+            captured(&ch("é"), code(KeyCode::Digit2), CTRL).as_deref(),
+            Some("Ctrl+É")
+        );
+        assert_eq!(
+            captured(&named(NamedKey::PageUp), UNIDENTIFIED, SHIFT).as_deref(),
+            Some("Shift+PageUp")
+        );
+        assert_eq!(
+            captured(&named(NamedKey::F5), UNIDENTIFIED, NONE).as_deref(),
+            Some("F5")
+        );
+        assert_eq!(
+            captured(&named(NamedKey::ArrowLeft), UNIDENTIFIED, csa()).as_deref(),
+            Some("Ctrl+Shift+Alt+Left")
+        );
+        // US layout: `+` is Shift+=, written without Shift.
+        assert_eq!(
+            captured(&ch("+"), code(KeyCode::Equal), cs()).as_deref(),
+            Some("Ctrl++")
+        );
+        assert_eq!(
+            captured(&ch(","), code(KeyCode::Comma), CTRL).as_deref(),
+            Some("Ctrl+,")
+        );
+        // AZERTY: the Digit1 key types `&`; with Alt it is the digit.
+        assert_eq!(
+            captured(&ch("&"), code(KeyCode::Digit1), ALT).as_deref(),
+            Some("Alt+1")
+        );
+        assert_eq!(
+            captured(&ch("1"), code(KeyCode::Digit1), ALT | CTRL).as_deref(),
+            Some("Ctrl+Alt+1")
+        );
+        assert_eq!(
+            captured(&ch("1"), code(KeyCode::Digit1), CTRL).as_deref(),
+            Some("Ctrl+1")
+        );
+    }
+
+    #[test]
+    fn from_event_rejects_keys_a_shortcut_cannot_name() {
+        for key in [
+            NamedKey::Shift,
+            NamedKey::Control,
+            NamedKey::Alt,
+            NamedKey::Super,
+            NamedKey::CapsLock,
+        ] {
+            assert_eq!(
+                Shortcut::from_event(&named(key), UNIDENTIFIED, CTRL),
+                None,
+                "{key:?}"
+            );
+        }
+        // A digit with Alt off the digit row is never matched.
+        assert_eq!(
+            Shortcut::from_event(&ch("1"), PhysicalKey::Code(KeyCode::Numpad1), ALT),
+            None
+        );
+        // No single character and no letter key.
+        assert_eq!(Shortcut::from_event(&ch("ab"), UNIDENTIFIED, CTRL), None);
+        assert_eq!(
+            Shortcut::from_event(&Key::Dead(None), UNIDENTIFIED, CTRL),
+            None
+        );
+        // A composed text on a letter key: the physical letter.
+        assert_eq!(
+            Shortcut::from_event(&ch("ab"), PhysicalKey::Code(KeyCode::KeyA), CTRL)
+                .map(Shortcut::label)
+                .as_deref(),
+            Some("Ctrl+A")
+        );
+    }
+
+    #[test]
+    fn shortcuts_of_an_action_are_listed_configured_first() {
+        let shortcut = |label| Shortcut::parse(label).unwrap();
+        let labels = |bindings: &Keybindings, action| -> Vec<String> {
+            bindings
+                .shortcuts(action)
+                .into_iter()
+                .map(Shortcut::label)
+                .collect()
+        };
+        let bindings = defaults();
+        assert_eq!(labels(&bindings, Action::Copy), ["Ctrl+Shift+C", "Copy"]);
+        assert!(labels(&bindings, Action::EqualisePanes).is_empty());
+        let bindings = with(&[
+            ("Ctrl+Alt+C", "copy"),
+            ("Copy", "none"),
+            ("ctrl+shift+c", "copy"),
+            ("Ctrl+Shift+V", "copy"),
+        ]);
+        assert_eq!(
+            labels(&bindings, Action::Copy),
+            // The default first, then the file's keys in order: lowercase keys come last.
+            ["Ctrl+Shift+C", "Ctrl+Alt+C", "Ctrl+Shift+V"]
+        );
+        assert_eq!(labels(&bindings, Action::Paste), ["Shift+Insert", "Paste"]);
+        assert_eq!(bindings.bound(shortcut("Ctrl+Shift+V")), Some(Action::Copy));
+        assert_eq!(bindings.bound(shortcut("Copy")), None);
+        assert_eq!(default_action(shortcut("Copy")), Some(Action::Copy));
+        assert_eq!(default_action(shortcut("Ctrl+Alt+C")), None);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
-use crate::config::{CONFIG_FILE, ConfigError};
+use crate::config::{CONFIG_FILE, ConfigError, ConfigErrorKind};
 use crate::palette::{Palette, UiColors, build_indexed};
 
 /// Theme used when the configured one cannot be found.
@@ -90,11 +90,10 @@ pub fn load(name: &str, config_dir: Option<&Path>) -> (Palette, Vec<ConfigError>
             Err(error) => {
                 return (
                     base.clone(),
-                    vec![ConfigError {
+                    vec![ConfigError::read(
                         file,
-                        line: None,
-                        message: format!("cannot read the theme: {error}"),
-                    }],
+                        format!("cannot read the theme: {error}"),
+                    )],
                 );
             }
         }
@@ -110,6 +109,8 @@ pub fn load(name: &str, config_dir: Option<&Path>) -> (Palette, Vec<ConfigError>
         vec![ConfigError {
             file,
             line: None,
+            key: None,
+            kind: ConfigErrorKind::InvalidValue,
             message: format!("unknown theme `{name}`, using `{DEFAULT_THEME}`"),
         }],
     )
@@ -126,7 +127,12 @@ pub fn parse(text: &str, base: &Palette, file: &Path) -> (Palette, Vec<ConfigErr
     let root = match DeTable::parse(text) {
         Ok(root) => root.into_inner(),
         Err(error) => {
-            reader.error(error.span(), error.message().trim_end().to_owned());
+            reader.error(
+                error.span(),
+                None,
+                ConfigErrorKind::Syntax,
+                error.message().trim_end().to_owned(),
+            );
             return (base.clone(), reader.errors);
         }
     };
@@ -239,7 +245,13 @@ struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    fn error(&mut self, span: Option<Range<usize>>, message: String) {
+    fn error(
+        &mut self,
+        span: Option<Range<usize>>,
+        key: Option<&str>,
+        kind: ConfigErrorKind,
+        message: String,
+    ) {
         let line = span.map(|span| {
             let end = span.start.min(self.text.len());
             self.text.as_bytes()[..end]
@@ -251,12 +263,19 @@ impl<'a> Reader<'a> {
         self.errors.push(ConfigError {
             file: self.file.to_path_buf(),
             line,
+            key: key.map(str::to_owned),
+            kind,
             message,
         });
     }
 
     fn unknown(&mut self, key: &Spanned<std::borrow::Cow<'_, str>>, path: &str) {
-        self.error(Some(key.span()), format!("unknown key `{path}`"));
+        self.error(
+            Some(key.span()),
+            Some(path),
+            ConfigErrorKind::UnknownKey,
+            format!("unknown key `{path}`"),
+        );
     }
 
     fn table<'v, 'de>(
@@ -267,7 +286,12 @@ impl<'a> Reader<'a> {
         match value.get_ref() {
             DeValue::Table(table) => Some(table),
             _ => {
-                self.error(Some(value.span()), format!("`{path}` must be a table"));
+                self.error(
+                    Some(value.span()),
+                    Some(path),
+                    ConfigErrorKind::InvalidValue,
+                    format!("`{path}` must be a table"),
+                );
                 None
             }
         }
@@ -279,6 +303,8 @@ impl<'a> Reader<'a> {
             _ => {
                 self.error(
                     Some(value.span()),
+                    Some(path),
+                    ConfigErrorKind::InvalidValue,
                     format!("invalid value for `{path}`: expected a \"#rrggbb\" string"),
                 );
                 None
@@ -295,6 +321,8 @@ impl<'a> Reader<'a> {
             Some(color) => *target = color,
             None => self.error(
                 Some(value.span()),
+                Some(path),
+                ConfigErrorKind::InvalidValue,
                 format!("invalid value for `{path}`: `{text}` is not a \"#rrggbb\" color"),
             ),
         }
@@ -527,6 +555,30 @@ banner = "#000000"
             ]
         );
         assert!(errors.iter().all(|e| e.file == Path::new("test.toml")));
+    }
+
+    #[test]
+    fn theme_errors_carry_the_key_path_of_the_faulty_color() {
+        let (_, errors) = parse_on_default(
+            "[colors]\nforeground = \"red\"\nglow = \"#ffffff\"\n[colors.normal]\nred = 1\n[ui]\nbanner = \"#000000\"\n",
+        );
+        let keys: Vec<_> = errors.iter().map(|e| (e.key.as_deref(), e.kind)).collect();
+        assert_eq!(
+            keys,
+            vec![
+                (Some("colors.foreground"), ConfigErrorKind::InvalidValue),
+                (Some("colors.glow"), ConfigErrorKind::UnknownKey),
+                (Some("colors.normal.red"), ConfigErrorKind::InvalidValue),
+                (Some("ui.banner"), ConfigErrorKind::UnknownKey),
+            ]
+        );
+    }
+
+    #[test]
+    fn theme_syntax_error_has_no_key_path() {
+        let (_, errors) = parse_on_default("[colors\n");
+        assert_eq!(errors[0].key, None);
+        assert_eq!(errors[0].kind, ConfigErrorKind::Syntax);
     }
 
     #[test]
