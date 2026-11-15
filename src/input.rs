@@ -469,6 +469,10 @@ mod tests {
             Some(vec![0x7f])
         );
         assert_eq!(
+            key_to_bytes(&named(NamedKey::Tab), None, NONE, m),
+            Some(b"\t".to_vec())
+        );
+        assert_eq!(
             key_to_bytes(&named(NamedKey::Tab), None, ModifiersState::SHIFT, m),
             Some(b"\x1b[Z".to_vec())
         );

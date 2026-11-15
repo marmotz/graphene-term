@@ -2275,6 +2275,10 @@ fn route(id: WindowId, session: Option<WindowId>, settings: Option<WindowId>) ->
     }
 }
 
+fn is_real_key_press(state: ElementState, is_synthetic: bool) -> bool {
+    state == ElementState::Pressed && !is_synthetic
+}
+
 impl App {
     /// Handles an event of the terminal window.
     fn session_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
@@ -2313,7 +2317,11 @@ impl App {
                     session.window.request_redraw();
                 }
             }
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } if is_real_key_press(event.state, is_synthetic) => {
                 session.key_press(&event, default_font_size, event_loop);
             }
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
@@ -2451,6 +2459,14 @@ mod tests {
             route(WindowId::from(3), Some(terminal), Some(WindowId::from(2))),
             Route::Unknown
         );
+    }
+
+    #[test]
+    fn synthetic_focus_key_presses_are_not_forwarded() {
+        assert!(is_real_key_press(ElementState::Pressed, false));
+        assert!(!is_real_key_press(ElementState::Pressed, true));
+        assert!(!is_real_key_press(ElementState::Released, false));
+        assert!(!is_real_key_press(ElementState::Released, true));
     }
 
     #[test]
