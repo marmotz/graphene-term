@@ -51,6 +51,9 @@ const ROW_PADDING: f32 = 4.0;
 const TEXT_PADDING: f32 = 12.0;
 /// Space between an entry label and its shortcut, in logical pixels.
 const SHORTCUT_GAP: f32 = 16.0;
+/// Width of the accent bar on the left edge of the selected row, in logical pixels: the
+/// width of the active pane border.
+const MARKER_WIDTH: f32 = 2.0;
 
 /// What an entry does when it is run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -541,6 +544,8 @@ pub struct PaletteLayout {
     /// The text cursor, after the query.
     pub caret: Rect,
     pub rows: Vec<Row>,
+    /// The accent bar on the left edge of the selected row, when it is shown.
+    pub marker: Option<Rect>,
 }
 
 /// What the mouse is over in the palette.
@@ -608,7 +613,7 @@ impl PaletteLayout {
             .saturating_sub(palette.scroll())
             .min(VISIBLE_ROWS);
         let rows_top = input.y + input.height + padding;
-        let rows = (0..shown)
+        let rows: Vec<Row> = (0..shown)
             .map(|offset| {
                 let index = palette.scroll() + offset;
                 let rect = Rect {
@@ -626,6 +631,12 @@ impl PaletteLayout {
                 )
             })
             .collect();
+        let marker = rows.iter().find(|row| row.selected).map(|row| Rect {
+            x: row.rect.x,
+            y: row.rect.y,
+            width: (MARKER_WIDTH * scale).round().max(1.0),
+            height: row.rect.height,
+        });
         let height = if shown == 0 {
             input.height + 2.0 * padding
         } else {
@@ -647,6 +658,7 @@ impl PaletteLayout {
             text_width,
             caret,
             rows,
+            marker,
         }
     }
 
@@ -1385,5 +1397,72 @@ mod tests {
         assert_eq!(shortcut, "Ctrl+Shift+E");
         assert_eq!(x, row.rect.x + row.rect.width - TEXT_PADDING - 120.0);
         assert!(row.runs.iter().all(|run| run.x + run.max_width <= x));
+    }
+
+    #[test]
+    fn marker_follows_the_selected_row_and_scales() {
+        let entries: Vec<Entry> = Action::ALL
+            .into_iter()
+            .map(|action| entry(&action.id(), action))
+            .collect();
+        let mut palette = CommandPalette::new(entries, Vec::new());
+        let lay = |palette: &CommandPalette, scale: f32| {
+            PaletteLayout::new(
+                palette,
+                Lang::En,
+                Rect::from_size(1000, 1000),
+                UiMetrics { scale, ..METRICS },
+                measure,
+            )
+        };
+
+        let layout = lay(&palette, 1.0);
+        let row = layout.rows[0].rect;
+        assert_eq!(
+            layout.marker,
+            Some(Rect {
+                x: row.x,
+                y: row.y,
+                width: MARKER_WIDTH,
+                height: row.height,
+            })
+        );
+        assert!(
+            layout.rows[0].runs[0].x >= row.x + MARKER_WIDTH,
+            "the marker does not cover the label"
+        );
+
+        assert_eq!(named(&mut palette, NamedKey::ArrowDown), None);
+        let layout = lay(&palette, 1.0);
+        let marker = layout.marker.expect("marker");
+        assert_eq!(marker.y, layout.rows[1].rect.y, "it follows the selection");
+
+        palette.scroll_by(2);
+        let layout = lay(&palette, 1.0);
+        let selected = layout.rows.iter().find(|row| row.selected).expect("row");
+        assert_eq!(layout.marker.expect("marker").y, selected.rect.y);
+
+        assert_eq!(lay(&palette, 2.0).marker.expect("marker").width, 4.0);
+        assert_eq!(lay(&palette, 1.5).marker.expect("marker").width, 3.0);
+        assert_eq!(
+            lay(&palette, 0.25).marker.expect("marker").width,
+            1.0,
+            "at least one pixel"
+        );
+    }
+
+    #[test]
+    fn marker_is_absent_without_a_match() {
+        let mut palette = CommandPalette::new(vec![entry("Copy", Action::Copy)], Vec::new());
+        typed(&mut palette, "zzz");
+        let layout = PaletteLayout::new(
+            &palette,
+            Lang::En,
+            Rect::from_size(1000, 1000),
+            METRICS,
+            measure,
+        );
+        assert!(layout.rows.is_empty());
+        assert_eq!(layout.marker, None);
     }
 }
