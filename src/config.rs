@@ -36,7 +36,7 @@ pub const MAX_FONT_SIZE: f32 = 72.0;
 /// Upper bound of `scrollback.lines`.
 pub const MAX_SCROLLBACK_LINES: usize = 100_000;
 
-/// `$XDG_CONFIG_HOME/graphene`, else `$HOME/.config/graphene`.
+/// `$XDG_CONFIG_HOME/graphene`, else the platform's default application config directory.
 pub fn config_dir() -> Option<PathBuf> {
     config_dir_from(
         std::env::var_os("XDG_CONFIG_HOME"),
@@ -56,13 +56,22 @@ fn config_dir_from(xdg_config_home: Option<OsString>, home: Option<OsString>) ->
         .filter(|path| path.is_absolute());
     let base = xdg.or_else(|| {
         home.filter(|home| !home.is_empty())
-            .map(|home| PathBuf::from(home).join(".config"))
+            .map(default_config_base)
     })?;
     Some(base.join("graphene"))
 }
 
-/// `$XDG_STATE_HOME/graphene`, else `$HOME/.local/state/graphene`: files written by
-/// Graphene itself (update check, last window), shared by every instance.
+fn default_config_base(home: OsString) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    let base = PathBuf::from(home)
+        .join("Library")
+        .join("Application Support");
+    #[cfg(not(target_os = "macos"))]
+    let base = PathBuf::from(home).join(".config");
+    base
+}
+
+/// `$XDG_STATE_HOME/graphene`, else the platform's default application state directory.
 pub fn state_dir() -> Option<PathBuf> {
     state_dir_from(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
 }
@@ -72,11 +81,18 @@ fn state_dir_from(xdg_state_home: Option<OsString>, home: Option<OsString>) -> O
     let xdg = xdg_state_home
         .map(PathBuf::from)
         .filter(|path| path.is_absolute());
-    let base = xdg.or_else(|| {
-        home.filter(|home| !home.is_empty())
-            .map(|home| PathBuf::from(home).join(".local").join("state"))
-    })?;
+    let base = xdg.or_else(|| home.filter(|home| !home.is_empty()).map(default_state_base))?;
     Some(base.join("graphene"))
+}
+
+fn default_state_base(home: OsString) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    let base = PathBuf::from(home)
+        .join("Library")
+        .join("Application Support");
+    #[cfg(not(target_os = "macos"))]
+    let base = PathBuf::from(home).join(".local").join("state");
+    base
 }
 
 /// Loads `config.toml` from the config directory. A missing file is created from
@@ -906,6 +922,11 @@ mod tests {
 
     #[test]
     fn config_dir_falls_back_to_home() {
+        #[cfg(target_os = "macos")]
+        let expected = Some(PathBuf::from(
+            "/home/u/Library/Application Support/graphene",
+        ));
+        #[cfg(not(target_os = "macos"))]
         let expected = Some(PathBuf::from("/home/u/.config/graphene"));
         assert_eq!(config_dir_from(None, Some("/home/u".into())), expected);
         assert_eq!(
@@ -930,6 +951,11 @@ mod tests {
 
     #[test]
     fn state_dir_falls_back_to_home() {
+        #[cfg(target_os = "macos")]
+        let expected = Some(PathBuf::from(
+            "/home/u/Library/Application Support/graphene",
+        ));
+        #[cfg(not(target_os = "macos"))]
         let expected = Some(PathBuf::from("/home/u/.local/state/graphene"));
         assert_eq!(state_dir_from(None, Some("/home/u".into())), expected);
         assert_eq!(

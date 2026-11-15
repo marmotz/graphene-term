@@ -122,29 +122,46 @@ alignment), wide characters, box drawing, colors, cursor in vim.
 
 ## Releases
 
-The CI of each pull request uploads its release binary as the `graphene-release`
-artifact (kept 30 days). Every push to `develop` (so every merged pull request) then
-runs `.github/workflows/release.yml`, which publishes a GitHub pre-release tagged
-`v<version>`, where `<version>` is what the binary prints with `graphene --version`.
+Pull requests run the test suite and release build on Linux, Apple Silicon macOS and
+Intel macOS. Releases are not automatic: launch **Actions → Release → Run workflow**
+from the `develop` branch. The workflow builds all assets for that commit, then publishes
+a GitHub release tagged `v<version>`, where `<version>` is what the binary prints with
+`graphene --version`.
 
 The version is computed at build time by `build.rs`: `<crate version>-dev.<UTC
 YYYYMMDDHHMMSS>` by default, `<crate version>` when built with `GRAPHENE_CHANNEL=stable`.
-The timestamp comes from `SOURCE_DATE_EPOCH` when set (the CI release builds set it to
-the current time), else the current time.
+The release workflow takes one timestamp when the manual run starts and shares it through
+`SOURCE_DATE_EPOCH`, so all platform builds have the same version and tag.
 
-The release does not rebuild: `scripts/find-ci-binary.sh` finds the successful CI run
-of the merged pull request and the binary is downloaded from it. This only happens
-when the merged commit has the same tree as the pull request head (the branch was up
-to date with `develop`, which the `develop` ruleset enforces). Otherwise (direct push,
-expired artifact, ...) the workflow falls back to testing and building from source.
+The release description is generated from commit subjects between the latest published
+regular release tag and the selected commit. On the first regular release, it covers the
+full history (earlier pre-releases are not used as the starting point). Conventional
+`feat:` commits go under **Nouveautés**, `fix:` commits under **Correctifs**, and all other
+commits under **Modifications**. Pull-request numbers in subjects link to their PR; other
+entries link to their commit.
 
 Assets:
 
-- `graphene-<tag>-x86_64-unknown-linux-gnu.tar.gz`: binary, desktop entry, icon, licenses
-- `graphene-term_<version>_amd64.deb` (package version `<crate version>~dev.<timestamp>`)
-- `graphene-term-<crate version>-0.dev.<timestamp>.x86_64.rpm`
-- `graphene-<tag>-x86_64.AppImage`
+- Linux:
+  - `graphene-<tag>-x86_64-unknown-linux-gnu.tar.gz`: binary, desktop entry, icon, licenses
+  - `graphene-term_<version>_amd64.deb`
+  - `graphene-term-<crate version>-0.dev.<timestamp>.x86_64.rpm`
+  - `graphene-<tag>-x86_64.AppImage`
+- macOS:
+  - `graphene-<tag>-aarch64-apple-darwin.tar.gz` and `.dmg` for Apple Silicon
+  - `graphene-<tag>-x86_64-apple-darwin.tar.gz` and `.dmg` for Intel
+  - DMGs contain an unsigned, unnotarized `Graphene.app`
 - `SHA256SUMS`
+
+The macOS package is built by `scripts/package-macos.sh`; it needs the macOS tools
+`sips`, `iconutil` and `hdiutil`. To package a local Apple Silicon build:
+
+```bash
+cargo build --release --locked
+scripts/package-macos.sh aarch64-apple-darwin
+```
+
+For Intel, run the same commands on an Intel Mac with `x86_64-apple-darwin`.
 
 The AppImage icon `packaging/graphene.png` is rendered from `graphene.svg`; regenerate it
 after changing the SVG with `rsvg-convert -w 256 -h 256 packaging/graphene.svg -o packaging/graphene.png`.

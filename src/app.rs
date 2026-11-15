@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::index::Point;
 use alacritty_terminal::term::{Config as TermConfig, TermMode};
+#[cfg(target_os = "linux")]
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -1095,7 +1096,16 @@ impl Session {
         match self.workspace.active_pane().and_then(Pane::copy_content) {
             Some(Content::Text(text)) => self.set_clipboard(Some(text)),
             Some(Content::Image { text, png }) => {
-                if let Err(error) = clipboard::set_text_and_image(text.clone(), png) {
+                #[cfg(target_os = "linux")]
+                let result = clipboard::set_text_and_image(text.clone(), png);
+                #[cfg(target_os = "macos")]
+                let result = self
+                    .clipboard
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("clipboard unavailable"))
+                    .and_then(|clipboard| clipboard::set_image(clipboard, &png));
+
+                if let Err(error) = result {
                     log::warn!("image copy failed, copying the text only: {error:#}");
                     self.set_clipboard(text);
                 }
@@ -1409,37 +1419,45 @@ impl Session {
     }
 
     fn set_primary(&mut self, text: String) {
-        let Some(clipboard) = self.clipboard.as_mut() else {
-            return;
-        };
-        // Some Wayland compositors do not support the primary selection.
-        if let Err(error) = clipboard
-            .set()
-            .clipboard(LinuxClipboardKind::Primary)
-            .text(text)
+        #[cfg(target_os = "linux")]
         {
-            log::debug!("primary selection unavailable: {error}");
+            let Some(clipboard) = self.clipboard.as_mut() else {
+                return;
+            };
+            // Some Wayland compositors do not support the primary selection.
+            if let Err(error) = clipboard
+                .set()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text(text)
+            {
+                log::debug!("primary selection unavailable: {error}");
+            }
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = text;
     }
 
     fn paste_primary(&mut self) {
         self.reset_blink();
-        let Some(clipboard) = self.clipboard.as_mut() else {
-            return;
-        };
-        let text = match clipboard
-            .get()
-            .clipboard(LinuxClipboardKind::Primary)
-            .text()
+        #[cfg(target_os = "linux")]
         {
-            Ok(text) => text,
-            Err(error) => {
-                log::debug!("primary selection unavailable: {error}");
+            let Some(clipboard) = self.clipboard.as_mut() else {
                 return;
+            };
+            let text = match clipboard
+                .get()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text()
+            {
+                Ok(text) => text,
+                Err(error) => {
+                    log::debug!("primary selection unavailable: {error}");
+                    return;
+                }
+            };
+            if let Some(pane) = self.workspace.active_pane_mut() {
+                pane.send_paste(&text);
             }
-        };
-        if let Some(pane) = self.workspace.active_pane_mut() {
-            pane.send_paste(&text);
         }
     }
 

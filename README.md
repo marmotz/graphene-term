@@ -1,6 +1,6 @@
 # Graphene Term
 
-A modern, GPU-accelerated terminal emulator for Linux, written in Rust.
+A modern, GPU-accelerated terminal emulator for Linux and macOS, written in Rust.
 The binary is called `graphene`.
 
 ## Run
@@ -11,8 +11,9 @@ cargo run --release
 
 ## Configuration
 
-Settings live in `~/.config/graphene/config.toml` (`$XDG_CONFIG_HOME/graphene/` when
-set). The file is created on first launch, fully commented, with the default values:
+Settings live in `~/.config/graphene/config.toml` on Linux, or
+`~/Library/Application Support/graphene/config.toml` on macOS. `$XDG_CONFIG_HOME/graphene/`
+overrides either default. The file is created on first launch, fully commented, with the default values:
 uncomment a line to change it. On startup, Graphene adds comments for supported options
 missing from an existing file inside their existing sections, creating a section only
 when needed. It preserves configured settings, unknown keys, custom comments and formatting;
@@ -21,6 +22,9 @@ comments explain each setting's format and range, and list finite allowed values
 without repeating the same help. Automatically added settings include their matching
 documentation. The file also lists the built-in keybindings. See
 [config.default.toml](config.default.toml).
+Runtime state is stored under `~/.local/state/graphene/` on Linux or
+`~/Library/Application Support/graphene/` on macOS; `$XDG_STATE_HOME/graphene/` overrides
+either default.
 
 Run `graphene --prune-config` to list and remove keys not recognized by this version.
 The command asks for confirmation in a terminal; when run non-interactively it makes no
@@ -36,7 +40,7 @@ portal; dark without portal), switching the theme as soon as it changes.
 
 `[window] startup_mode` opens new windows at the configured size (`"default"`),
 maximized (`"maximized"`), or at the size and maximized state of the last window closed
-(`"remember"`, kept in `~/.local/state/graphene/window.json`).
+(`"remember"`, kept in the application state directory).
 `[window] background_opacity` (0.0 to 1.0) makes the default background translucent,
 with a compositor; explicit cell backgrounds, the selection and the cursor stay opaque.
 
@@ -58,13 +62,21 @@ by hand.
 
 Graphene checks GitHub for a newer release in the background (by default every 6 hours for dev
 builds, every 24 hours for stable builds) and caches the result in
-`~/.local/state/graphene/update.json` (`$XDG_STATE_HOME/graphene/` when set). The only
+the application state directory (`$XDG_STATE_HOME/graphene/` when set). The only
 network call is a GET to the GitHub releases API; set `check = false` in the `[updates]`
 section to turn it off. A newer release shows a banner at the top of the window: "Open
 release" opens its GitHub page, "Ignore this version" hides it for good (until an even
 newer release), and "×" hides it until the next launch.
 
 The `RUST_LOG` environment variable sets the log level (default: `warn`).
+
+## Releases
+
+Releases are started manually from **GitHub Actions → Release → Run workflow** on the
+`develop` branch. Each release publishes Linux packages and macOS builds for Apple Silicon
+and Intel, as both a command-line archive and a `.dmg` containing `Graphene.app`. The macOS
+app is currently unsigned and not notarized; on first launch, macOS may require
+Control-clicking the app and choosing **Open**.
 
 ## Shell integration
 
