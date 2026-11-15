@@ -481,19 +481,21 @@ impl Renderer {
         gpu: Arc<Gpu>,
         surface: wgpu::Surface<'static>,
         window: Arc<Window>,
-        display: winit::event_loop::OwnedDisplayHandle,
+        _display: winit::event_loop::OwnedDisplayHandle,
         glyphs: Glyphs,
         background_opacity: f32,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let device = &gpu.device;
         let caps = surface.get_capabilities(&gpu.adapter);
-        let (native_alpha_mode, mut alpha_mode) = alpha_mode(&caps.alpha_modes);
+        let (native_alpha_mode, alpha_mode) = alpha_mode(&caps.alpha_modes);
+        #[cfg(target_os = "linux")]
+        let mut alpha_mode = alpha_mode;
         #[cfg(target_os = "linux")]
         let mut x11_presenter = None;
         #[cfg(target_os = "linux")]
         if !alpha_mode.is_transparent() {
-            match x11_presenter::X11Presenter::new(&window, &display) {
+            match x11_presenter::X11Presenter::new(&window, &_display) {
                 Ok(presenter) => x11_presenter = presenter,
                 Err(error) => log::warn!("X11 ARGB presentation unavailable: {error:#}"),
             }
