@@ -68,6 +68,12 @@ impl View {
         self.capturing.is_some()
     }
 
+    /// Takes an `Escape` press egui leaves alone: dismisses a pending shortcut conflict
+    /// and returns `true`, or returns `false` when nothing is pending, so the window closes.
+    pub fn escape(&mut self) -> bool {
+        self.conflict.take().is_some()
+    }
+
     /// Takes a key press while a shortcut is captured; returns the changes to write.
     /// `Escape` alone cancels, a modifier alone keeps waiting, a shortcut bound to
     /// another action waits for "Replace" or "Cancel".
@@ -677,6 +683,21 @@ mod tests {
                 Value::Text("detach_pane".into())
             )]
         );
+    }
+
+    #[test]
+    fn escape_dismisses_a_conflict_before_closing() {
+        let mut view = View {
+            conflict: Some(Conflict {
+                action: Action::NextTab,
+                shortcut: Shortcut::parse("Ctrl+Shift+T").unwrap(),
+                other: Action::NewTab,
+            }),
+            ..View::default()
+        };
+        assert!(view.escape());
+        assert_eq!(view.conflict, None);
+        assert!(!view.escape());
     }
 
     #[test]
