@@ -1,6 +1,6 @@
 # Alt+Tab inserts a tab character in the terminal
 
-**Statut** : tâches créées — voir [technical.md](technical.md)
+**Statut** : terminé — voir [technical.md](technical.md)
 
 ## Context
 

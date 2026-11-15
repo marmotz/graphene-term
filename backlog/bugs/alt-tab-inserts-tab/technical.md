@@ -7,23 +7,24 @@ not been tested.
 
 The terminal window tracks whether it is focused in `src/app.rs:132`. Its
 `WindowEvent::Focused` handler updates that state and may report focus changes to the
-terminal (`src/app.rs:2299-2307`). The handler separately stores modifier state on
-`ModifiersChanged` and sends every pressed `KeyboardInput` event to `key_press`
-(`src/app.rs:2308-2318`); the keyboard path does not check the window's `focused` state.
+terminal (`src/app.rs:2303-2311`). The handler separately stores modifier state on
+`ModifiersChanged` and sends pressed `KeyboardInput` events to `key_press`
+(`src/app.rs:2312-2325`).
 
 `key_press` first checks Graphene's bindings, then eventually encodes an unhandled key
 and writes it to the active pane (`src/app.rs:1536-1613`). In `src/input.rs:264-325`,
 `NamedKey::Tab` is explicitly encoded as a tab byte (or an Alt-prefixed tab when Alt is
-active). This explains how an incoming Tab event can reach the shell, but does not
-establish why that event reaches Graphene during a window switch.
+active). `winit` marks focus-recovery key events as synthetic; on X11 it generates
+synthetic presses for keys held when a window gains focus. Graphene previously ignored
+that marker, allowing such a press to follow the normal terminal input path. See
+[`WindowEvent::KeyboardInput` in winit 0.30.13](https://github.com/rust-windowing/winit/blob/v0.30.13/src/event.rs#L199-L218).
 
 ## Design
 
-Fix the keyboard event delivery/focus lifecycle so Graphene forwards only key input
-intended for its focused terminal window. Investigate the actual X11/Cinnamon event
-sequence during Alt+Tab before choosing the exact change; the current code alone does
-not identify whether the unexpected input is a late key event, a focus transition, or
-stale modifier state.
+Do not forward `KeyboardInput` events marked `is_synthetic` to Graphene's key handling.
+These events reconcile held-key state across focus changes and are not fresh user input;
+in particular, they must not be encoded and written to the PTY. Continue handling
+non-synthetic key presses normally.
 
 Do not special-case Alt+Tab or add a configurable list of desktop shortcuts. The issue is
 treated as incorrect input handling by Graphene, not as a request to reserve a particular
@@ -37,9 +38,9 @@ when the terminal window is focused.
   desktop environment.
 - **Add a configurable deny-list of shortcuts:** rejected because it shifts
   responsibility to users and requires them to duplicate desktop-environment settings.
-- **Correct input delivery around focus transitions:** retained because it addresses
-  the reported behavior without changing how ordinary terminal input is encoded. The
-  exact event-path change must be chosen after observing the event sequence.
+- **Ignore winit's synthetic focus key events:** retained because the X11 backend marks
+  generated focus-recovery events explicitly, allowing Graphene to distinguish them from
+  ordinary key presses without reserving desktop shortcuts.
 
 ## Verification
 

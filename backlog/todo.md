@@ -29,8 +29,8 @@ _tâches créées — voir [technical.md](features/e2e-tests/technical.md)_ — 
 
 ### Alt+Tab inserts a tab character in the terminal ·  [overview](bugs/alt-tab-inserts-tab/overview.md)
 
-_tâches créées — voir [technical.md](bugs/alt-tab-inserts-tab/technical.md)_ — 0/1 tasks done
+_terminé — voir [technical.md](bugs/alt-tab-inserts-tab/technical.md)_ — 1/1 tasks done
 
 | Done | Issue                                                       | Title                                                      | Blocked by |
 |------|-------------------------------------------------------------|------------------------------------------------------------|------------|
-| [ ]  | [#117](https://github.com/marmotz/graphene-term/issues/117) | Prevent spurious terminal input on window focus switches   | —          |
+| [x]  | [#117](https://github.com/marmotz/graphene-term/issues/117) | Prevent spurious terminal input on window focus switches   | —          |
