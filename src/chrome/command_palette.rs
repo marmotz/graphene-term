@@ -14,13 +14,21 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use winit::keyboard::{Key, NamedKey};
 
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::term::Term;
+
 use super::tab_bar::UiMetrics;
+use crate::block_actions::{self, Direction as BlockDirection, Part};
+use crate::config::{MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::i18n::{self, Lang, Msg};
 use crate::input::Action;
 use crate::keybindings::Keybindings;
 use crate::layout::Rect;
 use crate::terminal::PaneId;
-use crate::workspace::{TitleSource, Workspace};
+use crate::timeline::{BlockId, Timeline};
+use crate::view::{self, ScrollTarget};
+use crate::workspace::tree::{Axis, Geometry};
+use crate::workspace::{RESIZE_STEP_CELLS, TitleSource, Workspace};
 
 /// Name of the recent actions file inside the state directory.
 pub const RECENT_FILE: &str = "palette-recent";
@@ -62,16 +70,146 @@ pub struct Entry {
     pub shortcut: Option<String>,
 }
 
-/// The entries of the palette in their default order: every [`Action::ALL`], then each
-/// tab of `workspace`, followed by its panes when it holds several. Shortcuts are read
-/// from `keybindings`.
+/// What the active pane allows, read when the palette opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PaneContext {
+    /// A text selection or a selected block to copy.
+    pub copy: bool,
+    pub copy_command: bool,
+    pub copy_output: bool,
+    pub previous_block: bool,
+    pub next_block: bool,
+    pub toggle_fold: bool,
+    pub toggle_fold_all: bool,
+    pub scroll_page_up: bool,
+    pub scroll_page_down: bool,
+    pub scroll_to_top: bool,
+    pub scroll_to_bottom: bool,
+}
+
+impl PaneContext {
+    /// What a pane showing `timeline` over `live` allows, `selected` being its selected
+    /// block and `has_selection` whether it holds a text selection.
+    pub fn read<L>(
+        timeline: &Timeline,
+        live: &Term<L>,
+        selected: Option<BlockId>,
+        has_selection: bool,
+    ) -> Self {
+        let lines = live.screen_lines();
+        let target = block_actions::target(timeline, selected);
+        let part = |part| target.and_then(|id| block_actions::text(timeline, id, part));
+        // A navigation at either end selects the selected block again.
+        let moves = |direction| {
+            block_actions::neighbour(timeline, selected, direction)
+                .is_some_and(|id| Some(id) != selected)
+        };
+        let max_timeline = view::max_timeline_scroll(timeline, live, lines);
+        let timeline_scroll = timeline.scroll.min(max_timeline);
+        let (page_up, page_down) =
+            match view::page_target(selected, |id| view::can_scroll(timeline, live, id, lines)) {
+                ScrollTarget::Block(id) => {
+                    let max = view::max_block_scroll(timeline, live, id, lines);
+                    let scroll = if id == timeline.current().id {
+                        timeline.current().scroll
+                    } else {
+                        timeline.block(id).map_or(0, |block| block.scroll)
+                    };
+                    // Down past the bottom of its output moves the timeline.
+                    (
+                        scroll.min(max) < max,
+                        scroll.min(max) > 0 || timeline_scroll > 0,
+                    )
+                }
+                ScrollTarget::Timeline => (timeline_scroll < max_timeline, timeline_scroll > 0),
+            };
+        Self {
+            copy: has_selection
+                || selected.is_some_and(|id| block_actions::block_text(timeline, id).is_some()),
+            copy_command: part(Part::Command).is_some(),
+            copy_output: part(Part::Output).is_some(),
+            previous_block: moves(BlockDirection::Previous),
+            next_block: moves(BlockDirection::Next),
+            toggle_fold: target.is_some(),
+            toggle_fold_all: !timeline.blocks().is_empty(),
+            scroll_page_up: page_up,
+            scroll_page_down: page_down,
+            scroll_to_top: timeline_scroll < max_timeline,
+            scroll_to_bottom: timeline_scroll > 0 || timeline.current().scroll > 0,
+        }
+    }
+}
+
+/// What the window allows besides its workspace, read when the palette opens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Context {
+    /// The active pane's context; `None` without a pane.
+    pub pane: Option<PaneContext>,
+    /// The clipboard holds text to paste.
+    pub paste: bool,
+    pub font_size: f32,
+    pub default_font_size: f32,
+}
+
+/// Whether `action` would do something now, in `workspace` laid out in `geometry`.
+pub fn available<P>(
+    action: Action,
+    workspace: &Workspace<P>,
+    geometry: Geometry,
+    context: &Context,
+) -> bool {
+    let several_panes = workspace.active_tab().is_some_and(|tab| !tab.is_single());
+    let pane = context.pane.unwrap_or_default();
+    match action {
+        Action::NewTab | Action::OpenSettings | Action::CommandPalette => true,
+        Action::GoToTab(number) => usize::from(number) <= workspace.tabs().len(),
+        Action::SplitRight => workspace.can_split(Axis::Horizontal, geometry),
+        Action::SplitDown => workspace.can_split(Axis::Vertical, geometry),
+        Action::ClosePane => workspace.active_pane_id().is_some(),
+        Action::NextTab | Action::PreviousTab => workspace.tabs().len() > 1,
+        Action::NextPane => workspace.next_pane().is_some(),
+        Action::PreviousPane => workspace.previous_pane().is_some(),
+        Action::FocusPane(direction) => workspace.neighbour(direction, geometry).is_some(),
+        Action::ResizePane(direction) => {
+            workspace.can_resize_active(direction, RESIZE_STEP_CELLS, geometry)
+        }
+        Action::ToggleZoom | Action::EqualisePanes | Action::DetachPane => several_panes,
+        Action::FontSizeIncrease => context.font_size < MAX_FONT_SIZE,
+        Action::FontSizeDecrease => context.font_size > MIN_FONT_SIZE,
+        Action::FontSizeReset => {
+            context.font_size
+                != context
+                    .default_font_size
+                    .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)
+        }
+        Action::Paste => context.paste && context.pane.is_some(),
+        Action::Copy => pane.copy,
+        Action::CopyCommand => pane.copy_command,
+        Action::CopyOutput => pane.copy_output,
+        Action::PreviousBlock => pane.previous_block,
+        Action::NextBlock => pane.next_block,
+        Action::ToggleFold => pane.toggle_fold,
+        Action::ToggleFoldAll => pane.toggle_fold_all,
+        Action::ScrollPageUp => pane.scroll_page_up,
+        Action::ScrollPageDown => pane.scroll_page_down,
+        Action::ScrollToTop => pane.scroll_to_top,
+        Action::ScrollToBottom => pane.scroll_to_bottom,
+    }
+}
+
+/// The entries of the palette in their default order: every [`Action::ALL`] that is
+/// [`available`], then each tab of `workspace`, followed by its panes when it holds
+/// several. Shortcuts are read from `keybindings`.
 pub fn entries<P: TitleSource>(
     workspace: &Workspace<P>,
+    geometry: Geometry,
+    context: &Context,
     lang: Lang,
     keybindings: &Keybindings,
 ) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Action::ALL
         .into_iter()
+        .filter(|&action| available(action, workspace, geometry, context))
         .map(|action| Entry {
             command: Command::Action(action),
             label: i18n::text(lang, &action.label()).into_owned(),
@@ -577,9 +715,10 @@ impl PaletteLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Direction;
     use crate::layout::CellSize;
+    use crate::timeline::testing::Session;
     use crate::workspace::DIVIDER_THICKNESS;
-    use crate::workspace::tree::{Axis, Geometry};
 
     fn entry(label: &str, action: Action) -> Entry {
         Entry {
@@ -800,8 +939,17 @@ mod tests {
             })
             .expect("split fits");
 
-        let entries = entries(&ws, Lang::En, &Keybindings::default());
-        let actions = Action::ALL.len();
+        let entries = entries(
+            &ws,
+            geometry(),
+            &context(),
+            Lang::En,
+            &Keybindings::default(),
+        );
+        let actions = entries
+            .iter()
+            .filter(|e| matches!(e.command, Command::Action(_)))
+            .count();
         assert_eq!(entries.len(), actions + 4);
         assert_eq!(entries[0].label, "New tab");
         assert_eq!(entries[0].shortcut.as_deref(), Some("Ctrl+Shift+T"));
@@ -823,6 +971,246 @@ mod tests {
         let mut palette = CommandPalette::new(entries, Vec::new());
         typed(&mut palette, "htop");
         assert_eq!(palette.choose(0), Some(Outcome::Run(Command::Pane(second))));
+    }
+
+    /// A window with a pane allowing nothing, an empty clipboard and the default
+    /// font size.
+    fn context() -> Context {
+        Context {
+            pane: Some(PaneContext::default()),
+            paste: false,
+            font_size: 12.0,
+            default_font_size: 12.0,
+        }
+    }
+
+    fn actions<P: TitleSource>(workspace: &Workspace<P>, context: &Context) -> Vec<Action> {
+        entries(
+            workspace,
+            geometry(),
+            context,
+            Lang::En,
+            &Keybindings::default(),
+        )
+        .into_iter()
+        .filter_map(|e| match e.command {
+            Command::Action(action) => Some(action),
+            _ => None,
+        })
+        .collect()
+    }
+
+    fn single_pane() -> Workspace<Fake> {
+        let mut ws = Workspace::new();
+        let id = ws.allocate_id();
+        ws.new_tab(id, Fake(None));
+        ws
+    }
+
+    #[test]
+    fn a_lone_pane_with_nothing_to_act_on_offers_only_what_it_can_do() {
+        assert_eq!(
+            actions(&single_pane(), &context()),
+            [
+                Action::NewTab,
+                Action::ClosePane,
+                Action::SplitRight,
+                Action::SplitDown,
+                Action::FontSizeIncrease,
+                Action::FontSizeDecrease,
+                Action::OpenSettings,
+            ]
+        );
+    }
+
+    #[test]
+    fn tab_and_pane_actions_follow_the_workspace() {
+        let mut ws = single_pane();
+        let id = ws.allocate_id();
+        ws.new_tab(id, Fake(None));
+        ws.split(Axis::Horizontal, geometry(), |_| Some(Fake(None)))
+            .expect("split fits");
+        let shown = actions(&ws, &context());
+        for action in [
+            Action::NextTab,
+            Action::PreviousTab,
+            Action::NextPane,
+            Action::PreviousPane,
+            Action::FocusPane(Direction::Left),
+            Action::ResizePane(Direction::Left),
+            Action::ToggleZoom,
+            Action::EqualisePanes,
+            Action::DetachPane,
+        ] {
+            assert!(shown.contains(&action), "{action:?} is missing");
+        }
+        // The active pane is the right one of a side by side split.
+        for action in [
+            Action::FocusPane(Direction::Right),
+            Action::FocusPane(Direction::Up),
+            Action::ResizePane(Direction::Right),
+            Action::ResizePane(Direction::Down),
+        ] {
+            assert!(!shown.contains(&action), "{action:?} is shown");
+        }
+        // A zoomed pane cannot be resized.
+        assert!(ws.toggle_zoom());
+        assert!(!actions(&ws, &context()).contains(&Action::ResizePane(Direction::Left)));
+    }
+
+    #[test]
+    fn split_is_left_out_when_the_pane_is_too_small() {
+        let ws = single_pane();
+        let narrow = Geometry {
+            area: Rect::from_size(40, 600),
+            ..geometry()
+        };
+        assert!(!available(Action::SplitRight, &ws, narrow, &context()));
+        assert!(available(Action::SplitDown, &ws, narrow, &context()));
+    }
+
+    #[test]
+    fn font_size_actions_stop_at_their_limits() {
+        let ws = single_pane();
+        let at = |font_size| Context {
+            font_size,
+            ..context()
+        };
+        let shown = actions(&ws, &at(MAX_FONT_SIZE));
+        assert!(!shown.contains(&Action::FontSizeIncrease));
+        assert!(shown.contains(&Action::FontSizeDecrease));
+        assert!(shown.contains(&Action::FontSizeReset));
+        let shown = actions(&ws, &at(MIN_FONT_SIZE));
+        assert!(shown.contains(&Action::FontSizeIncrease));
+        assert!(!shown.contains(&Action::FontSizeDecrease));
+    }
+
+    #[test]
+    fn pane_and_clipboard_actions_follow_the_context() {
+        let ws = single_pane();
+        let everything = PaneContext {
+            copy: true,
+            copy_command: true,
+            copy_output: true,
+            previous_block: true,
+            next_block: true,
+            toggle_fold: true,
+            toggle_fold_all: true,
+            scroll_page_up: true,
+            scroll_page_down: true,
+            scroll_to_top: true,
+            scroll_to_bottom: true,
+        };
+        let full = Context {
+            pane: Some(everything),
+            paste: true,
+            ..context()
+        };
+        let shown = actions(&ws, &full);
+        for action in Action::ALL {
+            let expected = !matches!(
+                action,
+                Action::NextTab
+                    | Action::PreviousTab
+                    | Action::NextPane
+                    | Action::PreviousPane
+                    | Action::FocusPane(_)
+                    | Action::ResizePane(_)
+                    | Action::ToggleZoom
+                    | Action::EqualisePanes
+                    | Action::DetachPane
+                    | Action::FontSizeReset
+            );
+            assert_eq!(shown.contains(&action), expected, "{action:?}");
+        }
+        // Without a pane, there is nothing to paste into.
+        let no_pane = Context { pane: None, ..full };
+        assert!(!available(Action::Paste, &ws, geometry(), &no_pane));
+    }
+
+    #[test]
+    fn pane_context_of_an_empty_session_allows_nothing() {
+        let session = Session::new(1000);
+        let context = PaneContext::read(&session.timeline, &session.term, None, false);
+        assert_eq!(context, PaneContext::default());
+        let context = PaneContext::read(&session.timeline, &session.term, None, true);
+        assert_eq!(
+            context,
+            PaneContext {
+                copy: true,
+                ..PaneContext::default()
+            }
+        );
+    }
+
+    #[test]
+    fn pane_context_follows_the_blocks_and_the_selected_one() {
+        let mut session = Session::sized(20, 10, 1000);
+        session.command("one", &["1"], 0);
+        session.command("two", &["2"], 0);
+        session.feed("$ ");
+        let (timeline, term) = (&session.timeline, &session.term);
+        let first = timeline.blocks()[0].id;
+        let last = timeline.blocks()[1].id;
+
+        let none = PaneContext::read(timeline, term, None, false);
+        assert!(!none.copy);
+        assert!(none.copy_command && none.copy_output);
+        assert!(none.toggle_fold && none.toggle_fold_all);
+        // Without a selected block, a navigation selects the last one.
+        assert!(none.previous_block && none.next_block);
+
+        let on_last = PaneContext::read(timeline, term, Some(last), false);
+        assert!(on_last.copy);
+        assert!(on_last.previous_block && !on_last.next_block);
+        let on_first = PaneContext::read(timeline, term, Some(first), false);
+        assert!(!on_first.previous_block && on_first.next_block);
+    }
+
+    #[test]
+    fn pane_context_scrolls_only_where_there_is_room() {
+        let mut session = Session::sized(20, 5, 1000);
+        for name in ["a", "b", "c", "d", "e", "f"] {
+            session.command(name, &["1", "2", "3"], 0);
+        }
+        session.feed("$ ");
+        let at_rest = PaneContext::read(&session.timeline, &session.term, None, false);
+        assert!(at_rest.scroll_page_up && at_rest.scroll_to_top);
+        assert!(!at_rest.scroll_page_down && !at_rest.scroll_to_bottom);
+
+        session.timeline.scroll = 2;
+        let scrolled = PaneContext::read(&session.timeline, &session.term, None, false);
+        assert!(scrolled.scroll_page_up && scrolled.scroll_to_top);
+        assert!(scrolled.scroll_page_down && scrolled.scroll_to_bottom);
+
+        session.timeline.scroll = usize::MAX;
+        let at_top = PaneContext::read(&session.timeline, &session.term, None, false);
+        assert!(!at_top.scroll_page_up && !at_top.scroll_to_top);
+        assert!(at_top.scroll_page_down && at_top.scroll_to_bottom);
+    }
+
+    #[test]
+    fn pane_context_pages_through_a_selected_block_cut_by_its_cap() {
+        let mut session = Session::sized(20, 5, 1000);
+        let output: Vec<String> = (0..20).map(|n| n.to_string()).collect();
+        let output: Vec<&str> = output.iter().map(String::as_str).collect();
+        session.command("long", &output, 0);
+        session.feed("$ ");
+        let id = session.timeline.blocks()[0].id;
+        assert!(view::can_scroll(&session.timeline, &session.term, id, 5));
+
+        let at_bottom = PaneContext::read(&session.timeline, &session.term, Some(id), false);
+        assert!(at_bottom.scroll_page_up);
+        assert!(!at_bottom.scroll_page_down);
+
+        session
+            .timeline
+            .block_mut(id)
+            .expect("finished block")
+            .scroll = usize::MAX;
+        let at_top = PaneContext::read(&session.timeline, &session.term, Some(id), false);
+        assert!(!at_top.scroll_page_up);
+        assert!(at_top.scroll_page_down);
     }
 
     struct TempDir(PathBuf);

@@ -18,6 +18,7 @@ use winit::event::MouseScrollDelta;
 use winit::keyboard::ModifiersState;
 
 use crate::block_actions::{self, Direction, Part};
+use crate::chrome::command_palette::PaneContext;
 use crate::clipboard::{self, Content};
 use crate::frame;
 use crate::graphics;
@@ -422,6 +423,18 @@ impl Pane {
             let source = store.placement(image, placement)?.source;
             clipboard::encode_png(store.get(image)?.frame(), source)
         })
+    }
+
+    /// What the command palette may offer for this pane.
+    pub fn palette_context(&self) -> PaneContext {
+        let term = self.terminal.term.lock();
+        let timeline = lock(&self.terminal.timeline);
+        PaneContext::read(
+            &timeline,
+            &*term,
+            self.selected_block,
+            self.selection.is_some(),
+        )
     }
 
     /// Text of one part of the target block.
