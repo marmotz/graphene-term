@@ -211,6 +211,7 @@ fn ui_slot<'a>(ui: &'a mut UiColors, name: &str) -> Option<&'a mut Rgb> {
         "palette_background" => &mut ui.palette_background,
         "palette_text" => &mut ui.palette_text,
         "palette_match" => &mut ui.palette_match,
+        "palette_selection_background" => &mut ui.palette_selection_background,
         "banner_background" => &mut ui.banner_background,
         "banner_text" => &mut ui.banner_text,
         _ => return None,
@@ -336,6 +337,57 @@ mod tests {
 
     fn parse_on_default(text: &str) -> (Palette, Vec<ConfigError>) {
         parse(text, default_palette(), Path::new("test.toml"))
+    }
+
+    /// WCAG contrast ratio between two colors: 1 for identical colors, 21 for black
+    /// on white.
+    fn contrast(a: Rgb, b: Rgb) -> f64 {
+        fn luminance(color: Rgb) -> f64 {
+            let channel = |value: u8| {
+                let c = f64::from(value) / 255.0;
+                if c <= 0.039_28 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+        }
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn contrast_ratio_matches_wcag() {
+        assert!((contrast(rgb(0x000000), rgb(0xffffff)) - 21.0).abs() < 1e-9);
+        assert!((contrast(rgb(0x1c1f26), rgb(0x1c1f26)) - 1.0).abs() < 1e-9);
+        assert_eq!(
+            contrast(rgb(0x123456), rgb(0xabcdef)),
+            contrast(rgb(0xabcdef), rgb(0x123456))
+        );
+    }
+
+    #[test]
+    fn every_built_in_theme_keeps_the_palette_readable() {
+        for (name, text) in BUILT_IN {
+            let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
+            let ui = palette.ui;
+            let selection = contrast(ui.palette_background, ui.palette_selection_background);
+            assert!(
+                selection >= 1.1,
+                "theme {name}: selected row contrast {selection:.2}"
+            );
+            let border = contrast(ui.palette_background, ui.pane_border);
+            assert!(
+                border >= 1.1,
+                "theme {name}: palette border contrast {border:.2}"
+            );
+            let text = contrast(ui.palette_text, ui.palette_selection_background);
+            assert!(
+                text >= 4.5,
+                "theme {name}: selected row text contrast {text:.2}"
+            );
+        }
     }
 
     #[test]

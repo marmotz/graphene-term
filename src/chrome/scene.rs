@@ -77,7 +77,7 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
     ui.overlay_rects.push(rect(palette.caret, text));
     if let Some(row) = palette.rows.iter().find(|row| row.selected) {
         ui.overlay_rects
-            .push(rect(row.rect, color(colors.tab_active_background)));
+            .push(rect(row.rect, color(colors.palette_selection_background)));
     }
     ui.overlay_texts.push(UiTextItem {
         text: palette.input_text.clone(),
@@ -557,9 +557,11 @@ mod tests {
         use crate::i18n::Lang;
         use crate::input::Action;
         use winit::keyboard::Key;
+        const SELECTED_ROW: Rgb = Rgb { r: 50, g: 0, b: 0 };
         let colors = UiColors {
             palette_background: DIALOG_BACKGROUND,
             palette_text: DIALOG_TEXT,
+            palette_selection_background: SELECTED_ROW,
             ..tab_colors()
         };
         let entry = |label: &str, action, shortcut: Option<&str>| Entry {
@@ -600,7 +602,12 @@ mod tests {
         assert_eq!(ui.overlay_rects[0].color, color(DIALOG_BACKGROUND));
         assert_eq!(ui.overlay_rects[5].color, color(BAR));
         assert_eq!(ui.overlay_rects[6].color, color(DIALOG_TEXT));
-        assert_eq!(ui.overlay_rects[7].color, color(ACTIVE_TAB));
+        assert_eq!(ui.overlay_rects[7].color, color(SELECTED_ROW));
+        assert_ne!(
+            ui.overlay_rects[7].color,
+            color(ACTIVE_TAB),
+            "the selection does not reuse the active tab color"
+        );
         assert_eq!(
             ui.overlay_rects[7].position,
             [layout.rows[0].rect.x, layout.rows[0].rect.y]

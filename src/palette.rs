@@ -36,6 +36,8 @@ pub struct UiColors {
     pub palette_text: Rgb,
     /// Highlight of the characters matching the search in the command palette.
     pub palette_match: Rgb,
+    /// Background of the selected row of the command palette.
+    pub palette_selection_background: Rgb,
     pub banner_background: Rgb,
     pub banner_text: Rgb,
 }
@@ -52,6 +54,7 @@ impl UiColors {
             palette_background: color,
             palette_text: color,
             palette_match: color,
+            palette_selection_background: color,
             banner_background: color,
             banner_text: color,
         }
