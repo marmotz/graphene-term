@@ -54,12 +54,9 @@ use crate::view::RowSource;
 use crate::watcher;
 use crate::window_state::{self, WindowState};
 use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
-use crate::workspace::{self, DIVIDER_THICKNESS, TabBarPosition, Workspace};
+use crate::workspace::{self, DIVIDER_THICKNESS, RESIZE_STEP_CELLS, TabBarPosition, Workspace};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
-
-/// Cells a pane grows by per resize shortcut.
-const RESIZE_STEP_CELLS: usize = 2;
 
 /// How long startup waits for the system appearance, so the first window opens with
 /// the right `light`/`dark` theme. Without answer, it opens with the dark one and
@@ -463,11 +460,27 @@ impl Session {
 
     /// Opens the command palette over the window, its recent actions read from the
     /// recent file.
-    fn open_palette(&mut self) {
+    fn open_palette(&mut self, default_font_size: f32) {
         let recent = command_palette::recent_path()
             .map(|path| command_palette::load_recent(&path))
             .unwrap_or_default();
-        let entries = command_palette::entries(&self.workspace, self.lang, &self.keybindings);
+        let context = command_palette::Context {
+            pane: self.workspace.active_pane().map(Pane::palette_context),
+            paste: self
+                .clipboard
+                .as_mut()
+                .and_then(|clipboard| clipboard.get_text().ok())
+                .is_some_and(|text| !text.is_empty()),
+            font_size: self.font_size,
+            default_font_size,
+        };
+        let entries = command_palette::entries(
+            &self.workspace,
+            self.geometry(),
+            &context,
+            self.lang,
+            &self.keybindings,
+        );
         self.overlay = Some(Overlay::Palette(CommandPalette::new(entries, recent)));
         self.window.request_redraw();
         self.update_pointer();
@@ -1228,7 +1241,7 @@ impl Session {
     fn run_action(&mut self, action: Action, default_font_size: f32, event_loop: &ActiveEventLoop) {
         match action {
             Action::NewTab => self.new_tab(),
-            Action::CommandPalette => self.open_palette(),
+            Action::CommandPalette => self.open_palette(default_font_size),
             Action::OpenSettings => self.settings_requested = true,
             Action::NextTab => self.change_tab(|workspace| {
                 workspace.next();

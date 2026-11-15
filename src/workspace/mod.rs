@@ -17,6 +17,9 @@ use tree::{Axis, Branch, Geometry, Layout, Node};
 /// Thickness of the divider between two panes, in physical pixels.
 pub const DIVIDER_THICKNESS: f32 = 1.0;
 
+/// Cells a pane grows by on each resize key press.
+pub const RESIZE_STEP_CELLS: usize = 2;
+
 /// Edge of the window the tab bar sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TabBarPosition {
@@ -408,6 +411,27 @@ impl<P> Workspace<P> {
         }
     }
 
+    /// Whether [`Self::split`] along `axis` would fit the active pane of the shown tab.
+    pub fn can_split(&self, axis: Axis, geometry: Geometry) -> bool {
+        let Some(tab) = self.active_tab() else {
+            return false;
+        };
+        let mut tree = tab.tree.clone();
+        let probe = PaneId(self.next_id);
+        tree.split(tab.active, axis, probe, geometry)
+    }
+
+    /// Whether [`Self::resize_active`] toward `direction` would move a divider.
+    pub fn can_resize_active(&self, direction: Direction, step: usize, geometry: Geometry) -> bool {
+        match self.active_tab() {
+            Some(tab) if !tab.zoomed => tab
+                .tree
+                .clone()
+                .resize(tab.active, direction, step, geometry),
+            _ => false,
+        }
+    }
+
     /// Moves the divider of the split at `node_path` in the shown tab to the pixel
     /// `position` along its axis (see [`Node::set_divider`]). `false` when nothing
     /// moved.
@@ -594,6 +618,34 @@ mod tests {
         assert!(!ws.resize_active(Direction::Right, 2, geometry()));
         assert!(ws.toggle_zoom());
         assert!(!ws.resize_active(Direction::Left, 2, geometry()));
+    }
+
+    #[test]
+    fn can_resize_active_answers_like_resize_active_without_moving_anything() {
+        let mut ws = workspace(&[2]);
+        let before = ws.layout(0, geometry());
+        assert!(ws.can_resize_active(Direction::Left, 2, geometry()));
+        assert!(!ws.can_resize_active(Direction::Right, 2, geometry()));
+        assert!(!ws.can_resize_active(Direction::Up, 2, geometry()));
+        assert_eq!(ws.layout(0, geometry()), before);
+        assert!(ws.toggle_zoom());
+        assert!(!ws.can_resize_active(Direction::Left, 2, geometry()));
+    }
+
+    #[test]
+    fn can_split_is_refused_once_the_pane_is_too_small() {
+        let mut ws = workspace(&[1]);
+        let tiny = Geometry {
+            area: Rect::from_size(40, 600),
+            ..geometry()
+        };
+        assert!(!ws.can_split(Axis::Horizontal, tiny));
+        assert!(ws.can_split(Axis::Vertical, tiny));
+        assert!(ws.can_split(Axis::Horizontal, geometry()));
+        // Probing allocates no id and leaves the tree alone.
+        assert!(ws.tabs()[0].is_single());
+        assert_eq!(ws.allocate_id(), PaneId(1));
+        assert!(!Workspace::<Fake>::new().can_split(Axis::Horizontal, geometry()));
     }
 
     #[test]
