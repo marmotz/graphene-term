@@ -316,10 +316,6 @@ impl View {
                                     changes.extend(model.remove_shortcut(action, shortcut));
                                 }
                             }
-                            if self.capturing == Some(action) {
-                                ui.add_space(text_offset);
-                                ui.strong(label(Msg::PressShortcut));
-                            }
                         },
                     ));
                     bottom = bottom.max(column(
@@ -338,6 +334,23 @@ impl View {
                             }
                         },
                     ));
+                    if self.capturing == Some(action) {
+                        let hint_top = bottom + row_gap;
+                        let hint_rect = Rect::from_min_size(
+                            Pos2::new(left + name_width + SHORTCUTS_GAP, hint_top),
+                            Vec2::new(slots_width, 0.0),
+                        );
+                        let mut hint_ui = ui.new_child(
+                            UiBuilder::new()
+                                .max_rect(hint_rect)
+                                .layout(Layout::top_down(Align::Min)),
+                        );
+                        hint_ui.set_width(slots_width);
+                        hint_ui.add(
+                            Label::new(RichText::new(label(Msg::PressShortcut)).weak()).wrap(),
+                        );
+                        bottom = bottom.max(hint_ui.min_rect().bottom());
+                    }
                     ui.advance_cursor_after_rect(Rect::from_min_max(
                         Pos2::new(left, top),
                         Pos2::new(left + total, bottom),
