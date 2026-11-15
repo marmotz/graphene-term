@@ -1,4 +1,5 @@
-//! One-line banner drawn at the top of the window, over the grid.
+//! One-line banner at the top of the window, in a strip of its own: the tab bar and the
+//! panes are laid out below it (see [`below_banner`]).
 //!
 //! The banner content is plain data; [`BannerLayout`] places it in pixels so both the
 //! renderer and the mouse handling use the same geometry.
@@ -7,7 +8,7 @@ use semver::Version;
 
 use crate::config::ConfigError;
 use crate::i18n::{self, Lang, Msg};
-use crate::layout::CellSize;
+use crate::layout::{CellSize, Rect};
 use crate::update::{self, Release};
 
 /// Label of the action closing the update banner for the session.
@@ -202,8 +203,8 @@ impl BannerLayout {
     /// Places `banner` at the top of a window `width` pixels wide. The text uses the grid
     /// font, so a character is one cell wide.
     pub fn new(banner: &Banner, cell: CellSize, width: f32) -> Self {
-        let margin = (cell.height / 4.0).round();
-        let height = cell.height + 2.0 * margin;
+        let margin = Self::margin(cell);
+        let height = Self::height(cell);
         let gap = 2.0 * cell.width;
         let text_width = |text: &str| text.chars().count() as f32 * cell.width;
 
@@ -244,6 +245,16 @@ impl BannerLayout {
         }
     }
 
+    /// Space above and below the banner text.
+    fn margin(cell: CellSize) -> f32 {
+        (cell.height / 4.0).round()
+    }
+
+    /// Height of a banner drawn with `cell`, whatever its text.
+    pub fn height(cell: CellSize) -> f32 {
+        cell.height + 2.0 * Self::margin(cell)
+    }
+
     /// What the pixel (`x`, `y`) hits, `None` outside the banner.
     pub fn hit(&self, x: f32, y: f32) -> Option<BannerHit> {
         if !self.rect.contains(x, y) {
@@ -255,6 +266,16 @@ impl BannerLayout {
                 .position(|target| target.contains(x, y))
                 .map_or(BannerHit::Body, BannerHit::Action),
         )
+    }
+}
+
+/// `window` without the strip of `banner_height` pixels the banner takes at its top.
+pub fn below_banner(window: Rect, banner_height: f32) -> Rect {
+    let height = banner_height.clamp(0.0, window.height);
+    Rect {
+        y: window.y + height,
+        height: window.height - height,
+        ..window
     }
 }
 
@@ -465,5 +486,52 @@ mod tests {
         assert_eq!(layout.hit(135.0, 29.0), Some(BannerHit::Action(1)));
         assert_eq!(layout.hit(500.0, 0.0), Some(BannerHit::Body));
         assert_eq!(layout.hit(30.0, 30.0), None);
+    }
+
+    #[test]
+    fn layout_height_does_not_depend_on_the_text() {
+        let short = Banner {
+            text: "a".to_owned(),
+            actions: Vec::new(),
+        };
+        let long = Banner::update(&release("v0.2.0"), Lang::En);
+        let height = BannerLayout::height(CELL);
+        assert_eq!(height, 30.0);
+        assert_eq!(BannerLayout::new(&short, CELL, 800.0).rect.height, height);
+        assert_eq!(BannerLayout::new(&long, CELL, 800.0).rect.height, height);
+    }
+
+    fn window() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        }
+    }
+
+    #[test]
+    fn no_banner_keeps_the_window() {
+        assert_eq!(below_banner(window(), 0.0), window());
+    }
+
+    #[test]
+    fn the_banner_strip_is_removed_from_the_top() {
+        assert_eq!(
+            below_banner(window(), 30.0),
+            Rect {
+                x: 0.0,
+                y: 30.0,
+                width: 800.0,
+                height: 570.0,
+            }
+        );
+    }
+
+    #[test]
+    fn a_banner_taller_than_the_window_leaves_an_empty_area() {
+        let area = below_banner(window(), 900.0);
+        assert_eq!(area.y, 600.0);
+        assert_eq!(area.height, 0.0);
     }
 }

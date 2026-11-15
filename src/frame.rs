@@ -65,7 +65,7 @@ pub struct FrameCursor {
     pub color: Rgb,
 }
 
-/// Banner drawn at the top of the window, over the grid.
+/// Banner drawn at the top of the window, in the strip left above the tab bar and panes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameBanner {
     pub layout: BannerLayout,

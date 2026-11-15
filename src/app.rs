@@ -17,7 +17,7 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::appearance::{self, Appearance};
-use crate::banner::{Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
+use crate::banner::{self, Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
 use crate::block_actions::{Direction, Part};
 use crate::chrome;
 use crate::chrome::command_palette::{
@@ -174,6 +174,16 @@ impl Session {
         BannerLayout::new(shown.banner(), self.renderer.cell_size(), width)
     }
 
+    /// The window below the banner strip: where the tab bar and the panes are laid out.
+    fn chrome_area(&self) -> Rect {
+        let size = self.window.inner_size();
+        let height = match self.shown_banner() {
+            Some(_) => BannerLayout::height(self.renderer.cell_size()),
+            None => 0.0,
+        };
+        banner::below_banner(Rect::from_size(size.width, size.height), height)
+    }
+
     /// Handles a left press on the banner, before any selection. Returns whether the
     /// banner took it.
     fn banner_press(&mut self) -> bool {
@@ -194,7 +204,8 @@ impl Session {
             },
             (Shown::Update(_), BannerHit::Body) => {}
         }
-        self.window.request_redraw();
+        // The banner may be gone: the panes take its strip back.
+        self.relayout();
         true
     }
 
@@ -232,9 +243,8 @@ impl Session {
                     .unwrap_or_else(|| DEFAULT_TITLE.to_owned())
             })
             .collect();
-        let size = self.window.inner_size();
         Some(TabBarLayout::new(
-            Rect::from_size(size.width, size.height),
+            self.chrome_area(),
             self.tab_position,
             &titles,
             self.workspace.active_index(),
@@ -244,12 +254,10 @@ impl Session {
 
     /// Area the tabs divide between their panes, and the sizes they are laid out with.
     fn geometry(&self) -> Geometry {
-        let size = self.window.inner_size();
-        let window = Rect::from_size(size.width, size.height);
         Geometry {
             area: self
                 .tab_position
-                .content_area(window, self.tab_bar_thickness()),
+                .content_area(self.chrome_area(), self.tab_bar_thickness()),
             cell: self.renderer.cell_size(),
             divider: DIVIDER_THICKNESS,
         }
@@ -1720,9 +1728,14 @@ impl App {
         perf::mark("glyphs ready");
 
         let size = window.inner_size();
-        // A single tab: no tab bar.
+        // A single tab: no tab bar. A configuration error banner is already shown; the
+        // update banner only comes later, from the check thread.
+        let banner_height = match self.config_banner {
+            Some(_) => BannerLayout::height(glyphs.cell_size()),
+            None => 0.0,
+        };
         let layout = GridLayout::new(
-            Rect::from_size(size.width, size.height),
+            banner::below_banner(Rect::from_size(size.width, size.height), banner_height),
             glyphs.cell_size(),
             self.config.window.padding * scale,
         );
@@ -1881,7 +1894,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Update(release) => {
                 session.update.set(release);
-                session.window.request_redraw();
+                // The banner may show or hide: the panes make room for it.
+                session.relayout();
             }
             UserEvent::ConfigChanged | UserEvent::Appearance(_) => {}
         }

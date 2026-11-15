@@ -440,8 +440,9 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Scene {
         }
     }
 
-    // The banner covers the grid and the interface: its rect and its glyphs go in the
-    // overlay, one character per cell width from the text position.
+    // The banner sits in its own strip above the tab bar and the panes, drawn after them:
+    // its rect and its glyphs go in the overlay, one character per cell width from the
+    // text position.
     let mut overlay_rects = Vec::new();
     let mut overlay = Vec::new();
     if let Some(banner) = &frame.banner {
