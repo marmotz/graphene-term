@@ -1,6 +1,7 @@
-//! What a pane's shell is doing, read from `/proc`: its current directory and the
-//! program in the foreground of its terminal.
+//! What a pane's shell is doing, read from `/proc` on Linux: its current directory and
+//! the program in the foreground of its terminal.
 
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::path::PathBuf;
 
@@ -23,22 +24,46 @@ pub fn foreground_group(shell_pid: u32, tpgid: i32) -> Option<u32> {
 /// The name of the program running in the foreground of the shell's terminal, `None`
 /// when the shell itself is in the foreground or `/proc` cannot be read.
 pub fn foreground_program(shell_pid: u32) -> Option<String> {
-    let stat = fs::read_to_string(format!("/proc/{shell_pid}/stat")).ok()?;
-    let group = foreground_group(shell_pid, parse_tpgid(&stat)?)?;
-    program_name(group)
+    #[cfg(target_os = "linux")]
+    {
+        let stat = fs::read_to_string(format!("/proc/{shell_pid}/stat")).ok()?;
+        let group = foreground_group(shell_pid, parse_tpgid(&stat)?)?;
+        program_name(group)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = shell_pid;
+        None
+    }
 }
 
 /// The program name of the process `pid` (`/proc/<pid>/comm`), `None` when it cannot
 /// be read.
 pub fn program_name(pid: u32) -> Option<String> {
-    let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-    let name = comm.trim();
-    (!name.is_empty()).then(|| name.to_owned())
+    #[cfg(target_os = "linux")]
+    {
+        let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        let name = comm.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
 }
 
 /// The shell's current directory, `None` when `/proc` cannot be read.
 pub fn current_dir(shell_pid: u32) -> Option<PathBuf> {
-    fs::read_link(format!("/proc/{shell_pid}/cwd")).ok()
+    #[cfg(target_os = "linux")]
+    {
+        fs::read_link(format!("/proc/{shell_pid}/cwd")).ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = shell_pid;
+        None
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +112,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn own_process_has_a_current_dir() {
         let pid = std::process::id();
         assert_eq!(current_dir(pid), std::env::current_dir().ok());
@@ -102,6 +128,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn own_process_has_a_program_name() {
         let name = program_name(std::process::id()).expect("own comm is readable");
         assert!(!name.is_empty());

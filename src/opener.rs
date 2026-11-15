@@ -1,6 +1,7 @@
-//! Opens a URI with the desktop's default handler (`xdg-open`). Shared by every feature
-//! that opens a link: the update banner and the terminal links.
+//! Opens a URI with the platform's default handler. Shared by every feature that opens a
+//! link: the update banner and the terminal links.
 
+use std::ffi::CStr;
 use std::process::Command;
 
 /// Opens `uri` without blocking: `xdg-open` runs from a detached thread that waits for it,
@@ -8,27 +9,43 @@ use std::process::Command;
 pub fn open(uri: &str) {
     let mut command = command(uri);
     let uri = uri.to_owned();
+    let opener = command.get_program().to_string_lossy().into_owned();
+    let thread_opener = opener.clone();
     let spawned = std::thread::Builder::new()
-        .name("xdg-open".to_owned())
+        .name(opener.clone())
         .spawn(move || match command.status() {
             Ok(status) if status.success() => {}
-            Ok(status) => log::warn!("xdg-open {uri} failed: {status}"),
-            Err(error) => log::warn!("cannot run xdg-open {uri}: {error}"),
+            Ok(status) => log::warn!("{thread_opener} {uri} failed: {status}"),
+            Err(error) => log::warn!("cannot run {thread_opener} {uri}: {error}"),
         });
     if let Err(error) = spawned {
-        log::warn!("cannot start the xdg-open thread: {error}");
+        log::warn!("cannot start the {opener} thread: {error}");
     }
 }
 
 /// Name of this machine, read from the kernel; `None` when it cannot be read.
 pub fn hostname() -> Option<String> {
-    let name = std::fs::read_to_string("/proc/sys/kernel/hostname").ok()?;
-    Some(name.trim().to_owned()).filter(|name| !name.is_empty())
+    let mut buffer = [0i8; 256];
+    // SAFETY: `buffer` is writable and its length is passed to the POSIX function.
+    let result = unsafe { libc::gethostname(buffer.as_mut_ptr(), buffer.len() - 1) };
+    if result != 0 {
+        return None;
+    }
+    // SAFETY: The final byte was not passed to `gethostname` and remains NUL.
+    let name = unsafe { CStr::from_ptr(buffer.as_ptr()) }
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    (!name.is_empty()).then_some(name)
 }
 
 /// The command opening `uri`. The URI is a single argument, never parsed by a shell.
 fn command(uri: &str) -> Command {
-    let mut command = Command::new("xdg-open");
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(not(target_os = "macos"))]
+    let program = "xdg-open";
+    let mut command = Command::new(program);
     command.arg(uri);
     command
 }
@@ -43,7 +60,11 @@ mod tests {
     fn command_passes_the_uri_as_one_argument() {
         let uri = "https://example.com/a b?c=1&d=$(rm -rf ~)";
         let command = command(uri);
-        assert_eq!(command.get_program(), OsStr::new("xdg-open"));
+        #[cfg(target_os = "macos")]
+        let opener = "open";
+        #[cfg(not(target_os = "macos"))]
+        let opener = "xdg-open";
+        assert_eq!(command.get_program(), OsStr::new(opener));
         let args: Vec<&OsStr> = command.get_args().collect();
         assert_eq!(args, vec![OsStr::new(uri)]);
     }

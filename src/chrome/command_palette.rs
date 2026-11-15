@@ -448,8 +448,7 @@ impl CommandPalette {
     }
 }
 
-/// `$XDG_STATE_HOME/graphene/palette-recent`, else
-/// `$HOME/.local/state/graphene/palette-recent`.
+/// `$XDG_STATE_HOME/graphene/palette-recent`, else the platform's application state folder.
 pub fn recent_path() -> Option<PathBuf> {
     recent_path_from(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
 }
@@ -459,11 +458,18 @@ fn recent_path_from(xdg_state_home: Option<OsString>, home: Option<OsString>) ->
     let xdg = xdg_state_home
         .map(PathBuf::from)
         .filter(|path| path.is_absolute());
-    let base = xdg.or_else(|| {
-        home.filter(|home| !home.is_empty())
-            .map(|home| PathBuf::from(home).join(".local").join("state"))
-    })?;
+    let base = xdg.or_else(|| home.filter(|home| !home.is_empty()).map(default_state_base))?;
     Some(base.join("graphene").join(RECENT_FILE))
+}
+
+fn default_state_base(home: OsString) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    let base = PathBuf::from(home)
+        .join("Library")
+        .join("Application Support");
+    #[cfg(not(target_os = "macos"))]
+    let base = PathBuf::from(home).join(".local").join("state");
+    base
 }
 
 /// The action ids of the recent file, most recent first, at most [`MAX_RECENT`]. A
@@ -1253,13 +1259,12 @@ mod tests {
     fn recent_path_prefers_xdg_state_home() {
         let path = recent_path_from(Some("/state".into()), Some("/home/u".into()));
         assert_eq!(path, Some(PathBuf::from("/state/graphene/palette-recent")));
+        #[cfg(target_os = "macos")]
+        let fallback = PathBuf::from("/home/u/Library/Application Support/graphene/palette-recent");
+        #[cfg(not(target_os = "macos"))]
+        let fallback = PathBuf::from("/home/u/.local/state/graphene/palette-recent");
         let path = recent_path_from(Some("relative".into()), Some("/home/u".into()));
-        assert_eq!(
-            path,
-            Some(PathBuf::from(
-                "/home/u/.local/state/graphene/palette-recent"
-            ))
-        );
+        assert_eq!(path, Some(fallback));
         assert_eq!(recent_path_from(None, None), None);
     }
 

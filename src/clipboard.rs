@@ -64,6 +64,7 @@ pub fn encode_png(pixels: &Pixels, source: Option<SourceRect>) -> Option<Vec<u8>
 /// Offers `png` as `image/png` in the clipboard, with `text` as UTF-8 text when given.
 /// Wayland is tried first when `WAYLAND_DISPLAY` is set (compositors without the data
 /// control protocol fall back to X11 through XWayland).
+#[cfg(target_os = "linux")]
 pub fn set_text_and_image(text: Option<String>, png: Vec<u8>) -> Result<()> {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         match wayland::set(text.clone(), png.clone()) {
@@ -74,6 +75,30 @@ pub fn set_text_and_image(text: Option<String>, png: Vec<u8>) -> Result<()> {
     x11::set(text, png)
 }
 
+/// Copies a PNG image through the platform clipboard API.
+#[cfg(target_os = "macos")]
+pub fn set_image(clipboard: &mut arboard::Clipboard, png: &[u8]) -> Result<()> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(png));
+    let mut reader = decoder.read_info()?;
+    let buffer_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| anyhow::anyhow!("clipboard image is too large"))?;
+    let mut buffer = vec![0; buffer_size];
+    let info = reader.next_frame(&mut buffer)?;
+    anyhow::ensure!(
+        info.color_type == png::ColorType::Rgba && info.bit_depth == png::BitDepth::Eight,
+        "clipboard image is not RGBA8"
+    );
+    buffer.truncate(info.buffer_size());
+    clipboard.set_image(arboard::ImageData {
+        width: info.width,
+        height: info.height,
+        bytes: buffer.into(),
+    })?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 mod wayland {
     use anyhow::Result;
     use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
@@ -156,6 +181,7 @@ impl Transfer {
     }
 }
 
+#[cfg(target_os = "linux")]
 mod x11 {
     use std::collections::HashMap;
     use std::sync::Arc;

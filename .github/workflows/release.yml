@@ -1,8 +1,7 @@
 name: Release
 
 on:
-  push:
-    branches: [develop]
+  workflow_dispatch:
 
 concurrency:
   group: release
@@ -10,8 +9,6 @@ concurrency:
 
 permissions:
   contents: write
-  actions: read
-  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,36 +16,32 @@ env:
   CARGO_GENERATE_RPM_VERSION: 0.21.1
 
 jobs:
-  release:
+  guard:
+    outputs:
+      source_date_epoch: ${{ steps.timestamp.outputs.epoch }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the develop branch
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/develop" ]]; then
+            echo "Launch releases from the develop branch (selected ref: $GITHUB_REF)." >&2
+            exit 1
+          fi
+      - name: Set the release timestamp
+        id: timestamp
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: guard
     runs-on: ubuntu-latest
     env:
-      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      SOURCE_DATE_EPOCH: ${{ needs.guard.outputs.source_date_epoch }}
+    outputs:
+      tag: ${{ steps.package.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Find the CI binary of the merged pull request
-        id: ci-binary
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: echo "run-id=$(scripts/find-ci-binary.sh "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-
-      - name: Download the CI binary
-        if: steps.ci-binary.outputs.run-id != ''
-        uses: actions/download-artifact@v8
-        with:
-          name: graphene-release
-          path: target/release
-          run-id: ${{ steps.ci-binary.outputs.run-id }}
-          github-token: ${{ github.token }}
-
-      # Artifacts do not keep file permissions.
-      - name: Make the CI binary executable
-        if: steps.ci-binary.outputs.run-id != ''
-        run: chmod +x target/release/graphene
-
-      # Fallback when no CI binary can be reused: build from source.
       - uses: actions/cache@v6
-        if: steps.ci-binary.outputs.run-id == ''
         with:
           path: |
             ~/.cargo/registry
@@ -59,13 +52,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Test
-        if: steps.ci-binary.outputs.run-id == ''
         run: cargo test --locked
 
-      # A fresh timestamp: a restored target/ cache must not carry an older one.
       - name: Release build
-        if: steps.ci-binary.outputs.run-id == ''
-        run: SOURCE_DATE_EPOCH=$(date +%s) cargo build --release --locked
+        run: cargo build --release --locked
 
       - name: Cache packaging tools
         id: tools-cache
@@ -90,26 +80,112 @@ jobs:
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
           echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
 
-      - name: Package
+      - name: Package Linux release
         id: package
         run: scripts/package.sh | tail -n1 >> "$GITHUB_OUTPUT"
 
-      - name: Publish pre-release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
+            dist/aur/
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.guard.outputs.source_date_epoch }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Release build
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Package macOS release
+        env:
+          GRAPHENE_BINARY: target/${{ matrix.target }}/release/graphene
+        run: scripts/package-macos.sh "${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/*.dmg
+            dist/*-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        run: |
+          find dist -mindepth 1 -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+            | sort -z | xargs -0 sha256sum > dist/SHA256SUMS
+
+      - name: Generate categorized release notes
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.package.outputs.tag }}
         run: |
-          gh release create "$TAG" \
-            dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.AppImage dist/SHA256SUMS \
+          previous_tag=$(gh release list --limit 100 --json tagName,isDraft,isPrerelease \
+            --jq '[.[] | select(.isDraft == false and .isPrerelease == false)][0].tagName // ""')
+          scripts/release-notes.sh "$previous_tag" "$GITHUB_SHA" "$GITHUB_REPOSITORY" \
+            > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.linux.outputs.tag }}
+        run: |
+          mapfile -d '' -t assets < <(find dist -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+          gh release create "$TAG" "${assets[@]}" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --generate-notes \
-            --prerelease
+            --notes-file "$RUNNER_TEMP/release-notes.md"
 
 #      - name: Publish to AUR
 #        if: env.AUR_SSH_PRIVATE_KEY != ''
 #        env:
-#          TAG: ${{ steps.package.outputs.tag }}
+#          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+#          TAG: ${{ needs.linux.outputs.tag }}
 #        run: |
 #          mkdir -p ~/.ssh
 #          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
