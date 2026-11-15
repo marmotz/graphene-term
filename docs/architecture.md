@@ -200,6 +200,17 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   watcher sees the rename and `UserEvent::ConfigChanged` applies it to the terminal
   window and refreshes the settings window (`SettingsWindow::apply`), as for a hand
   edit.
+- Keyboard shortcuts section: one row per action (`Action::ALL`, the palette, tabs 1 to
+  9, then any other action the file binds), with its effective shortcuts
+  (`Keybindings::shortcuts`: the configured ones first). Removing a configured shortcut
+  deletes its `[keybindings]` entries (every spelling that parses to it); removing a
+  default one writes `"<keys>" = "none"`. "Add" captures the next key press: the winit
+  `KeyEvent` is taken by `SettingsWindow::window_event` before egui sees it and turned
+  into a shortcut by `Shortcut::from_event`, the inverse of `Keybindings::action`; its
+  label is the key written (`"<label>" = "<action id>"`, or the `none` entry removed
+  when it restores a default). `Escape` alone cancels, a modifier alone keeps waiting. A
+  shortcut bound to another action shows "Already used by <action>" with "Replace"
+  (writes the new binding over it) and "Cancel".
 - Errors (`App.load_errors`: the configuration's and the theme's, kept apart): a value
   error under its field (by `ConfigError.key`), a key of a section with no field
   (`font = 3`, a keybinding) at the top of its section, theme errors in the Theme

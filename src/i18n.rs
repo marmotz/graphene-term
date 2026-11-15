@@ -211,6 +211,18 @@ pub enum Msg {
     AtLeast(String),
     /// A number field is above its maximum.
     AtMost(String),
+    /// Button adding a shortcut to an action.
+    AddShortcut,
+    /// Tooltip of the button removing a shortcut.
+    RemoveShortcut,
+    /// An action without shortcut.
+    NoShortcut,
+    /// Shown while the next key press is captured as a shortcut.
+    PressShortcut,
+    /// A captured shortcut is bound to this other action (its label).
+    AlreadyUsedBy(String),
+    /// Button binding a captured shortcut over the other action.
+    Replace,
     /// Hint shown in the command palette's empty search field.
     PalettePlaceholder,
     // Command palette entries for open tabs and panes (1-based numbers).
@@ -332,6 +344,12 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::NotAWholeNumber => "Enter a whole number",
         Msg::AtLeast(min) => return format!("Must be at least {min}").into(),
         Msg::AtMost(max) => return format!("Must be at most {max}").into(),
+        Msg::AddShortcut => "Add",
+        Msg::RemoveShortcut => "Remove this shortcut",
+        Msg::NoShortcut => "No shortcut",
+        Msg::PressShortcut => "Press the new shortcut, or Escape to cancel",
+        Msg::AlreadyUsedBy(action) => return format!("Already used by {action}").into(),
+        Msg::Replace => "Replace",
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
         Msg::PalettePlaceholder => "Type a command, a tab or a pane",
@@ -451,6 +469,12 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::NotAWholeNumber => "Saisissez un nombre entier",
         Msg::AtLeast(min) => return format!("Doit valoir au moins {min}").into(),
         Msg::AtMost(max) => return format!("Doit valoir au plus {max}").into(),
+        Msg::AddShortcut => "Ajouter",
+        Msg::RemoveShortcut => "Supprimer ce raccourci",
+        Msg::NoShortcut => "Aucun raccourci",
+        Msg::PressShortcut => "Appuyez sur le nouveau raccourci, ou Échap pour annuler",
+        Msg::AlreadyUsedBy(action) => return format!("Déjà utilisé par {action}").into(),
+        Msg::Replace => "Remplacer",
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
         Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
@@ -555,9 +579,15 @@ mod tests {
             Msg::NotAWholeNumber => 50,
             Msg::AtLeast(_) => 51,
             Msg::AtMost(_) => 52,
+            Msg::AddShortcut => 53,
+            Msg::RemoveShortcut => 54,
+            Msg::NoShortcut => 55,
+            Msg::PressShortcut => 56,
+            Msg::AlreadyUsedBy(_) => 57,
+            Msg::Replace => 58,
         }
     }
-    const VARIANT_COUNT: usize = 53;
+    const VARIANT_COUNT: usize = 59;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -619,6 +649,12 @@ mod tests {
             Msg::NotAWholeNumber,
             Msg::AtLeast("6".into()),
             Msg::AtMost("72".into()),
+            Msg::AddShortcut,
+            Msg::RemoveShortcut,
+            Msg::NoShortcut,
+            Msg::PressShortcut,
+            Msg::AlreadyUsedBy("Copy".into()),
+            Msg::Replace,
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
@@ -656,6 +692,14 @@ mod tests {
     #[test]
     fn messages_with_values_include_them() {
         assert_eq!(text(Lang::En, &Msg::GoToTab(4)), "Go to tab 4");
+        assert_eq!(
+            text(Lang::En, &Msg::AlreadyUsedBy("New tab".into())),
+            "Already used by New tab"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::AlreadyUsedBy("Nouvel onglet".into())),
+            "Déjà utilisé par Nouvel onglet"
+        );
         assert_eq!(text(Lang::En, &Msg::LinesHidden(1)), "1 line hidden");
         assert_eq!(text(Lang::En, &Msg::LinesHidden(12)), "12 lines hidden");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(1)), "1 ligne masquée");

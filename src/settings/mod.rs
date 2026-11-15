@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use egui::ViewportId;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
+use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::config::{Config, ConfigError};
@@ -52,6 +53,8 @@ pub struct SettingsWindow {
     lang: Lang,
     /// When egui asked for the next frame, for a delayed repaint (tooltips, animations).
     repaint_at: Option<Instant>,
+    /// Modifiers held, for a captured shortcut.
+    modifiers: ModifiersState,
 }
 
 impl SettingsWindow {
@@ -126,6 +129,7 @@ impl SettingsWindow {
             file,
             lang,
             repaint_at: None,
+            modifiers: ModifiersState::empty(),
         };
         settings.apply(palette, lang, config, errors);
         Ok(settings)
@@ -185,6 +189,24 @@ impl SettingsWindow {
                 return Outcome::Keep;
             }
             WindowEvent::Resized(size) => self.resize(size.width, size.height),
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            // A captured shortcut is read from the winit event, to match it as the
+            // terminal window does; egui does not see the key press.
+            WindowEvent::KeyboardInput { event: key, .. }
+                if self.view.capturing() && key.state == ElementState::Pressed =>
+            {
+                let changes = self.view.captured_key(
+                    &self.model,
+                    &key.logical_key,
+                    key.physical_key,
+                    self.modifiers,
+                );
+                if !changes.is_empty() {
+                    self.write(&changes);
+                }
+                self.window.request_redraw();
+                return Outcome::Keep;
+            }
             _ => {}
         }
         if self.egui.on_window_event(&self.window, event).repaint {

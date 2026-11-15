@@ -11,6 +11,8 @@ use crate::config::{
     MAX_SCROLLBACK_LINES, MIN_FONT_SIZE, StartupMode, TabPosition, UpdateInterval,
 };
 use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
+use crate::input::Action;
+use crate::keybindings::{self, Keybindings, NONE_ACTION, Shortcut};
 use crate::theme;
 
 /// Errors of the last load of the configuration file and of its theme.
@@ -320,6 +322,8 @@ pub struct SettingsModel {
     write_error: Option<String>,
     theme_choices: Vec<String>,
     font_families: Vec<String>,
+    /// The shortcut table of `config`.
+    keybindings: Keybindings,
 }
 
 impl SettingsModel {
@@ -331,6 +335,7 @@ impl SettingsModel {
             write_error: None,
             theme_choices: theme_choices([]),
             font_families: Vec::new(),
+            keybindings: Keybindings::new(&config.keybindings),
         }
     }
 
@@ -339,6 +344,7 @@ impl SettingsModel {
         self.config = config.clone();
         self.errors = errors.clone();
         self.write_error = None;
+        self.keybindings = Keybindings::new(&self.config.keybindings);
     }
 
     /// Takes the configuration parsed from the file just written, before the reload
@@ -347,6 +353,7 @@ impl SettingsModel {
         self.config = config;
         self.errors.config = config_errors;
         self.write_error = None;
+        self.keybindings = Keybindings::new(&self.config.keybindings);
     }
 
     /// Records a failed write.
@@ -577,6 +584,92 @@ impl SettingsModel {
             .collect()
     }
 
+    /// One row per action of the keyboard shortcuts section, with its shortcuts: the
+    /// palette's actions, the palette, the first nine tabs, then any other action the
+    /// file binds (`go_to_tab_12`).
+    pub fn shortcut_rows(&self) -> Vec<(Action, Vec<Shortcut>)> {
+        let mut actions: Vec<Action> = Action::ALL
+            .into_iter()
+            .chain([Action::CommandPalette])
+            .chain((1..=9).map(Action::GoToTab))
+            .collect();
+        for action in self.config.keybindings.values() {
+            if let Some(action) = Action::from_id(action)
+                && !actions.contains(&action)
+            {
+                actions.push(action);
+            }
+        }
+        actions
+            .into_iter()
+            .map(|action| (action, self.keybindings.shortcuts(action)))
+            .collect()
+    }
+
+    /// The action `shortcut` triggers now.
+    pub fn bound(&self, shortcut: Shortcut) -> Option<Action> {
+        self.keybindings.bound(shortcut)
+    }
+
+    /// Binds `shortcut` to `action`; `Err` with the action it is already bound to, when
+    /// another one (see [`Self::replace_shortcut`]).
+    pub fn add_shortcut(&self, action: Action, shortcut: Shortcut) -> Result<Vec<Change>, Action> {
+        match self.bound(shortcut) {
+            Some(bound) if bound == action => Ok(Vec::new()),
+            Some(other) => Err(other),
+            None => Ok(self.replace_shortcut(action, shortcut)),
+        }
+    }
+
+    /// Binds `shortcut` to `action`, over any action it is bound to: the entries of the
+    /// file naming it are replaced by `"<label>" = "<action>"`, or just removed when
+    /// that is its default.
+    pub fn replace_shortcut(&self, action: Action, shortcut: Shortcut) -> Vec<Change> {
+        if self.bound(shortcut) == Some(action) {
+            return Vec::new();
+        }
+        let label = shortcut.label();
+        let mut changes = self.remove_entries(shortcut, &label);
+        if keybindings::default_action(shortcut) == Some(action) {
+            if self.config.keybindings.contains_key(&label) {
+                changes.push(Change::Remove(keybinding(&label)));
+            }
+        } else {
+            changes.push(Change::Set(keybinding(&label), Value::Text(action.id())));
+        }
+        changes
+    }
+
+    /// Unbinds `shortcut` from `action`: its entries in the file are removed, and a
+    /// default shortcut of `action` is set to `"none"`.
+    pub fn remove_shortcut(&self, action: Action, shortcut: Shortcut) -> Vec<Change> {
+        if self.bound(shortcut) != Some(action) {
+            return Vec::new();
+        }
+        let label = shortcut.label();
+        let mut changes = self.remove_entries(shortcut, &label);
+        if keybindings::default_action(shortcut) == Some(action) {
+            changes.push(Change::Set(
+                keybinding(&label),
+                Value::Text(NONE_ACTION.to_owned()),
+            ));
+        } else if self.config.keybindings.contains_key(&label) {
+            changes.push(Change::Remove(keybinding(&label)));
+        }
+        changes
+    }
+
+    /// Removals of the `[keybindings]` entries naming `shortcut` but written another
+    /// way than `label` (`ctrl+shift+c`), so a single entry is left to set.
+    fn remove_entries(&self, shortcut: Shortcut, label: &str) -> Vec<Change> {
+        self.config
+            .keybindings
+            .keys()
+            .filter(|keys| keys.as_str() != label && Shortcut::parse(keys) == Ok(shortcut))
+            .map(|keys| Change::Remove(keybinding(keys)))
+            .collect()
+    }
+
     fn value_errors(&self) -> impl Iterator<Item = &ConfigError> {
         self.errors.config.iter().filter(|error| {
             matches!(
@@ -585,6 +678,11 @@ impl SettingsModel {
             )
         })
     }
+}
+
+/// Raw path of a `[keybindings]` entry.
+fn keybinding(keys: &str) -> Vec<String> {
+    vec!["keybindings".to_owned(), keys.to_owned()]
 }
 
 fn field_of_key(key: &str) -> Option<Field> {
@@ -1071,5 +1169,162 @@ interval = "1w"
         m.written(config, errors);
         assert_eq!(m.text(Field::FontSize), "20");
         assert_eq!(m.write_error(), None);
+    }
+
+    fn shortcut(label: &str) -> Shortcut {
+        Shortcut::parse(label).unwrap()
+    }
+
+    fn binding(keys: &str) -> Vec<String> {
+        keybinding(keys)
+    }
+
+    /// The file `text` once `changes` are applied, and its model.
+    fn apply(text: &str, changes: &[Change]) -> (String, SettingsModel) {
+        let mut edit = crate::config_edit::ConfigEdit::parse(text, &file()).unwrap();
+        for change in changes {
+            match change {
+                Change::Set(path, value) => {
+                    let path: Vec<&str> = path.iter().map(String::as_str).collect();
+                    edit.set(&path, value.clone()).unwrap();
+                }
+                Change::Remove(path) => {
+                    let path: Vec<&str> = path.iter().map(String::as_str).collect();
+                    edit.remove(&path);
+                }
+            }
+        }
+        let text = edit.to_string();
+        let m = model(&text);
+        assert_eq!(m.errors.config, vec![], "{text}");
+        (text, m)
+    }
+
+    fn labels(m: &SettingsModel, action: Action) -> Vec<String> {
+        m.shortcut_rows()
+            .into_iter()
+            .find(|(a, _)| *a == action)
+            .map(|(_, shortcuts)| shortcuts.into_iter().map(Shortcut::label).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn shortcut_rows_show_the_defaults_with_the_file_applied() {
+        let m = model("");
+        let rows = m.shortcut_rows();
+        let actions: Vec<Action> = rows.iter().map(|(action, _)| *action).collect();
+        assert_eq!(&actions[..Action::ALL.len()], &Action::ALL);
+        assert!(actions.contains(&Action::CommandPalette));
+        assert!(actions.contains(&Action::GoToTab(9)));
+        assert!(!actions.contains(&Action::GoToTab(10)));
+        assert_eq!(labels(&m, Action::Copy), ["Ctrl+Shift+C", "Copy"]);
+        assert!(labels(&m, Action::EqualisePanes).is_empty());
+        assert_eq!(labels(&m, Action::GoToTab(1)), ["Alt+1"]);
+
+        let m = model(
+            "[keybindings]\n\"Ctrl+Alt+C\" = \"copy\"\n\"Copy\" = \"none\"\n\"Alt+0\" = \"go_to_tab_10\"\n",
+        );
+        assert_eq!(labels(&m, Action::Copy), ["Ctrl+Alt+C", "Ctrl+Shift+C"]);
+        assert_eq!(labels(&m, Action::GoToTab(10)), ["Alt+0"]);
+        assert_eq!(m.bound(shortcut("Copy")), None);
+    }
+
+    #[test]
+    fn removing_a_default_shortcut_writes_none() {
+        let m = model("");
+        let changes = m.remove_shortcut(Action::Copy, shortcut("Ctrl+Shift+C"));
+        assert_eq!(changes, set(&["keybindings", "Ctrl+Shift+C"], text("none")));
+        let (_, m) = apply("", &changes);
+        assert_eq!(labels(&m, Action::Copy), ["Copy"]);
+        assert_eq!(m.bound(shortcut("Ctrl+Shift+C")), None);
+    }
+
+    #[test]
+    fn removing_a_configured_shortcut_deletes_its_entry() {
+        let file = "# mine\n[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n\"F7\" = \"copy\"\n";
+        let m = model(file);
+        let changes = m.remove_shortcut(Action::NewTab, shortcut("Ctrl+Alt+T"));
+        assert_eq!(changes, vec![Change::Remove(binding("Ctrl+Alt+T"))]);
+        let (text, m) = apply(file, &changes);
+        assert!(text.starts_with("# mine\n"), "{text}");
+        assert_eq!(labels(&m, Action::NewTab), ["Ctrl+Shift+T"]);
+        assert_eq!(labels(&m, Action::Copy), ["F7", "Ctrl+Shift+C", "Copy"]);
+        // A shortcut not bound to the action changes nothing.
+        assert_eq!(m.remove_shortcut(Action::Paste, shortcut("F7")), vec![]);
+    }
+
+    #[test]
+    fn removing_an_entry_written_another_way_removes_every_spelling() {
+        let file = "[keybindings]\n\"ctrl+shift+c\" = \"copy\"\n\"ctrl+alt+x\" = \"paste\"\n";
+        let m = model(file);
+        // The default `Ctrl+Shift+C`, also configured in lowercase.
+        let changes = m.remove_shortcut(Action::Copy, shortcut("Ctrl+Shift+C"));
+        let (text, m) = apply(file, &changes);
+        assert!(!text.contains("ctrl+shift+c"), "{text}");
+        assert_eq!(labels(&m, Action::Copy), ["Copy"]);
+        let changes = m.remove_shortcut(Action::Paste, shortcut("Ctrl+Alt+X"));
+        assert_eq!(changes, vec![Change::Remove(binding("ctrl+alt+x"))]);
+    }
+
+    #[test]
+    fn adding_a_shortcut_writes_its_label_and_action() {
+        let m = model("");
+        let changes = m.add_shortcut(Action::EqualisePanes, shortcut("Ctrl+Alt+E"));
+        assert_eq!(
+            changes,
+            Ok(set(&["keybindings", "Ctrl+Alt+E"], text("equalise_panes")))
+        );
+        let (_, m) = apply("", &changes.unwrap());
+        assert_eq!(labels(&m, Action::EqualisePanes), ["Ctrl+Alt+E"]);
+        // Already bound to the action: nothing to write.
+        assert_eq!(
+            m.add_shortcut(Action::EqualisePanes, shortcut("Ctrl+Alt+E")),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn restoring_a_removed_default_deletes_its_none_entry() {
+        let file = "[keybindings]\n\"Ctrl+Shift+C\" = \"none\"\n";
+        let m = model(file);
+        let changes = m
+            .add_shortcut(Action::Copy, shortcut("Ctrl+Shift+C"))
+            .unwrap();
+        assert_eq!(changes, vec![Change::Remove(binding("Ctrl+Shift+C"))]);
+        let (_, m) = apply(file, &changes);
+        assert_eq!(labels(&m, Action::Copy), ["Ctrl+Shift+C", "Copy"]);
+    }
+
+    #[test]
+    fn a_shortcut_bound_to_another_action_is_a_conflict_until_replaced() {
+        let m = model("");
+        let taken = shortcut("Ctrl+Shift+T");
+        assert_eq!(m.add_shortcut(Action::NextTab, taken), Err(Action::NewTab));
+        let changes = m.replace_shortcut(Action::NextTab, taken);
+        assert_eq!(
+            changes,
+            set(&["keybindings", "Ctrl+Shift+T"], text("next_tab"))
+        );
+        let (_, m) = apply("", &changes);
+        assert_eq!(m.bound(taken), Some(Action::NextTab));
+        assert!(labels(&m, Action::NewTab).is_empty());
+        assert_eq!(
+            labels(&m, Action::NextTab),
+            ["Ctrl+Shift+T", "Ctrl+Tab", "Ctrl+PageDown"]
+        );
+    }
+
+    #[test]
+    fn shortcuts_follow_a_written_configuration() {
+        let mut m = model("");
+        let (config, errors) = Config::parse(
+            "[keybindings]\n\"F7\" = \"detach_pane\"\n",
+            &Config::default(),
+            &file(),
+        );
+        m.written(config, errors);
+        assert_eq!(labels(&m, Action::DetachPane), ["F7"]);
+        m.refresh(&Config::default(), &LoadErrors::default());
+        assert!(labels(&m, Action::DetachPane).is_empty());
     }
 }

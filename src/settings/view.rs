@@ -4,9 +4,12 @@
 use std::collections::BTreeMap;
 
 use egui::{CentralPanel, ComboBox, Grid, Panel, RichText, ScrollArea, Slider, TextEdit, Ui};
+use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
 use super::model::{self, Change, Input, InputError, SettingsModel, Widget};
 use crate::i18n::{self, Lang, Msg, SettingsField as Field, SettingsSection};
+use crate::input::Action;
+use crate::keybindings::Shortcut;
 
 /// Width of the sections sidebar, in points.
 const SIDEBAR_WIDTH: f32 = 180.0;
@@ -24,6 +27,18 @@ pub struct View {
     input_errors: BTreeMap<Field, InputError>,
     /// Slider value while it is dragged.
     sliding: BTreeMap<Field, f64>,
+    /// Action whose new shortcut is the next key press.
+    capturing: Option<Action>,
+    /// A captured shortcut bound to another action, waiting for "Replace" or "Cancel".
+    conflict: Option<Conflict>,
+}
+
+/// A captured shortcut already bound to `other`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Conflict {
+    action: Action,
+    shortcut: Shortcut,
+    other: Action,
 }
 
 impl View {
@@ -32,6 +47,45 @@ impl View {
         self.editing.clear();
         self.input_errors.clear();
         self.sliding.clear();
+    }
+
+    /// Whether the next key press is captured as a shortcut, so it must not reach egui.
+    pub fn capturing(&self) -> bool {
+        self.capturing.is_some()
+    }
+
+    /// Takes a key press while a shortcut is captured; returns the changes to write.
+    /// `Escape` alone cancels, a modifier alone keeps waiting, a shortcut bound to
+    /// another action waits for "Replace" or "Cancel".
+    pub fn captured_key(
+        &mut self,
+        model: &SettingsModel,
+        key: &Key,
+        physical: PhysicalKey,
+        mods: ModifiersState,
+    ) -> Vec<Change> {
+        let Some(action) = self.capturing else {
+            return Vec::new();
+        };
+        if model.locked().is_some() || (mods.is_empty() && *key == Key::Named(NamedKey::Escape)) {
+            self.capturing = None;
+            return Vec::new();
+        }
+        let Some(shortcut) = Shortcut::from_event(key, physical, mods) else {
+            return Vec::new();
+        };
+        self.capturing = None;
+        match model.add_shortcut(action, shortcut) {
+            Ok(changes) => changes,
+            Err(other) => {
+                self.conflict = Some(Conflict {
+                    action,
+                    shortcut,
+                    other,
+                });
+                Vec::new()
+            }
+        }
     }
 
     /// Draws one frame; returns the changes to write.
@@ -48,8 +102,11 @@ impl View {
                     if ui
                         .selectable_label(selected, label(Msg::Section(section)))
                         .clicked()
+                        && !selected
                     {
                         self.section = section;
+                        self.capturing = None;
+                        self.conflict = None;
                     }
                 }
             });
@@ -80,6 +137,10 @@ impl View {
             for message in model.theme_errors() {
                 error_label(ui, &message);
             }
+        }
+        if self.section == SettingsSection::KeyboardShortcuts {
+            self.shortcuts(ui, lang, model, changes);
+            return;
         }
         Grid::new(("settings_fields", self.section))
             .num_columns(2)
@@ -154,6 +215,87 @@ impl View {
                 self.input_errors.insert(field, error);
             }
         }
+    }
+
+    /// One row per action: its shortcuts, each removable, and the "Add" button that
+    /// captures a new one.
+    fn shortcuts(
+        &mut self,
+        ui: &mut Ui,
+        lang: Lang,
+        model: &SettingsModel,
+        changes: &mut Vec<Change>,
+    ) {
+        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        Grid::new("settings_shortcuts")
+            .num_columns(2)
+            .spacing([16.0, 8.0])
+            .striped(true)
+            .show(ui, |ui| {
+                for (action, shortcuts) in model.shortcut_rows() {
+                    ui.label(label(action.label()));
+                    ui.vertical(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            if shortcuts.is_empty() {
+                                ui.weak(label(Msg::NoShortcut));
+                            }
+                            for shortcut in shortcuts {
+                                if ui
+                                    .button(format!("{} \u{00d7}", shortcut.label()))
+                                    .on_hover_text(label(Msg::RemoveShortcut))
+                                    .clicked()
+                                {
+                                    self.conflict = None;
+                                    changes.extend(model.remove_shortcut(action, shortcut));
+                                }
+                            }
+                            if self.capturing == Some(action) {
+                                ui.strong(label(Msg::PressShortcut));
+                                if ui.button(label(Msg::Cancel)).clicked() {
+                                    self.capturing = None;
+                                }
+                            } else if ui.button(label(Msg::AddShortcut)).clicked() {
+                                self.capturing = Some(action);
+                                self.conflict = None;
+                            }
+                        });
+                        if let Some(conflict) = self.conflict.filter(|c| c.action == action) {
+                            self.conflict_row(ui, lang, model, conflict, changes);
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+    }
+
+    /// "Already used by <action>" with "Replace" and "Cancel".
+    fn conflict_row(
+        &mut self,
+        ui: &mut Ui,
+        lang: Lang,
+        model: &SettingsModel,
+        conflict: Conflict,
+        changes: &mut Vec<Change>,
+    ) {
+        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let other = label(conflict.other.label());
+        warn_label(
+            ui,
+            &format!(
+                "{}: {}",
+                conflict.shortcut.label(),
+                label(Msg::AlreadyUsedBy(other))
+            ),
+        );
+        ui.horizontal(|ui| {
+            if ui.button(label(Msg::Replace)).clicked() {
+                self.conflict = None;
+                changes.extend(model.replace_shortcut(conflict.action, conflict.shortcut));
+            }
+            if ui.button(label(Msg::Cancel)).clicked() {
+                self.conflict = None;
+            }
+        });
     }
 
     /// A text field, whose text is kept while edited and returned when `Enter` is
@@ -253,6 +395,119 @@ fn warn_label(ui: &mut Ui, text: &str) {
 mod tests {
     use super::*;
 
+    use winit::keyboard::KeyCode;
+
+    use super::model::{LoadErrors, Value};
+    use crate::config::Config;
+
+    fn model(text: &str) -> SettingsModel {
+        let file = std::path::PathBuf::from("/tmp/config.toml");
+        let (config, errors) = Config::parse(text, &Config::default(), &file);
+        SettingsModel::new(
+            &config,
+            &LoadErrors {
+                config: errors,
+                theme: Vec::new(),
+            },
+        )
+    }
+
+    fn letter(c: &str, code: KeyCode) -> (Key, PhysicalKey) {
+        (Key::Character(c.into()), PhysicalKey::Code(code))
+    }
+
+    const CTRL_ALT: ModifiersState = ModifiersState::CONTROL.union(ModifiersState::ALT);
+
+    #[test]
+    fn a_captured_key_press_binds_the_shortcut() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Action::DetachPane),
+            ..View::default()
+        };
+        // A modifier alone keeps waiting.
+        let (control, control_left) = (
+            Key::Named(NamedKey::Control),
+            PhysicalKey::Code(KeyCode::ControlLeft),
+        );
+        assert_eq!(
+            view.captured_key(&model, &control, control_left, CTRL_ALT),
+            vec![]
+        );
+        assert!(view.capturing());
+        let (key, physical) = letter("d", KeyCode::KeyD);
+        assert_eq!(
+            view.captured_key(&model, &key, physical, CTRL_ALT),
+            vec![Change::Set(
+                vec!["keybindings".into(), "Ctrl+Alt+D".into()],
+                Value::Text("detach_pane".into())
+            )]
+        );
+        assert!(!view.capturing());
+        // Not capturing: the key is not taken.
+        assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT), vec![]);
+    }
+
+    #[test]
+    fn escape_alone_cancels_the_capture() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Action::DetachPane),
+            ..View::default()
+        };
+        let escape = Key::Named(NamedKey::Escape);
+        let physical = PhysicalKey::Code(KeyCode::Escape);
+        assert_eq!(
+            view.captured_key(&model, &escape, physical, ModifiersState::empty()),
+            vec![]
+        );
+        assert!(!view.capturing());
+        // With a modifier, Escape is a shortcut.
+        view.capturing = Some(Action::DetachPane);
+        let changes = view.captured_key(&model, &escape, physical, ModifiersState::SHIFT);
+        assert_eq!(
+            changes,
+            vec![Change::Set(
+                vec!["keybindings".into(), "Shift+Escape".into()],
+                Value::Text("detach_pane".into())
+            )]
+        );
+    }
+
+    #[test]
+    fn a_shortcut_of_another_action_waits_for_replace() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Action::NextTab),
+            ..View::default()
+        };
+        let (key, physical) = letter("T", KeyCode::KeyT);
+        let mods = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(view.captured_key(&model, &key, physical, mods), vec![]);
+        assert!(!view.capturing());
+        assert_eq!(
+            view.conflict,
+            Some(Conflict {
+                action: Action::NextTab,
+                shortcut: Shortcut::parse("Ctrl+Shift+T").unwrap(),
+                other: Action::NewTab,
+            })
+        );
+    }
+
+    #[test]
+    fn a_locked_file_cancels_the_capture() {
+        let model = model("[font\n");
+        assert!(model.locked().is_some());
+        let mut view = View {
+            capturing: Some(Action::DetachPane),
+            ..View::default()
+        };
+        let (key, physical) = letter("d", KeyCode::KeyD);
+        assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT), vec![]);
+        assert!(!view.capturing());
+    }
+
     #[test]
     fn reset_drops_the_values_not_written() {
         let mut view = View::default();
@@ -261,10 +516,13 @@ mod tests {
             .insert(Field::FontSize, InputError::NotANumber);
         view.sliding.insert(Field::BackgroundOpacity, 0.5);
         view.section = SettingsSection::Cursor;
+        view.capturing = Some(Action::Copy);
         view.reset_inputs();
         assert!(view.editing.is_empty());
         assert!(view.input_errors.is_empty());
         assert!(view.sliding.is_empty());
         assert_eq!(view.section, SettingsSection::Cursor);
+        // A reload after a write does not stop a capture.
+        assert!(view.capturing());
     }
 }

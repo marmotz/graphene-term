@@ -50,7 +50,9 @@ reload.
 
 The settings window (`Ctrl+,`, or "Settings" in the command palette) edits the same
 file: each change is written at once, keeping the file's comments, and applied like a
-hand edit. Errors are shown under the faulty setting, unknown keys at the top; while the
+hand edit. Its keyboard shortcuts section lists every action with its shortcuts: add
+one by pressing it (`Escape` cancels), remove a default one (written as `"none"`) or a
+configured one. Errors are shown under the faulty setting, unknown keys at the top; while the
 file has a syntax error, the window shows it and stays read-only until the file is fixed
 by hand.
 
