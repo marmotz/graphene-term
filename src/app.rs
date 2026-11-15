@@ -44,7 +44,7 @@ use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
-use crate::renderer::{Glyphs, PaneFrame, Renderer, UiFont};
+use crate::renderer::{Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
@@ -1690,6 +1690,10 @@ pub struct App {
     /// Palette of the configured theme.
     palette: Palette,
     session: Option<Session>,
+    /// GPU context created with the terminal window, on which other windows create
+    /// their surface.
+    #[allow(dead_code)] // Read by the settings window.
+    gpu: Option<Arc<Gpu>>,
     update_checker: Checker,
     error: Option<anyhow::Error>,
     /// Banner reporting the errors of the configuration and theme files.
@@ -1750,12 +1754,16 @@ impl App {
         workspace.new_tab(id, Pane::new(id, terminal, layout));
         perf::mark("shell spawned");
 
-        let renderer = pollster::block_on(Renderer::new(
+        let display = event_loop.owned_display_handle();
+        let (gpu, surface) = pollster::block_on(Gpu::new(window.clone(), display.clone()))?;
+        let renderer = Renderer::new(
+            gpu,
+            surface,
             window.clone(),
-            event_loop.owned_display_handle(),
+            display,
             glyphs,
             self.config.window.background_opacity,
-        ))?;
+        )?;
 
         let clipboard = arboard::Clipboard::new()
             .map_err(|e| log::warn!("clipboard unavailable: {e}"))
@@ -1855,6 +1863,7 @@ impl ApplicationHandler<UserEvent> for App {
         match self.create_session(event_loop) {
             Ok(mut session) => {
                 session.update_pointer();
+                self.gpu = Some(session.renderer.gpu().clone());
                 self.session = Some(session);
             }
             Err(error) => return self.fail(event_loop, error),
@@ -1902,7 +1911,36 @@ impl ApplicationHandler<UserEvent> for App {
         session.flush_panes();
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let session_window = self.session.as_ref().map(|session| session.window.id());
+        match route(id, session_window) {
+            Route::Session => self.session_window_event(event_loop, event),
+            Route::Unknown => {}
+        }
+    }
+}
+
+/// Window an event is delivered to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// The terminal window.
+    Session,
+    /// A window `App` does not know (already closed): the event is dropped.
+    Unknown,
+}
+
+/// Routes an event of window `id`; `session` is the terminal window, when open.
+fn route(id: WindowId, session: Option<WindowId>) -> Route {
+    if session == Some(id) {
+        Route::Session
+    } else {
+        Route::Unknown
+    }
+}
+
+impl App {
+    /// Handles an event of the terminal window.
+    fn session_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         let default_font_size = self.config.font.size;
         let Some(session) = self.session.as_mut() else {
             return;
@@ -2000,6 +2038,7 @@ pub fn run() -> anyhow::Result<()> {
         config,
         palette,
         session: None,
+        gpu: None,
         error: None,
         config_banner,
         appearance: Appearance::default(),
@@ -2021,6 +2060,19 @@ pub fn run() -> anyhow::Result<()> {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn events_of_the_terminal_window_go_to_the_session() {
+        let terminal = WindowId::from(1);
+        assert_eq!(route(terminal, Some(terminal)), Route::Session);
+    }
+
+    #[test]
+    fn events_of_an_unknown_window_are_dropped() {
+        let terminal = WindowId::from(1);
+        assert_eq!(route(WindowId::from(2), Some(terminal)), Route::Unknown);
+        assert_eq!(route(terminal, None), Route::Unknown);
+    }
 
     #[test]
     fn earliest_keeps_the_sooner_deadline() {

@@ -85,7 +85,7 @@ src/
     state.rs       update.json state file (last check, latest release, ignored tag)
     checker.rs     update-check thread, pure tick (check or reuse the cache, next wake-up)
   renderer/
-    mod.rs         wgpu device/surface, frame orchestration, headless renderer (benches)
+    mod.rs         Gpu context (shared), per-window surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + glyph instances (pure, no GPU)
     glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic, ui) -> atlas slot,
                    interface font shaping
@@ -109,6 +109,13 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 
 ## Session and panes
 
+- `App` routes each window event by `WindowId` (`app::route`): the terminal window's
+  events go to the session, those of an unknown window are dropped. The GPU context
+  (`renderer::Gpu`: instance, adapter, device, queue) is created with the terminal
+  window, whose surface picks the adapter (backends of `BACKEND_ATTEMPTS` in order),
+  and is kept in `App` as an `Arc<Gpu>` for the other windows. Each `Renderer` keeps
+  its own surface, configuration and layers, and recreates a lost surface on the
+  shared instance.
 - `Session` owns the window and what is shared by every pane: the renderer, the
   clipboard, the modifiers, the font size, the banners, the mouse gesture in progress
   (`Drag`) and the open overlay. Its `Workspace<Pane>` holds the tabs; each tab is a
