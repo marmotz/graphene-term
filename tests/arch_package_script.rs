@@ -34,8 +34,8 @@ impl Sandbox {
         fs::write(
             dir.join("SHA256SUMS"),
             format!(
-                "ffff  graphene-{tag}-x86_64.AppImage\n\
-                 {ARCHIVE_SHA}  graphene-{tag}-x86_64-unknown-linux-gnu.tar.gz\n"
+                "ffff  dist/graphene-{tag}-x86_64.AppImage\n\
+                 {ARCHIVE_SHA}  dist/graphene-{tag}-x86_64-unknown-linux-gnu.tar.gz\n"
             ),
         )
         .unwrap();
