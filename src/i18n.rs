@@ -185,6 +185,20 @@ pub enum Msg {
     NextPane,
     PreviousPane,
     ToggleZoom,
+    #[allow(dead_code)] // Used by the context menu; its event integration is issue #103.
+    ZoomPane,
+    #[allow(dead_code)]
+    UnzoomPane,
+    #[allow(dead_code)]
+    SplitVertical,
+    #[allow(dead_code)]
+    SplitHorizontal,
+    #[allow(dead_code)]
+    Themes,
+    #[allow(dead_code)]
+    FoldBlock,
+    #[allow(dead_code)]
+    UnfoldBlock,
     CommandPalette,
     EqualisePanes,
     DetachPane,
@@ -301,6 +315,13 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::NextPane => "Next pane",
         Msg::PreviousPane => "Previous pane",
         Msg::ToggleZoom => "Zoom / unzoom pane",
+        Msg::ZoomPane => "Zoom the pane",
+        Msg::UnzoomPane => "Unzoom the pane",
+        Msg::SplitVertical => "Split vertically",
+        Msg::SplitHorizontal => "Split horizontally",
+        Msg::Themes => "Themes",
+        Msg::FoldBlock => "Fold block",
+        Msg::UnfoldBlock => "Unfold block",
         Msg::CommandPalette => "Command palette",
         Msg::OpenSettings => "Settings",
         Msg::Quit => "Quit Graphene",
@@ -428,6 +449,13 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::NextPane => "Panneau suivant",
         Msg::PreviousPane => "Panneau précédent",
         Msg::ToggleZoom => "Agrandir / réduire le panneau",
+        Msg::ZoomPane => "Agrandir le panneau",
+        Msg::UnzoomPane => "Réduire le panneau",
+        Msg::SplitVertical => "Diviser verticalement",
+        Msg::SplitHorizontal => "Diviser horizontalement",
+        Msg::Themes => "Thèmes",
+        Msg::FoldBlock => "Replier le bloc",
+        Msg::UnfoldBlock => "Déplier le bloc",
         Msg::CommandPalette => "Palette de commandes",
         Msg::OpenSettings => "Paramètres",
         Msg::Quit => "Quitter Graphene",
@@ -559,6 +587,13 @@ mod tests {
             Msg::NextPane => 24,
             Msg::PreviousPane => 25,
             Msg::ToggleZoom => 26,
+            Msg::ZoomPane => 61,
+            Msg::UnzoomPane => 62,
+            Msg::SplitVertical => 63,
+            Msg::SplitHorizontal => 64,
+            Msg::Themes => 65,
+            Msg::FoldBlock => 66,
+            Msg::UnfoldBlock => 67,
             Msg::CommandPalette => 27,
             Msg::EqualisePanes => 28,
             Msg::DetachPane => 29,
@@ -595,7 +630,7 @@ mod tests {
             Msg::Replace => 58,
         }
     }
-    const VARIANT_COUNT: usize = 61;
+    const VARIANT_COUNT: usize = 68;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -626,6 +661,13 @@ mod tests {
             Msg::NextPane,
             Msg::PreviousPane,
             Msg::ToggleZoom,
+            Msg::ZoomPane,
+            Msg::UnzoomPane,
+            Msg::SplitVertical,
+            Msg::SplitHorizontal,
+            Msg::Themes,
+            Msg::FoldBlock,
+            Msg::UnfoldBlock,
             Msg::CommandPalette,
             Msg::EqualisePanes,
             Msg::DetachPane,
