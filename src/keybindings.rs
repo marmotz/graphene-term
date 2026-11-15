@@ -142,6 +142,8 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Alt+8", Action::GoToTab(8)),
     ("Alt+9", Action::GoToTab(9)),
     ("Ctrl+Shift+P", Action::CommandPalette),
+    // Not `Ctrl+Shift+,`: Shift is dropped for a symbol (see `Shortcut::character`).
+    ("Ctrl+,", Action::OpenSettings),
 ];
 
 /// Built-in key/action pairs, in the order shown in the default configuration.
@@ -543,6 +545,11 @@ mod tests {
         assert_eq!(get(&named(NamedKey::Copy), NONE), Some(Action::Copy));
         assert_eq!(get(&ch("P"), cs()), Some(Action::CommandPalette));
         assert_eq!(get(&ch("p"), cs()), Some(Action::CommandPalette));
+        assert_eq!(get(&ch(","), CTRL), Some(Action::OpenSettings));
+        assert_eq!(
+            bindings.label(Action::OpenSettings).as_deref(),
+            Some("Ctrl+,")
+        );
     }
 
     #[test]

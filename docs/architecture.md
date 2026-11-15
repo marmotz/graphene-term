@@ -15,6 +15,7 @@
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
 | Kitty graphics: PNG, zlib, base64 | `png` + `flate2` + `base64`                              | 0.18, 1, 0.22 |
+| Settings window widgets           | `egui` + `egui-winit` + `egui-wgpu`                      | 0.37    |
 
 ## Modules
 
@@ -23,7 +24,13 @@ src/
   main.rs          binary entry point: --version, logger setup, calls lib::run
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup timing logs (`graphene::perf` target)
-  app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay)
+  app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay),
+                   window event routing (terminal or settings window)
+  settings/
+    mod.rs         SettingsWindow: winit window, surface on the shared Gpu, egui_winit::State,
+                   egui_wgpu::Renderer, redraw on demand
+    view.rs        egui drawing: sections sidebar, selected section panel (thin)
+    visuals.rs     egui Visuals from the active theme's colors (pure)
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
   process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
   workspace/
@@ -104,7 +111,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`) hold the logic
+Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
@@ -154,6 +161,33 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   `$XDG_STATE_HOME/graphene/palette-recent` (default `~/.local/state/graphene/`), one id
   per line, at most 50; the file is read each time the palette opens, and a missing or
   unreadable file means no recent actions. Tab and pane entries are not stored.
+
+## Settings window
+
+- `Ctrl+,` (`Action::OpenSettings`, also in the palette) opens it. Not `Ctrl+Shift+,`:
+  Shift is dropped for a symbol (`Shortcut::character`), so it would never match.
+- `Session::run_action` cannot create a window, which `App` owns: the action sets
+  `Session.settings_requested`, read by `App` after each terminal window event and user
+  event (`App::open_settings`). A second request focuses the open window
+  (`Window::focus_window`).
+- Same process, second winit window: its surface is created on the shared
+  `renderer::Gpu`, in the format egui prefers (`egui_wgpu::preferred_framebuffer_format`,
+  gamma-space), opaque. `egui_winit::State` takes its window events and applies the
+  platform output (cursor, clipboard, IME); `egui_wgpu::Renderer` paints the tessellated
+  frame. It is drawn only on demand: when egui says an event needs a repaint, or after
+  the delay egui asks for (`repaint_delay`, folded into `about_to_wait`'s deadline).
+- `App::window_event` routes by `WindowId`: the settings window's events go to
+  `SettingsWindow::window_event`; `CloseRequested` drops it. Closing the terminal window
+  exits the event loop as before, which closes the settings window too.
+- Layout (`settings/view.rs`): a sidebar with the ten sections (`i18n::SettingsSection`:
+  Font, Window, Scrollback, Cursor, Selection, Tabs, Language, Theme, Keyboard shortcuts,
+  Updates) and the selected section's panel; labels in the configuration's resolved
+  language.
+- Look: egui's bundled fonts; `settings::visuals` maps the active palette to egui
+  `Visuals` (dark or light base from the background's luma, panels from the background,
+  text from the foreground, accent from `ui.palette_match`, borders from
+  `ui.pane_border`, controls from the tab bar colors). Rebuilt by `App::reload_config`,
+  so on `UserEvent::ConfigChanged` and on a system appearance change.
 
 ## Threads
 

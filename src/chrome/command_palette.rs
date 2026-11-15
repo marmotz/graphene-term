@@ -869,7 +869,7 @@ mod tests {
         }
         // Each action once, the last run first.
         assert_eq!(recent.len(), Action::ALL.len());
-        assert_eq!(recent[0], Action::FontSizeReset.id());
+        assert_eq!(recent[0], Action::ALL[Action::ALL.len() - 1].id());
         let many: Vec<String> = (0..80).map(|i| format!("action_{i}")).collect();
         save_recent(&file, &many).expect("saved");
         let loaded = load_recent(&file);

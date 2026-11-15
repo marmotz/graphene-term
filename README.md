@@ -116,6 +116,7 @@ first output.
 | Shift+PageUp / Shift+PageDown | Scroll the selected block, or the history       |
 | Shift+Home / Shift+End        | Top / bottom of the history (not at the prompt) |
 | Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                     |
+| Ctrl+,                        | Open the settings window                        |
 | Mouse wheel                   | Scroll the block under the pointer, or history  |
 
 Tabs and split panes:
@@ -153,7 +154,7 @@ Every key-bound action can be remapped in the `[keybindings]` section of `config
 one back to the shell. Keys are modifiers (`Ctrl`, `Shift`, `Alt`, `Super`) joined with
 `+`, then a key name (`PageUp`, `F5`, `Left`...) or one character; actions are the
 snake_case names of the palette entries (`copy`, `split_right`, `focus_pane_left`,
-`go_to_tab_3`, `command_palette`...). The palette shows the configured shortcut.
+`go_to_tab_3`, `command_palette`, `open_settings`...). The palette shows the configured shortcut.
 
 At the shell prompt (zsh, bash or fish with the integration, not inside a running
 command or a full-screen application), the command line is edited like in an editor.

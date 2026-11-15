@@ -48,12 +48,14 @@ pub enum Action {
     GoToTab(u8),
     /// Opens the command palette.
     CommandPalette,
+    /// Opens the settings window, or focuses it when already open.
+    OpenSettings,
 }
 
 impl Action {
     /// Every action the command palette lists, in its default order. The tabs are
     /// listed by the palette itself, so `GoToTab` is left out, and so is the palette.
-    pub const ALL: [Action; 34] = [
+    pub const ALL: [Action; 35] = [
         Action::NewTab,
         Action::ClosePane,
         Action::SplitRight,
@@ -88,6 +90,7 @@ impl Action {
         Action::FontSizeIncrease,
         Action::FontSizeDecrease,
         Action::FontSizeReset,
+        Action::OpenSettings,
     ];
 
     /// Stable name of the action: the snake_case of its variant, the direction or tab
@@ -131,6 +134,7 @@ impl Action {
             Action::PreviousTab => "previous_tab",
             Action::GoToTab(number) => return format!("go_to_tab_{number}"),
             Action::CommandPalette => "command_palette",
+            Action::OpenSettings => "open_settings",
         };
         name.to_owned()
     }
@@ -184,6 +188,7 @@ impl Action {
             Action::PreviousTab => Msg::PreviousTab,
             Action::GoToTab(number) => Msg::GoToTab(usize::from(number)),
             Action::CommandPalette => Msg::CommandPalette,
+            Action::OpenSettings => Msg::OpenSettings,
         }
     }
 }
@@ -357,6 +362,9 @@ mod tests {
         assert_eq!(Action::FocusPane(Direction::Left).id(), "focus_pane_left");
         assert_eq!(Action::GoToTab(3).id(), "go_to_tab_3");
         assert_eq!(Action::FontSizeReset.id(), "font_size_reset");
+        assert_eq!(Action::OpenSettings.id(), "open_settings");
+        assert_eq!(Action::from_id("open_settings"), Some(Action::OpenSettings));
+        assert!(Action::ALL.contains(&Action::OpenSettings));
     }
 
     #[test]

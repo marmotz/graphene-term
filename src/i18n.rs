@@ -67,6 +67,38 @@ pub enum CloseTarget {
     Window,
 }
 
+/// A section of the settings window, in sidebar order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsSection {
+    #[default]
+    Font,
+    Window,
+    Scrollback,
+    Cursor,
+    Selection,
+    Tabs,
+    Language,
+    Theme,
+    KeyboardShortcuts,
+    Updates,
+}
+
+impl SettingsSection {
+    /// Every section, in sidebar order.
+    pub const ALL: [SettingsSection; 10] = [
+        SettingsSection::Font,
+        SettingsSection::Window,
+        SettingsSection::Scrollback,
+        SettingsSection::Cursor,
+        SettingsSection::Selection,
+        SettingsSection::Tabs,
+        SettingsSection::Language,
+        SettingsSection::Theme,
+        SettingsSection::KeyboardShortcuts,
+        SettingsSection::Updates,
+    ];
+}
+
 /// A translatable label. Messages carrying a value have fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
@@ -104,6 +136,10 @@ pub enum Msg {
     CommandPalette,
     EqualisePanes,
     DetachPane,
+    /// The settings action, and the settings window's title.
+    OpenSettings,
+    /// Sidebar entry of the settings window.
+    Section(SettingsSection),
     /// Hint shown in the command palette's empty search field.
     PalettePlaceholder,
     // Command palette entries for open tabs and panes (1-based numbers).
@@ -180,6 +216,19 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::PreviousPane => "Previous pane",
         Msg::ToggleZoom => "Zoom / unzoom pane",
         Msg::CommandPalette => "Command palette",
+        Msg::OpenSettings => "Settings",
+        Msg::Section(section) => match section {
+            SettingsSection::Font => "Font",
+            SettingsSection::Window => "Window",
+            SettingsSection::Scrollback => "Scrollback",
+            SettingsSection::Cursor => "Cursor",
+            SettingsSection::Selection => "Selection",
+            SettingsSection::Tabs => "Tabs",
+            SettingsSection::Language => "Language",
+            SettingsSection::Theme => "Theme",
+            SettingsSection::KeyboardShortcuts => "Keyboard shortcuts",
+            SettingsSection::Updates => "Updates",
+        },
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
         Msg::PalettePlaceholder => "Type a command, a tab or a pane",
@@ -254,6 +303,19 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::PreviousPane => "Panneau précédent",
         Msg::ToggleZoom => "Agrandir / réduire le panneau",
         Msg::CommandPalette => "Palette de commandes",
+        Msg::OpenSettings => "Paramètres",
+        Msg::Section(section) => match section {
+            SettingsSection::Font => "Police",
+            SettingsSection::Window => "Fenêtre",
+            SettingsSection::Scrollback => "Historique",
+            SettingsSection::Cursor => "Curseur",
+            SettingsSection::Selection => "Sélection",
+            SettingsSection::Tabs => "Onglets",
+            SettingsSection::Language => "Langue",
+            SettingsSection::Theme => "Thème",
+            SettingsSection::KeyboardShortcuts => "Raccourcis clavier",
+            SettingsSection::Updates => "Mises à jour",
+        },
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
         Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
@@ -346,9 +408,11 @@ mod tests {
             Msg::OpenRelease => 37,
             Msg::IgnoreVersion => 38,
             Msg::LinesHidden(_) => 39,
+            Msg::OpenSettings => 41,
+            Msg::Section(_) => 42,
         }
     }
-    const VARIANT_COUNT: usize = 41;
+    const VARIANT_COUNT: usize = 43;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -381,6 +445,7 @@ mod tests {
             Msg::CommandPalette,
             Msg::EqualisePanes,
             Msg::DetachPane,
+            Msg::OpenSettings,
             Msg::PalettePlaceholder,
             Msg::TabEntry {
                 tab: 2,
@@ -404,6 +469,7 @@ mod tests {
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
         messages.extend(TARGETS.map(Msg::ConfirmCloseTitle));
+        messages.extend(SettingsSection::ALL.map(Msg::Section));
         messages
     }
 
@@ -465,6 +531,29 @@ mod tests {
             text(Lang::Fr, &Msg::UpdateAvailable("v0.2.0".into())),
             "Graphene v0.2.0 est disponible"
         );
+    }
+
+    #[test]
+    fn settings_texts() {
+        assert_eq!(text(Lang::En, &Msg::OpenSettings), "Settings");
+        assert_eq!(text(Lang::Fr, &Msg::OpenSettings), "Paramètres");
+        assert_eq!(
+            text(Lang::En, &Msg::Section(SettingsSection::KeyboardShortcuts)),
+            "Keyboard shortcuts"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::Section(SettingsSection::Updates)),
+            "Mises à jour"
+        );
+        // Sidebar entries are distinct within a language.
+        for lang in LANGS {
+            let mut labels: Vec<_> = SettingsSection::ALL
+                .map(|section| text(lang, &Msg::Section(section)))
+                .to_vec();
+            labels.sort();
+            labels.dedup();
+            assert_eq!(labels.len(), SettingsSection::ALL.len(), "{lang:?}");
+        }
     }
 
     #[test]

@@ -46,6 +46,7 @@ use crate::pane::{self, Pane};
 use crate::perf;
 use crate::renderer::{Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection;
+use crate::settings::{self, SettingsWindow};
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
@@ -159,6 +160,9 @@ struct Session {
     /// Last inner size seen while the window was not maximized, in logical pixels:
     /// winit has no getter for the size a maximized window is restored to.
     restore_size: LogicalSize<u32>,
+    /// Set by [`Action::OpenSettings`]: the window is owned by [`App`], which opens it
+    /// after the event.
+    settings_requested: bool,
 }
 
 impl Session {
@@ -1225,6 +1229,7 @@ impl Session {
         match action {
             Action::NewTab => self.new_tab(),
             Action::CommandPalette => self.open_palette(),
+            Action::OpenSettings => self.settings_requested = true,
             Action::NextTab => self.change_tab(|workspace| {
                 workspace.next();
                 true
@@ -1645,7 +1650,8 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::NextTab
         | Action::PreviousTab
         | Action::GoToTab(_)
-        | Action::CommandPalette => {}
+        | Action::CommandPalette
+        | Action::OpenSettings => {}
     }
 }
 
@@ -1692,8 +1698,9 @@ pub struct App {
     session: Option<Session>,
     /// GPU context created with the terminal window, on which other windows create
     /// their surface.
-    #[allow(dead_code)] // Read by the settings window.
     gpu: Option<Arc<Gpu>>,
+    /// The settings window, while open.
+    settings: Option<SettingsWindow>,
     update_checker: Checker,
     error: Option<anyhow::Error>,
     /// Banner reporting the errors of the configuration and theme files.
@@ -1799,6 +1806,7 @@ impl App {
             keybindings: Keybindings::new(&self.config.keybindings),
             first_frame: perf::FirstFrame::default(),
             restore_size: initial_size,
+            settings_requested: false,
         })
     }
 
@@ -1811,6 +1819,9 @@ impl App {
         self.watch_appearance();
         self.palette = palette;
         self.config_banner = banner.clone();
+        if let Some(settings) = self.settings.as_mut() {
+            settings.apply(&self.palette, self.config.language.resolve(Lang::detect));
+        }
         if let Some(session) = self.session.as_mut() {
             session.apply_config(&old, &self.config, &self.palette, banner);
             if old.updates != self.config.updates {
@@ -1849,6 +1860,32 @@ impl App {
         }
     }
 
+    /// Opens the settings window, or brings it to the front when already open.
+    fn open_settings(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(settings) = &self.settings {
+            return settings.focus();
+        }
+        let Some(gpu) = self.gpu.clone() else {
+            return;
+        };
+        let lang = self.config.language.resolve(Lang::detect);
+        match SettingsWindow::open(event_loop, gpu, &self.palette, lang) {
+            Ok(settings) => self.settings = Some(settings),
+            Err(error) => log::error!("cannot open the settings window: {error:#}"),
+        }
+    }
+
+    /// Opens the settings window when the last event asked for it.
+    fn open_requested_settings(&mut self, event_loop: &ActiveEventLoop) {
+        let requested = self
+            .session
+            .as_mut()
+            .is_some_and(|session| std::mem::take(&mut session.settings_requested));
+        if requested {
+            self.open_settings(event_loop);
+        }
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
         self.error = Some(error);
         event_loop.exit();
@@ -1878,13 +1915,20 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
         let deadline = self.session.as_mut().and_then(|session| {
-            let now = Instant::now();
             let deadline = earliest(session.auto_scroll(now), session.animate(now));
             let deadline = earliest(deadline, session.blink(now));
             session.flush_panes();
             deadline
         });
+        let deadline = earliest(
+            deadline,
+            self.settings.as_mut().and_then(|settings| {
+                settings.wake(now);
+                settings.deadline()
+            }),
+        );
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
@@ -1909,12 +1953,24 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ConfigChanged | UserEvent::Appearance(_) => {}
         }
         session.flush_panes();
+        self.open_requested_settings(event_loop);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let session_window = self.session.as_ref().map(|session| session.window.id());
-        match route(id, session_window) {
-            Route::Session => self.session_window_event(event_loop, event),
+        let settings_window = self.settings.as_ref().map(SettingsWindow::id);
+        match route(id, session_window, settings_window) {
+            Route::Session => {
+                self.session_window_event(event_loop, event);
+                self.open_requested_settings(event_loop);
+            }
+            Route::Settings => {
+                if let Some(settings) = self.settings.as_mut()
+                    && settings.window_event(event_loop, &event) == settings::Outcome::Close
+                {
+                    self.settings = None;
+                }
+            }
             Route::Unknown => {}
         }
     }
@@ -1925,14 +1981,19 @@ impl ApplicationHandler<UserEvent> for App {
 enum Route {
     /// The terminal window.
     Session,
+    /// The settings window.
+    Settings,
     /// A window `App` does not know (already closed): the event is dropped.
     Unknown,
 }
 
-/// Routes an event of window `id`; `session` is the terminal window, when open.
-fn route(id: WindowId, session: Option<WindowId>) -> Route {
+/// Routes an event of window `id`; `session` is the terminal window and `settings` the
+/// settings window, when open.
+fn route(id: WindowId, session: Option<WindowId>, settings: Option<WindowId>) -> Route {
     if session == Some(id) {
         Route::Session
+    } else if settings == Some(id) {
+        Route::Settings
     } else {
         Route::Unknown
     }
@@ -2039,6 +2100,7 @@ pub fn run() -> anyhow::Result<()> {
         palette,
         session: None,
         gpu: None,
+        settings: None,
         error: None,
         config_banner,
         appearance: Appearance::default(),
@@ -2064,14 +2126,39 @@ mod tests {
     #[test]
     fn events_of_the_terminal_window_go_to_the_session() {
         let terminal = WindowId::from(1);
-        assert_eq!(route(terminal, Some(terminal)), Route::Session);
+        assert_eq!(route(terminal, Some(terminal), None), Route::Session);
+        let settings = WindowId::from(2);
+        assert_eq!(
+            route(terminal, Some(terminal), Some(settings)),
+            Route::Session
+        );
+    }
+
+    #[test]
+    fn events_of_the_settings_window_go_to_it() {
+        let terminal = WindowId::from(1);
+        let settings = WindowId::from(2);
+        assert_eq!(
+            route(settings, Some(terminal), Some(settings)),
+            Route::Settings
+        );
+        // Still routed once the terminal window is gone, until the app exits.
+        assert_eq!(route(settings, None, Some(settings)), Route::Settings);
     }
 
     #[test]
     fn events_of_an_unknown_window_are_dropped() {
         let terminal = WindowId::from(1);
-        assert_eq!(route(WindowId::from(2), Some(terminal)), Route::Unknown);
-        assert_eq!(route(terminal, None), Route::Unknown);
+        assert_eq!(
+            route(WindowId::from(2), Some(terminal), None),
+            Route::Unknown
+        );
+        assert_eq!(route(terminal, None, None), Route::Unknown);
+        // A closed settings window.
+        assert_eq!(
+            route(WindowId::from(3), Some(terminal), Some(WindowId::from(2))),
+            Route::Unknown
+        );
     }
 
     #[test]
