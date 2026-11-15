@@ -63,8 +63,8 @@
 ## "focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down",
 ## "resize_pane_left", "resize_pane_right", "resize_pane_up", "resize_pane_down",
 ## "next_pane", "previous_pane", "toggle_zoom", "equalise_panes", "detach_pane", "new_tab",
-## "next_tab", "previous_tab", "go_to_tab_1" through "go_to_tab_255", "command_palette",
-## "open_settings".
+## "close_tab", "next_tab", "previous_tab", "go_to_tab_1" through "go_to_tab_255",
+## "command_palette", "open_settings", "quit".
 ## Example: `"Ctrl+Alt+T" = "new_tab"` adds a shortcut.
 
 # [updates]

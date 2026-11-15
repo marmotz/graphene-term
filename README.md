@@ -133,6 +133,7 @@ Tabs and split panes:
 |-------------------------------|-------------------------------------------------|
 | Ctrl+Shift+P                  | Command palette                                 |
 | Ctrl+Shift+T                  | New tab                                         |
+| Ctrl+Alt+W                    | Close the tab                                   |
 | Ctrl+Tab / Ctrl+Shift+Tab     | Next / previous tab                             |
 | Ctrl+PageDown / Ctrl+PageUp   | Next / previous tab                             |
 | Alt+1 ... Alt+9               | Go to tab 1 to 9                                |
@@ -142,6 +143,7 @@ Tabs and split panes:
 | Ctrl+Shift+Alt+Arrow          | Resize the pane toward that direction           |
 | Ctrl+Shift+N / Ctrl+Shift+B   | Next / previous pane                            |
 | Ctrl+Shift+Z                  | Zoom the pane to the whole tab, or back         |
+| Ctrl+Shift+Q                  | Quit Graphene                                   |
 | Click on a tab                | Show the tab; drag it to move it                |
 | Middle click or × on a tab    | Close the tab                                   |
 | Click on +                    | New tab                                         |

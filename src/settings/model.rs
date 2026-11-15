@@ -2,8 +2,6 @@
 //! configuration, errors routed by key, the locked state of an unreadable file, and the
 //! changes an edit makes to `config.toml`. Pure; drawn by `view`.
 
-use std::path::Path;
-
 use cosmic_text::fontdb;
 
 use crate::config::{
@@ -13,7 +11,6 @@ use crate::config::{
 use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
 use crate::input::Action;
 use crate::keybindings::{self, Keybindings, NONE_ACTION, Shortcut};
-use crate::theme;
 
 /// Errors of the last load of the configuration file and of its theme.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -239,33 +236,6 @@ fn names<T>(values: &[(&'static str, T)]) -> Vec<Choice> {
         .collect()
 }
 
-/// Theme choices: the user themes (`themes/*.toml` stems) first, then the built-in
-/// themes they do not shadow.
-pub fn theme_choices(user: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut choices: Vec<String> = user.into_iter().collect();
-    choices.sort();
-    choices.dedup();
-    for (name, _) in theme::BUILT_IN {
-        if !choices.iter().any(|choice| choice == name) {
-            choices.push((*name).to_owned());
-        }
-    }
-    choices
-}
-
-/// Stems of the `*.toml` files of the themes directory of `config_dir`.
-pub fn user_themes(config_dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(config_dir.join(theme::THEMES_DIR)) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "toml"))
-        .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
-        .collect()
-}
-
 /// Monospace families of `db`, sorted, each once.
 pub fn monospace_families(db: &fontdb::Database) -> Vec<String> {
     let mut families: Vec<String> = db
@@ -333,7 +303,7 @@ impl SettingsModel {
             config: config.clone(),
             errors: errors.clone(),
             write_error: None,
-            theme_choices: theme_choices([]),
+            theme_choices: crate::theme::available(None),
             font_families: Vec::new(),
             keybindings: Keybindings::new(&config.keybindings),
         }
@@ -1116,34 +1086,6 @@ interval = "1w"
             values(Field::UpdatesInterval).len(),
             UpdateInterval::VALUES.len()
         );
-    }
-
-    #[test]
-    fn user_themes_come_first_and_shadow_built_in_ones() {
-        let choices = theme_choices(["zed".to_owned(), "gruvbox-dark".to_owned()]);
-        assert_eq!(&choices[..2], ["gruvbox-dark", "zed"]);
-        assert_eq!(choices.len(), theme::BUILT_IN.len() + 1);
-        assert_eq!(
-            choices
-                .iter()
-                .filter(|name| *name == "gruvbox-dark")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn user_themes_are_the_toml_stems() {
-        let dir =
-            std::env::temp_dir().join(format!("graphene-settings-themes-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let themes = dir.join(theme::THEMES_DIR);
-        std::fs::create_dir_all(themes.join("folder.toml")).unwrap();
-        std::fs::write(themes.join("mine.toml"), "").unwrap();
-        std::fs::write(themes.join("notes.txt"), "").unwrap();
-        assert_eq!(user_themes(&dir), ["mine"]);
-        assert!(user_themes(&dir.join("missing")).is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

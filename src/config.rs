@@ -1194,7 +1194,7 @@ interval = "2d"
 
     #[test]
     fn keybinding_error_carries_a_quoted_key_path() {
-        let (_, errors) = parse("[keybindings]\n\"Ctrl+Q\" = \"quit\"\n");
+        let (_, errors) = parse("[keybindings]\n\"Ctrl+Q\" = \"not_an_action\"\n");
         assert_eq!(
             keys(&errors),
             vec![(
@@ -1205,7 +1205,7 @@ interval = "2d"
         // The banner text keeps the unquoted path.
         assert_eq!(
             errors[0].to_string(),
-            "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"quit\""
+            "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"not_an_action\""
         );
     }
 
@@ -1333,7 +1333,7 @@ interval = "2d"
         previous
             .keybindings
             .insert("Ctrl+Q".to_owned(), "copy".to_owned());
-        let text = "[keybindings]\n\"Ctrl+Q\" = \"quit\"\n\"Ctrl+PgUp\" = \"copy\"\n\"Ctrl+Alt+T\" = \"new_tab\"\n";
+        let text = "[keybindings]\n\"Ctrl+Q\" = \"not_an_action\"\n\"Ctrl+PgUp\" = \"copy\"\n\"Ctrl+Alt+T\" = \"new_tab\"\n";
         let (config, errors) = Config::parse(text, &previous, &file());
         assert_eq!(
             config.keybindings,
@@ -1346,7 +1346,7 @@ interval = "2d"
         assert_eq!(
             messages,
             [
-                "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"quit\"",
+                "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"not_an_action\"",
                 "config.toml:3: invalid value for `keybindings.Ctrl+PgUp`: unknown key \"PgUp\" in \"Ctrl+PgUp\"",
             ]
         );

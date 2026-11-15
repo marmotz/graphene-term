@@ -164,7 +164,11 @@ pub fn available<P>(
     let several_panes = workspace.active_tab().is_some_and(|tab| !tab.is_single());
     let pane = context.pane.unwrap_or_default();
     match action {
-        Action::NewTab | Action::OpenSettings | Action::CommandPalette => true,
+        Action::NewTab
+        | Action::CloseTab
+        | Action::OpenSettings
+        | Action::CommandPalette
+        | Action::Quit => true,
         Action::GoToTab(number) => usize::from(number) <= workspace.tabs().len(),
         Action::SplitRight => workspace.can_split(Axis::Horizontal, geometry),
         Action::SplitDown => workspace.can_split(Axis::Vertical, geometry),
@@ -1025,12 +1029,14 @@ mod tests {
             actions(&single_pane(), &context()),
             [
                 Action::NewTab,
+                Action::CloseTab,
                 Action::ClosePane,
                 Action::SplitRight,
                 Action::SplitDown,
                 Action::FontSizeIncrease,
                 Action::FontSizeDecrease,
                 Action::OpenSettings,
+                Action::Quit,
             ]
         );
     }
