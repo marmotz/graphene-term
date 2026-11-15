@@ -33,3 +33,11 @@ terminé — voir [technical.md](bugs/transparent-background/technical.md) — 1
 | Done | Issue                                                     | Title                                       | Blocked by |
 |------|-----------------------------------------------------------|---------------------------------------------|------------|
 | [x]  | [#92](https://github.com/marmotz/graphene-term/issues/92) | Fix transparent terminal background opacity | —          |
+
+### Top banner hides the first prompt ·  [overview](bugs/update-banner-hides-prompt/overview.md)
+
+terminé — voir [technical.md](bugs/update-banner-hides-prompt/technical.md) — 1/1 tasks done
+
+| Done | Issue                                                     | Title                                                         | Blocked by |
+|------|-----------------------------------------------------------|---------------------------------------------------------------|------------|
+| [x]  | [#97](https://github.com/marmotz/graphene-term/issues/97) | Reserve the top banner strip so it no longer hides the prompt | —          |

@@ -547,4 +547,37 @@ mod tests {
         assert_eq!(placed, [("tab 1", 0.0), ("tab 2", 30.0), ("tab 0", 50.0)]);
         assert!(bar.tabs.iter().all(|t| t.rect.x == 0.0));
     }
+
+    #[test]
+    fn bar_starts_below_the_banner() {
+        // The window below a 40 px banner strip.
+        let window = Rect {
+            x: 0.0,
+            y: 40.0,
+            width: 1000.0,
+            height: 560.0,
+        };
+        for position in [
+            TabBarPosition::Top,
+            TabBarPosition::Bottom,
+            TabBarPosition::Left,
+            TabBarPosition::Right,
+        ] {
+            let bar = TabBarLayout::new(window, position, &titles(3), 0, METRICS);
+            assert!(bar.rect.y >= 40.0, "{position:?}: bar at {}", bar.rect.y);
+            assert!(
+                bar.rect.y + bar.rect.height <= 600.0,
+                "{position:?}: bar past the window bottom"
+            );
+            for tab in &bar.tabs {
+                assert!(tab.rect.y >= 40.0, "{position:?}: tab at {}", tab.rect.y);
+            }
+        }
+        let top = TabBarLayout::new(window, TabBarPosition::Top, &titles(3), 0, METRICS);
+        assert_eq!(top.rect.y, 40.0);
+        let left = TabBarLayout::new(window, TabBarPosition::Left, &titles(3), 0, METRICS);
+        assert_eq!(left.rect.y, 40.0);
+        assert_eq!(left.rect.height, 560.0);
+        assert_eq!(left.tabs[0].rect.y, 40.0);
+    }
 }

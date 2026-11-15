@@ -919,6 +919,28 @@ mod tests {
     }
 
     #[test]
+    fn tab_bar_area_keeps_a_window_below_the_banner() {
+        // The window below a 40 px banner strip.
+        let window = Rect {
+            x: 0.0,
+            y: 40.0,
+            width: 800.0,
+            height: 560.0,
+        };
+        let area = |position: TabBarPosition| position.content_area(window, 30.0);
+        let rect = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        assert_eq!(area(TabBarPosition::Top), rect(0.0, 70.0, 800.0, 530.0));
+        assert_eq!(area(TabBarPosition::Bottom), rect(0.0, 40.0, 800.0, 530.0));
+        assert_eq!(area(TabBarPosition::Left), rect(30.0, 40.0, 770.0, 560.0));
+        assert_eq!(area(TabBarPosition::Right), rect(0.0, 40.0, 770.0, 560.0));
+    }
+
+    #[test]
     fn configured_position_maps_to_the_bar_edge() {
         assert_eq!(TabBarPosition::from(TabPosition::Top), TabBarPosition::Top);
         assert_eq!(
