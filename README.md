@@ -72,11 +72,12 @@ The `RUST_LOG` environment variable sets the log level (default: `warn`).
 
 ## Releases
 
-Releases are started manually from **GitHub Actions → Release → Run workflow** on the
-`develop` branch. Each release publishes Linux packages and macOS builds for Apple Silicon
-and Intel, as both a command-line archive and a `.dmg` containing `Graphene.app`. The macOS
-app is currently unsigned and not notarized; on first launch, macOS may require
-Control-clicking the app and choosing **Open**.
+To release, merge `develop` into `main`, create and push a `vX.Y.Z` tag on that commit,
+then launch **GitHub Actions → Release → Run workflow** with that tag selected. The tag
+must match the version in `Cargo.toml`. Each release publishes Linux packages and macOS
+builds for Apple Silicon and Intel, as both a command-line archive and a `.dmg` containing
+`Graphene.app`. The macOS app is currently unsigned and not notarized; on first launch,
+macOS may require Control-clicking the app and choosing **Open**.
 
 ## Shell integration
 

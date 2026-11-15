@@ -123,20 +123,20 @@ alignment), wide characters, box drawing, colors, cursor in vim.
 ## Releases
 
 Pull requests run the test suite and release build on Linux, Apple Silicon macOS and
-Intel macOS. Releases are not automatic: launch **Actions → Release → Run workflow**
-from the `develop` branch. The workflow builds all assets for that commit, then publishes
-a GitHub release tagged `v<version>`, where `<version>` is what the binary prints with
-`graphene --version`.
+Intel macOS. To release, merge `develop` into `main`, create and push a `vX.Y.Z` tag on
+that commit, then launch **Actions → Release → Run workflow** with the tag selected. The
+workflow rejects branch refs, tags not on `main`, and tags that do not match the
+`Cargo.toml` version. It builds from the tagged commit in the stable channel, then creates
+the GitHub release using that same tag.
 
 The version is computed at build time by `build.rs`: `<crate version>-dev.<UTC
 YYYYMMDDHHMMSS>` by default, `<crate version>` when built with `GRAPHENE_CHANNEL=stable`.
-The release workflow takes one timestamp when the manual run starts and shares it through
-`SOURCE_DATE_EPOCH`, so all platform builds have the same version and tag.
+All release builds use the stable channel, so the app version matches the tag.
 
 The release description is generated from commit subjects between the latest published
-regular release tag and the selected commit. On the first regular release, it covers the
-full history (earlier pre-releases are not used as the starting point). Conventional
-`feat:` commits go under **Nouveautés**, `fix:` commits under **Correctifs**, and all other
+regular release tag and the selected tag. On the first regular release, it covers the full
+history (earlier pre-releases are not used as the starting point). Conventional `feat:`
+commits go under **Nouveautés**, `fix:` commits under **Correctifs**, and all other
 commits under **Modifications**. Pull-request numbers in subjects link to their PR; other
 entries link to their commit.
 
