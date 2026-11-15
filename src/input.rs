@@ -42,6 +42,7 @@ pub enum Action {
     DetachPane,
     /// Opens a tab after the last one.
     NewTab,
+    CloseTab,
     NextTab,
     PreviousTab,
     /// Shows the tab of this number, counted from 1.
@@ -50,13 +51,15 @@ pub enum Action {
     CommandPalette,
     /// Opens the settings window, or focuses it when already open.
     OpenSettings,
+    Quit,
 }
 
 impl Action {
     /// Every action the command palette lists, in its default order. The tabs are
     /// listed by the palette itself, so `GoToTab` is left out, and so is the palette.
-    pub const ALL: [Action; 35] = [
+    pub const ALL: [Action; 37] = [
         Action::NewTab,
+        Action::CloseTab,
         Action::ClosePane,
         Action::SplitRight,
         Action::SplitDown,
@@ -91,6 +94,7 @@ impl Action {
         Action::FontSizeDecrease,
         Action::FontSizeReset,
         Action::OpenSettings,
+        Action::Quit,
     ];
 
     /// Stable name of the action: the snake_case of its variant, the direction or tab
@@ -130,11 +134,13 @@ impl Action {
             Action::EqualisePanes => "equalise_panes",
             Action::DetachPane => "detach_pane",
             Action::NewTab => "new_tab",
+            Action::CloseTab => "close_tab",
             Action::NextTab => "next_tab",
             Action::PreviousTab => "previous_tab",
             Action::GoToTab(number) => return format!("go_to_tab_{number}"),
             Action::CommandPalette => "command_palette",
             Action::OpenSettings => "open_settings",
+            Action::Quit => "quit",
         };
         name.to_owned()
     }
@@ -184,11 +190,13 @@ impl Action {
             Action::EqualisePanes => Msg::EqualisePanes,
             Action::DetachPane => Msg::DetachPane,
             Action::NewTab => Msg::NewTab,
+            Action::CloseTab => Msg::CloseTab,
             Action::NextTab => Msg::NextTab,
             Action::PreviousTab => Msg::PreviousTab,
             Action::GoToTab(number) => Msg::GoToTab(usize::from(number)),
             Action::CommandPalette => Msg::CommandPalette,
             Action::OpenSettings => Msg::OpenSettings,
+            Action::Quit => Msg::Quit,
         }
     }
 }
@@ -364,7 +372,13 @@ mod tests {
         assert_eq!(Action::FontSizeReset.id(), "font_size_reset");
         assert_eq!(Action::OpenSettings.id(), "open_settings");
         assert_eq!(Action::from_id("open_settings"), Some(Action::OpenSettings));
+        assert_eq!(Action::CloseTab.id(), "close_tab");
+        assert_eq!(Action::Quit.id(), "quit");
+        assert_eq!(Action::from_id("close_tab"), Some(Action::CloseTab));
+        assert_eq!(Action::from_id("quit"), Some(Action::Quit));
         assert!(Action::ALL.contains(&Action::OpenSettings));
+        assert!(Action::ALL.contains(&Action::CloseTab));
+        assert!(Action::ALL.contains(&Action::Quit));
     }
 
     #[test]
@@ -377,7 +391,7 @@ mod tests {
             assert_eq!(Action::from_id(&action.id()), Some(action), "{action:?}");
         }
         for id in [
-            "quit",
+            "unknown_action",
             "",
             "Copy",
             "go_to_tab_0",

@@ -1241,6 +1241,12 @@ impl Session {
     fn run_action(&mut self, action: Action, default_font_size: f32, event_loop: &ActiveEventLoop) {
         match action {
             Action::NewTab => self.new_tab(),
+            Action::CloseTab => {
+                if let Some(target) = Target::tab(&self.workspace, self.workspace.active_index()) {
+                    self.request_close(target, event_loop);
+                }
+            }
+            Action::Quit => self.request_close(Target::Window, event_loop),
             Action::CommandPalette => self.open_palette(default_font_size),
             Action::OpenSettings => self.settings_requested = true,
             Action::NextTab => self.change_tab(|workspace| {
@@ -1660,11 +1666,13 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::EqualisePanes
         | Action::DetachPane
         | Action::NewTab
+        | Action::CloseTab
         | Action::NextTab
         | Action::PreviousTab
         | Action::GoToTab(_)
         | Action::CommandPalette
-        | Action::OpenSettings => {}
+        | Action::OpenSettings
+        | Action::Quit => {}
     }
 }
 
