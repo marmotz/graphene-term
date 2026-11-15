@@ -10,6 +10,7 @@ use std::ffi::CString;
 use std::fmt;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
+#[cfg(not(target_os = "macos"))]
 use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -334,12 +335,83 @@ fn read_shared_memory(name: &str, command: &Command) -> Result<Vec<u8>, Error> {
     if fd < 0 {
         return Err(bad(&std::io::Error::last_os_error()));
     }
-    // SAFETY: `fd` was just opened and is owned by nothing else.
-    let file = unsafe { File::from_raw_fd(fd) };
-    let bytes = read_from(file, command);
+    #[cfg(target_os = "macos")]
+    let bytes = read_shared_memory_mapping(fd, command);
+    #[cfg(not(target_os = "macos"))]
+    let bytes = {
+        // SAFETY: `fd` was just opened and is owned by nothing else.
+        let file = unsafe { File::from_raw_fd(fd) };
+        read_from(file, command)
+    };
+    #[cfg(target_os = "macos")]
+    // SAFETY: the mapping helper borrows `fd` and releases its mapping before returning.
+    unsafe {
+        libc::close(fd);
+    }
     // SAFETY: `c_name` is a valid NUL-terminated string.
     unsafe { libc::shm_unlink(c_name.as_ptr()) };
     bytes
+}
+
+/// macOS shared-memory descriptors support mapping but not ordinary `read` calls.
+#[cfg(target_os = "macos")]
+fn read_shared_memory_mapping(fd: libc::c_int, command: &Command) -> Result<Vec<u8>, Error> {
+    let bad = |err: &dyn fmt::Display| Error::new("EBADF", format!("shared memory: {err}"));
+    // SAFETY: `stat` is a plain C struct and `fstat` initializes it on success.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut stat) } != 0 {
+        return Err(bad(&std::io::Error::last_os_error()));
+    }
+    let length = usize::try_from(stat.st_size).map_err(|err| bad(&err))?;
+    let offset = usize::try_from(command.offset).map_err(|err| bad(&err))?;
+    if offset >= length {
+        return Ok(Vec::new());
+    }
+    let limit = match command.size {
+        0 => MAX_DATA + 1,
+        size => usize::try_from(size).map_err(|err| bad(&err))?,
+    };
+    let count = (length - offset).min(limit);
+    if count > MAX_DATA {
+        return Err(Error::too_big());
+    }
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    // mmap requires a page-aligned offset; only map the requested range and its prefix.
+    // SAFETY: `sysconf` has no memory preconditions.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return Err(bad(&std::io::Error::last_os_error()));
+    }
+    let page_size = page_size as usize;
+    let map_offset = offset / page_size * page_size;
+    let prefix = offset - map_offset;
+    let map_length = prefix.checked_add(count).ok_or_else(|| Error::too_big())?;
+    // SAFETY: the descriptor is open, the offset is page-aligned, and `map_length`
+    // stays within the shared-memory object as checked above.
+    let mapping = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            map_length,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            map_offset as libc::off_t,
+        )
+    };
+    if mapping == libc::MAP_FAILED {
+        return Err(bad(&std::io::Error::last_os_error()));
+    }
+    // SAFETY: the mapping covers `prefix + count` readable bytes.
+    let bytes =
+        unsafe { std::slice::from_raw_parts(mapping.cast::<u8>().add(prefix), count) }.to_vec();
+    // SAFETY: `mapping` was returned by mmap with this exact length.
+    unsafe {
+        libc::munmap(mapping, map_length);
+    }
+    Ok(bytes)
 }
 
 /// Reads `command.size` bytes (all when 0) from `command.offset` on.
@@ -1422,7 +1494,7 @@ mod tests {
     fn shared_memory_medium_reads_and_unlinks_the_object() {
         let name = format!("/graphene-test-{}", std::process::id());
         let c_name = CString::new(name.clone()).unwrap();
-        // SAFETY: valid NUL-terminated name; the fd is handed to a `File`.
+        // SAFETY: valid NUL-terminated shared-memory name.
         let fd = unsafe {
             libc::shm_open(
                 c_name.as_ptr(),
@@ -1436,10 +1508,29 @@ mod tests {
         // SAFETY: `fd` is a live shared-memory descriptor and the requested size is small.
         let result = unsafe { libc::ftruncate(fd, bytes.len() as libc::off_t) };
         assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
-        // SAFETY: `fd` was just opened.
-        let mut file = unsafe { File::from_raw_fd(fd) };
-        file.write_all(bytes).unwrap();
-        drop(file);
+        // SAFETY: `fd` was just opened and the requested range has been allocated.
+        let mapping = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                bytes.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(
+            mapping,
+            libc::MAP_FAILED,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: the mapping is writable for `bytes.len()` bytes and the source is valid.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapping.cast(), bytes.len());
+            libc::munmap(mapping, bytes.len());
+            libc::close(fd);
+        }
 
         let data = BASE64.encode(name.as_bytes());
         assert_eq!(

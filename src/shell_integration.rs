@@ -123,6 +123,11 @@ fn injection(
             save("ZDOTDIR", "GRAPHENE_ZDOTDIR");
             env.push(("ZDOTDIR".to_owned(), path(ZSH_DIR)));
         }
+        #[cfg(target_os = "macos")]
+        "bash" => {
+            args.extend(["--rcfile".to_owned(), path(BASH_SCRIPT)]);
+        }
+        #[cfg(not(target_os = "macos"))]
         "bash" => {
             save("ENV", "GRAPHENE_BASH_ENV");
             args.push("--posix".to_owned());
@@ -288,6 +293,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn bash_through_posix_env() {
         let inj = injection("/bin/bash", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
         assert_eq!(inj.args, ["--posix"]);
@@ -310,6 +316,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(env_of(&inj)["GRAPHENE_BASH_ENV"], "/home/me/.shrc");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn bash_uses_rcfile_on_macos() {
+        let inj = injection("/bin/bash", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
+        assert_eq!(
+            inj.args,
+            [
+                "--rcfile",
+                "/run/user/1000/graphene/shell-integration/bash/graphene.bash"
+            ]
+        );
+        assert_eq!(env_of(&inj), HashMap::from([(TOKEN_VAR, TOKEN)]));
     }
 
     #[test]

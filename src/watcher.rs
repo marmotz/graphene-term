@@ -52,7 +52,9 @@ fn watch(dir: &Path, on_change: impl Fn()) -> notify::Result<()> {
     #[cfg(target_os = "macos")]
     let mut watcher = notify::PollWatcher::new(
         sender,
-        notify::Config::default().with_poll_interval(Duration::from_millis(100)),
+        notify::Config::default()
+            .with_poll_interval(Duration::from_millis(100))
+            .with_compare_contents(true),
     )?;
     #[cfg(not(target_os = "macos"))]
     let mut watcher = notify::recommended_watcher(sender)?;
