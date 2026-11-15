@@ -176,7 +176,7 @@ impl SettingsWindow {
         let ctx = self.egui.egui_ctx().clone();
         let view = &mut self.view;
         let lang = self.lang;
-        let output = ctx.run_ui(input, |ui| view.show(ui, lang));
+        let mut output = ctx.run_ui(input, |ui| view.show(ui, lang));
         self.egui.handle_platform_output_with_event_loop(
             &self.window,
             event_loop,
@@ -193,17 +193,36 @@ impl SettingsWindow {
             Instant::now().checked_add(delay)
         };
 
-        let device = &self.gpu.device;
-        let queue = &self.gpu.queue;
-        for (id, deltas) in &output.textures_delta.set {
+        // Drained, not borrowed: a dropped `TexturesDelta` still holding deltas is a
+        // debug assertion failure.
+        let mut textures = std::mem::take(&mut output.textures_delta);
+        for (id, deltas) in textures.set.drain() {
             for delta in deltas {
-                self.renderer.update_texture(device, queue, *id, delta);
+                self.renderer
+                    .update_texture(&self.gpu.device, &self.gpu.queue, id, &delta);
             }
         }
         let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+        let painted = self.paint(&ctx, &primitives, output.pixels_per_point);
+        // Freed after the submit, or with no frame at all: the frame may still use them.
+        for id in textures.free.drain() {
+            self.renderer.free_texture(&id);
+        }
+        painted
+    }
+
+    /// Paints `primitives` on the next surface texture and presents it.
+    fn paint(
+        &mut self,
+        ctx: &egui::Context,
+        primitives: &[egui::ClippedPrimitive],
+        pixels_per_point: f32,
+    ) -> anyhow::Result<()> {
+        let device = &self.gpu.device;
+        let queue = &self.gpu.queue;
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],
-            pixels_per_point: output.pixels_per_point,
+            pixels_per_point,
         };
 
         let frame = match self.surface.get_current_texture() {
@@ -234,7 +253,7 @@ impl SettingsWindow {
         });
         let callbacks =
             self.renderer
-                .update_buffers(device, queue, &mut encoder, &primitives, &screen);
+                .update_buffers(device, queue, &mut encoder, primitives, &screen);
         let [r, g, b, a] = ctx
             .global_style()
             .visuals
@@ -263,13 +282,9 @@ impl SettingsWindow {
                 multiview_mask: None,
             });
             self.renderer
-                .render(&mut pass.forget_lifetime(), &primitives, &screen);
+                .render(&mut pass.forget_lifetime(), primitives, &screen);
         }
         queue.submit(callbacks.into_iter().chain([encoder.finish()]));
-        // Freed after the submit: the frame may still use them.
-        for id in &output.textures_delta.free {
-            self.renderer.free_texture(id);
-        }
         self.window.pre_present_notify();
         queue.present(frame);
         Ok(())
