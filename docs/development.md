@@ -150,11 +150,11 @@ Assets:
 - macOS:
   - `graphene-<tag>-aarch64-apple-darwin.tar.gz` and `.dmg` for Apple Silicon
   - `graphene-<tag>-x86_64-apple-darwin.tar.gz` and `.dmg` for Intel
-  - DMGs contain an unsigned, unnotarized `Graphene.app`
+  - DMGs contain an ad-hoc signed, unnotarized `Graphene.app`
 - `SHA256SUMS`
 
 The macOS package is built by `scripts/package-macos.sh`; it needs the macOS tools
-`sips`, `iconutil` and `hdiutil`. To package a local Apple Silicon build:
+`sips`, `iconutil`, `codesign` and `hdiutil`. To package a local Apple Silicon build:
 
 ```bash
 cargo build --release --locked

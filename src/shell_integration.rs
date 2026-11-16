@@ -3,7 +3,8 @@
 //!
 //! The scripts of `shell-integration/` are embedded in the binary, written at startup
 //! to a private runtime folder, and injected into the spawned shell through its startup
-//! mechanism: `ZDOTDIR` for zsh, `--posix` + `ENV` for bash, `XDG_DATA_DIRS` for fish.
+//! mechanism: `ZDOTDIR` for zsh, `--posix` + `ENV` for bash (`--rcfile` on macOS), `XDG_DATA_DIRS`
+//! for fish. On macOS the shell starts as a login shell, like in Terminal.app.
 //! Each script restores the variable it came through before loading the user's files,
 //! and moves the session token from [`TOKEN_VAR`] into a shell variable.
 
@@ -24,6 +25,9 @@ pub const TOKEN_VAR: &str = "GRAPHENE_BLOCK_TOKEN";
 
 /// zsh entry point, relative to the integration root.
 const ZSH_DIR: &str = "zsh";
+/// Tells the bash script to load the login files, for a bash that cannot be a login
+/// shell because it starts with --rcfile (macOS).
+const BASH_LOGIN_VAR: &str = "GRAPHENE_BASH_LOGIN";
 /// bash entry point, relative to the integration root.
 const BASH_SCRIPT: &str = "bash/graphene.bash";
 
@@ -108,6 +112,20 @@ fn injection(
     token: &str,
     var: impl Fn(&str) -> Option<String>,
 ) -> Option<Injection> {
+    injection_for(shell, root, token, var, cfg!(target_os = "macos"))
+}
+
+/// [`injection`] for macOS when `macos` is set. There, like Terminal.app, the shell
+/// starts as a login shell: an app launched from Finder gets a minimal environment, and
+/// the login files (`/etc/zprofile`, `~/.zprofile`, `~/.bash_profile`...) set `PATH`
+/// up, Homebrew included.
+fn injection_for(
+    shell: &str,
+    root: &Path,
+    token: &str,
+    var: impl Fn(&str) -> Option<String>,
+    macos: bool,
+) -> Option<Injection> {
     let name = Path::new(shell).file_name().and_then(OsStr::to_str)?;
     let path = |relative: &str| root.join(relative).to_string_lossy().into_owned();
     let mut args = Vec::new();
@@ -122,12 +140,15 @@ fn injection(
         "zsh" => {
             save("ZDOTDIR", "GRAPHENE_ZDOTDIR");
             env.push(("ZDOTDIR".to_owned(), path(ZSH_DIR)));
+            if macos {
+                args.push("-l".to_owned());
+            }
         }
-        #[cfg(target_os = "macos")]
-        "bash" => {
+        // A login bash ignores --rcfile: the script sources the login files itself.
+        "bash" if macos => {
             args.extend(["--rcfile".to_owned(), path(BASH_SCRIPT)]);
+            env.push((BASH_LOGIN_VAR.to_owned(), "1".to_owned()));
         }
-        #[cfg(not(target_os = "macos"))]
         "bash" => {
             save("ENV", "GRAPHENE_BASH_ENV");
             args.push("--posix".to_owned());
@@ -142,6 +163,9 @@ fn injection(
                 "XDG_DATA_DIRS".to_owned(),
                 format!("{}:{rest}", root.to_string_lossy()),
             ));
+            if macos {
+                args.push("-l".to_owned());
+            }
         }
         _ => return None,
     }
@@ -270,6 +294,16 @@ mod tests {
     }
 
     #[test]
+    fn login_shells_on_macos_only() {
+        for shell in ["zsh", "fish"] {
+            let linux = injection_for(shell, Path::new(ROOT), TOKEN, vars(&[]), false).unwrap();
+            assert!(linux.args.is_empty(), "{shell}");
+            let macos = injection_for(shell, Path::new(ROOT), TOKEN, vars(&[]), true).unwrap();
+            assert_eq!(macos.args, ["-l"], "{shell}");
+        }
+    }
+
+    #[test]
     fn zsh_through_zdotdir() {
         let inj = injection("/usr/bin/zsh", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
         assert_eq!(inj.program, "/usr/bin/zsh");
@@ -293,9 +327,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "macos"))]
     fn bash_through_posix_env() {
-        let inj = injection("/bin/bash", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
+        let inj = injection_for("/bin/bash", Path::new(ROOT), TOKEN, vars(&[]), false).unwrap();
         assert_eq!(inj.args, ["--posix"]);
         assert_eq!(
             env_of(&inj),
@@ -308,20 +341,20 @@ mod tests {
             ])
         );
 
-        let inj = injection(
+        let inj = injection_for(
             "bash",
             Path::new(ROOT),
             TOKEN,
             vars(&[("ENV", "/home/me/.shrc")]),
+            false,
         )
         .unwrap();
         assert_eq!(env_of(&inj)["GRAPHENE_BASH_ENV"], "/home/me/.shrc");
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn bash_uses_rcfile_on_macos() {
-        let inj = injection("/bin/bash", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
+    fn bash_uses_rcfile_and_login_files_on_macos() {
+        let inj = injection_for("/bin/bash", Path::new(ROOT), TOKEN, vars(&[]), true).unwrap();
         assert_eq!(
             inj.args,
             [
@@ -329,7 +362,10 @@ mod tests {
                 "/run/user/1000/graphene/shell-integration/bash/graphene.bash"
             ]
         );
-        assert_eq!(env_of(&inj), HashMap::from([(TOKEN_VAR, TOKEN)]));
+        assert_eq!(
+            env_of(&inj),
+            HashMap::from([(BASH_LOGIN_VAR, "1"), (TOKEN_VAR, TOKEN)])
+        );
     }
 
     #[test]
@@ -514,13 +550,25 @@ mod tests {
 
         impl Session {
             fn spawn(shell: &str, home: &Path) -> Self {
+                Self::spawn_as(shell, home, cfg!(target_os = "macos"))
+            }
+
+            /// [`Session::spawn`] started as on macOS when `macos` is set.
+            fn spawn_as(shell: &str, home: &Path, macos: bool) -> Self {
                 let path = find(shell).expect("shell present");
                 let root = home
                     .join("runtime")
                     .join("graphene")
                     .join("shell-integration");
                 install(&root).unwrap();
-                let injection = injection(path.to_str().unwrap(), &root, TOKEN, vars(&[])).unwrap();
+                let injection =
+                    injection_for(path.to_str().unwrap(), &root, TOKEN, vars(&[]), macos).unwrap();
+                // Login bash reads ~/.bash_profile: like the usual setup, it loads the
+                // .bashrc the tests write.
+                let profile = home.join(".bash_profile");
+                if shell == "bash" && !profile.exists() {
+                    fs::write(profile, ". ~/.bashrc\n").unwrap();
+                }
 
                 let home_str = home.to_string_lossy().into_owned();
                 let mut env: HashMap<String, String> = injection.env.into_iter().collect();
@@ -776,6 +824,39 @@ mod tests {
             )
             .unwrap();
             check("zsh", &home.0, ZSH_PROBE, "rc:yes:::0:end");
+        }
+
+        /// Started as on macOS, zsh and bash read the login files, then the usual
+        /// interactive ones.
+        #[test]
+        fn login_files_when_started_as_on_macos() {
+            const PROBE: &str =
+                "echo p:${GRAPHENE_TEST_PROFILE}:${GRAPHENE_TEST_RC}:${GRAPHENE_BASH_LOGIN-}:end";
+            for (shell, profile, rc, ready) in [
+                ("zsh", ".zprofile", ".zshrc", ZSH_READY),
+                ("bash", ".bash_profile", ".bashrc", BASH_READY),
+            ] {
+                if find(shell).is_none() {
+                    eprintln!("{shell} not installed, skipped");
+                    continue;
+                }
+                let home = TempDir::new(&format!("{shell}-login"));
+                let source_rc = if shell == "bash" { ". ~/.bashrc\n" } else { "" };
+                fs::write(
+                    home.0.join(profile),
+                    format!("export GRAPHENE_TEST_PROFILE=yes\n{source_rc}"),
+                )
+                .unwrap();
+                fs::write(
+                    home.0.join(rc),
+                    format!("export GRAPHENE_TEST_RC=yes\nPS1='$ '\n{ready}"),
+                )
+                .unwrap();
+                let mut session = Session::spawn_as(shell, &home.0, true);
+                session.run(PROBE);
+                let output = String::from_utf8_lossy(&session.output);
+                assert!(output.contains("p:yes:yes::end"), "{shell}: {output:?}");
+            }
         }
 
         #[test]

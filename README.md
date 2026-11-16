@@ -76,8 +76,9 @@ To release, merge `develop` into `main`, create and push a `vX.Y.Z` tag on that 
 then launch **GitHub Actions → Release → Run workflow** with that tag selected. The tag
 must match the version in `Cargo.toml`. Each release publishes Linux packages and macOS
 builds for Apple Silicon and Intel, as both a command-line archive and a `.dmg` containing
-`Graphene.app`. The macOS app is currently unsigned and not notarized; on first launch,
-macOS may require Control-clicking the app and choosing **Open**.
+`Graphene.app`. The macOS app is ad-hoc signed but not notarized, so macOS blocks its
+first launch: open **System Settings → Privacy & Security** and click **Open Anyway**, or
+run `xattr -dr com.apple.quarantine /Applications/Graphene.app`.
 
 ## Shell integration
 

@@ -1215,6 +1215,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sys-locale",
  "toml",
  "toml_edit",
  "ureq",

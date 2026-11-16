@@ -72,7 +72,7 @@ src/
                    block and timeline scrolls, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors and block marks
-  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG; `language` forces it) and label translations
+  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations
   input.rs         key -> bytes encoding, app shortcuts, paste wrapping
   input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection, selection replacement (pure)
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
@@ -344,7 +344,7 @@ Renderer::render(pane frames, interface rects)
 
 ## Command blocks
 
-Design and rationale: [command-blocks technical design](../backlog/features/command-blocks/technical.md).
+Design and rationale.
 
 - Each block is a terminal of its own. The session's `Term` is the live grid: it holds
   the current block (`timeline::Current`). On a `start` signal the live grid is

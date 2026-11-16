@@ -16,13 +16,19 @@ pub enum Lang {
 
 impl Lang {
     /// Language of the system locale, read from `LC_ALL`, then `LC_MESSAGES`, then
-    /// `LANG`.
+    /// `LANG`. On macOS, an app launched from Finder gets none of them: the first
+    /// language preferred in the system settings comes next.
     pub fn detect() -> Self {
         let var = |name| std::env::var(name).ok();
-        Self::from_locale(
+        #[cfg(target_os = "macos")]
+        let system = sys_locale::get_locale();
+        #[cfg(not(target_os = "macos"))]
+        let system: Option<String> = None;
+        Self::from_locale_or_system(
             var("LC_ALL").as_deref(),
             var("LC_MESSAGES").as_deref(),
             var("LANG").as_deref(),
+            system.as_deref(),
         )
     }
 
@@ -34,14 +40,28 @@ impl Lang {
         lc_messages: Option<&str>,
         lang: Option<&str>,
     ) -> Self {
-        let locale = [lc_all, lc_messages, lang]
+        Self::from_locale_or_system(lc_all, lc_messages, lang, None)
+    }
+
+    /// [`Lang::from_locale`], then the `system` language, a BCP 47 tag such as
+    /// `fr-FR`, when no variable has a value.
+    pub fn from_locale_or_system(
+        lc_all: Option<&str>,
+        lc_messages: Option<&str>,
+        lang: Option<&str>,
+        system: Option<&str>,
+    ) -> Self {
+        let locale = [lc_all, lc_messages, lang, system]
             .into_iter()
             .flatten()
             .find(|value| !value.is_empty());
         let Some(locale) = locale else {
             return Lang::En;
         };
-        let language = locale.split(['_', '.', '@']).next().unwrap_or_default();
+        let language = locale
+            .split(['_', '-', '.', '@'])
+            .next()
+            .unwrap_or_default();
         if language.eq_ignore_ascii_case("fr") {
             Lang::Fr
         } else {
@@ -854,6 +874,31 @@ mod tests {
         let fr = Some("fr_FR.UTF-8");
         assert_eq!(Lang::from_locale(Some(""), Some(""), fr), Lang::Fr);
         assert_eq!(Lang::from_locale(Some(""), fr, Some("en_US")), Lang::Fr);
+    }
+
+    #[test]
+    fn detect_uses_the_system_language_without_locale_variables() {
+        assert_eq!(
+            Lang::from_locale_or_system(None, None, None, Some("fr-FR")),
+            Lang::Fr
+        );
+        assert_eq!(
+            Lang::from_locale_or_system(None, None, None, Some("fr")),
+            Lang::Fr
+        );
+        assert_eq!(
+            Lang::from_locale_or_system(Some(""), None, Some(""), Some("fr-CA")),
+            Lang::Fr
+        );
+        assert_eq!(
+            Lang::from_locale_or_system(None, None, None, Some("en-US")),
+            Lang::En
+        );
+        // A locale variable wins over the system language.
+        assert_eq!(
+            Lang::from_locale_or_system(None, None, Some("en_US.UTF-8"), Some("fr-FR")),
+            Lang::En
+        );
     }
 
     #[test]

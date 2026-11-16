@@ -18,7 +18,12 @@ fi
 _graphene_token=${GRAPHENE_BLOCK_TOKEN-}
 unset GRAPHENE_BLOCK_TOKEN
 
-if shopt -q login_shell; then
+# Graphene sets GRAPHENE_BASH_LOGIN when bash should behave as a login shell but cannot
+# be one (macOS, where --rcfile and --login exclude each other).
+_graphene_login=${GRAPHENE_BASH_LOGIN-}
+unset GRAPHENE_BASH_LOGIN
+
+if shopt -q login_shell || [[ $_graphene_login == 1 ]]; then
   if [[ -r /etc/profile ]]; then
     builtin source /etc/profile
   fi
@@ -37,6 +42,7 @@ else
     builtin source ~/.bashrc
   fi
 fi
+unset _graphene_login
 
 if [[ -n $_graphene_token ]]; then
   _graphene_command_ran=0

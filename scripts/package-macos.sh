@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Build a macOS CLI archive and an unsigned drag-and-drop DMG containing Graphene.app.
+# Build a macOS CLI archive and a drag-and-drop DMG containing an ad-hoc signed,
+# unnotarized Graphene.app.
 #
 # Usage: scripts/package-macos.sh <aarch64-apple-darwin|x86_64-apple-darwin>
-# Requires: sips, iconutil, hdiutil.
+# Requires: sips, iconutil, codesign, hdiutil.
 # $GRAPHENE_BINARY and $DIST_DIR can be overridden for tests.
 set -euo pipefail
 
@@ -81,10 +82,19 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# Seal the whole bundle with an ad-hoc signature. The linker only signs the bare
+# executable; once it sits in a bundle with Info.plist and resources, that signature no
+# longer covers them, and Gatekeeper reports a downloaded app as "damaged".
+codesign --force --sign - --timestamp=none "$app"
+codesign --verify --strict "$app"
+
 ln -s /Applications "$stage/Applications"
 cat > "$stage/Install Graphene.txt" <<'INSTALL'
-Drag Graphene.app to Applications. The app is not signed or notarized; on first launch,
-macOS may require Control-click > Open to confirm that you want to run it.
+Drag Graphene.app to Applications. The app is not notarized, so macOS blocks the first
+launch. Open System Settings > Privacy & Security and click "Open Anyway" next to the
+Graphene message, or run in a terminal:
+
+  xattr -dr com.apple.quarantine /Applications/Graphene.app
 INSTALL
 
 hdiutil create -volname "Graphene ${tag}" -srcfolder "$stage" -ov -format UDZO \

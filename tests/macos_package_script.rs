@@ -51,6 +51,10 @@ impl Sandbox {
                shift\n\
              done\n",
         );
+        self.script(
+            "bin/codesign",
+            &format!("echo \"$*\" >> '{}'\n", self.codesign_log().display()),
+        );
         self.script("bin/hdiutil", "touch \"${@: -1}\"\n");
         let path = format!(
             "{}:{}",
@@ -66,6 +70,10 @@ impl Sandbox {
             .env("DIST_DIR", self.dist())
             .output()
             .expect("run package-macos.sh")
+    }
+
+    fn codesign_log(&self) -> PathBuf {
+        self.dir.join("codesign.log")
     }
 
     fn dist(&self) -> PathBuf {
@@ -120,6 +128,14 @@ fn builds_an_archive_and_dmg_for_each_supported_architecture() {
         let listing = String::from_utf8(listing.stdout).unwrap();
         assert!(listing.contains(&format!("{dirname}/graphene")));
         assert!(listing.contains(&format!("{dirname}/LICENSE-MIT")));
+
+        let codesign = fs::read_to_string(sandbox.codesign_log()).unwrap();
+        let calls: Vec<&str> = codesign.lines().collect();
+        assert_eq!(calls.len(), 2, "unexpected codesign calls: {codesign}");
+        assert!(calls[0].starts_with("--force --sign - --timestamp=none "));
+        assert!(calls[0].ends_with("/Graphene.app"));
+        assert!(calls[1].starts_with("--verify --strict "));
+        assert!(calls[1].ends_with("/Graphene.app"));
     }
 }
 

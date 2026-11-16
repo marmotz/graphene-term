@@ -840,6 +840,9 @@ impl Session {
         self.padding = new.window.padding;
         self.renderer
             .set_background_opacity(new.window.background_opacity);
+        #[cfg(target_os = "macos")]
+        self.window
+            .set_transparent(window_transparent(new.window.background_opacity, true));
         self.palette = palette.clone();
         self.theme = new.theme.clone();
         self.keybindings = Keybindings::new(&new.keybindings);
@@ -1985,6 +1988,14 @@ pub struct App {
     appearance_watched: bool,
 }
 
+/// Whether the window is created transparent for a background `opacity`. Elsewhere
+/// always: winit only honours it at creation on X11, and the opacity can change by hot
+/// reload. On macOS only below 1.0, and updated on reload: a transparent window also
+/// clears the background of the title bar.
+fn window_transparent(opacity: f32, macos: bool) -> bool {
+    !macos || opacity < 1.0
+}
+
 impl App {
     fn create_session(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Session> {
         let remembered = match self.config.window.startup_mode {
@@ -1996,9 +2007,10 @@ impl App {
             .with_title(DEFAULT_TITLE)
             .with_inner_size(initial_size)
             .with_maximized(maximized)
-            // Always: winit only honours it at creation on X11, and the opacity can
-            // change by hot reload.
-            .with_transparent(true);
+            .with_transparent(window_transparent(
+                self.config.window.background_opacity,
+                cfg!(target_os = "macos"),
+            ));
         let window = Arc::new(event_loop.create_window(attributes)?);
         perf::mark("window created");
 
@@ -2440,6 +2452,14 @@ pub fn run() -> anyhow::Result<()> {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn macos_window_transparent_only_below_full_opacity() {
+        assert!(!window_transparent(1.0, true));
+        assert!(window_transparent(0.9, true));
+        assert!(window_transparent(1.0, false));
+        assert!(window_transparent(0.9, false));
+    }
 
     #[test]
     fn events_of_the_terminal_window_go_to_the_session() {

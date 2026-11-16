@@ -48,6 +48,9 @@ egui = { version = "0.37.0", features = ["default_fonts"] }
 egui-winit = { version = "0.37.0", default-features = false, features = ["clipboard"] }
 egui-wgpu = { version = "0.37.0", default-features = false }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+sys-locale = "0.3.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
 egui-winit = { version = "0.37.0", default-features = false, features = ["wayland", "x11"] }

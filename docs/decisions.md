@@ -316,7 +316,8 @@ needed.
 
 Interface labels are an `i18n::Msg` enum translated by one exhaustive `match` per
 language (English, French; English is the fallback), the language read from
-`LC_ALL`, `LC_MESSAGES` then `LANG`. A missing translation does not compile, and no
+`LC_ALL`, `LC_MESSAGES` then `LANG`, then on macOS the first preferred language of the
+system settings (an app launched from Finder has no locale variable). A missing translation does not compile, and no
 runtime dependency or resource file is needed. Fluent would only pay off with many
 languages and translators outside the code.
 
