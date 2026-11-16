@@ -614,10 +614,35 @@ mod tests {
         let active = ws.active_pane_id().unwrap();
         let width = |layout: &Layout| layout.rect_of(active).unwrap().width;
         assert_eq!(width(&after), width(&before) + 20.0);
-        // Nothing to grow into on the right.
-        assert!(!ws.resize_active(Direction::Right, 2, geometry()));
+        // The right edge is outside the window, so the opposite divider moves right.
+        assert!(ws.resize_active(Direction::Right, 2, geometry()));
+        let after = ws.layout(0, geometry());
+        assert_eq!(width(&after), width(&before));
         assert!(ws.toggle_zoom());
         assert!(!ws.resize_active(Direction::Left, 2, geometry()));
+    }
+
+    #[test]
+    fn resize_active_moves_vertical_dividers_at_the_window_edges() {
+        let mut ws = Workspace::<Fake>::new();
+        let first = ws.allocate_id();
+        ws.new_tab(first, Fake::default());
+        let second = ws
+            .split(Axis::Vertical, geometry(), |_| Some(Fake::default()))
+            .expect("vertical split fits");
+        let before = ws.layout(0, geometry());
+        let height = |layout: &Layout, id| layout.rect_of(id).unwrap().height;
+
+        // The active pane is at the bottom; its lower edge is the window edge.
+        assert!(ws.resize_active(Direction::Down, 2, geometry()));
+        let after_down = ws.layout(0, geometry());
+        assert_eq!(height(&after_down, second), height(&before, second) - 40.0);
+
+        // The top pane has no upper divider either, so the same divider moves up.
+        assert!(ws.focus(first));
+        assert!(ws.resize_active(Direction::Up, 2, geometry()));
+        let after_up = ws.layout(0, geometry());
+        assert_eq!(height(&after_up, first), height(&after_down, first) - 40.0);
     }
 
     #[test]
@@ -625,7 +650,7 @@ mod tests {
         let mut ws = workspace(&[2]);
         let before = ws.layout(0, geometry());
         assert!(ws.can_resize_active(Direction::Left, 2, geometry()));
-        assert!(!ws.can_resize_active(Direction::Right, 2, geometry()));
+        assert!(ws.can_resize_active(Direction::Right, 2, geometry()));
         assert!(!ws.can_resize_active(Direction::Up, 2, geometry()));
         assert_eq!(ws.layout(0, geometry()), before);
         assert!(ws.toggle_zoom());

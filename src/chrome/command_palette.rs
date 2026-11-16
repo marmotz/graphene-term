@@ -1072,11 +1072,13 @@ mod tests {
         for action in [
             Action::FocusPane(Direction::Right),
             Action::FocusPane(Direction::Up),
-            Action::ResizePane(Direction::Right),
             Action::ResizePane(Direction::Down),
         ] {
             assert!(!shown.contains(&action), "{action:?} is shown");
         }
+        // The right edge is the window boundary, so resizing right uses the divider
+        // on the pane's opposite side.
+        assert!(shown.contains(&Action::ResizePane(Direction::Right)));
         // A zoomed pane cannot be resized.
         assert!(ws.toggle_zoom());
         assert!(!actions(&ws, &context()).contains(&Action::ResizePane(Direction::Left)));
