@@ -53,19 +53,39 @@ Product decisions: [overview.md](overview.md).
 
 ### GUI automation tool evaluation
 
-- The exact GUI automation tool is intentionally not selected yet. Before building the
-  complete suite, add a small evaluation step to verify a dedicated tool against the
-  app's custom-rendered `wgpu`/`egui` UI.
-- The evaluation must show that the tool can launch and stop the real app, send keyboard
-  and pointer input, synchronize on observable UI state rather than fixed sleeps, and
-  run in both virtual X11 and virtual Wayland sessions with software rendering.
-- Prefer assertions on behavior visible to a user (for example, a command's displayed
-  result, a changed setting, a tab/pane transition, or clipboard contents). Save
-  screenshots and logs on failure for diagnosis, but do not use pixel snapshots as the
-  pass/fail oracle.
-- The existing `xdotool` workflow is a useful X11 baseline but is not sufficient alone
-  because the required matrix also includes native Wayland. The evaluation should choose
-  a tool that meets both backend requirements rather than silently reducing coverage.
+- **Evaluation result (2026-11-16):** retain backend-specific drivers behind the same
+  scenario/assertion contract. On X11, `xdotool` drives keyboard and pointer input. On
+  native Wayland CI, use `wayland-automation`'s `Mouse` API for pointer gestures and
+  invoke `wtype` directly for keyboard text. The Wayland probe reads the primary
+  selection with `wl-paste`; X11 reads the clipboard after Graphene's copy shortcut.
+- This was prototyped against the real `target/debug/graphene` executable in isolated
+  sessions: Xvfb at 1280x800x24, and headless Sway/wlroots at 1280x800. In both cases the
+  probe typed a unique marker into a controlled bash prompt, selected it with a pointer
+  drag and asserted that the clipboard contained the marker. It launched and stopped the
+  Graphene process without invoking application internals. See
+  [`tests/e2e/gui-automation-probe.sh`](../../../tests/e2e/gui-automation-probe.sh).
+- The Wayland run used `WLR_BACKENDS=headless`, `WLR_RENDERER=pixman` and
+  `LIBGL_ALWAYS_SOFTWARE=1`. Use the same software-rendering environment in CI. Sway is
+  deliberately selected as the virtual Wayland compositor because
+  `wayland-automation`'s pointer backend uses the wlroots virtual-pointer protocol; this
+  is not a claim of pointer automation support on GNOME/Mutter or KDE/KWin.
+- Dependencies for the probe are `xvfb`, `xdotool`, `xclip` for X11; and `sway`, `wtype`,
+  `wl-clipboard`, Python 3 and `wayland-automation==0.3.1` for Wayland. Install the Python
+  package with `pip install --no-deps wayland-automation==0.3.1`: the distribution
+  requires `evdev`, but the probe uses only its wlroots `Mouse` API and does not need the
+  evdev cursor fallback or kernel headers. `wtype` is called directly for text input; the
+  package's keyboard helpers pass `-k`, while wtype 0.4 requires `-P`/`-p` for key presses,
+  so those helpers are intentionally not used. The compositor session must export
+  `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`.
+- The probe waits for a marker written by the controlled shell's `PROMPT_COMMAND`, then
+  polls the clipboard for the expected text with a bounded timeout. Sleeps are only poll
+  intervals, never assumptions that the UI has completed a fixed-duration operation.
+  Clipboard text is the behavioral oracle; the probe retains logs and captures a
+  screenshot on failure when `import` (X11) or `grim` (Wayland) is installed, but pixels
+  are not compared.
+- `xdotool` alone remains insufficient because it cannot inject input into a native
+  Wayland client. Keeping separate input adapters avoids relying on XWayland and lets the
+  eventual scenario suite use the same behavioral checks on both backends.
 
 ### Scenario inventory and coverage
 
