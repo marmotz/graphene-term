@@ -12,7 +12,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  check-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -40,7 +40,7 @@ jobs:
       - name: Release build
         run: SOURCE_DATE_EPOCH=$(date +%s) cargo build --release --locked
 
-  macos:
+  check-macos:
     strategy:
       fail-fast: false
       matrix:

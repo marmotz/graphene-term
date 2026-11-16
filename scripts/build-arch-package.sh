@@ -58,7 +58,16 @@ sums=$(curl -sSfL "${download}/${tag}/SHA256SUMS") || {
   echo "cannot download SHA256SUMS of release $tag" >&2
   exit 1
 }
-sha256=$(awk -v f="$archive" '$2 == f { print $1 }' <<< "$sums")
+sha256=$(awk -v f="$archive" '
+  {
+    name = $2
+    sub(/^.*\//, "", name)
+    if (name == f) {
+      print $1
+      exit
+    }
+  }
+' <<< "$sums")
 if [[ -z $sha256 ]]; then
   echo "$archive is not listed in the SHA256SUMS of release $tag" >&2
   exit 1
