@@ -305,7 +305,8 @@ mod tests {
 
     #[test]
     fn zsh_through_zdotdir() {
-        let inj = injection("/usr/bin/zsh", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
+        // The macOS-specific login argument is covered by `login_shells_on_macos_only`.
+        let inj = injection_for("/usr/bin/zsh", Path::new(ROOT), TOKEN, vars(&[]), false).unwrap();
         assert_eq!(inj.program, "/usr/bin/zsh");
         assert!(inj.args.is_empty());
         assert_eq!(
@@ -316,11 +317,12 @@ mod tests {
             ])
         );
 
-        let inj = injection(
+        let inj = injection_for(
             "zsh",
             Path::new(ROOT),
             TOKEN,
             vars(&[("ZDOTDIR", "/home/me/.zsh")]),
+            false,
         )
         .unwrap();
         assert_eq!(env_of(&inj)["GRAPHENE_ZDOTDIR"], "/home/me/.zsh");
@@ -370,7 +372,8 @@ mod tests {
 
     #[test]
     fn fish_through_xdg_data_dirs() {
-        let inj = injection("/usr/bin/fish", Path::new(ROOT), TOKEN, vars(&[])).unwrap();
+        // The macOS-specific login argument is covered by `login_shells_on_macos_only`.
+        let inj = injection_for("/usr/bin/fish", Path::new(ROOT), TOKEN, vars(&[]), false).unwrap();
         assert!(inj.args.is_empty());
         assert_eq!(
             env_of(&inj),
@@ -383,11 +386,12 @@ mod tests {
             ])
         );
 
-        let inj = injection(
+        let inj = injection_for(
             "fish",
             Path::new(ROOT),
             TOKEN,
             vars(&[("XDG_DATA_DIRS", "/opt/share")]),
+            false,
         )
         .unwrap();
         let env = env_of(&inj);
