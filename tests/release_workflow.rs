@@ -13,7 +13,8 @@ fn job_runner(workflow: &str, job: &str) -> Option<String> {
         }
         if in_job {
             // A new top-level job starts with exactly two spaces of indentation.
-            if line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':') {
+            if line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':')
+            {
                 return None;
             }
             if let Some(value) = line.trim().strip_prefix("runs-on:") {
