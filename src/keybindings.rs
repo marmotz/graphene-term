@@ -122,6 +122,12 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Ctrl+Shift+Down", Action::FocusPane(Direction::Down)),
     ("Ctrl+Shift+Alt+Left", Action::ResizePane(Direction::Left)),
     ("Ctrl+Shift+Alt+Right", Action::ResizePane(Direction::Right)),
+    // Cinnamon reserves Ctrl+Shift+Alt+Up/Down to move a window between workspaces.
+    ("Ctrl+Shift+Alt+PageUp", Action::ResizePane(Direction::Up)),
+    (
+        "Ctrl+Shift+Alt+PageDown",
+        Action::ResizePane(Direction::Down),
+    ),
     ("Ctrl+Shift+Alt+Up", Action::ResizePane(Direction::Up)),
     ("Ctrl+Shift+Alt+Down", Action::ResizePane(Direction::Down)),
     ("Ctrl+Shift+N", Action::NextPane),
@@ -695,6 +701,14 @@ mod tests {
             assert_eq!(get(&named(key), csa()), Some(Action::ResizePane(direction)));
             assert_eq!(get(&named(key), CTRL), None);
         }
+        assert_eq!(
+            get(&named(NamedKey::PageUp), csa()),
+            Some(Action::ResizePane(Direction::Up))
+        );
+        assert_eq!(
+            get(&named(NamedKey::PageDown), csa()),
+            Some(Action::ResizePane(Direction::Down))
+        );
     }
 
     #[test]

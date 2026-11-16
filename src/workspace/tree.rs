@@ -466,9 +466,11 @@ impl Node {
         Some(leaves[(index + leaves.len() - 1) % leaves.len()])
     }
 
-    /// Grows the pane `target` by `step` cells toward `direction`: moves the divider
+    /// Resizes the pane `target` by `step` cells toward `direction`: moves the divider
     /// of its nearest ancestor split on that axis where `target` is on the side facing
-    /// `direction`, clamped to the minimum sizes. `false` when nothing moved.
+    /// `direction`, clamped to the minimum sizes. If that edge is on the outside of the
+    /// window, moves the nearest divider on the opposite side instead. `false` when
+    /// nothing moved.
     pub fn resize(
         &mut self,
         target: PaneId,
@@ -487,6 +489,11 @@ impl Node {
         let ancestor = (0..path.len()).rev().find(|&depth| {
             path[depth] == facing
                 && matches!(self.node(&path[..depth]), Some(Node::Split { axis: own, .. }) if *own == axis)
+        }).or_else(|| {
+            (0..path.len()).rev().find(|&depth| {
+                path[depth] != facing
+                    && matches!(self.node(&path[..depth]), Some(Node::Split { axis: own, .. }) if *own == axis)
+            })
         });
         let Some(depth) = ancestor else {
             return false;
@@ -870,9 +877,73 @@ mod tests {
         let layout = tree.layout(g);
         assert_eq!(rect(&layout, 2).height, 320.0);
         assert_eq!(rect(&layout, 1).width, 480.0);
-        // No split on pane 1's left.
-        assert!(!tree.resize(id(1), Direction::Left, 1, g));
+        // Pane 1 has no split on its left, so its opposite edge moves left instead.
+        assert!(tree.resize(id(1), Direction::Left, 1, g));
+        assert_eq!(rect(&tree.layout(g), 1).width, 470.0);
         assert!(!tree.resize(id(1), Direction::Up, 1, g));
+    }
+
+    #[test]
+    fn resize_uses_the_opposite_edge_at_the_window_boundary() {
+        let g = geometry(1001.0, 601.0);
+        let mut tree = Node::Leaf(id(1));
+        assert!(tree.split(id(1), Axis::Horizontal, id(2), g));
+        let before = tree.layout(g);
+        let first_width = rect(&before, 1).width;
+        let second_width = rect(&before, 2).width;
+
+        // The outside edge cannot move; the divider at the other edge moves in the
+        // requested direction, shrinking the active pane.
+        assert!(tree.resize(id(1), Direction::Left, 2, g));
+        let after = tree.layout(g);
+        assert_eq!(rect(&after, 1).width, first_width - 20.0);
+        assert_eq!(rect(&after, 2).width, second_width + 20.0);
+
+        assert!(tree.resize(id(2), Direction::Right, 2, g));
+        let after = tree.layout(g);
+        assert_eq!(rect(&after, 1).width, first_width);
+        assert_eq!(rect(&after, 2).width, second_width);
+    }
+
+    #[test]
+    fn resize_uses_the_opposite_edge_at_the_top_and_bottom_boundaries() {
+        let g = geometry(1001.0, 601.0);
+        let mut tree = Node::Leaf(id(1));
+        assert!(tree.split(id(1), Axis::Vertical, id(2), g));
+        let before = tree.layout(g);
+        let first_height = rect(&before, 1).height;
+        let second_height = rect(&before, 2).height;
+
+        assert!(tree.resize(id(1), Direction::Up, 2, g));
+        let after = tree.layout(g);
+        assert_eq!(rect(&after, 1).height, first_height - 40.0);
+        assert_eq!(rect(&after, 2).height, second_height + 40.0);
+
+        assert!(tree.resize(id(2), Direction::Down, 2, g));
+        let after = tree.layout(g);
+        assert_eq!(rect(&after, 1).height, first_height);
+        assert_eq!(rect(&after, 2).height, second_height);
+    }
+
+    #[test]
+    fn resize_central_pane_keeps_using_its_nearest_divider_on_each_side() {
+        let g = geometry(1001.0, 601.0);
+        let mut tree = Node::Leaf(id(1));
+        assert!(tree.split(id(1), Axis::Horizontal, id(2), g));
+        assert!(tree.split(id(2), Axis::Horizontal, id(3), g));
+        let before = tree.layout(g);
+        let root_divider = before.dividers[0].rect.x;
+
+        assert!(tree.resize(id(2), Direction::Left, 2, g));
+        let after_left = tree.layout(g);
+        assert_eq!(after_left.dividers[0].rect.x, root_divider - 20.0);
+
+        assert!(tree.resize(id(2), Direction::Right, 2, g));
+        let after_right = tree.layout(g);
+        assert_eq!(
+            after_right.dividers[1].rect.x,
+            after_left.dividers[1].rect.x + 20.0
+        );
     }
 
     #[test]
