@@ -2384,11 +2384,7 @@ impl App {
                     self.update_checker.ignore(&tag);
                 }
             }
-            WindowEvent::RedrawRequested => {
-                let t = Instant::now();
-                session.redraw();
-                log::warn!(target: "graphene::tmpframe", "frame {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
-            }
+            WindowEvent::RedrawRequested => session.redraw(),
             _ => {}
         }
         session.flush_panes();
