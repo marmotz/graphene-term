@@ -27,7 +27,7 @@ pub const INACTIVE_BORDER: f32 = 1.0;
 
 /// Opacity of the pane border color in the border of the other panes, to keep it more
 /// discreet than the active one.
-pub const INACTIVE_BORDER_OPACITY: f32 = 0.5;
+pub const INACTIVE_BORDER_OPACITY: f32 = 0.7;
 
 /// Share of the accent color in the background of an inactive pane bar, the rest being
 /// the tab bar background: a muted version of the active bar's hue.
