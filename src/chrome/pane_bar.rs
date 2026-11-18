@@ -8,6 +8,7 @@
 
 use super::tab_bar::UiMetrics;
 use crate::layout::Rect;
+use crate::mouse::Button;
 use crate::terminal::PaneId;
 
 /// Height of a pane bar, in pixels: a line of interface text and its padding.
@@ -32,7 +33,6 @@ pub fn split(pane: Rect, metrics: UiMetrics) -> (Rect, Rect) {
 }
 
 /// What the mouse is over in a pane bar.
-#[allow(dead_code)] // Mouse routing on the bar is tracked by issue #136.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneBarHit {
     Title,
@@ -83,7 +83,6 @@ impl PaneBarLayout {
     }
 
     /// What is under the pixel `(x, y)`: the close button before the title.
-    #[allow(dead_code)] // Mouse routing on the bar is tracked by issue #136.
     pub fn hit(&self, x: f32, y: f32) -> Option<PaneBarHit> {
         if !self.rect.contains(x, y) {
             None
@@ -92,6 +91,45 @@ impl PaneBarLayout {
         } else {
             Some(PaneBarHit::Title)
         }
+    }
+}
+
+/// The bar under the pixel `(x, y)` among the panes `panes` (pane and rectangle, as a
+/// split layout gives them): its pane and what the pixel is over.
+pub fn hit_at(
+    panes: &[(PaneId, Rect)],
+    x: f32,
+    y: f32,
+    metrics: UiMetrics,
+) -> Option<(PaneId, PaneBarHit)> {
+    panes.iter().find_map(|&(pane, rect)| {
+        PaneBarLayout::new(pane, rect, String::new(), false, metrics)
+            .hit(x, y)
+            .map(|hit| (pane, hit))
+    })
+}
+
+/// What a press on a pane bar does. The bar is Graphene's: a press on it is never
+/// reported to the application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneBarAction {
+    /// Close the pane, with confirmation while a program runs in it.
+    Close,
+    /// Open the pane menu, without block actions.
+    Menu,
+    /// Focus the pane, then toggle the zoom of its tab when `zoom`.
+    Focus { zoom: bool },
+}
+
+/// What a press of `button` on `hit` does, the press being click `clicks` of its series
+/// on the bar (see [`crate::selection::ClickTracker`]): a double click on the title
+/// toggles the zoom.
+pub fn press_action(button: Button, hit: PaneBarHit, clicks: u8) -> Option<PaneBarAction> {
+    match (button, hit) {
+        (Button::Left, PaneBarHit::Close) => Some(PaneBarAction::Close),
+        (Button::Left, PaneBarHit::Title) => Some(PaneBarAction::Focus { zoom: clicks == 2 }),
+        (Button::Right, _) => Some(PaneBarAction::Menu),
+        (Button::Middle, _) => None,
     }
 }
 
@@ -210,5 +248,59 @@ mod tests {
         // Under the bar is the content, outside of it nothing.
         assert_eq!(bar.hit(cx, bar.rect.y + bar.rect.height + 1.0), None);
         assert_eq!(bar.hit(bar.rect.x - 1.0, cy), None);
+    }
+
+    #[test]
+    fn hit_at_finds_the_bar_of_the_pane_under_the_pixel() {
+        let right = Rect { x: 500.0, ..pane() };
+        let panes = [(PaneId(1), pane()), (PaneId(2), right)];
+        assert_eq!(
+            hit_at(&panes, 120.0, 60.0, METRICS),
+            Some((PaneId(1), PaneBarHit::Title))
+        );
+        let close = PaneBarLayout::new(PaneId(2), right, String::new(), false, METRICS).close;
+        assert_eq!(
+            hit_at(&panes, close.x + 1.0, close.y + 1.0, METRICS),
+            Some((PaneId(2), PaneBarHit::Close))
+        );
+        // The content under the bars and the space outside the panes have no bar.
+        assert_eq!(hit_at(&panes, 120.0, 200.0, METRICS), None);
+        assert_eq!(hit_at(&panes, 50.0, 60.0, METRICS), None);
+        assert_eq!(hit_at(&[], 120.0, 60.0, METRICS), None);
+    }
+
+    #[test]
+    fn left_press_closes_on_the_button_and_focuses_on_the_title() {
+        assert_eq!(
+            press_action(Button::Left, PaneBarHit::Close, 1),
+            Some(PaneBarAction::Close)
+        );
+        assert_eq!(
+            press_action(Button::Left, PaneBarHit::Title, 1),
+            Some(PaneBarAction::Focus { zoom: false })
+        );
+    }
+
+    #[test]
+    fn double_click_on_the_title_toggles_the_zoom_only_on_the_second_click() {
+        assert_eq!(
+            press_action(Button::Left, PaneBarHit::Title, 2),
+            Some(PaneBarAction::Focus { zoom: true })
+        );
+        assert_eq!(
+            press_action(Button::Left, PaneBarHit::Title, 3),
+            Some(PaneBarAction::Focus { zoom: false })
+        );
+    }
+
+    #[test]
+    fn right_press_opens_the_menu_and_middle_press_does_nothing() {
+        for hit in [PaneBarHit::Title, PaneBarHit::Close] {
+            assert_eq!(
+                press_action(Button::Right, hit, 1),
+                Some(PaneBarAction::Menu)
+            );
+            assert_eq!(press_action(Button::Middle, hit, 1), None);
+        }
     }
 }

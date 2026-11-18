@@ -28,7 +28,7 @@ use crate::chrome::context_menu::{
     self, BlockState, Command as MenuCommand, ContextMenu, MenuContext, MenuHit, MenuLayout,
 };
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
-use crate::chrome::pane_bar::{self, PaneBarLayout};
+use crate::chrome::pane_bar::{self, PaneBarAction, PaneBarHit, PaneBarLayout};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
@@ -52,7 +52,7 @@ use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
 use crate::renderer::{Glyphs, Gpu, PaneFrame, Renderer, UiFont};
-use crate::selection;
+use crate::selection::{self, ClickTracker};
 use crate::settings::{self, LoadErrors, SettingsWindow};
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
@@ -146,6 +146,8 @@ struct Session {
     hovered_link: Option<HoveredLink>,
     /// Left press on a link, until its release.
     link_press: Option<LinkPress>,
+    /// Clicks on the pane bars, per pane: a double click on a title toggles the zoom.
+    pane_bar_clicks: ClickTracker<PaneId>,
     /// Whether the link tooltip stays hidden: set by the wheel, cleared when the mouse
     /// moves.
     tooltip_hidden: bool,
@@ -304,10 +306,21 @@ impl Session {
         (self.mouse_position.x as f32, self.mouse_position.y as f32)
     }
 
-    /// The pane of the shown tab under the mouse.
+    /// The pane of the shown tab whose content is under the mouse: `None` over its
+    /// title bar, which is never the application's.
     fn pane_under_mouse(&self) -> Option<PaneId> {
         let (x, y) = self.mouse_pixel();
-        self.shown_layout().pane_at(x, y)
+        let layout = self.shown_layout();
+        if self.pane_bar_at(&layout, x, y).is_some() {
+            return None;
+        }
+        layout.pane_at(x, y)
+    }
+
+    /// The pane bar of `layout` under the pixel `(x, y)`: its pane and what the pixel
+    /// is over.
+    fn pane_bar_at(&self, layout: &Layout, x: f32, y: f32) -> Option<(PaneId, PaneBarHit)> {
+        pane_bar::hit_at(&layout.panes, x, y, self.ui_metrics(UiFont::Chrome))
     }
 
     /// Gives the keyboard focus to the pane `id`.
@@ -978,7 +991,8 @@ impl Session {
 
     /// Hand over a fold chevron or an active link, arrow while the application captures
     /// the mouse under the pointer, I-beam otherwise; the window is only updated when the shape changes.
-    /// Over a divider, or while dragging one, the resize arrows of its axis.
+    /// Over a divider, or while dragging one, the resize arrows of its axis. Arrow over
+    /// a pane bar.
     fn update_pointer(&mut self) {
         let (x, y) = self.mouse_pixel();
         if self.overlay.is_some()
@@ -995,6 +1009,8 @@ impl Session {
         };
         let icon = if let Some(axis) = divider {
             mouse::divider_icon(axis)
+        } else if self.pane_bar_at(&layout, x, y).is_some() {
+            winit::window::CursorIcon::Default
         } else {
             let id = layout
                 .pane_at(x, y)
@@ -1189,7 +1205,7 @@ impl Session {
     }
 
     /// A press goes to the first of: the overlay, the banner, the tab bar, a divider, a
-    /// pane. While an overlay is open, it takes every press.
+    /// pane bar, a pane. While an overlay is open, it takes every press.
     fn mouse_press(
         &mut self,
         button: mouse::Button,
@@ -1221,6 +1237,10 @@ impl Session {
                 axis: divider.axis,
             });
             self.update_pointer();
+            return;
+        }
+        if let Some((pane, hit)) = self.pane_bar_at(&layout, x, y) {
+            self.pane_bar_press(button, pane, hit, event_loop);
             return;
         }
         // A press in an inactive pane makes it active, then acts as in the active one.
@@ -1316,6 +1336,36 @@ impl Session {
             }
             mouse::Button::Middle => self.paste_primary(),
             mouse::Button::Right => self.open_pane_menu(target, hit),
+        }
+    }
+
+    /// A press of `button` on `hit` in the bar of `pane`: never reported to the
+    /// application (see [`pane_bar::press_action`]).
+    fn pane_bar_press(
+        &mut self,
+        button: mouse::Button,
+        pane: PaneId,
+        hit: PaneBarHit,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let clicks = if (button, hit) == (mouse::Button::Left, PaneBarHit::Title) {
+            self.pane_bar_clicks.click(pane, Instant::now())
+        } else {
+            0
+        };
+        match pane_bar::press_action(button, hit, clicks) {
+            Some(PaneBarAction::Close) => self.request_close(Target::Pane(pane), event_loop),
+            Some(PaneBarAction::Menu) => self.open_pane_menu(pane, Hit::Blank),
+            Some(PaneBarAction::Focus { zoom }) => {
+                if self.workspace.active_pane_id() != Some(pane) {
+                    self.focus_pane(pane);
+                }
+                if zoom && self.workspace.toggle_zoom() {
+                    self.relayout();
+                    self.update_pointer();
+                }
+            }
+            None => {}
         }
     }
 
@@ -2132,6 +2182,7 @@ impl App {
             hovered_cell: None,
             hovered_link: None,
             link_press: None,
+            pane_bar_clicks: ClickTracker::default(),
             tooltip_hidden: false,
             pointer: None,
             window_title: DEFAULT_TITLE.to_owned(),

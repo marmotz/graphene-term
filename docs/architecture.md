@@ -88,7 +88,7 @@ src/
   chrome/
     command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
-    pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing (pure)
+    pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing, press routing (pure)
     scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
     tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
@@ -494,7 +494,11 @@ Design and rationale.
    third of the window) on the left or right. The panes area is the window minus the
    bar (`TabBarPosition::content_area`); each grid is centred in its pane under its
    title bar (`pane_bar::split`), and `Geometry::title_bar` adds the bar to the minimum
-   pane height. The open dialog
+   pane height. A press goes to the first of: overlay, banner, tab bar, divider, pane
+   bar, pane content; a press on a pane bar (`pane_bar::hit_at`, routed by
+   `pane_bar::press_action`) is never reported to the application: `×` closes the pane,
+   a right click opens the pane menu, a click on the title focuses the pane and a double
+   click (a `ClickTracker<PaneId>`) toggles the zoom. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
    the window height) goes to the overlay rects and texts of the layer. The link

@@ -164,6 +164,9 @@ Tabs and split panes:
 | Middle click or × on a tab    | Close the tab                                   |
 | Click on +                    | New tab                                         |
 | Click in a pane               | Focus the pane                                  |
+| Click on a pane title bar     | Focus the pane; double click to zoom, or back   |
+| × on a pane title bar         | Close the pane                                  |
+| Right click on a title bar    | Pane menu                                       |
 | Drag a divider                | Resize the panes on both sides                  |
 
 "Equalise panes" and "Move pane to a new tab" have no key: run them from the command
@@ -174,6 +177,10 @@ two tabs, on the edge set by `tabs.position` (`top`, `bottom`, `left` or `right`
 side, the tabs are stacked). Closing a pane, a tab or the window asks for confirmation while a program
 other than the shell runs in it. With several panes in the tab, `Ctrl+Shift+Left /
 Right` moves the focus instead of extending the input selection.
+
+Every pane has a title bar on top, showing its title (set by the shell or the program,
+else the current directory) and a `×` button. The bar of the active pane is drawn in the accent color.
+Clicks on the bar are Graphene's and never reach the program running in the pane.
 
 Every key-bound action can be remapped in the `[keybindings]` section of `config.toml`:
 `"Ctrl+Alt+T" = "new_tab"` adds a shortcut, `"Shift+PageUp" = "none"` gives a default
