@@ -37,7 +37,8 @@ src/
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
   process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
   workspace/
-    mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback (pure)
+    mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback, pane moves (pure)
+    drop.rs        drop targets of a dragged pane: edge or center of a pane, tab, new tab, highlight (pure)
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml and state directory locations, model, key-by-key parsing and validation

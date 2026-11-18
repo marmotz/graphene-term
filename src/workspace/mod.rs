@@ -3,6 +3,7 @@
 //! The workspace is generic over the pane type so its bookkeeping (which tab holds
 //! which pane, which is active, zoom) is tested without spawning shells.
 
+pub mod drop;
 pub mod tree;
 
 use std::collections::HashMap;
@@ -346,44 +347,61 @@ impl<P> Workspace<P> {
         side: Direction,
         geometry: Geometry,
     ) -> bool {
-        if id == target {
-            return false;
-        }
-        let (Some(source), Some(mut index)) = (self.tab_of(id), self.tab_of(target)) else {
+        let Some((source, mut index, tree)) = self.moved_tree(id, target, side, geometry) else {
             return false;
         };
-        if source == index {
-            let mut tree = self.tabs[source].tree.clone();
-            if !tree.remove(id) || !tree.insert(target, side, id, geometry) {
-                return false;
-            }
-            self.tabs[source] = Tab {
-                tree,
-                active: id,
-                zoomed: false,
-            };
-            self.active = source;
-            return true;
-        }
-        let mut tree = self.tabs[index].tree.clone();
-        if !tree.insert(target, side, id, geometry) {
-            return false;
-        }
         self.tabs[index] = Tab {
             tree,
             active: id,
             zoomed: false,
         };
-        if self.tabs[source].is_single() {
-            self.remove_tab(source);
-            if source < index {
-                index -= 1;
+        if source != index {
+            if self.tabs[source].is_single() {
+                self.remove_tab(source);
+                if source < index {
+                    index -= 1;
+                }
+            } else {
+                self.take_out(source, id);
             }
-        } else {
-            self.take_out(source, id);
         }
         self.active = index;
         true
+    }
+
+    /// Whether [`Self::move_pane`] would accept moving `id` next to `target` on `side`,
+    /// without changing anything.
+    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
+    pub fn can_move_pane(
+        &self,
+        id: PaneId,
+        target: PaneId,
+        side: Direction,
+        geometry: Geometry,
+    ) -> bool {
+        self.moved_tree(id, target, side, geometry).is_some()
+    }
+
+    /// The tree of the tab of `target` once `id` is inserted next to it on `side` (and
+    /// removed from it, when both share that tab), with the indices of the source and
+    /// target tabs. `None` when the move is refused.
+    fn moved_tree(
+        &self,
+        id: PaneId,
+        target: PaneId,
+        side: Direction,
+        geometry: Geometry,
+    ) -> Option<(usize, usize, Node)> {
+        if id == target {
+            return None;
+        }
+        let (source, index) = (self.tab_of(id)?, self.tab_of(target)?);
+        let mut tree = self.tabs[index].tree.clone();
+        if source == index && !tree.remove(id) {
+            return None;
+        }
+        tree.insert(target, side, id, geometry)
+            .then_some((source, index, tree))
     }
 
     /// Exchanges the places of the panes `a` (the one moved) and `b`, in one tab or
@@ -1039,6 +1057,22 @@ mod tests {
         assert!(!ws.move_pane(PaneId(1), PaneId(1), Direction::Left, geometry()));
         assert!(!ws.move_pane(PaneId(9), PaneId(1), Direction::Left, geometry()));
         assert!(!ws.move_pane(PaneId(1), PaneId(9), Direction::Left, geometry()));
+        assert_eq!(snapshot(&ws), before);
+    }
+
+    #[test]
+    fn can_move_pane_matches_move_pane_without_changing_anything() {
+        let ws = workspace(&[2, 1]);
+        let before = snapshot(&ws);
+        let too_small = Geometry {
+            area: Rect::from_size(150, 600),
+            ..geometry()
+        };
+        assert!(ws.can_move_pane(PaneId(1), PaneId(0), Direction::Left, geometry()));
+        assert!(ws.can_move_pane(PaneId(1), PaneId(2), Direction::Down, geometry()));
+        assert!(!ws.can_move_pane(PaneId(1), PaneId(2), Direction::Left, too_small));
+        assert!(!ws.can_move_pane(PaneId(1), PaneId(1), Direction::Left, geometry()));
+        assert!(!ws.can_move_pane(PaneId(9), PaneId(1), Direction::Left, geometry()));
         assert_eq!(snapshot(&ws), before);
     }
 
