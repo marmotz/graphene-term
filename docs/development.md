@@ -91,7 +91,9 @@ Pull-request CI runs every scenario of
 [`tests/e2e/scenario-catalog.md`](../tests/e2e/scenario-catalog.md) on both X11 (Xvfb)
 and native Wayland (headless Sway) with `tests/e2e/gui-automation-probe.sh`. Each run
 starts the built `graphene` executable as a separate process, gives it a private home and
-XDG config/state/runtime directories, and disables update checks. Input goes through the
+XDG config/state/runtime directories, and disables update checks; the `update-banner`
+scenario turns them on with a recent cached release, so no request reaches GitHub, and
+links open through a recording `xdg-open`. Input goes through the
 backend's driver (`xdotool` on X11, `wtype` and `wayland-automation` on Wayland). The
 controlled shell fixture assigns each pane a unique ID, so navigation is asserted by
 typing a command into whichever shell has focus; pane sizes are read with `stty size`,
@@ -99,7 +101,10 @@ palette actions through the recent-actions file, and dialog and Settings text wi
 (`tesseract`). Terminal scenarios locate words of a known text with OCR, then assert the
 selection and clipboard Graphene fills (`xclip`, `wl-clipboard`). The `shell-*`,
 `blocks` and `scroll` scenarios start a real bash, zsh or fish with Graphene's integration and
-startup files written to the private home. Screenshots are not compared. The application and its shells are stopped
+startup files written to the private home. Configuration scenarios edit the private
+`config.toml` and themes from Settings or by hand, then read the result back from the
+files, from `stty size` and from the background colour a shell reads with an OSC 11
+query. Screenshots are not compared. The application and its shells are stopped
 at the end of each run. Software rendering is enabled for Graphene and the Wayland
 compositor. On failure, CI uploads the application/compositor logs and a screenshot for
 seven days.
@@ -119,7 +124,8 @@ export PYTHONPATH=/tmp/wayland-automation
 export GRAPHENE_BIN="$PWD/target/debug/graphene"
 export GRAPHENE_E2E_ARTIFACTS=/tmp/graphene-e2e-artifacts
 for scenario in smoke tabs palette panes menu dialogs settings selection clipboard scroll \
-  font mouse blocks shell-bash shell-zsh shell-fish; do
+  font mouse blocks shell-bash shell-zsh shell-fish startup config-reload settings-fields \
+  settings-keys update-banner; do
   xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX +render -noreset" \
     tests/e2e/gui-automation-probe.sh x11 "$scenario"
   tests/e2e/gui-automation-probe.sh wayland "$scenario"

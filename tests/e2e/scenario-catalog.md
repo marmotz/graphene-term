@@ -13,7 +13,9 @@ for a fixed prompt and the same readiness markers. Assertions use what the appli
 exposes to the outside: commands typed into the focused shell (which pane answers, its
 `stty size`), the palette's recent-actions file, the process tree, the window list of the
 display server, OCR of visible dialog, Settings and terminal text, and the clipboard and
-primary selection read with `xclip` or `wl-paste`. Terminal words are located by OCR on a
+primary selection read with `xclip` or `wl-paste`, the background colour a shell reads
+back with an OSC 11 query, and the isolated `config.toml`, `update.json` and
+`window.json` files. Links are opened through a recording `xdg-open`. Terminal words are located by OCR on a
 known text, then the selection Graphene makes from them is read back, so the selection
 also proves what is displayed. Screenshots are
 failure artifacts, never pixel-comparison oracles. Waits poll for a state change with a
@@ -39,6 +41,11 @@ bounded timeout instead of sleeping for a fixed duration.
 | `shell-bash` | In bash with the integration and startup files in the private home: type a command, press `Home` and complete it; run two commands; copy the command and output of the last block, select the previous and next blocks with `Ctrl+Shift+PageUp`/`PageDown` and copy them | The edited command runs; `Ctrl+Shift+Alt+C`/`O` copy the exact command and output of the last, previous and next blocks | X11, Wayland |
 | `shell-zsh` | Same as `shell-bash` with zsh | Same as `shell-bash` | X11, Wayland |
 | `shell-fish` | Same as `shell-bash` with fish | Same as `shell-bash` | X11, Wayland |
+| `startup` | Launch with `language = "fr"`, theme `solarized-dark`, tabs at the bottom, an 840x520 window and `startup_mode = "remember"`; open Settings; click the top rows and the bottom tab bar; quit, relaunch with a 900x560 configured size, then relaunch in the `default` startup mode | The window is 840x520 and reports the solarized background to an OSC 11 query; Settings is titled `Paramètres`; only the bottom click selects tab 1; `window.json` records 840x520 on quit; the remembered 840x520 wins over the configured size, then `default` gives 900x560 | X11, Wayland |
+| `config-reload` | Edit `config.toml` and a user theme while Graphene runs: font size, theme name, theme colour, an invalid colour, an invalid value, a syntax error, a keybinding and an unknown action, then fix each error | `stty size` loses columns; OSC 11 reports each theme colour, the default one for the invalid colour; the error banner names `custom.toml` or `config.toml` and the faulty key or action, and leaves once fixed; the terminal keeps answering; the new shortcut opens a tab | X11, Wayland |
+| `settings-fields` | In Settings: type `abc`, `500` then `18` in the font size, toggle cursor blinking twice, pick a theme and the left tab position in their lists; add an unknown key, an invalid value and a syntax error to the file by hand; pick French | Each invalid size shows its validation message and leaves `config.toml` unchanged; each valid edit is written to `config.toml` and applied to the terminal (`stty size`, OSC 11); the unknown key, the invalid value and the locked-file message are shown, and leave once fixed; the window title becomes `Paramètres` | X11, Wayland |
+| `settings-keys` | In the keyboard shortcuts section: Add on New tab then Escape; Add then `Ctrl+Alt+Y`; Add then the taken `Ctrl+Shift+E`, dismissed with Escape, cancelled, then replaced; remove the `Ctrl+Alt+Y` chip; add an unknown action to the file | Escape cancels the capture without closing Settings; `config.toml` gets each written shortcut and nothing for a dismissed conflict; in the terminal `Ctrl+Alt+Y` opens a tab, `Ctrl+Shift+E` opens a tab instead of a split, the removed shortcut does nothing; the unknown action is shown in the banner and in the section | X11, Wayland |
+| `update-banner` | With a cached newer release in `update.json` and a week-long interval: Open release, ×, relaunch, an invalid value, French, update checks off and on, Ignore this version, then relaunch with a newer release | No request reaches GitHub; Open release opens the release URL and keeps the banner; × hides it until the next launch; the configuration error banner takes its place; the text follows the language; turning checks off hides it; Ignore records the tag in `update.json`, and only a newer release is shown again | X11, Wayland |
 
 ## Action coverage
 
@@ -94,7 +101,20 @@ A unit test in `src/input.rs` fails when an action is missing from this table.
 
 ## Known coverage gaps
 
-- Settings field edits, keybinding changes, themes and banners are left to #116.
+- Settings fields not edited through the window: font family, cursor shape, startup
+  mode, window width and height, padding, the background opacity slider, scrollback
+  lines, word separators, the appearance toggle with its light and dark themes, and the
+  update check and interval (turning checks on from Settings would call GitHub). Their
+  values reach the application through the same file write and hot reload that the
+  covered fields exercise; `startup` covers the window size and startup mode from the
+  file.
+- `startup_mode = "maximized"` is not covered: Xvfb has no window manager to maximize
+  the window, and Sway tiles or floats it whatever the request. The startup scenario
+  floats the main window under Sway so that it keeps the size Graphene asks for.
+- Following the system light or dark appearance is not covered: the virtual sessions
+  expose no appearance setting to switch.
+- A failed write of `config.toml` from Settings ("Cannot save the change") is not
+  covered.
 - Reopening Settings while it is open is checked to reuse the window, not to raise it:
   winit 0.30's `Window::focus_window` is a no-op on Wayland, and Xvfb has no window
   manager to honour the X11 activation request.

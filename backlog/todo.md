@@ -4,7 +4,7 @@
 
 ## End-to-end tests ·  [overview](features/e2e-tests/overview.md)
 
-_tâches créées — voir [technical.md](features/e2e-tests/technical.md)_ — 4/5 tasks done
+_terminé — voir [technical.md](features/e2e-tests/technical.md)_ — 5/5 tasks done
 
 | Done | Issue                                                       | Title                                                                 | Blocked by |
 |------|-------------------------------------------------------------|-----------------------------------------------------------------------|------------|
@@ -12,4 +12,4 @@ _tâches créées — voir [technical.md](features/e2e-tests/technical.md)_ — 
 | [x]  | [#113](https://github.com/marmotz/graphene-term/issues/113) | [E2E] Créer le harness et activer le premier contrôle CI bloquant     | #112       |
 | [x]  | [#114](https://github.com/marmotz/graphene-term/issues/114) | [E2E] Couvrir la navigation, la palette et le chrome de l’application | #113       |
 | [x]  | [#115](https://github.com/marmotz/graphene-term/issues/115) | [E2E] Couvrir les interactions du terminal et les intégrations shell  | #113       |
-| [ ]  | [#116](https://github.com/marmotz/graphene-term/issues/116) | [E2E] Couvrir les réglages, la configuration et les états de bannière | #113, #114 |
+| [x]  | [#116](https://github.com/marmotz/graphene-term/issues/116) | [E2E] Couvrir les réglages, la configuration et les états de bannière | #113, #114 |

@@ -12,7 +12,7 @@ case "$backend" in
 esac
 
 case "$scenario" in
-  smoke|tabs|palette|panes|menu|dialogs|settings|selection|clipboard|scroll|font|mouse|blocks|shell-bash|shell-zsh|shell-fish) ;;
+  smoke|tabs|palette|panes|menu|dialogs|settings|selection|clipboard|scroll|font|mouse|blocks|shell-bash|shell-zsh|shell-fish|startup|config-reload|settings-fields|settings-keys|update-banner) ;;
   *)
     printf 'Unknown scenario: %s\n' "$scenario" >&2
     exit 2
@@ -25,7 +25,7 @@ if [[ ! -x "$binary" ]]; then
   exit 2
 fi
 
-for command in awk bash cat chmod find grep head mktemp pgrep ps rm sed seq sha256sum sleep timeout wc; do
+for command in awk bash cat chmod date find grep head mktemp mv pgrep ps rm sed seq sha256sum sleep timeout wc; do
   command -v "$command" >/dev/null || {
     printf 'Required command not found: %s\n' "$command" >&2
     exit 2
@@ -175,6 +175,7 @@ export GRAPHENE_E2E_TEXT="$tmp/text"
 export GRAPHENE_E2E_ROWS="$tmp/rows"
 export GRAPHENE_E2E_MOUSE_REPORT="$tmp/mouse-report"
 export GRAPHENE_E2E_MOUSE_READY="$tmp/mouse-ready"
+export GRAPHENE_E2E_BACKGROUND="$tmp/background"
 
 # Shell-integration scenarios start a real bash, zsh or fish with Graphene's hooks;
 # every other scenario uses the controlled fixture below without integration.
@@ -225,8 +226,15 @@ else
   export GRAPHENE_SHELL_INTEGRATION=0
 fi
 
-cat >"$tmp/config/graphene/config.toml" <<'EOF'
-language = "en"
+# Writes config.toml as an editor does, through a file renamed over it, so a running
+# Graphene sees one complete change.
+write_config() {
+  local file="$XDG_CONFIG_HOME/graphene/config.toml"
+  printf '%s' "$1" >"$file.e2e-tmp"
+  mv -f "$file.e2e-tmp" "$file"
+}
+
+base_config='language = "en"
 
 [updates]
 check = false
@@ -234,7 +242,64 @@ check = false
 [window]
 width = 960
 height = 600
+'
+case "$scenario" in
+  startup)
+    write_config 'language = "fr"
+
+[updates]
+check = false
+
+[window]
+width = 840
+height = 520
+startup_mode = "remember"
+
+[theme]
+name = "solarized-dark"
+
+[tabs]
+position = "bottom"
+'
+    ;;
+  settings-fields)
+    write_config "$base_config"'
+[font]
+size = 13
+'
+    ;;
+  update-banner)
+    # The cached check is recent and the interval long: the check thread shows the cached
+    # release without calling GitHub.
+    update_config='language = "en"
+
+[updates]
+check = true
+interval = "1w"
+
+[window]
+width = 960
+height = 600
+'
+    write_config "$update_config"
+    mkdir -p "$XDG_STATE_HOME/graphene"
+    printf '{"last_check": %s, "latest": {"tag": "v99.0.0", "url": "https://example.invalid/graphene/releases/v99.0.0"}}\n' \
+      "$(date +%s)" >"$XDG_STATE_HOME/graphene/update.json"
+    ;;
+  *)
+    write_config "$base_config"
+    ;;
+esac
+
+# Links are opened through this recorder instead of a real browser.
+export GRAPHENE_E2E_OPENED="$tmp/opened"
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/xdg-open" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$1" >> "$GRAPHENE_E2E_OPENED"
 EOF
+chmod +x "$tmp/bin/xdg-open"
+export PATH="$tmp/bin:$PATH"
 
 cat >"$tmp/shell" <<'EOF'
 #!/bin/sh
@@ -272,8 +337,13 @@ case "$backend" in
 default_border none
 default_floating_border none
 output HEADLESS-1 mode 1280x800
-for_window [title="Settings"] floating enable, border none, resize set 1000 700, move position 0 0
+for_window [title="^(Settings|Paramètres)$"] floating enable, border none, resize set 1000 700, move position 0 0
 EOF
+    # Sway sizes tiled windows itself; floating, the main window keeps the size Graphene
+    # asks for, as on X11.
+    if [[ "$scenario" == startup ]]; then
+      printf 'for_window [title="^(?!(Settings|Paramètres)$)"] floating enable\n' >>"$tmp/sway.conf"
+    fi
     sway --unsupported-gpu -d -c "$tmp/sway.conf" >"$tmp/sway.log" 2>&1 &
     sway_pid=$!
 
@@ -300,9 +370,6 @@ EOF
     ;;
 esac
 
-"$binary" >"$tmp/graphene.log" 2>&1 &
-app_pid=$!
-
 wait_for_file() {
   local file=$1
   local description=$2
@@ -324,7 +391,6 @@ wait_for_file() {
   return 1
 }
 
-wait_for_file "$GRAPHENE_E2E_PROMPT_READY" 'the controlled shell prompt'
 prompt_count() {
   [[ -f "$GRAPHENE_E2E_PROMPT_COUNT" ]] && wc -l <"$GRAPHENE_E2E_PROMPT_COUNT" || printf '0\n'
 }
@@ -969,7 +1035,7 @@ main_window_rect() {
     swaymsg -t get_tree | python3 -c '
 import json, sys
 def walk(node):
-    if node.get("focused") and node.get("type") == "con":
+    if node.get("focused") and node.get("type") in ("con", "floating_con"):
         r = node["rect"]
         print(r["x"], r["y"], r["width"], r["height"])
         return True
@@ -1029,9 +1095,18 @@ click_palette_first_match() {
   click_pointer "$row_x" "$row_y" left
 }
 
+# Title of the Settings window, in the interface language.
+settings_title=Settings
+
+# xdotool pattern of the Settings title: X11 may hold it in a non-UTF-8 property, so
+# its non-ASCII characters match anything.
+settings_title_x11() {
+  printf '^%s$' "${settings_title//[^[:ascii:]]/.+}"
+}
+
 settings_window_count() {
   if [[ "$backend" == x11 ]]; then
-    xdotool search --onlyvisible --name '^Settings$' 2>/dev/null | wc -l
+    xdotool search --onlyvisible --name "$(settings_title_x11)" 2>/dev/null | wc -l
   else
     swaymsg -t get_tree | python3 -c '
 import json, sys
@@ -1039,8 +1114,8 @@ def walk(node):
     yield node
     for child in node.get("nodes", []) + node.get("floating_nodes", []):
         yield from walk(child)
-print(sum(w.get("name") == "Settings" for w in walk(json.load(sys.stdin))))
-'
+print(sum(w.get("name") == sys.argv[1] for w in walk(json.load(sys.stdin))))
+' "$settings_title"
   fi
 }
 
@@ -1055,10 +1130,10 @@ focus_main_window() {
 focus_settings_window() {
   if [[ "$backend" == x11 ]]; then
     local settings
-    settings=$(timeout 15 xdotool search --sync --onlyvisible --name '^Settings$' | head -n1)
+    settings=$(timeout 15 xdotool search --sync --onlyvisible --name "$(settings_title_x11)" | head -n1)
     xdotool windowfocus --sync "$settings"
   else
-    swaymsg '[title="^Settings$"] focus' >/dev/null
+    swaymsg "[title=\"^${settings_title}\$\"] focus" >/dev/null
   fi
 }
 
@@ -1074,7 +1149,7 @@ wait_for_settings_closed() {
 wait_for_settings_open() {
   for _ in $(seq 1 200); do
     if [[ "$backend" == x11 ]]; then
-      if timeout 1 xdotool search --onlyvisible --name 'Settings' >/dev/null 2>&1; then
+      if timeout 1 xdotool search --onlyvisible --name "$(settings_title_x11)" >/dev/null 2>&1; then
         return 0
       fi
     elif swaymsg -t get_tree | python3 -c '
@@ -1084,31 +1159,254 @@ def walk(node):
     for child in node.get("nodes", []) + node.get("floating_nodes", []):
         yield from walk(child)
 tree = json.load(sys.stdin)
-raise SystemExit(0 if any(w.get("name") == "Settings" and w.get("focused") for w in walk(tree)) else 1)
-'; then
+raise SystemExit(0 if any(w.get("name") == sys.argv[1] and w.get("focused") for w in walk(tree)) else 1)
+' "$settings_title"; then
       return 0
     fi
     sleep 0.05
   done
-  printf 'Settings did not open and receive focus\n' >&2
+  printf 'The %s window did not open and receive focus\n' "$settings_title" >&2
+  return 1
+}
+
+# Finds the open Settings window and focuses it. Positions read from its captures are
+# offset by its origin: X11 places it anywhere, Sway floats it at the output origin.
+locate_settings_window() {
+  wait_for_settings_open
+  focus_settings_window
+  settings_x=0
+  settings_y=0
+  settings_width=1000
+  settings_height=700
+  if [[ "$backend" == x11 ]]; then
+    settings_window=$(timeout 15 xdotool search --sync --onlyvisible --name "$(settings_title_x11)" | head -n1)
+    local X Y WIDTH HEIGHT
+    eval "$(xdotool getwindowgeometry --shell "$settings_window" | grep -E '^(X|Y|WIDTH|HEIGHT)=')"
+    settings_x=$X
+    settings_y=$Y
+    settings_width=$WIDTH
+    settings_height=$HEIGHT
+  fi
+}
+
+open_settings() {
+  send_key ctrl+comma
+  locate_settings_window
+}
+
+capture_settings() {
+  if [[ "$backend" == x11 ]]; then
+    import -window "$settings_window" "$tmp/settings.png"
+  else
+    grim -g "$settings_x,$settings_y ${settings_width}x${settings_height}" "$tmp/settings.png"
+  fi
+}
+
+# Settings draws errors in red and warnings in yellow: the brightest channel of each
+# pixel keeps them as readable as the regular light text.
+ocr_settings() {
+  convert "$tmp/settings.png" -channel RGB -separate -evaluate-sequence Max -negate \
+    -resize 200% "$tmp/settings.png.ocr.png"
+  tesseract "$tmp/settings.png.ocr.png" stdout -l eng "$@" 2>/dev/null
+}
+
+settings_text() {
+  capture_settings
+  ocr_settings
+}
+
+wait_for_settings_text() {
+  local pattern=$1 description=$2
+  for _ in $(seq 1 100); do
+    settings_text | grep -Eqi -- "$pattern" && return 0
+    sleep 0.05
+  done
+  printf 'Could not read %s (/%s/) in the Settings window\n' "$description" "$pattern" >&2
+  return 1
+}
+
+wait_for_settings_text_gone() {
+  local pattern=$1 description=$2
+  for _ in $(seq 1 100); do
+    settings_text | grep -Eqi -- "$pattern" || return 0
+    sleep 0.05
+  done
+  printf '%s (/%s/) was still visible in the Settings window\n' "$description" "$pattern" >&2
+  return 1
+}
+
+# Box `left top right bottom`, in Settings window coordinates, of each line of the
+# Settings content (right of the sidebar) holding `phrase` as consecutive words, one
+# per line, top to bottom.
+settings_phrase_boxes() {
+  local phrase=$1
+  capture_settings
+  ocr_settings tsv | python3 -c '
+import sys
+
+phrase = sys.argv[1].casefold().split()
+lines = {}
+for row in sys.stdin.read().splitlines()[1:]:
+    columns = row.split("\t")
+    if len(columns) != 12 or not columns[11].strip():
+        continue
+    left, top, width, height = (int(value) // 2 for value in columns[6:10])
+    if left < 180:
+        continue
+    key = tuple(columns[2:5])
+    lines.setdefault(key, []).append((left, top, width, height, columns[11].strip().casefold()))
+boxes = []
+for words in lines.values():
+    words.sort()
+    texts = [word[4] for word in words]
+    for start in range(len(texts) - len(phrase) + 1):
+        if texts[start:start + len(phrase)] == phrase:
+            first, last = words[start], words[start + len(phrase) - 1]
+            top = min(word[1] for word in words[start:start + len(phrase)])
+            bottom = max(word[1] + word[3] for word in words[start:start + len(phrase)])
+            boxes.append((top, first[0], last[0] + last[2], bottom))
+if not boxes:
+    raise SystemExit(1)
+for top, left, right, bottom in sorted(boxes):
+    print(left, top, right, bottom)
+' "$phrase"
+}
+
+# Clicks the centre of the `which` (first or last) occurrence of `phrase` in the
+# Settings content.
+click_settings_text() {
+  local phrase=$1 which=${2:-first} boxes=
+  for _ in $(seq 1 100); do
+    boxes=$(settings_phrase_boxes "$phrase") && break
+    sleep 0.05
+  done
+  [[ -n "$boxes" ]] || {
+    printf 'Could not locate "%s" in the Settings window\n' "$phrase" >&2
+    return 1
+  }
+  local left top right bottom
+  if [[ "$which" == first ]]; then
+    read -r left top right bottom <<<"$(head -n1 <<<"$boxes")"
+  else
+    read -r left top right bottom <<<"$(tail -n1 <<<"$boxes")"
+  fi
+  click_pointer "$((settings_x + (left + right) / 2))" "$((settings_y + (top + bottom) / 2))" left
+}
+
+# Clicks the widget of the field labelled `label` in the selected section. The fields
+# are a grid: the widgets start past the widest label of the section, whose labels
+# are `labels`, separated by `|`. A label is the last occurrence of its text, below
+# the section heading.
+click_settings_field() {
+  local label=$1 labels=$2 offset=${3:-40}
+  local -a all
+  IFS='|' read -r -a all <<<"$labels"
+  local widest=0 row_top= row_bottom= candidate boxes left top right bottom
+  for candidate in "${all[@]}"; do
+    boxes=
+    for _ in $(seq 1 100); do
+      boxes=$(settings_phrase_boxes "$candidate") && break
+      sleep 0.05
+    done
+    [[ -n "$boxes" ]] || {
+      printf 'Could not locate the Settings field label "%s"\n' "$candidate" >&2
+      return 1
+    }
+    read -r left top right bottom <<<"$(tail -n1 <<<"$boxes")"
+    ((right > widest)) && widest=$right
+    if [[ "$candidate" == "$label" ]]; then
+      row_top=$top
+      row_bottom=$bottom
+    fi
+  done
+  [[ -n "$row_top" ]] || {
+    printf 'Field %s is not among the labels %s\n' "$label" "$labels" >&2
+    return 1
+  }
+  click_pointer "$((settings_x + widest + 16 + offset))" "$((settings_y + (row_top + row_bottom) / 2))" left
+}
+
+click_settings_section() {
+  local section=$1
+  local coordinates=
+  for _ in $(seq 1 200); do
+    capture_settings
+    coordinates=$(ocr_text "$tmp/settings.png" tsv | python3 -c '
+import sys
+
+section = sys.argv[1]
+for row in sys.stdin.read().splitlines()[1:]:
+    columns = row.split("\t")
+    if len(columns) == 12 and columns[11].strip().casefold() == section.casefold():
+        left, top, width, height = (int(value) // 2 for value in columns[6:10])
+        if left < 180 and float(columns[10]) > 20:
+            print(left + width // 2, top + height // 2)
+            break
+else:
+    raise SystemExit(1)
+' "$section") && break
+    sleep 0.05
+  done
+  [[ -n "$coordinates" ]] || {
+    printf 'Could not locate Settings section %s\n' "$section" >&2
+    return 1
+  }
+  read -r section_x section_y <<<"$coordinates"
+  click_pointer "$((settings_x + section_x))" "$((settings_y + section_y))" left
+  for _ in $(seq 1 200); do
+    if [[ "$backend" == x11 ]]; then
+      import -window "$settings_window" -crop 800x40+180+0 +repage "$tmp/settings-heading.png"
+    else
+      grim -g "$((settings_x + 180)),$settings_y 800x40" "$tmp/settings-heading.png"
+    fi
+    if ocr_text "$tmp/settings-heading.png" | head -n1 | grep -qi "$section"; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  printf 'Settings section heading %s was not visible after selection\n' "$section" >&2
+  return 1
+}
+
+# The terminal window applies a change of config.toml once the watcher has seen 100 ms
+# without further events (watcher::DEBOUNCE). A change with no visible effect, such as
+# a new shortcut, cannot be polled for: this bounded wait covers the debounce and the
+# reload.
+wait_for_hot_reload() {
+  sleep 1
+}
+
+config_file() {
+  printf '%s\n' "$XDG_CONFIG_HOME/graphene/config.toml"
+}
+
+wait_for_config() {
+  local pattern=$1 description=$2
+  for _ in $(seq 1 100); do
+    grep -Eq -- "$pattern" "$(config_file)" && return 0
+    sleep 0.05
+  done
+  printf 'config.toml did not get %s (/%s/):\n' "$description" "$pattern" >&2
+  cat "$(config_file)" >&2
   return 1
 }
 
 focus_wayland_window() {
   main_sway_con_id=
   for _ in $(seq 1 200); do
-    main_sway_con_id=$(swaymsg -t get_tree | python3 -c '
+    read -r main_sway_con_id main_x main_y <<<"$(swaymsg -t get_tree | python3 -c '
 import json, sys
 def walk(node):
-    if node.get("type") in ("con", "floating_con") and node.get("name") != "Settings":
-        print(node["id"])
+    if node.get("type") in ("con", "floating_con") and node.get("name") not in ("Settings", "Paramètres"):
+        rect = node["rect"]
+        print(node["id"], rect["x"], rect["y"])
         return True
     for child in node.get("nodes", []) + node.get("floating_nodes", []):
         if walk(child):
             return True
     return False
 walk(json.load(sys.stdin))
-')
+')"
     [[ -n "$main_sway_con_id" ]] && break
     sleep 0.05
   done
@@ -1117,23 +1415,125 @@ walk(json.load(sys.stdin))
     return 1
   }
   swaymsg "[con_id=$main_sway_con_id] focus" >/dev/null
-  python3 - <<'PY'
+  # A click inside the window gives it the pointer as well; a floating window is not at
+  # the output origin.
+  python3 - "$((main_x + 100))" "$((main_y + 60))" <<'PY'
+import sys
 from wayland_automation import Mouse
 
 with Mouse() as mouse:
-    mouse.click(100, 60)
+    mouse.click(int(sys.argv[1]), int(sys.argv[2]))
 PY
 }
 
-case "$backend" in
-  x11)
-    window=$(timeout 15 xdotool search --sync --onlyvisible --classname graphene | head -n1)
-    xdotool windowfocus "$window"
-    ;;
-  wayland)
-    focus_wayland_window
-    ;;
-esac
+# Background colour the active terminal reports to an OSC 11 query, `rgb:RRRR/GGGG/BBBB`:
+# the colour of the theme in use, read without comparing pixels.
+query_background() {
+  rm -f "$GRAPHENE_E2E_BACKGROUND"
+  run_shell_command 'stty -echo; printf "\033]11;?\033\\\\"; IFS= read -r -d "\\" -t 3 reply; stty echo; printf "%s\n" "$reply" | grep -o "rgb:[0-9a-f/]*" > "$GRAPHENE_E2E_BACKGROUND"'
+  cat "$GRAPHENE_E2E_BACKGROUND" 2>/dev/null || true
+}
+
+wait_for_background() {
+  local expected=$1 description=$2 actual=
+  for _ in $(seq 1 20); do
+    actual=$(query_background)
+    [[ "$actual" == "$expected" ]] && return 0
+    sleep 0.1
+  done
+  printf 'Expected the background of %s to be %s; got %q\n' "$description" "$expected" "$actual" >&2
+  return 1
+}
+
+wait_for_window_size() {
+  local width=$1 height=$2 description=$3 actual=
+  for _ in $(seq 1 100); do
+    local x y w h
+    read -r x y w h <<<"$(main_window_rect)"
+    actual="$w $h"
+    [[ "$actual" == "$width $height" ]] && return 0
+    sleep 0.05
+  done
+  printf 'Expected %s to be %sx%s; got %s\n' "$description" "$width" "$height" "$actual" >&2
+  return 1
+}
+
+# Checks the window state file Graphene writes when it closes.
+expect_window_state() {
+  local width=$1 height=$2 description=$3 file="$XDG_STATE_HOME/graphene/window.json"
+  python3 - "$file" "$width" "$height" <<'PY_STATE' || {
+import json, sys
+
+state = json.load(open(sys.argv[1]))
+expected = {"width": int(sys.argv[2]), "height": int(sys.argv[3]), "maximized": False}
+raise SystemExit(0 if state == expected else 1)
+PY_STATE
+    printf 'Expected window.json to record %s (%sx%s); got: %s\n' "$description" "$width" "$height" \
+      "$(cat "$file" 2>/dev/null)" >&2
+    return 1
+  }
+}
+
+click_word() {
+  local left top width height
+  read -r left top width height <<<"$(locate_word "$1")"
+  click_pointer "$((left + width / 2))" "$((top + height / 2))" left
+}
+
+# The update banner's × follows "Ignore this version" after a two-cell gap; the banner
+# uses the grid font, so a cell is a seventh of the word "version".
+click_update_banner_close() {
+  local left top width height
+  read -r left top width height <<<"$(locate_word version)"
+  click_pointer "$((left + width + 5 * width / 14))" "$((top + height / 2))" left
+}
+
+wait_for_opened() {
+  local expected=$1 description=$2 actual=
+  for _ in $(seq 1 100); do
+    actual=$(tail -n1 "$GRAPHENE_E2E_OPENED" 2>/dev/null || true)
+    [[ "$actual" == "$expected" ]] && return 0
+    sleep 0.05
+  done
+  printf 'Expected %s to open %s; got %q\n' "$description" "$expected" "$actual" >&2
+  return 1
+}
+
+update_state() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]))' \
+    "$XDG_STATE_HOME/graphene/update.json" "$1"
+}
+
+# Starts Graphene, waits for its first shell prompt and focuses its window. Called
+# again after the application quit, to observe what a new launch restores.
+launch_graphene() {
+  rm -f "$GRAPHENE_E2E_PROMPT_READY"
+  "$binary" >>"$tmp/graphene.log" 2>&1 &
+  app_pid=$!
+  wait_for_file "$GRAPHENE_E2E_PROMPT_READY" 'the controlled shell prompt'
+  case "$backend" in
+    x11)
+      window=$(timeout 15 xdotool search --sync --onlyvisible --classname graphene | head -n1)
+      xdotool windowfocus "$window"
+      ;;
+    wayland)
+      focus_wayland_window
+      ;;
+  esac
+}
+
+wait_for_app_exit() {
+  local description=$1 app_state=
+  for _ in $(seq 1 200); do
+    app_state=$(ps -o stat= -p "$app_pid" 2>/dev/null || true)
+    [[ -z "$app_state" || "$app_state" == Z* ]] && return 0
+    sleep 0.05
+  done
+  printf '%s did not close Graphene\n' "$description" >&2
+  return 1
+}
+
+launch_graphene
 
 case "$scenario" in
   smoke)
@@ -1365,101 +1765,12 @@ case "$scenario" in
     send_key ctrl+shift+q
     wait_for_confirmation_dialog 'Close the window?'
     send_key enter
-    for _ in $(seq 1 200); do
-      app_state=$(ps -o stat= -p "$app_pid" 2>/dev/null || true)
-      [[ -z "$app_state" || "$app_state" == Z* ]] && break
-      sleep 0.05
-    done
-    app_state=$(ps -o stat= -p "$app_pid" 2>/dev/null || true)
-    [[ -n "$app_state" && "$app_state" != Z* ]] && {
-      printf 'Window close confirmation did not close Graphene\n' >&2
-      exit 1
-    }
+    wait_for_app_exit 'Window close confirmation'
     printf '%s close dialog passed: cancel preserved shell; confirm closed the window\n' "$backend"
     ;;
   settings)
     config_before=$(sha256sum "$XDG_CONFIG_HOME/graphene/config.toml")
-    send_key ctrl+comma
-    if [[ "$backend" == x11 ]]; then
-      settings_window=$(timeout 15 xdotool search --sync --onlyvisible --name 'Settings' | head -n1)
-      xdotool windowfocus --sync "$settings_window"
-    else
-      settings_focused=false
-      for _ in $(seq 1 200); do
-        swaymsg -t get_tree | python3 -c '
-import json, sys
-def windows(node):
-    yield node
-    for child in node.get("nodes", []) + node.get("floating_nodes", []):
-        yield from windows(child)
-tree = json.load(sys.stdin)
-raise SystemExit(0 if any(w.get("name") == "Settings" and w.get("focused") for w in windows(tree)) else 1)
-' && { settings_focused=true; break; }
-        sleep 0.05
-      done
-      [[ "$settings_focused" == true ]] || {
-        printf 'Settings did not receive focus after opening\n' >&2
-        exit 1
-      }
-    fi
-    # Sidebar positions are read from a capture of the Settings window, so pointer clicks
-    # are offset by the window origin: X11 captures the window alone, while Sway places
-    # the floating Settings window at the output origin and grim captures the output.
-    settings_x=0
-    settings_y=0
-    if [[ "$backend" == x11 ]]; then
-      eval "$(xdotool getwindowgeometry --shell "$settings_window" | grep -E '^(X|Y)=')"
-      settings_x=$X
-      settings_y=$Y
-    fi
-    capture_settings() {
-      if [[ "$backend" == x11 ]]; then
-        import -window "$settings_window" "$tmp/settings.png"
-      else
-        grim "$tmp/settings.png"
-      fi
-    }
-    click_settings_section() {
-      local section=$1
-      local coordinates=
-      for _ in $(seq 1 200); do
-        capture_settings
-        coordinates=$(ocr_text "$tmp/settings.png" tsv | python3 -c '
-import sys
-
-section = sys.argv[1]
-for row in sys.stdin.read().splitlines()[1:]:
-    columns = row.split("\t")
-    if len(columns) == 12 and columns[11].strip().casefold() == section.casefold():
-        left, top, width, height = (int(value) // 2 for value in columns[6:10])
-        if left < 180 and float(columns[10]) > 20:
-            print(left + width // 2, top + height // 2)
-            break
-else:
-    raise SystemExit(1)
-' "$section") && break
-        sleep 0.05
-      done
-      [[ -n "$coordinates" ]] || {
-        printf 'Could not locate Settings section %s\n' "$section" >&2
-        return 1
-      }
-      read -r section_x section_y <<<"$coordinates"
-      click_pointer "$((settings_x + section_x))" "$((settings_y + section_y))" left
-      for _ in $(seq 1 200); do
-        if [[ "$backend" == x11 ]]; then
-          import -window "$settings_window" -crop 800x40+180+0 +repage "$tmp/settings-heading.png"
-        else
-          grim -g "$((settings_x + 180)),$settings_y 800x40" "$tmp/settings-heading.png"
-        fi
-        if ocr_text "$tmp/settings-heading.png" | head -n1 | grep -qi "$section"; then
-          return 0
-        fi
-        sleep 0.05
-      done
-      printf 'Settings section heading %s was not visible after selection\n' "$section" >&2
-      return 1
-    }
+    open_settings
     for section in Language Font Window Scrollback Cursor Selection Tabs Theme Keyboard Updates; do
       click_settings_section "$section"
     done
@@ -1711,6 +2022,326 @@ else:
     expect_copy ctrl+shift+alt+c "printf 'E2E_OUT_%s\\n' 1 2 3" 'copying the command of the next block'
     printf '%s %s integration passed: prompt editing, command blocks, navigation and copies\n' \
       "$backend" "$integration_shell"
+    ;;
+  startup)
+    # Launched with language = "fr", theme solarized-dark, tabs at the bottom, an
+    # 840x520 window and startup_mode = "remember" with nothing remembered yet.
+    settings_title=Paramètres
+    wait_for_window_size 840 520 'the window at the configured size'
+    wait_for_background rgb:0000/2b2b/3636 'the configured solarized-dark theme'
+    open_settings
+    send_key esc
+    wait_for_settings_closed
+    focus_main_window
+    send_key ctrl+shift+t
+    wait_for_line_count "$GRAPHENE_E2E_PANE_IDS" 2 'the second tab'
+    record_active_pane 2
+    read -r x y width height <<<"$(main_window_rect)"
+    # The top rows belong to the terminal of tab 2; the tab bar is at the bottom.
+    click_pointer "$((x + 100))" "$((y + 15))" left
+    record_active_pane 2
+    click_pointer "$((x + 100))" "$((y + height - 15))" left
+    record_active_pane 1
+    send_key ctrl+shift+q
+    wait_for_app_exit 'Ctrl+Shift+Q without a running program'
+    expect_window_state 840 520 'the window closed at its configured size'
+    write_config 'language = "fr"
+
+[updates]
+check = false
+
+[window]
+width = 900
+height = 560
+startup_mode = "remember"
+'
+    launch_graphene
+    wait_for_window_size 840 520 'the remembered window, not the configured size'
+    send_key ctrl+shift+q
+    wait_for_app_exit 'Ctrl+Shift+Q without a running program'
+    write_config 'language = "fr"
+
+[updates]
+check = false
+
+[window]
+width = 900
+height = 560
+startup_mode = "default"
+'
+    launch_graphene
+    wait_for_window_size 900 560 'the configured size in the default startup mode'
+    printf '%s startup options passed: size, remembered window, theme, language and tab position\n' "$backend"
+    ;;
+  config-reload)
+    size=$(measure_active_pane 1)
+    read -r rows columns <<<"$size"
+    write_config "$base_config"'
+[font]
+size = 20
+'
+    wait_for_columns_less 1 "$columns" >/dev/null
+    write_theme() {
+      local dir="$XDG_CONFIG_HOME/graphene/themes"
+      mkdir -p "$dir"
+      printf '[colors]\nbackground = %s\n' "$1" >"$dir/custom.toml.e2e-tmp"
+      mv -f "$dir/custom.toml.e2e-tmp" "$dir/custom.toml"
+    }
+    write_theme '"#102030"'
+    themed_config="$base_config"'
+[font]
+size = 20
+
+[theme]
+name = "custom"
+'
+    write_config "$themed_config"
+    wait_for_background rgb:1010/2020/3030 'the user theme selected in config.toml'
+    write_theme '"#203040"'
+    wait_for_background rgb:2020/3030/4040 'the edited user theme'
+    write_theme '"not-a-colour"'
+    wait_for_window_text 'custom\. ?toml' 'the banner of the invalid theme colour'
+    wait_for_background rgb:1414/1616/1b1b 'the invalid colour replaced by the default one'
+    write_theme '"#102030"'
+    wait_for_window_text_gone 'custom\. ?toml' 'the banner of the fixed theme'
+    wait_for_background rgb:1010/2020/3030 'the fixed user theme'
+    write_config "$themed_config"'
+[cursor]
+blinking = "often"
+'
+    wait_for_window_text 'config\. ?toml.*cursor\. ?blinking' 'the banner of an invalid value'
+    record_active_pane 1
+    write_config "$themed_config"
+    wait_for_window_text_gone 'config\. ?toml' 'the banner of the fixed value'
+    write_config "$themed_config"'
+[cursor
+'
+    wait_for_window_text 'config\. ?toml' 'the banner of a syntax error'
+    record_active_pane 1
+    write_config "$themed_config"'
+[keybindings]
+"ctrl+alt+y" = "new_tab"
+"ctrl+alt+u" = "fly"
+'
+    wait_for_window_text 'config\. ?toml.*keybindings' 'the banner of an unknown action'
+    send_key ctrl+alt+y
+    wait_for_line_count "$GRAPHENE_E2E_PANE_IDS" 2 'the shortcut added to config.toml'
+    record_active_pane 2
+    write_config "$themed_config"'
+[keybindings]
+"ctrl+alt+y" = "new_tab"
+'
+    wait_for_window_text_gone 'config\. ?toml' 'the banner of the fixed keybindings'
+    printf '%s configuration hot reload passed: font, user theme, keybindings and error banners\n' "$backend"
+    ;;
+  settings-fields)
+    set_settings_text_field() {
+      click_settings_field "$1" "$2"
+      send_key ctrl+a
+      type_text "$3"
+      send_key enter
+    }
+    pick_settings_choice() {
+      click_settings_field "$1" "$2"
+      type_text "$3"
+      send_key enter
+    }
+    send_key ctrl+shift+t
+    wait_for_line_count "$GRAPHENE_E2E_PANE_IDS" 2 'the second tab'
+    size=$(measure_active_pane 2)
+    read -r rows columns <<<"$size"
+    open_settings
+    click_settings_section Font
+    config_before=$(sha256sum "$(config_file)")
+    set_settings_text_field Size 'Family|Size' abc
+    wait_for_settings_text 'Enter a number' 'the error of a font size that is not a number'
+    set_settings_text_field Size 'Family|Size' 500
+    wait_for_settings_text 'Must be at most' 'the error of a font size above the maximum'
+    [[ $(sha256sum "$(config_file)") == "$config_before" ]] || {
+      printf 'Settings wrote an invalid font size to config.toml\n' >&2
+      exit 1
+    }
+    set_settings_text_field Size 'Family|Size' 18
+    wait_for_config '^size = 18(\.0)?$' 'the font size typed in Settings'
+    wait_for_settings_text_gone 'Must be at most' 'the font size error'
+    focus_main_window
+    size=$(wait_for_columns_less 2 "$columns")
+    read -r font_rows font_columns <<<"$size"
+    focus_settings_window
+    click_settings_section Cursor
+    click_settings_field Blinking 'Shape|Blinking' 9
+    wait_for_config '^blinking = true$' 'the cursor blinking checkbox'
+    click_settings_field Blinking 'Shape|Blinking' 9
+    wait_for_config '^blinking = false$' 'the cursor blinking checkbox cleared'
+    click_settings_section Theme
+    pick_settings_choice Theme 'Follow the system appearance|Theme' solarized-d
+    wait_for_config '^name = "solarized-dark"$' 'the theme picked in Settings'
+    focus_main_window
+    wait_for_background rgb:0000/2b2b/3636 'the theme picked in Settings'
+    focus_settings_window
+    click_settings_section Tabs
+    pick_settings_choice Position Position left
+    wait_for_config '^position = "left"$' 'the tab position picked in Settings'
+    focus_main_window
+    wait_for_columns_less 2 "$font_columns" >/dev/null
+    focus_settings_window
+    # Problems of the file, edited by hand, are shown where they apply.
+    valid_config=$(cat "$(config_file)")
+    write_config "$valid_config"$'\nbogus_key = 1\n'
+    wait_for_settings_text 'Unknown keys' 'the unknown keys of the file'
+    write_config "$(sed 's/^size = 18\(\.0\)\?$/size = "big"/' <<<"$valid_config")"$'\n'
+    click_settings_section Font
+    wait_for_settings_text 'invalid value' 'the invalid font size of the file'
+    wait_for_settings_text_gone 'Unknown keys' 'the unknown keys removed from the file'
+    write_config "$valid_config"$'\n[cursor\n'
+    wait_for_settings_text 'fix it by hand' 'the file locked by a syntax error'
+    write_config "$valid_config"$'\n'
+    wait_for_settings_text_gone 'fix it by hand' 'the file unlocked once fixed'
+    click_settings_section Language
+    pick_settings_choice Language Language fr
+    wait_for_config '^language = "fr"$' 'the language picked in Settings'
+    settings_title=Paramètres
+    locate_settings_window
+    send_key esc
+    wait_for_settings_closed
+    printf '%s settings fields passed: validation, number, toggle, choices, file problems and language\n' "$backend"
+    ;;
+  settings-keys)
+    open_settings
+    click_settings_section Keyboard
+    # The first row is New tab: its Add button is the first one.
+    click_settings_text Add first
+    wait_for_settings_text 'Press a shortcut' 'the shortcut capture hint'
+    send_key esc
+    wait_for_settings_text_gone 'Press a shortcut' 'the cancelled shortcut capture'
+    [[ $(settings_window_count) == 1 ]] || {
+      printf 'Escape during a shortcut capture closed Settings\n' >&2
+      exit 1
+    }
+    click_settings_text Add first
+    wait_for_settings_text 'Press a shortcut' 'the shortcut capture hint'
+    send_key ctrl+alt+y
+    wait_for_config '^"Ctrl\+Alt\+Y" = "new_tab"$' 'the shortcut captured in Settings'
+    wait_for_hot_reload
+    focus_main_window
+    send_key ctrl+alt+y
+    wait_for_line_count "$GRAPHENE_E2E_PANE_IDS" 2 'the shortcut added in Settings'
+    record_active_pane 2
+    size=$(measure_active_pane 2)
+    read -r tab_rows tab_columns <<<"$size"
+    focus_settings_window
+    config_before=$(sha256sum "$(config_file)")
+    click_settings_text Add first
+    wait_for_settings_text 'Press a shortcut' 'the shortcut capture hint'
+    send_key ctrl+shift+e
+    wait_for_settings_text 'Already used by' 'the conflict with Split right'
+    send_key esc
+    wait_for_settings_text_gone 'Already used by' 'the conflict dismissed with Escape'
+    click_settings_text Add first
+    wait_for_settings_text 'Press a shortcut' 'the shortcut capture hint'
+    send_key ctrl+shift+e
+    wait_for_settings_text 'Already used by' 'the conflict with Split right'
+    click_settings_text Cancel first
+    wait_for_settings_text_gone 'Already used by' 'the conflict cancelled'
+    [[ $(sha256sum "$(config_file)") == "$config_before" ]] || {
+      printf 'A dismissed shortcut conflict changed config.toml\n' >&2
+      exit 1
+    }
+    click_settings_text Add first
+    wait_for_settings_text 'Press a shortcut' 'the shortcut capture hint'
+    send_key ctrl+shift+e
+    wait_for_settings_text 'Already used by' 'the conflict with Split right'
+    click_settings_text Replace first
+    wait_for_config '^"Ctrl\+Shift\+E" = "new_tab"$' 'the replaced shortcut'
+    wait_for_hot_reload
+    focus_main_window
+    send_key ctrl+shift+e
+    wait_for_line_count "$GRAPHENE_E2E_PANE_IDS" 3 'the replaced shortcut opening a tab'
+    size=$(measure_active_pane 3)
+    read -r new_rows new_columns <<<"$size"
+    ((new_columns == tab_columns)) || {
+      printf 'Ctrl+Shift+E split the pane (%s columns) instead of opening a tab (%s columns)\n' \
+        "$new_columns" "$tab_columns" >&2
+      exit 1
+    }
+    focus_settings_window
+    click_settings_text 'Ctrl+Alt+Y' first
+    for _ in $(seq 1 100); do
+      grep -q 'Ctrl+Alt+Y' "$(config_file)" || break
+      sleep 0.05
+    done
+    ! grep -q 'Ctrl+Alt+Y' "$(config_file)" || {
+      printf 'Removing the Ctrl+Alt+Y chip did not remove it from config.toml\n' >&2
+      exit 1
+    }
+    wait_for_hot_reload
+    focus_main_window
+    send_key ctrl+alt+y
+    # Unbound, Ctrl+Alt+Y reaches bash, whose yank-nth-arg inserts text at the prompt.
+    send_key ctrl+u
+    record_active_pane 3
+    [[ $(wc -l <"$GRAPHENE_E2E_PANE_IDS") == 3 ]] || {
+      printf 'The removed shortcut still opened a tab\n' >&2
+      exit 1
+    }
+    sed '/^\[keybindings\]$/a "Ctrl+Alt+U" = "fly"' "$(config_file)" >"$tmp/keybindings.toml"
+    write_config "$(cat "$tmp/keybindings.toml")"$'\n'
+    focus_settings_window
+    wait_for_settings_text 'fly' 'the unknown action in the keyboard section'
+    # Xvfb has no window manager to raise the terminal window over Settings: the banner
+    # is read once Settings is closed.
+    send_key esc
+    wait_for_settings_closed
+    focus_main_window
+    wait_for_window_text 'config\. ?toml.*keybindings' 'the banner of an unknown action'
+    sed '/"Ctrl+Alt+U" = "fly"/d' "$(config_file)" >"$tmp/keybindings.toml"
+    write_config "$(cat "$tmp/keybindings.toml")"$'\n'
+    wait_for_window_text_gone 'config\. ?toml' 'the banner of the fixed keybindings'
+    printf '%s keyboard shortcuts passed: capture, cancel, conflict, replace, remove and file errors\n' "$backend"
+    ;;
+  update-banner)
+    release_url=https://example.invalid/graphene/releases/v99.0.0
+    wait_for_window_text 'is available' 'the update banner'
+    click_word Open
+    wait_for_opened "$release_url" 'Open release'
+    wait_for_window_text 'is available' 'the update banner kept after Open release'
+    click_update_banner_close
+    wait_for_window_text_gone 'is available' 'the update banner closed with ×'
+    send_key ctrl+shift+q
+    wait_for_app_exit 'Ctrl+Shift+Q without a running program'
+    launch_graphene
+    wait_for_window_text 'is available' 'the update banner shown again on the next launch'
+    write_config "$update_config"'
+[cursor]
+blinking = "often"
+'
+    wait_for_window_text 'config\. ?toml' 'the configuration error banner'
+    wait_for_window_text_gone 'is available' 'the update banner behind the configuration error'
+    write_config "$update_config"
+    wait_for_window_text 'is available' 'the update banner once the error is fixed'
+    write_config "$(sed 's/^language = "en"$/language = "fr"/' <<<"$update_config")"$'\n'
+    wait_for_window_text 'est disponible' 'the update banner in French'
+    write_config "$(sed 's/^check = true$/check = false/' <<<"$update_config")"$'\n'
+    wait_for_window_text_gone 'disponible|available' 'the banner with update checks turned off'
+    write_config "$update_config"
+    wait_for_window_text 'is available' 'the banner with update checks turned on'
+    click_word Ignore
+    wait_for_window_text_gone 'is available' 'the ignored release'
+    for _ in $(seq 1 100); do
+      [[ $(update_state ignored) == v99.0.0 ]] && break
+      sleep 0.05
+    done
+    [[ $(update_state ignored) == v99.0.0 ]] || {
+      printf 'Ignore this version did not record v99.0.0 in update.json\n' >&2
+      exit 1
+    }
+    send_key ctrl+shift+q
+    wait_for_app_exit 'Ctrl+Shift+Q without a running program'
+    printf '{"last_check": %s, "ignored": "v99.0.0", "latest": {"tag": "v99.1.0", "url": "https://example.invalid/graphene/releases/v99.1.0"}}\n' \
+      "$(date +%s)" >"$XDG_STATE_HOME/graphene/update.json"
+    launch_graphene
+    wait_for_window_text '99.1.0 is available' 'a release newer than the ignored one'
+    printf '%s update banner passed: open, close, ignore, error priority, language and checks toggle\n' "$backend"
     ;;
 esac
 

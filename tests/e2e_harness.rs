@@ -168,3 +168,38 @@ fn probe_rejects_a_missing_graphene_executable() {
             .contains("Graphene executable is missing or not executable")
     );
 }
+
+#[test]
+fn catalogue_leaves_no_coverage_to_a_later_issue() {
+    let catalogue = fs::read_to_string(CATALOGUE).unwrap();
+    for marker in ["pending (#", "left to #"] {
+        assert!(
+            !catalogue.contains(marker),
+            "the catalogue still defers coverage to another issue ({marker})"
+        );
+    }
+}
+
+#[test]
+fn update_banner_scenario_never_calls_github() {
+    let probe = fs::read_to_string(PROBE).unwrap();
+    let setup = probe
+        .split_once("  update-banner)\n    # The cached check")
+        .expect("the probe must seed the update-banner scenario before launching Graphene")
+        .1
+        .split_once("    ;;\n")
+        .unwrap()
+        .0;
+    assert!(
+        setup.contains("interval = \"1w\""),
+        "a long interval keeps the cached check valid"
+    );
+    assert!(
+        setup.contains("\"last_check\": %s") && setup.contains("$(date +%s)"),
+        "the cached check must be recent"
+    );
+    assert!(
+        !probe.contains("api.github.com"),
+        "the probe must not reach GitHub"
+    );
+}

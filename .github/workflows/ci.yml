@@ -77,7 +77,7 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/wayland-automation
         run: |
           mkdir -p "$GRAPHENE_E2E_ARTIFACTS"
-          for scenario in smoke tabs palette panes menu dialogs settings selection clipboard scroll font mouse blocks shell-bash shell-zsh shell-fish; do
+          for scenario in smoke tabs palette panes menu dialogs settings selection clipboard scroll font mouse blocks shell-bash shell-zsh shell-fish startup config-reload settings-fields settings-keys update-banner; do
             xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX +render -noreset" \
               tests/e2e/gui-automation-probe.sh x11 "$scenario"
             tests/e2e/gui-automation-probe.sh wayland "$scenario"
