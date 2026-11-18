@@ -5,7 +5,7 @@
 //! wants in the primary selection, and the window drains both (see
 //! [`Pane::take_redraw`] and [`Pane::take_primary`]), so a hidden pane never redraws.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -20,6 +20,7 @@ use winit::keyboard::ModifiersState;
 use crate::block_actions::{self, Direction, Part};
 use crate::chrome::command_palette::PaneContext;
 use crate::clipboard::{self, Content};
+use crate::fold_animation::FoldAnimations;
 use crate::frame;
 use crate::graphics;
 use crate::i18n::{self, Lang, Msg};
@@ -62,6 +63,8 @@ pub struct Pane {
     /// What the view looked like at the last frame, to keep it still while output
     /// arrives.
     pub anchor: Cell<Anchor>,
+    /// Fold chevrons of the last frame, animated when their fold changes.
+    pub fold_animations: RefCell<FoldAnimations>,
     /// When the fallback title was last read, `None` before the first time.
     title_checked: Option<Instant>,
     /// The pane changed what it shows since the window last asked.
@@ -99,6 +102,7 @@ impl Pane {
             selection: None,
             selected_block: None,
             anchor: Cell::default(),
+            fold_animations: RefCell::default(),
             title_checked: None,
             redraw: Cell::new(false),
             primary: None,

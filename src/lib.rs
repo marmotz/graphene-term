@@ -12,6 +12,7 @@ mod clipboard;
 mod config;
 mod config_edit;
 mod cursor_blink;
+mod fold_animation;
 mod frame;
 mod graphics;
 mod i18n;

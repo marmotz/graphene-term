@@ -885,6 +885,22 @@ impl Session {
         deadline
     }
 
+    /// Requests a redraw while a fold chevron of a shown pane is animated. Returns when
+    /// its next frame is due, `None` when no chevron is animated.
+    fn fold_animate(&mut self, now: Instant) -> Option<Instant> {
+        let shown = self.workspace.active_tab().cloned();
+        let deadline = self
+            .workspace
+            .panes_mut()
+            .filter(|(id, _)| shown.as_ref().is_some_and(|tab| tab.shows(*id)))
+            .filter_map(|(_, pane)| pane.fold_animations.borrow().deadline(now))
+            .min();
+        if deadline.is_some() {
+            self.window.request_redraw();
+        }
+        deadline
+    }
+
     /// Updates the blink phase of the active pane's cursor, and requests a redraw when
     /// it toggled. Returns when the next toggle is due, `None` while the cursor does not
     /// blink: its style does not ask for it, or the window does not have the focus.
@@ -1823,6 +1839,7 @@ impl Session {
         let active = self.workspace.active_pane_id();
         let several = layout.panes.len() > 1;
         let link = self.active_link();
+        let now = Instant::now();
         let mut frames = Vec::with_capacity(layout.panes.len());
         for &(id, _) in &layout.panes {
             let Some(pane) = self.workspace.pane(id) else {
@@ -1843,6 +1860,9 @@ impl Session {
                     pane.selected_block,
                 );
                 frame.attach_images(&graphics::lock(&pane.terminal.images));
+                pane.fold_animations
+                    .borrow_mut()
+                    .apply(&mut frame.cards, &rows, now);
                 if let Some(hovered) = link.filter(|hovered| hovered.pane == id) {
                     frame.underline_link(&rows, hovered.source, &hovered.link.range);
                 }
@@ -2225,6 +2245,7 @@ impl ApplicationHandler<UserEvent> for App {
         let deadline = self.session.as_mut().and_then(|session| {
             let deadline = earliest(session.auto_scroll(now), session.animate(now));
             let deadline = earliest(deadline, session.blink(now));
+            let deadline = earliest(deadline, session.fold_animate(now));
             session.flush_panes();
             deadline
         });
@@ -2363,7 +2384,11 @@ impl App {
                     self.update_checker.ignore(&tag);
                 }
             }
-            WindowEvent::RedrawRequested => session.redraw(),
+            WindowEvent::RedrawRequested => {
+                let t = Instant::now();
+                session.redraw();
+                log::warn!(target: "graphene::tmpframe", "frame {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+            }
             _ => {}
         }
         session.flush_panes();

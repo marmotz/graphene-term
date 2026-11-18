@@ -383,8 +383,8 @@ Design and rationale.
 - Folding shows a block's header and one summary row (`RowSource::Summary`, "N lines
   hidden") instead of its output. `Ctrl+Shift+F` toggles the fold of the target block;
   `Ctrl+Shift+Alt+F` folds every finished block when any is unfolded, otherwise unfolds
-  them all. A click on the chevron disc (`Hit::Chevron`) toggles the fold, a click on
-  the summary label unfolds. Nothing is folded automatically.
+  them all. A click on the chevron (`Hit::Chevron`: the right card padding of the
+  card's first row) toggles the fold, a click on the summary label unfolds. Nothing is folded automatically.
 - The wheel (unless an application captures it) scrolls the output of the block under
   the pointer when it shows only part of it (`view::can_scroll`), revealing the whole
   block (`view::reveal`) so its header is never cut by the view top; at the bottom end
@@ -397,19 +397,23 @@ Design and rationale.
 - A block that shows only part of its output has a scroll indicator: a thin bar in the
   dim color in the card's right padding, beside its output rows (`frame::ScrollBar`).
 - The window holds, from the left: the padding, a margin of half a cell, half a cell of
-  card padding, the grid, the card padding, then a right reserve (the padding, or the
-  chevron radius when larger), always reserved. The view rows of one block form a card
+  card padding, the grid, the right card padding (the chevron, 0.6 of a cell height
+  wide, between two card paddings), then the padding, always reserved. The view rows of one block form a card
   (`frame::Card`, by `frame::marks` from the timeline): a rounded background (the
   background blended 6 % toward the foreground, 14 % when selected) behind the grid and
   its card padding, a status stripe in the margin (green, red, yellow, or
   `DimForeground` for `Success`, `Failure`, `Running`, `Unknown`; none for the neutral
   card of the current block at its prompt), and, on a finished block with output whose
-  first row is shown, a fold chevron on the card's top-right corner: a disc in the card
-  color with a triangle (right folded, down unfolded) in the status color. A card whose
+  first row is shown, a fold chevron centered in the right card padding of its first
+  row: a stroke in the status color bent into a slight V, pointing down unfolded and up
+  folded. When the fold of a shown block changes, its chevron straightens into a line
+  then bends the other way over 220 ms (`fold_animation::FoldAnimations`, kept per pane
+  and applied to each frame's cards; `Session::fold_animate` requests redraws while one
+  runs). A card whose
   block starts above the view (or is cut by its cap) keeps its top corners above the
   view. Half a line separates two cards. The summary row of a folded block shows a dim
-  label (`i18n::Msg::LinesHidden`). `GridLayout::hit` tells a margin pixel, a chevron
-  disc, a gap between cards and a grid cell apart; a margin click selects the block (the
+  label (`i18n::Msg::LinesHidden`). `GridLayout::hit` tells a margin pixel, a chevron,
+  a gap between cards and a grid cell apart; a margin click selects the block (the
   margin below the cards counts as the last row's), a gap click does nothing.
 - Text selection spans blocks (`timeline_selection::TimelineSelection`, kept as
   `Session::selection`): two ends, each a view source, a point and a side. It is split
@@ -469,8 +473,8 @@ Design and rationale.
     - image quads: one per run of image cells showing consecutive columns of one row of
       one placement; the image is scaled to fit its placement's box of cells, aspect
       ratio kept, centered, and each quad shows the part falling in its cells;
-    - `over` rects: underline, strikeout, the fold chevrons (disc and triangle, SDF
-      shapes of the rect pipeline), non-block cursor;
+    - `over` rects: underline, strikeout, the fold chevrons (a bent stroke, SDF shape
+      of the rect pipeline), non-block cursor;
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
       anchored at the cell origin, plus the fold summaries (one character per cell);
     - overlay rects and glyph instances at pixel positions (banner).
@@ -681,7 +685,7 @@ is reset with the glyph cache, and the frame is resolved again.
 - Left and middle clicks over the live rows are ignored when the application enabled
   mouse reporting, unless `Shift` is held (`selection::mouse_reserved`).
 - A left press in the margin (`layout::hit` gives `Hit::Margin`, the status stripe) or
-  on a chevron disc (`Hit::Chevron`) is checked first and is always Graphene's, even
+  on a chevron (`Hit::Chevron`) is checked first and is always Graphene's, even
   under mouse reporting: the chevron toggles the fold of a card that has one, the
   margin selects the block of its row (see Command blocks), elsewhere it is ignored. A left press on a fold summary unfolds its block instead of selecting.
 

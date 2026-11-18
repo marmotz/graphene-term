@@ -11,6 +11,7 @@ struct Instance {
     @location(2) color: vec4<f32>,
     @location(3) radius: f32,
     @location(4) shape: u32,
+    @location(5) bend: f32,
 };
 
 struct VertexOutput {
@@ -21,11 +22,11 @@ struct VertexOutput {
     @location(2) @interpolate(flat) size: vec2<f32>,
     @location(3) @interpolate(flat) radius: f32,
     @location(4) @interpolate(flat) shape: u32,
+    @location(5) @interpolate(flat) bend: f32,
 };
 
 const SHAPE_RECT: u32 = 0u;
-const SHAPE_TRIANGLE_RIGHT: u32 = 1u;
-const SHAPE_TRIANGLE_DOWN: u32 = 2u;
+const SHAPE_CHEVRON: u32 = 1u;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32, instance: Instance) -> VertexOutput {
@@ -43,6 +44,7 @@ fn vs_main(@builtin(vertex_index) index: u32, instance: Instance) -> VertexOutpu
     out.size = instance.size;
     out.radius = instance.radius;
     out.shape = instance.shape;
+    out.bend = instance.bend;
     return out;
 }
 
@@ -54,26 +56,26 @@ fn sd_rounded_box(p: vec2<f32>, half: vec2<f32>, radius: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// Signed distance to the triangle p0 p1 p2: negative inside.
-fn sd_triangle(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
-    let e0 = p1 - p0;
-    let e1 = p2 - p1;
-    let e2 = p0 - p2;
-    let v0 = p - p0;
-    let v1 = p - p1;
-    let v2 = p - p2;
-    let pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
-    let pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
-    let pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
-    let s = sign(e0.x * e2.y - e0.y * e2.x);
-    let d = min(
-        min(
-            vec2<f32>(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
-            vec2<f32>(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x)),
-        ),
-        vec2<f32>(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)),
-    );
-    return -sqrt(d.x) * sign(d.y);
+// Distance to the segment a b.
+fn sd_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+// Signed distance to a chevron stroke of half width `half_stroke` filling a box of size
+// `size`: two segments from the box's left and right edges to its horizontal center,
+// the middle `bend` times the bend room below the ends (above when negative).
+fn sd_chevron(p: vec2<f32>, size: vec2<f32>, half_stroke: f32, bend: f32) -> f32 {
+    let room = max(size.y - 2.0 * half_stroke, 0.0);
+    let center = size.y * 0.5;
+    let ends = center - bend * room * 0.5;
+    let middle = center + bend * room * 0.5;
+    let left = vec2<f32>(half_stroke, ends);
+    let mid = vec2<f32>(size.x * 0.5, middle);
+    let right = vec2<f32>(size.x - half_stroke, ends);
+    return min(sd_segment(p, left, mid), sd_segment(p, mid, right)) - half_stroke;
 }
 
 @fragment
@@ -84,10 +86,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     let size = in.size;
     var d: f32;
-    if in.shape == SHAPE_TRIANGLE_RIGHT {
-        d = sd_triangle(in.local, vec2<f32>(0.0, 0.0), vec2<f32>(size.x, size.y * 0.5), vec2<f32>(0.0, size.y));
-    } else if in.shape == SHAPE_TRIANGLE_DOWN {
-        d = sd_triangle(in.local, vec2<f32>(0.0, 0.0), vec2<f32>(size.x, 0.0), vec2<f32>(size.x * 0.5, size.y));
+    if in.shape == SHAPE_CHEVRON {
+        d = sd_chevron(in.local, size, in.radius, in.bend);
     } else {
         let half = size * 0.5;
         d = sd_rounded_box(in.local - half, half, in.radius);

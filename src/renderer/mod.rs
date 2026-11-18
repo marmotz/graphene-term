@@ -1039,6 +1039,7 @@ mod tests {
                 clipped_top: false,
                 status: None,
                 chevron: None,
+                fold_progress: 1.0,
                 selected: false,
                 scroll: None,
             }],

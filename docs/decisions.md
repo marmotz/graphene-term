@@ -113,10 +113,10 @@ shell or a printed file never matter. The prompt is never wrapped or parsed.
 ## Card space always reserved
 
 The command blocks are drawn as cards: a margin for the status stripe and half a cell
-of card padding left of the grid, the card padding and room for the fold chevron
-(on the card's top-right corner) right of it. This space is reserved from the start,
-even when the shell sends no signal, so the first block never changes the column count:
-no reflow mid-session. The cost is about one and a half columns fewer for every user.
+of card padding left of the grid, and a wider card padding holding the fold chevron
+right of it. This space is reserved from the start, even when the shell sends no signal,
+so the first block never changes the column count: no reflow mid-session. The cost is
+about three columns fewer for every user.
 
 ## Cards replace the gutter marks
 
@@ -124,8 +124,16 @@ The first rendering put a one-cell gutter bar, a 1 px separator over the grid an
 chevron (`▸` / `▾`) on the command row. With a real prompt (powerlevel10k) it read as
 console content, and the chevron glyph came from a fallback font, a few pixels wide,
 half under the status bar. Each block is now a card: a rounded background derived from
-the palette, a status stripe in the margin and a chevron drawn as SDF shapes (disc and
-triangle) in the rect pipeline, so it is crisp at any size and needs no font.
+the palette, a status stripe in the margin and a chevron drawn as an SDF shape in the
+rect pipeline, so it is crisp at any size and needs no font.
+
+## Chevron inside the card
+
+The chevron was first a disc with a triangle straddling the card's top-right corner,
+half outside the card. It is now a slight V stroke inside the card, in a right card
+padding widened for it, animated through a straight line when the fold changes. The
+wider padding costs about one and a half columns, in exchange for a chevron that belongs to
+its card and never covers the command row.
 
 ## Gaps between cards keep the PTY size
 

@@ -44,8 +44,8 @@ impl Rect {
 /// Placement of the terminal grid inside a pane rectangle of the window.
 ///
 /// The rectangle holds, from the left: the padding, the margin (status stripe of the
-/// command block cards), the card padding, the grid, the card padding again, then the
-/// right reserve (room for the fold chevron on the cards' top-right corner). All of it
+/// command block cards), the card padding, the grid, the right card padding (wider: it
+/// holds the fold chevron on the card's first row), then the right padding. All of it
 /// is always reserved, so a block never reflows the grid.
 ///
 /// Vertically, rows are placed by the view in half-lines ([`ViewRow::top`]): a gap of
@@ -63,12 +63,13 @@ pub struct GridLayout {
     pub origin: (f32, f32),
     /// Width of the margin left of the cards, in physical pixels: half a cell.
     pub margin: f32,
-    /// Horizontal padding inside a card on each side of the grid: half a cell.
+    /// Horizontal padding inside a card left of the grid: half a cell.
     pub card_pad: f32,
-    /// Radius of the fold chevron disc, centered on a card's top-right corner.
-    pub chevron_radius: f32,
-    /// Room right of the cards: the padding, or the chevron radius when larger.
-    pub right_reserve: f32,
+    /// Width of the fold chevron, drawn in the right card padding of a card's first row.
+    pub chevron_width: f32,
+    /// Horizontal padding inside a card right of the grid: the chevron with the card
+    /// padding on each side.
+    pub card_pad_right: f32,
     pub columns: usize,
     pub lines: usize,
 }
@@ -78,7 +79,8 @@ pub struct GridLayout {
 pub enum Hit {
     /// Left of the grid (margin, left card padding or left padding).
     Margin { row: usize },
-    /// Inside the fold chevron disc of the card starting on view row `row`.
+    /// In the right card padding of view row `row`, the first row of its card: where its
+    /// fold chevron is drawn.
     Chevron { row: usize },
     /// In the gap between two cards.
     Gap,
@@ -112,9 +114,9 @@ impl GridLayout {
     pub fn new(rect: Rect, cell: CellSize, padding: f32) -> Self {
         let margin = (cell.width / 2.0).round();
         let card_pad = (cell.width / 2.0).round();
-        let chevron_radius = (cell.height * 0.45).round();
-        let right_reserve = padding.max(chevron_radius);
-        let horizontal = rect.width - padding - margin - 2.0 * card_pad - right_reserve;
+        let chevron_width = (cell.height * 0.6).round();
+        let card_pad_right = 2.0 * card_pad + chevron_width;
+        let horizontal = rect.width - 2.0 * padding - margin - card_pad - card_pad_right;
         let vertical = rect.height - 2.0 * padding;
         let columns = ((horizontal.max(0.0) / cell.width).floor() as usize).max(MIN_COLUMNS);
         let lines = ((vertical.max(0.0) / cell.height).floor() as usize).max(MIN_SCREEN_LINES);
@@ -133,8 +135,8 @@ impl GridLayout {
             ),
             margin,
             card_pad,
-            chevron_radius,
-            right_reserve,
+            chevron_width,
+            card_pad_right,
             columns,
             lines,
         }
@@ -165,6 +167,11 @@ impl GridLayout {
     /// Right pixel edge of the grid.
     pub fn grid_right(&self) -> f32 {
         self.grid_left() + self.columns as f32 * self.cell.width
+    }
+
+    /// Right pixel edge of the cards: the grid's right edge plus the right card padding.
+    pub fn card_right(&self) -> f32 {
+        self.grid_right() + self.card_pad_right
     }
 
     /// Left pixel edge of grid column `column`.
@@ -210,17 +217,19 @@ impl GridLayout {
     /// grid, or a grid cell. Above the first row, the row is clamped to it; right of the
     /// grid, the column is clamped to the last one.
     pub fn hit(&self, x: f32, y: f32, view: &[ViewRow]) -> Hit {
-        let cx = self.grid_right() + self.card_pad;
-        let chevron = (0..view.len()).find(|&row| {
-            let cy = self.row_top(view[row].top);
-            Self::starts_card(view, row)
-                && (x - cx).powi(2) + (y - cy).powi(2) <= self.chevron_radius.powi(2)
-        });
-        if let Some(row) = chevron {
-            return Hit::Chevron { row };
-        }
-        if let RowAt::Gap(_) = self.row_at(y, view) {
+        let at = self.row_at(y, view);
+        if let RowAt::Gap(_) = at {
             return Hit::Gap;
+        }
+        if let RowAt::Row(row) = at
+            && let Some(shown) = view.get(row)
+        {
+            let top = self.row_top(shown.top);
+            let chevron = (self.grid_right()..self.card_right()).contains(&x)
+                && (top..top + self.cell.height).contains(&y);
+            if chevron && Self::starts_card(view, row) {
+                return Hit::Chevron { row };
+            }
         }
         match view.last() {
             Some(last) if y < self.row_top(last.top + 2) => {}
@@ -304,10 +313,10 @@ mod tests {
         height: 20.0,
     };
 
-    /// 80 columns and 20 lines with 8 px of padding: 5 px of margin, 5 px of card
-    /// padding on each side and 8 px of right reserve (the padding, larger than the
-    /// 7 px chevron radius).
-    const WIDTH: u32 = 832;
+    /// 80 columns and 20 lines with 8 px of padding on each side: 5 px of margin, 5 px
+    /// of card padding left of the grid and 22 px right of it (a 12 px chevron between
+    /// two card paddings).
+    const WIDTH: u32 = 848;
     const HEIGHT: u32 = 416;
 
     fn layout() -> GridLayout {
@@ -346,30 +355,30 @@ mod tests {
         let l = layout();
         assert_eq!((l.columns, l.lines), (80, 20));
         assert_eq!(
-            (l.margin, l.card_pad, l.chevron_radius, l.right_reserve),
-            (5.0, 5.0, 9.0, 9.0)
+            (l.margin, l.card_pad, l.chevron_width, l.card_pad_right),
+            (5.0, 5.0, 12.0, 22.0)
         );
     }
 
     #[test]
-    fn margin_card_padding_and_right_reserve_are_always_reserved() {
+    fn margin_and_card_paddings_are_always_reserved() {
         // One pixel less loses a column.
         assert_eq!(
             GridLayout::new(Rect::from_size(WIDTH - 1, HEIGHT), CELL, 8.0).columns,
             79
         );
-        // Without padding, the chevron radius is reserved on the right: 9 + 5 + 10.
-        let l = GridLayout::new(Rect::from_size(824, HEIGHT), CELL, 0.0);
-        assert_eq!((l.right_reserve, l.columns), (9.0, 80));
+        // Without padding, the card paddings are still reserved: 5 + 5 + 800 + 22.
+        let l = GridLayout::new(Rect::from_size(832, HEIGHT), CELL, 0.0);
+        assert_eq!((l.card_right(), l.columns), (832.0, 80));
         assert_eq!(
-            GridLayout::new(Rect::from_size(823, HEIGHT), CELL, 0.0).columns,
+            GridLayout::new(Rect::from_size(831, HEIGHT), CELL, 0.0).columns,
             79
         );
     }
 
     #[test]
     fn partial_cells_are_dropped() {
-        let l = GridLayout::new(Rect::from_size(840, 435), CELL, 8.0);
+        let l = GridLayout::new(Rect::from_size(856, 435), CELL, 8.0);
         assert_eq!((l.columns, l.lines), (80, 20));
     }
 
@@ -387,9 +396,9 @@ mod tests {
         assert_eq!((l.content_left(), l.content_top()), (12.0, 17.0));
         assert_eq!(l.grid_left(), 22.0);
         assert_eq!(l.row_top(0), 17.0);
-        // The leftover right of the right reserve and below the last row matches the
+        // The leftover right of the right padding and below the last row matches the
         // leftover past the padding on the other side.
-        let right = (WIDTH + 8) as f32 - l.grid_right() - l.card_pad - l.right_reserve;
+        let right = (WIDTH + 8) as f32 - l.card_right() - l.padding;
         assert_eq!(right, l.origin.0 - l.padding);
         let bottom = (HEIGHT + 18) as f32 - l.row_top(2 * l.lines as u32);
         assert_eq!(bottom, l.content_top());
@@ -563,31 +572,32 @@ mod tests {
     }
 
     #[test]
-    fn hit_on_the_chevron_disc() {
+    fn hit_on_the_chevron_padding() {
         let l = layout();
         let view = gapped();
-        // Card corners: x = 818 + 5 = 823; block 0 at y = 18 (first view row), block 1
-        // at y = 68. Radius 9.
-        assert_eq!(l.hit(823.0, 68.0, &view), Hit::Chevron { row: 2 });
-        assert_eq!(l.hit(818.0, 64.0, &view), Hit::Chevron { row: 2 });
-        assert_eq!(l.hit(829.0, 70.0, &view), Hit::Chevron { row: 2 });
-        assert_eq!(l.hit(823.0, 18.0, &view), Hit::Chevron { row: 0 });
-        // Outside the disc.
+        // Right card padding: x 818..840. Block 0's first row at y 18..38, block 1's at
+        // y 68..88.
+        assert_eq!(l.hit(829.0, 78.0, &view), Hit::Chevron { row: 2 });
+        assert_eq!(l.hit(818.0, 68.0, &view), Hit::Chevron { row: 2 });
+        assert_eq!(l.hit(839.9, 87.9, &view), Hit::Chevron { row: 2 });
+        assert_eq!(l.hit(829.0, 28.0, &view), Hit::Chevron { row: 0 });
+        // Right of the card, on the grid, or in the gap above the card.
         assert!(matches!(
-            l.hit(833.0, 68.0, &view),
+            l.hit(841.0, 78.0, &view),
             Hit::Cell { row: 2, .. }
         ));
         assert!(matches!(
-            l.hit(815.0, 76.0, &view),
+            l.hit(815.0, 78.0, &view),
             Hit::Cell { row: 2, .. }
         ));
-        // No chevron on rows outside blocks, nor inside a card.
+        assert_eq!(l.hit(829.0, 64.0, &view), Hit::Gap);
+        // No chevron on rows outside blocks, nor on a card's other rows.
         assert!(matches!(
-            l.hit(823.0, 8.0, &plain(20)),
+            l.hit(829.0, 18.0, &plain(20)),
             Hit::Cell { row: 0, .. }
         ));
         assert!(matches!(
-            l.hit(823.0, 38.0, &view),
+            l.hit(829.0, 48.0, &view),
             Hit::Cell { row: 1, .. }
         ));
     }
@@ -682,10 +692,10 @@ mod tests {
     fn contains_excludes_the_right_and_bottom_edges() {
         let l = offset();
         assert!(l.contains(300.0, 200.0));
-        assert!(l.contains(1131.9, 615.9));
+        assert!(l.contains(1147.9, 615.9));
         assert!(!l.contains(299.9, 300.0));
         assert!(!l.contains(400.0, 199.9));
-        assert!(!l.contains(1132.0, 300.0));
+        assert!(!l.contains(1148.0, 300.0));
         assert!(!l.contains(400.0, 616.0));
     }
 
