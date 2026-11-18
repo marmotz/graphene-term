@@ -3,6 +3,7 @@
 //! The workspace is generic over the pane type so its bookkeeping (which tab holds
 //! which pane, which is active, zoom) is tested without spawning shells.
 
+pub mod drop;
 pub mod tree;
 
 use std::collections::HashMap;
@@ -324,10 +325,155 @@ impl<P> Workspace<P> {
         let Some(index) = self.tab_of(id) else {
             return false;
         };
-        let tab = &mut self.tabs[index];
-        if tab.is_single() {
+        if self.tabs[index].is_single() {
             return false;
         }
+        self.take_out(index, id);
+        self.tabs.insert(index + 1, Tab::new(id));
+        self.active = index + 1;
+        true
+    }
+
+    /// Moves the pane `id` next to the pane `target`, on its `side` (see
+    /// [`Node::insert`]). The moved pane becomes the active pane of the target tab,
+    /// which is shown; both tabs are unzoomed, and a source tab left empty is closed.
+    /// `false`, with nothing changed, when either pane is unknown, they are the same
+    /// pane, or the target is too small to split.
+    pub fn move_pane(
+        &mut self,
+        id: PaneId,
+        target: PaneId,
+        side: Direction,
+        geometry: Geometry,
+    ) -> bool {
+        let Some((source, mut index, tree)) = self.moved_tree(id, target, side, geometry) else {
+            return false;
+        };
+        self.tabs[index] = Tab {
+            tree,
+            active: id,
+            zoomed: false,
+        };
+        if source != index {
+            if self.tabs[source].is_single() {
+                self.remove_tab(source);
+                if source < index {
+                    index -= 1;
+                }
+            } else {
+                self.take_out(source, id);
+            }
+        }
+        self.active = index;
+        true
+    }
+
+    /// Whether [`Self::move_pane`] would accept moving `id` next to `target` on `side`,
+    /// without changing anything.
+    pub fn can_move_pane(
+        &self,
+        id: PaneId,
+        target: PaneId,
+        side: Direction,
+        geometry: Geometry,
+    ) -> bool {
+        self.moved_tree(id, target, side, geometry).is_some()
+    }
+
+    /// The tree of the tab of `target` once `id` is inserted next to it on `side` (and
+    /// removed from it, when both share that tab), with the indices of the source and
+    /// target tabs. `None` when the move is refused.
+    fn moved_tree(
+        &self,
+        id: PaneId,
+        target: PaneId,
+        side: Direction,
+        geometry: Geometry,
+    ) -> Option<(usize, usize, Node)> {
+        if id == target {
+            return None;
+        }
+        let (source, index) = (self.tab_of(id)?, self.tab_of(target)?);
+        let mut tree = self.tabs[index].tree.clone();
+        if source == index && !tree.remove(id) {
+            return None;
+        }
+        tree.insert(target, side, id, geometry)
+            .then_some((source, index, tree))
+    }
+
+    /// Exchanges the places of the panes `a` (the one moved) and `b`, in one tab or
+    /// across two. `a` gets the focus in the tab of `b`, which is shown; in the tab of
+    /// `a`, `b` stays active when `a` was. `false` when either pane is unknown or they
+    /// are the same pane.
+    pub fn swap_panes(&mut self, a: PaneId, b: PaneId) -> bool {
+        if a == b {
+            return false;
+        }
+        let (Some(source), Some(index)) = (self.tab_of(a), self.tab_of(b)) else {
+            return false;
+        };
+        if source == index {
+            let tab = &mut self.tabs[index];
+            tab.tree.swap(a, b);
+        } else {
+            let tab = &mut self.tabs[source];
+            tab.tree.replace(a, b);
+            if tab.active == a {
+                tab.active = b;
+            }
+            self.tabs[index].tree.replace(b, a);
+        }
+        self.tabs[index].active = a;
+        self.active = index;
+        true
+    }
+
+    /// Moves the pane `id` into tab `index`, next to its active pane on its longer
+    /// side: `Right` when wider than tall, else `Down` (see [`Self::move_pane`]).
+    /// `false`, with nothing changed, for the pane's own tab, an unknown pane or tab,
+    /// or a refused move.
+    pub fn move_pane_to_tab(&mut self, id: PaneId, index: usize, geometry: Geometry) -> bool {
+        let Some(tab) = self.tabs.get(index) else {
+            return false;
+        };
+        if self.tab_of(id).is_none_or(|source| source == index) {
+            return false;
+        }
+        let target = tab.active;
+        let Some(rect) = tab.tree.layout(geometry).rect_of(target) else {
+            return false;
+        };
+        let side = if rect.width > rect.height {
+            Direction::Right
+        } else {
+            Direction::Down
+        };
+        self.move_pane(id, target, side, geometry)
+    }
+
+    /// Moves the pane `id` into a new last tab, and shows it. For the only pane of its
+    /// tab, the tab itself moves last. `false` when the pane is unknown.
+    pub fn move_pane_to_new_tab(&mut self, id: PaneId) -> bool {
+        let Some(source) = self.tab_of(id) else {
+            return false;
+        };
+        let last = self.tabs.len() - 1;
+        if self.tabs[source].is_single() {
+            self.move_tab(source, last);
+            self.active = last;
+            return true;
+        }
+        self.take_out(source, id);
+        self.tabs.push(Tab::new(id));
+        self.active = self.tabs.len() - 1;
+        true
+    }
+
+    /// Removes the pane `id` from the tree of tab `index`, which holds other panes,
+    /// and unzooms it; the focus moves to the previous pane when `id` had it.
+    fn take_out(&mut self, index: usize, id: PaneId) {
+        let tab = &mut self.tabs[index];
         tab.zoomed = false;
         if tab.active == id
             && let Some(previous) = tab.tree.previous(id)
@@ -335,9 +481,6 @@ impl<P> Workspace<P> {
             tab.active = previous;
         }
         tab.tree.remove(id);
-        self.tabs.insert(index + 1, Tab::new(id));
-        self.active = index + 1;
-        true
     }
 
     /// Gives the keyboard focus to the pane `id`, showing its tab. A focus change
@@ -553,6 +696,7 @@ mod tests {
                 height: 20.0,
             },
             divider: DIVIDER_THICKNESS,
+            title_bar: 0.0,
         }
     }
 
@@ -834,6 +978,204 @@ mod tests {
         assert_eq!(ws.tabs()[0].active, panes[0]);
         assert_eq!(ws.tabs()[1].tree, Node::Leaf(panes[1]));
         assert_eq!(ws.active_index(), 1);
+    }
+
+    fn ids(tab: &Tab) -> Vec<u64> {
+        tab.tree.leaves().into_iter().map(|id| id.0).collect()
+    }
+
+    fn snapshot(ws: &Workspace<Fake>) -> (Vec<Tab>, usize) {
+        (ws.tabs().to_vec(), ws.active_index())
+    }
+
+    #[test]
+    fn move_pane_within_a_tab_reorders_and_focuses_it() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_zoom();
+        assert!(ws.move_pane(PaneId(2), PaneId(0), Direction::Left, geometry()));
+        let tab = &ws.tabs()[0];
+        assert_eq!(ids(tab), vec![2, 0, 1]);
+        assert_eq!(tab.active, PaneId(2));
+        assert!(!tab.zoomed);
+    }
+
+    #[test]
+    fn move_pane_across_tabs_shows_the_target_tab() {
+        let mut ws = workspace(&[2, 2]);
+        ws.select(1);
+        ws.toggle_zoom();
+        ws.select(0);
+        ws.toggle_zoom();
+        assert!(ws.move_pane(PaneId(1), PaneId(2), Direction::Down, geometry()));
+        assert_eq!(ws.active_index(), 1);
+        let (source, target) = (&ws.tabs()[0], &ws.tabs()[1]);
+        assert_eq!(ids(source), vec![0]);
+        assert_eq!(source.active, PaneId(0));
+        assert!(!source.zoomed);
+        assert_eq!(ids(target), vec![2, 1, 3]);
+        assert_eq!(target.active, PaneId(1));
+        assert!(!target.zoomed);
+    }
+
+    #[test]
+    fn move_of_the_last_pane_of_a_tab_closes_it() {
+        // Tabs: [0, 1], [2], [3]; the last tab is shown.
+        let mut ws = workspace(&[2, 1, 1]);
+        ws.select(2);
+        assert!(ws.move_pane(PaneId(2), PaneId(3), Direction::Right, geometry()));
+        assert_eq!(ws.tabs().len(), 2);
+        assert_eq!(ws.active_index(), 1);
+        assert_eq!(ids(&ws.tabs()[1]), vec![3, 2]);
+        assert_eq!(ws.active_pane_id(), Some(PaneId(2)));
+    }
+
+    #[test]
+    fn move_of_the_last_pane_to_an_earlier_tab_keeps_its_index() {
+        let mut ws = workspace(&[1, 1, 1]);
+        assert!(ws.move_pane(PaneId(2), PaneId(0), Direction::Up, geometry()));
+        assert_eq!(ws.tabs().len(), 2);
+        assert_eq!(ws.active_index(), 0);
+        assert_eq!(ids(&ws.tabs()[0]), vec![2, 0]);
+        assert_eq!(ids(&ws.tabs()[1]), vec![1]);
+    }
+
+    #[test]
+    fn refused_moves_change_nothing() {
+        let mut ws = workspace(&[2, 1]);
+        let before = snapshot(&ws);
+        let too_small = Geometry {
+            area: Rect::from_size(150, 600),
+            ..geometry()
+        };
+        assert!(!ws.move_pane(PaneId(1), PaneId(2), Direction::Left, too_small));
+        assert!(!ws.move_pane(PaneId(0), PaneId(1), Direction::Left, too_small));
+        assert!(!ws.move_pane(PaneId(1), PaneId(1), Direction::Left, geometry()));
+        assert!(!ws.move_pane(PaneId(9), PaneId(1), Direction::Left, geometry()));
+        assert!(!ws.move_pane(PaneId(1), PaneId(9), Direction::Left, geometry()));
+        assert_eq!(snapshot(&ws), before);
+    }
+
+    #[test]
+    fn can_move_pane_matches_move_pane_without_changing_anything() {
+        let ws = workspace(&[2, 1]);
+        let before = snapshot(&ws);
+        let too_small = Geometry {
+            area: Rect::from_size(150, 600),
+            ..geometry()
+        };
+        assert!(ws.can_move_pane(PaneId(1), PaneId(0), Direction::Left, geometry()));
+        assert!(ws.can_move_pane(PaneId(1), PaneId(2), Direction::Down, geometry()));
+        assert!(!ws.can_move_pane(PaneId(1), PaneId(2), Direction::Left, too_small));
+        assert!(!ws.can_move_pane(PaneId(1), PaneId(1), Direction::Left, geometry()));
+        assert!(!ws.can_move_pane(PaneId(9), PaneId(1), Direction::Left, geometry()));
+        assert_eq!(snapshot(&ws), before);
+    }
+
+    #[test]
+    fn swap_within_a_tab_focuses_the_moved_pane() {
+        let mut ws = workspace(&[3]);
+        assert!(ws.swap_panes(PaneId(0), PaneId(2)));
+        let tab = &ws.tabs()[0];
+        assert_eq!(ids(tab), vec![2, 1, 0]);
+        assert_eq!(tab.active, PaneId(0));
+    }
+
+    #[test]
+    fn swap_across_tabs_fixes_both_active_panes() {
+        // Tab 0 active pane is 1, tab 1 holds 2 and 3, 3 active.
+        let mut ws = workspace(&[2, 2]);
+        assert!(ws.swap_panes(PaneId(1), PaneId(2)));
+        assert_eq!(ws.active_index(), 1);
+        assert_eq!(ids(&ws.tabs()[0]), vec![0, 2]);
+        assert_eq!(ws.tabs()[0].active, PaneId(2));
+        assert_eq!(ids(&ws.tabs()[1]), vec![1, 3]);
+        assert_eq!(ws.tabs()[1].active, PaneId(1));
+    }
+
+    #[test]
+    fn swap_keeps_the_source_focus_on_another_pane() {
+        let mut ws = workspace(&[2, 1]);
+        assert!(ws.swap_panes(PaneId(0), PaneId(2)));
+        assert_eq!(ids(&ws.tabs()[0]), vec![2, 1]);
+        assert_eq!(ws.tabs()[0].active, PaneId(1));
+        assert_eq!(ws.tabs()[1].active, PaneId(0));
+    }
+
+    #[test]
+    fn refused_swaps_change_nothing() {
+        let mut ws = workspace(&[2, 1]);
+        let before = snapshot(&ws);
+        assert!(!ws.swap_panes(PaneId(1), PaneId(1)));
+        assert!(!ws.swap_panes(PaneId(1), PaneId(9)));
+        assert!(!ws.swap_panes(PaneId(9), PaneId(1)));
+        assert_eq!(snapshot(&ws), before);
+    }
+
+    #[test]
+    fn move_to_tab_splits_its_active_pane_on_the_longer_side() {
+        // 800x600: a single pane is wider than tall.
+        let mut ws = workspace(&[2, 1]);
+        assert!(ws.move_pane_to_tab(PaneId(0), 1, geometry()));
+        let tab = &ws.tabs()[1];
+        assert!(matches!(
+            tab.tree,
+            Node::Split {
+                axis: Axis::Horizontal,
+                ..
+            }
+        ));
+        assert_eq!(ids(tab), vec![2, 0]);
+        assert_eq!(ws.active_index(), 1);
+
+        // The target tab now has two 400-wide panes, taller than wide.
+        assert!(ws.move_pane_to_tab(PaneId(1), 1, geometry()));
+        assert_eq!(ws.tabs().len(), 1);
+        let tab = &ws.tabs()[0];
+        assert_eq!(ids(tab), vec![2, 0, 1]);
+        match &tab.tree {
+            Node::Split { second, .. } => assert!(matches!(
+                **second,
+                Node::Split {
+                    axis: Axis::Vertical,
+                    ..
+                }
+            )),
+            Node::Leaf(_) => panic!("split expected"),
+        }
+    }
+
+    #[test]
+    fn move_to_its_own_or_a_missing_tab_is_refused() {
+        let mut ws = workspace(&[2, 1]);
+        let before = snapshot(&ws);
+        assert!(!ws.move_pane_to_tab(PaneId(0), 0, geometry()));
+        assert!(!ws.move_pane_to_tab(PaneId(0), 5, geometry()));
+        assert!(!ws.move_pane_to_tab(PaneId(9), 1, geometry()));
+        assert_eq!(snapshot(&ws), before);
+    }
+
+    #[test]
+    fn move_to_new_tab_opens_a_last_tab() {
+        let mut ws = workspace(&[2, 1, 1]);
+        ws.toggle_zoom();
+        assert!(ws.move_pane_to_new_tab(PaneId(1)));
+        assert_eq!(ws.tabs().len(), 4);
+        assert_eq!(ws.active_index(), 3);
+        assert_eq!(ids(&ws.tabs()[3]), vec![1]);
+        assert_eq!(ids(&ws.tabs()[0]), vec![0]);
+        assert_eq!(ws.tabs()[0].active, PaneId(0));
+        assert!(!ws.tabs()[0].zoomed);
+    }
+
+    #[test]
+    fn move_of_a_single_pane_to_new_tab_moves_its_tab_last() {
+        let mut ws = workspace(&[1, 1, 1]);
+        assert!(ws.move_pane_to_new_tab(PaneId(0)));
+        assert_eq!(ws.tabs().len(), 3);
+        assert_eq!(ws.active_index(), 2);
+        let order: Vec<_> = ws.tabs().iter().map(ids).collect();
+        assert_eq!(order, vec![vec![1], vec![2], vec![0]]);
+        assert!(!ws.move_pane_to_new_tab(PaneId(9)));
     }
 
     #[test]

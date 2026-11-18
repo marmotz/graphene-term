@@ -15,26 +15,36 @@ use crate::graphics::placeholder::{self, PLACEHOLDER};
 /// Maximum delay between two clicks of the same series.
 const MULTI_CLICK_DELAY: Duration = Duration::from_millis(400);
 
-/// Counts consecutive clicks on the same cell (single, double, triple click).
-#[derive(Debug, Default)]
-pub struct ClickTracker {
-    last: Option<(Point, Instant)>,
+/// Counts consecutive clicks on the same spot (single, double, triple click). The spot
+/// is a grid cell by default; the pane bars count clicks per pane.
+#[derive(Debug)]
+pub struct ClickTracker<K = Point> {
+    last: Option<(K, Instant)>,
     count: u8,
 }
 
-impl ClickTracker {
-    /// Registers a click on `point` at `now` and returns its rank in the series: 1, 2 or 3.
-    /// A click on another cell, after the delay, or after a triple click starts over at 1.
-    pub fn click(&mut self, point: Point, now: Instant) -> u8 {
-        let continues = self.last.is_some_and(|(last_point, last_time)| {
-            last_point == point && now.saturating_duration_since(last_time) <= MULTI_CLICK_DELAY
+impl<K> Default for ClickTracker<K> {
+    fn default() -> Self {
+        Self {
+            last: None,
+            count: 0,
+        }
+    }
+}
+
+impl<K: PartialEq + Copy> ClickTracker<K> {
+    /// Registers a click on `spot` at `now` and returns its rank in the series: 1, 2 or 3.
+    /// A click on another spot, after the delay, or after a triple click starts over at 1.
+    pub fn click(&mut self, spot: K, now: Instant) -> u8 {
+        let continues = self.last.is_some_and(|(last_spot, last_time)| {
+            last_spot == spot && now.saturating_duration_since(last_time) <= MULTI_CLICK_DELAY
         });
         self.count = if continues && self.count < 3 {
             self.count + 1
         } else {
             1
         };
-        self.last = Some((point, now));
+        self.last = Some((spot, now));
         self.count
     }
 
@@ -314,6 +324,16 @@ mod tests {
         tracker.click(point(0, 0), t0);
         assert_eq!(tracker.click(point(0, 1), t0), 1);
         assert_eq!(tracker.click(point(1, 1), t0), 1);
+    }
+
+    #[test]
+    fn counts_clicks_on_any_spot_kind() {
+        let mut tracker: ClickTracker<u64> = ClickTracker::default();
+        let t0 = Instant::now();
+        assert_eq!(tracker.count(), 0);
+        assert_eq!(tracker.click(7, t0), 1);
+        assert_eq!(tracker.click(7, t0 + Duration::from_millis(300)), 2);
+        assert_eq!(tracker.click(8, t0 + Duration::from_millis(350)), 1);
     }
 
     #[test]

@@ -34,7 +34,8 @@ impl UiMetrics {
         (self.line_height + 2.0 * VERTICAL_PADDING * self.scale).round()
     }
 
-    fn padding(self) -> f32 {
+    /// Space before a title and around a close button, in pixels.
+    pub fn padding(self) -> f32 {
         HORIZONTAL_PADDING * self.scale
     }
 }
@@ -79,6 +80,8 @@ pub struct TabSlot {
     /// Square close button, at the right end of the tab.
     pub close: Rect,
     pub active: bool,
+    /// Whether the mouse is over the close button.
+    pub close_hovered: bool,
 }
 
 /// The bar on its edge of the window, in pixels.
@@ -89,6 +92,8 @@ pub struct TabBarLayout {
     pub tabs: Vec<TabSlot>,
     /// `+` button after the last tab.
     pub new_tab: Rect,
+    /// Whether the mouse is over the `+` button.
+    pub new_tab_hovered: bool,
     /// Width of every tab.
     pub tab_width: f32,
     /// Height of every tab.
@@ -147,6 +152,7 @@ impl TabBarLayout {
             rect,
             tabs: Vec::with_capacity(titles.len()),
             new_tab: rect,
+            new_tab_hovered: false,
             tab_width,
             tab_height,
             vertical,
@@ -225,6 +231,7 @@ impl TabBarLayout {
             title_width: (close.x - padding / 2.0 - title_x).max(0.0),
             close,
             active,
+            close_hovered: false,
         }
     }
 
