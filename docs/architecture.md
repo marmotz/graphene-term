@@ -89,7 +89,7 @@ src/
     command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
     pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing, press routing (pure)
-    scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
+    scene.rs       interface layer: pane title bars, tab bar, dividers, pane borders, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
     tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
   update/
