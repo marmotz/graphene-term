@@ -1,14 +1,19 @@
 use std::fs;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// A fresh folder per call. The tests run in parallel in one process, and the clock of
+/// some systems (macOS) has only microseconds: the counter keeps two folders apart.
 fn config_dir() -> std::path::PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!(
-        "graphene-prune-command-{}-{unique}",
-        std::process::id()
+        "graphene-prune-command-{}-{unique}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir_all(&dir).unwrap();
     dir
