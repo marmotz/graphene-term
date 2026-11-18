@@ -350,6 +350,26 @@ mod tests {
     const NONE: ModifiersState = ModifiersState::empty();
 
     #[test]
+    fn e2e_catalogue_lists_every_palette_action() {
+        let catalogue = include_str!("../tests/e2e/scenario-catalog.md");
+        let listed: Vec<&str> = catalogue
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `"))
+            .filter_map(|rest| rest.split_once('`').map(|(id, _)| id))
+            .collect();
+        let missing: Vec<String> = Action::ALL
+            .into_iter()
+            .chain([Action::CommandPalette])
+            .map(Action::id)
+            .filter(|id| !listed.contains(&id.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "tests/e2e/scenario-catalog.md has no coverage row for {missing:?}"
+        );
+    }
+
+    #[test]
     fn action_ids_are_unique_snake_case() {
         let mut ids: Vec<String> = Action::ALL
             .into_iter()

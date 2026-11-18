@@ -63,23 +63,25 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             grim imagemagick libgl1-mesa-dri libx11-6 libxkbcommon-x11-0 \
             libxcursor1 libxi6 libxinerama1 libxrandr2 mesa-vulkan-drivers \
-            python3-pip sway wtype xdotool xvfb
+            python3-pip sway tesseract-ocr wtype xdotool xvfb
           python3 -m pip install --no-deps --target "$RUNNER_TEMP/wayland-automation" \
             wayland-automation==0.3.1
 
       - name: Build Graphene
         run: cargo build --locked
 
-      - name: Run X11 and Wayland smoke tests
+      - name: Run GUI scenarios on X11 and Wayland
         env:
           GRAPHENE_BIN: ${{ github.workspace }}/target/debug/graphene
           GRAPHENE_E2E_ARTIFACTS: ${{ runner.temp }}/graphene-e2e-artifacts
           PYTHONPATH: ${{ runner.temp }}/wayland-automation
         run: |
           mkdir -p "$GRAPHENE_E2E_ARTIFACTS"
-          xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX +render -noreset" \
-            tests/e2e/gui-automation-probe.sh x11
-          tests/e2e/gui-automation-probe.sh wayland
+          for scenario in smoke tabs palette panes menu dialogs settings; do
+            xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX +render -noreset" \
+              tests/e2e/gui-automation-probe.sh x11 "$scenario"
+            tests/e2e/gui-automation-probe.sh wayland "$scenario"
+          done
 
       - uses: actions/upload-artifact@v7
         if: failure()
