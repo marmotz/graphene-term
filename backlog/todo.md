@@ -1,15 +1,15 @@
-<!-- backlog-sync 2026-11-15T17:08Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-18T20:00Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
-## End-to-end tests ·  [overview](features/e2e-tests/overview.md)
+## Rearrange panes with the mouse  ·  [overview](features/pane-mouse-rearrange/overview.md)
 
-_tâches créées — voir [technical.md](features/e2e-tests/technical.md)_ — 0/5 tasks done
+_tâches créées — voir [technical.md](features/pane-mouse-rearrange/technical.md)_ — 0/5 tasks done
 
-| Done | Issue                                                       | Title                                                                 | Blocked by |
-|------|-------------------------------------------------------------|-----------------------------------------------------------------------|------------|
-| [ ]  | [#112](https://github.com/marmotz/graphene-term/issues/112) | [E2E] Évaluer un outil d’automatisation graphique sur X11 et Wayland  | —          |
-| [ ]  | [#113](https://github.com/marmotz/graphene-term/issues/113) | [E2E] Créer le harness et activer le premier contrôle CI bloquant     | #112       |
-| [ ]  | [#114](https://github.com/marmotz/graphene-term/issues/114) | [E2E] Couvrir la navigation, la palette et le chrome de l’application | #113       |
-| [ ]  | [#115](https://github.com/marmotz/graphene-term/issues/115) | [E2E] Couvrir les interactions du terminal et les intégrations shell  | #113       |
-| [ ]  | [#116](https://github.com/marmotz/graphene-term/issues/116) | [E2E] Couvrir les réglages, la configuration et les états de bannière | #113, #114 |
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [ ]  | [#133](https://github.com/marmotz/graphene-term/issues/133) | [Panes] Barre de titre des panes : mise en page et dessin | — |
+| [ ]  | [#134](https://github.com/marmotz/graphene-term/issues/134) | [Panes] Opérations de déplacement et d'échange de panes dans le workspace | — |
+| [ ]  | [#135](https://github.com/marmotz/graphene-term/issues/135) | [Panes] Cibles de dépôt d'un pane glissé | — |
+| [ ]  | [#136](https://github.com/marmotz/graphene-term/issues/136) | [Panes] Interactions de la barre de titre : focus, fermeture, zoom, menu | #133 |
+| [ ]  | [#137](https://github.com/marmotz/graphene-term/issues/137) | [Panes] Glisser-déposer d'un pane : geste, surbrillance, onglets, annulation | #136, #134, #135 |
