@@ -382,9 +382,9 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
 }
 
 /// The chrome over the panes of `layout`: the title bar of every pane (see
-/// [`pane_bar`]), then, while it shows several panes, its dividers, in the pane border
-/// color, a discreet border inside every other pane, in the translucent inactive tab
-/// text color, and the border of the `active` pane, inside its rectangle, in the accent
+/// [`pane_bar`]), then, while it shows several panes, its dividers and a discreet
+/// border inside every other pane, both in the translucent inactive tab text color so
+/// that a divider and the borders beside it read as one line, and the border of the `active` pane, inside its rectangle, in the accent
 /// color (the one highlighting command palette matches).
 pub fn panes(
     layout: &Layout,
@@ -400,11 +400,10 @@ pub fn panes(
     if layout.panes.len() < 2 {
         return;
     }
-    let divider = gpu_color(colors.pane_border, srgb_target);
-    ui.rects
-        .extend(layout.dividers.iter().map(|d| rect(d.rect, divider)));
     let [r, g, b, _] = gpu_color(colors.tab_inactive_text, srgb_target);
     let inactive = [r, g, b, INACTIVE_BORDER_OPACITY];
+    ui.rects
+        .extend(layout.dividers.iter().map(|d| rect(d.rect, inactive)));
     for &(id, pane) in &layout.panes {
         if Some(id) != active {
             ui.rects.extend(border(pane, INACTIVE_BORDER, inactive));
@@ -566,14 +565,14 @@ mod tests {
     #[test]
     fn several_panes_draw_the_dividers_the_other_borders_then_the_active_border() {
         let rects = pane_rects(&two_columns(), Some(PaneId(2)), &[], &colors(), false);
-        let border = gpu_color(BORDER, false);
         let [r, g, b, _] = gpu_color(MUTED, false);
         let discreet = [r, g, b, INACTIVE_BORDER_OPACITY];
         let accent = gpu_color(ACCENT, false);
         assert_eq!(
             drawn(&rects),
             vec![
-                ([100.0, 0.0], [1.0, 100.0], border),
+                // The divider, in the same color as the borders beside it.
+                ([100.0, 0.0], [1.0, 100.0], discreet),
                 // Inside the other pane, 1 px thick, in the translucent inactive text.
                 ([0.0, 0.0], [100.0, 1.0], discreet),
                 ([0.0, 99.0], [100.0, 1.0], discreet),
@@ -606,8 +605,8 @@ mod tests {
     #[test]
     fn colors_follow_the_target_encoding() {
         let rects = pane_rects(&two_columns(), Some(PaneId(1)), &[], &colors(), true);
-        assert_eq!(rects[0].color, gpu_color(BORDER, true));
         let [r, g, b, _] = gpu_color(MUTED, true);
+        assert_eq!(rects[0].color, [r, g, b, INACTIVE_BORDER_OPACITY]);
         assert_eq!(rects[1].color, [r, g, b, INACTIVE_BORDER_OPACITY]);
         assert_eq!(rects[5].color, gpu_color(ACCENT, true));
     }
@@ -706,7 +705,8 @@ mod tests {
             &tab_colors(),
             false,
         );
-        assert_eq!(ui.rects[0].color, gpu_color(BORDER, false));
+        let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
+        assert_eq!(ui.rects[0].color, [r, g, b, INACTIVE_BORDER_OPACITY]);
         assert_eq!(ui.rects[1 + 4 + 4].color, gpu_color(BAR, false));
         assert!(ui.overlay_rects.is_empty() && ui.overlay_texts.is_empty());
     }
@@ -803,7 +803,8 @@ mod tests {
         assert_eq!(rects[0].color, inactive);
         assert_eq!(rects[1].position, [101.0, 0.0]);
         assert_eq!(rects[1].color, color(ACCENT));
-        assert_eq!(rects[2].color, color(BORDER));
+        let [r, g, b, _] = color(INACTIVE_TEXT);
+        assert_eq!(rects[2].color, [r, g, b, INACTIVE_BORDER_OPACITY]);
         assert!(rects[3..7].iter().all(|r| r.position[0] < 100.0));
         assert!(rects[7..].iter().all(|r| r.color == color(ACCENT)));
     }
