@@ -37,7 +37,8 @@ src/
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
   process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
   workspace/
-    mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback (pure)
+    mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback, pane moves (pure)
+    drop.rs        drop targets of a dragged pane: edge or center of a pane, tab, new tab, highlight (pure)
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
   config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
@@ -87,7 +88,8 @@ src/
   chrome/
     command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
-    scene.rs       interface layer: tab bar, dividers, active pane border, dialog or palette overlay (pure)
+    pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing, press routing (pure)
+    scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
     tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
   update/
@@ -481,13 +483,36 @@ Design and rationale.
 3. `Session::redraw` captures one frame per pane shown by the active tab. When the tab
    shows several panes, the inactive ones go through `Frame::dimmed(INACTIVE_PANE_DIM)`
    (every color mixed 30 % toward the background). `chrome::scene::build` gives the
-   interface layer (`UiLayer`: rects, then text items): the dividers (`ui.pane_border`)
-   and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
+   interface layer (`UiLayer`: rects, then text items): the title bar of every pane
+   (`chrome::pane_bar::PaneBarLayout`, one interface text line high like a horizontal
+   tab, titled by `Workspace::pane_title`; filled with `ui.palette_match` for the active
+   pane, with `INACTIVE_PANE_BAR` of it mixed into `ui.tab_bar_background` otherwise),
+   then the dividers (`ui.pane_border`) and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
    the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
    there are several tabs, on the edge of `tabs.position` (`TabBarPosition`): side by
    side along the top or bottom edge, stacked in a bar `TAB_MAX_WIDTH` wide (at most a
    third of the window) on the left or right. The panes area is the window minus the
-   bar (`TabBarPosition::content_area`); each grid is centred in its pane. The open dialog
+   bar (`TabBarPosition::content_area`); each grid is centred in its pane under its
+   title bar (`pane_bar::split`), and `Geometry::title_bar` adds the bar to the minimum
+   pane height. A press goes to the first of: overlay, banner, tab bar, divider, pane
+   bar, pane content; a press on a pane bar (`pane_bar::hit_at`, routed by
+   `pane_bar::press_action`) is never reported to the application: `×` closes the pane,
+   a right click opens the pane menu, a click on the title focuses the pane and a double
+   click (a `ClickTracker<PaneId>`) toggles the zoom. A left press on the title also arms
+   a `Drag::Pane` gesture, started once the pointer moves `pane_bar::PANE_DRAG_THRESHOLD`
+   (4 logical pixels) away: the tab is unzoomed (`was_zoomed` remembered), the tab bar is
+   shown even for a single tab (`Session::tab_bar_shown`) and the panes laid out again,
+   the pointer is `Grabbing`. Each move looks the target up with
+   `workspace::drop::target` (a move `Workspace::can_move_pane` refuses is no target, nor
+   the pane's own tab), and `chrome::scene::drop_highlight` draws its
+   `workspace::drop::highlight` as one `ui.palette_match` rect at `DROP_HIGHLIGHT`
+   opacity, after the tab bar and before the overlay. Staying over another tab for
+   `drop::TAB_HOVER_DELAY` shows it (`Session::pane_drag_tick`, a deadline of
+   `about_to_wait`), the drag going on. The release runs `move_pane`, `swap_panes`,
+   `move_pane_to_tab` or `move_pane_to_new_tab`; without target, a refused move,
+   `Escape`, the window losing the focus or any pane closing cancels it: the pane gets
+   the focus back in its tab, zoomed again when it was. While started, the drag takes
+   every key (only `Escape` acts) and ignores the other buttons. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
    the window height) goes to the overlay rects and texts of the layer. The link

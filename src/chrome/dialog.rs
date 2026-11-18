@@ -336,6 +336,7 @@ mod tests {
                 height: 20.0,
             },
             divider: 1.0,
+            title_bar: 0.0,
         };
         workspace
             .split(Axis::Horizontal, geometry, |_| Some(()))

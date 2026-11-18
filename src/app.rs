@@ -14,7 +14,7 @@ use winit::dpi::LogicalSize;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::appearance::{self, Appearance};
@@ -28,6 +28,7 @@ use crate::chrome::context_menu::{
     self, BlockState, Command as MenuCommand, ContextMenu, MenuContext, MenuHit, MenuLayout,
 };
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
+use crate::chrome::pane_bar::{self, PaneBarAction, PaneBarHit, PaneBarLayout};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
@@ -51,7 +52,7 @@ use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
 use crate::renderer::{Glyphs, Gpu, PaneFrame, Renderer, UiFont};
-use crate::selection;
+use crate::selection::{self, ClickTracker};
 use crate::settings::{self, LoadErrors, SettingsWindow};
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
@@ -59,6 +60,7 @@ use crate::update::checker::Checker;
 use crate::view::RowSource;
 use crate::watcher;
 use crate::window_state::{self, WindowState};
+use crate::workspace::drop::{self, DropTarget};
 use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
 use crate::workspace::{self, DIVIDER_THICKNESS, RESIZE_STEP_CELLS, TabBarPosition, Workspace};
 
@@ -83,6 +85,21 @@ enum Drag {
     /// Tab `index` of the bar being moved, grabbed `grab_offset` pixels right of its
     /// left edge.
     Tab { index: usize, grab_offset: f32 },
+    /// A pane grabbed by its title bar: pending until the pointer moves past
+    /// [`pane_bar::PANE_DRAG_THRESHOLD`], then dragged onto a drop target.
+    Pane {
+        pane: PaneId,
+        /// Where the title was pressed.
+        press: PhysicalPosition<f64>,
+        started: bool,
+        /// The tab was zoomed when the drag started: restored on cancel.
+        was_zoomed: bool,
+        /// Tab of the bar under the pointer and since when, for the switch after
+        /// [`drop::TAB_HOVER_DELAY`].
+        tab_hover: Option<(usize, Instant)>,
+        /// Where the pane would land if released now.
+        target: Option<DropTarget>,
+    },
 }
 
 /// Grid cell under the mouse: its pane, the grid shown there and the point in it.
@@ -145,11 +162,16 @@ struct Session {
     hovered_link: Option<HoveredLink>,
     /// Left press on a link, until its release.
     link_press: Option<LinkPress>,
+    /// Clicks on the pane bars, per pane: a double click on a title toggles the zoom.
+    pane_bar_clicks: ClickTracker<PaneId>,
     /// Whether the link tooltip stays hidden: set by the wheel, cleared when the mouse
     /// moves.
     tooltip_hidden: bool,
     /// Pointer shape last applied to the window; `None` before the first update.
     pointer: Option<winit::window::CursorIcon>,
+    /// Close button of a tab or a pane bar, or `+` button, under the mouse: drawn
+    /// hovered.
+    hovered_button: Option<chrome::ChromeButton>,
     /// Title last applied to the window.
     window_title: String,
     /// Configuration error banner; `None` once dismissed or without error.
@@ -229,9 +251,20 @@ impl Session {
         }
     }
 
+    /// Whether a pane is being dragged, past its threshold.
+    fn pane_dragging(&self) -> bool {
+        matches!(self.drag, Some(Drag::Pane { started: true, .. }))
+    }
+
+    /// Whether the tab bar is shown: with several tabs, or while a pane is dragged so
+    /// it can be dropped into a new tab.
+    fn tab_bar_shown(&self) -> bool {
+        tab_bar::shown(self.workspace.tabs().len()) || self.pane_dragging()
+    }
+
     /// Size of the tab bar across its edge, 0 while it is hidden.
     fn tab_bar_thickness(&self) -> f32 {
-        if tab_bar::shown(self.workspace.tabs().len()) {
+        if self.tab_bar_shown() {
             tab_bar::thickness(
                 self.tab_position,
                 self.window.inner_size().width as f32,
@@ -245,7 +278,7 @@ impl Session {
     /// The tab bar, `None` while it is hidden.
     fn tab_bar(&self) -> Option<TabBarLayout> {
         let count = self.workspace.tabs().len();
-        if !tab_bar::shown(count) {
+        if !self.tab_bar_shown() {
             return None;
         }
         let titles: Vec<String> = (0..count)
@@ -272,7 +305,24 @@ impl Session {
                 .content_area(self.chrome_area(), self.tab_bar_thickness()),
             cell: self.renderer.cell_size(),
             divider: DIVIDER_THICKNESS,
+            title_bar: pane_bar::height(self.ui_metrics(UiFont::Chrome)),
         }
+    }
+
+    /// Title bars of the panes of `layout`, the `active` one highlighted.
+    fn pane_bars(&self, layout: &Layout, active: Option<PaneId>) -> Vec<PaneBarLayout> {
+        let metrics = self.ui_metrics(UiFont::Chrome);
+        layout
+            .panes
+            .iter()
+            .map(|&(id, rect)| {
+                let title = self
+                    .workspace
+                    .pane_title(id)
+                    .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
+                PaneBarLayout::new(id, rect, title, Some(id) == active, metrics)
+            })
+            .collect()
     }
 
     /// Layout of the shown tab.
@@ -286,10 +336,21 @@ impl Session {
         (self.mouse_position.x as f32, self.mouse_position.y as f32)
     }
 
-    /// The pane of the shown tab under the mouse.
+    /// The pane of the shown tab whose content is under the mouse: `None` over its
+    /// title bar, which is never the application's.
     fn pane_under_mouse(&self) -> Option<PaneId> {
         let (x, y) = self.mouse_pixel();
-        self.shown_layout().pane_at(x, y)
+        let layout = self.shown_layout();
+        if self.pane_bar_at(&layout, x, y).is_some() {
+            return None;
+        }
+        layout.pane_at(x, y)
+    }
+
+    /// The pane bar of `layout` under the pixel `(x, y)`: its pane and what the pixel
+    /// is over.
+    fn pane_bar_at(&self, layout: &Layout, x: f32, y: f32) -> Option<(PaneId, PaneBarHit)> {
+        pane_bar::hit_at(&layout.panes, x, y, self.ui_metrics(UiFont::Chrome))
     }
 
     /// Gives the keyboard focus to the pane `id`.
@@ -795,15 +856,17 @@ impl Session {
     }
 
     /// Lays out every tab, hidden ones included, so each shell keeps a correct size;
-    /// only panes whose cell count changed resize their shell. The hidden panes of a
-    /// zoomed tab keep their last size.
+    /// only panes whose cell count changed resize their shell. Each grid fills the pane
+    /// under its title bar. The hidden panes of a zoomed tab keep their last size.
     fn relayout(&mut self) {
         let geometry = self.geometry();
+        let metrics = self.ui_metrics(UiFont::Chrome);
         let padding = self.padding * self.window.scale_factor() as f32;
         for index in 0..self.workspace.tabs().len() {
             for (id, rect) in self.workspace.layout(index, geometry).panes {
+                let (_, content) = pane_bar::split(rect, metrics);
                 if let Some(pane) = self.workspace.pane_mut(id) {
-                    pane.resize(GridLayout::new(rect, geometry.cell, padding));
+                    pane.resize(GridLayout::new(content, geometry.cell, padding));
                 }
             }
         }
@@ -958,8 +1021,23 @@ impl Session {
 
     /// Hand over a fold chevron or an active link, arrow while the application captures
     /// the mouse under the pointer, I-beam otherwise; the window is only updated when the shape changes.
-    /// Over a divider, or while dragging one, the resize arrows of its axis.
+    /// Over a divider, or while dragging one, the resize arrows of its axis. Arrow over
+    /// a pane bar, hand over a close button of a tab or a pane bar or over the `+`
+    /// button, which is then drawn hovered.
     fn update_pointer(&mut self) {
+        let button = self.button_under_mouse();
+        if button != self.hovered_button {
+            self.hovered_button = button;
+            self.window.request_redraw();
+        }
+        if button.is_some() {
+            self.set_pointer(winit::window::CursorIcon::Pointer);
+            return;
+        }
+        if self.pane_dragging() {
+            self.set_pointer(winit::window::CursorIcon::Grabbing);
+            return;
+        }
         let (x, y) = self.mouse_pixel();
         if self.overlay.is_some()
             || matches!(self.drag, Some(Drag::Tab { .. }))
@@ -975,6 +1053,8 @@ impl Session {
         };
         let icon = if let Some(axis) = divider {
             mouse::divider_icon(axis)
+        } else if self.pane_bar_at(&layout, x, y).is_some() {
+            winit::window::CursorIcon::Default
         } else {
             let id = layout
                 .pane_at(x, y)
@@ -995,6 +1075,18 @@ impl Session {
             mouse::pointer_icon(captured, over_chevron || over_link)
         };
         self.set_pointer(icon);
+    }
+
+    /// The close button of a tab or a pane bar, or the `+` button, under the mouse; none
+    /// while an overlay is open or a gesture is in progress.
+    fn button_under_mouse(&self) -> Option<chrome::ChromeButton> {
+        if self.overlay.is_some() || self.drag.is_some() {
+            return None;
+        }
+        let (x, y) = self.mouse_pixel();
+        let layout = self.shown_layout();
+        let metrics = self.ui_metrics(UiFont::Chrome);
+        chrome::button_at(self.tab_bar().as_ref(), &layout.panes, x, y, metrics)
     }
 
     /// Looks the link under the mouse up again when the grid cell under it changed, or
@@ -1066,6 +1158,9 @@ impl Session {
             self.window.request_redraw();
         }
         self.update_pointer();
+        if self.hovered_button.take().is_some() {
+            self.window.request_redraw();
+        }
     }
 
     /// End of a left press on a link: opens it when the click calls for it (see
@@ -1169,7 +1264,7 @@ impl Session {
     }
 
     /// A press goes to the first of: the overlay, the banner, the tab bar, a divider, a
-    /// pane. While an overlay is open, it takes every press.
+    /// pane bar, a pane. While an overlay is open, it takes every press.
     fn mouse_press(
         &mut self,
         button: mouse::Button,
@@ -1178,6 +1273,10 @@ impl Session {
     ) {
         if self.overlay.is_some() {
             self.overlay_press(button, default_font_size, event_loop);
+            return;
+        }
+        // The other buttons do nothing while a pane is dragged.
+        if self.pane_dragging() {
             return;
         }
         if button == mouse::Button::Left && self.banner_press() {
@@ -1201,6 +1300,10 @@ impl Session {
                 axis: divider.axis,
             });
             self.update_pointer();
+            return;
+        }
+        if let Some((pane, hit)) = self.pane_bar_at(&layout, x, y) {
+            self.pane_bar_press(button, pane, hit, event_loop);
             return;
         }
         // A press in an inactive pane makes it active, then acts as in the active one.
@@ -1299,6 +1402,45 @@ impl Session {
         }
     }
 
+    /// A press of `button` on `hit` in the bar of `pane`: never reported to the
+    /// application (see [`pane_bar::press_action`]).
+    fn pane_bar_press(
+        &mut self,
+        button: mouse::Button,
+        pane: PaneId,
+        hit: PaneBarHit,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let clicks = if (button, hit) == (mouse::Button::Left, PaneBarHit::Title) {
+            self.pane_bar_clicks.click(pane, Instant::now())
+        } else {
+            0
+        };
+        match pane_bar::press_action(button, hit, clicks) {
+            Some(PaneBarAction::Close) => self.request_close(Target::Pane(pane), event_loop),
+            Some(PaneBarAction::Menu) => self.open_pane_menu(pane, Hit::Blank),
+            Some(PaneBarAction::Focus { zoom }) => {
+                if self.workspace.active_pane_id() != Some(pane) {
+                    self.focus_pane(pane);
+                }
+                if zoom && self.workspace.toggle_zoom() {
+                    self.relayout();
+                    self.update_pointer();
+                }
+                // The pane is dragged once the pointer moves past the threshold.
+                self.drag = Some(Drag::Pane {
+                    pane,
+                    press: self.mouse_position,
+                    started: false,
+                    was_zoomed: false,
+                    tab_hover: None,
+                    target: None,
+                });
+            }
+            None => {}
+        }
+    }
+
     /// Ends the gesture of `button`, then opens the link it was pressed on when the
     /// press and release make a click on it.
     fn mouse_release(&mut self, button: mouse::Button) {
@@ -1315,6 +1457,10 @@ impl Session {
     }
 
     fn release_gesture(&mut self, button: mouse::Button) {
+        if button == mouse::Button::Left && matches!(self.drag, Some(Drag::Pane { .. })) {
+            self.drop_pane();
+            return;
+        }
         if button == mouse::Button::Left && matches!(self.drag, Some(Drag::Divider { .. })) {
             self.drag = None;
             self.update_pointer();
@@ -1365,6 +1511,10 @@ impl Session {
         }
         self.update_hover(false);
         self.update_pointer();
+        if matches!(self.drag, Some(Drag::Pane { .. })) {
+            self.pane_drag_moved();
+            return;
+        }
         if matches!(self.drag, Some(Drag::Tab { .. })) {
             self.window.request_redraw();
             return;
@@ -1411,6 +1561,163 @@ impl Session {
     /// once per `AUTO_SCROLL_INTERVAL`, scrolls the timeline and moves the selection end
     /// onto the edge row. Returns when the next step is due, `None` when auto-scroll is
     /// idle.
+    /// Follows the pointer with the grabbed pane: starts the drag past the threshold,
+    /// then looks the drop target up.
+    fn pane_drag_moved(&mut self) {
+        let Some(Drag::Pane { press, started, .. }) = self.drag else {
+            return;
+        };
+        if !started {
+            let scale = self.window.scale_factor() as f32;
+            let press = (press.x as f32, press.y as f32);
+            if !pane_bar::drag_started(press, self.mouse_pixel(), scale) {
+                return;
+            }
+            self.start_pane_drag();
+        }
+        self.update_pane_drop(Instant::now());
+        self.window.request_redraw();
+    }
+
+    /// Starts dragging the grabbed pane: its tab is unzoomed, and the tab bar shown
+    /// even for a single tab, the panes being laid out again.
+    fn start_pane_drag(&mut self) {
+        let zoomed = self.workspace.active_tab().is_some_and(|tab| tab.zoomed);
+        if zoomed {
+            self.workspace.toggle_zoom();
+        }
+        if let Some(Drag::Pane {
+            started,
+            was_zoomed,
+            ..
+        }) = &mut self.drag
+        {
+            *started = true;
+            *was_zoomed = zoomed;
+        }
+        self.relayout();
+        self.update_pointer();
+    }
+
+    /// Looks up the drop target under the pointer, and the tab it hovers, at `now`.
+    fn update_pane_drop(&mut self, now: Instant) {
+        let Some(Drag::Pane {
+            pane,
+            started: true,
+            ..
+        }) = self.drag
+        else {
+            return;
+        };
+        let (x, y) = self.mouse_pixel();
+        let layout = self.shown_layout();
+        let bar = self.tab_bar();
+        let geometry = self.geometry();
+        let found = drop::target(&layout, bar.as_ref(), pane, x, y, |target, side| {
+            self.workspace.can_move_pane(pane, target, side, geometry)
+        });
+        let over = match found {
+            Some(DropTarget::Tab(index)) => Some(index),
+            _ => None,
+        };
+        // Dropping a pane on its own tab changes nothing: no target there.
+        let own_tab = self.workspace.tab_of(pane);
+        let found = found
+            .filter(|found| !matches!(found, DropTarget::Tab(index) if Some(*index) == own_tab));
+        let shown = self.workspace.active_index();
+        if let Some(Drag::Pane {
+            target, tab_hover, ..
+        }) = &mut self.drag
+        {
+            *target = found;
+            *tab_hover = drop::tab_hover(*tab_hover, over, shown, now);
+        }
+    }
+
+    /// Shows the tab the dragged pane hovers once it has hovered it long enough, the
+    /// drag going on. Returns when that is due, `None` without hovered tab.
+    fn pane_drag_tick(&mut self, now: Instant) -> Option<Instant> {
+        let Some(Drag::Pane { tab_hover, .. }) = self.drag else {
+            return None;
+        };
+        let deadline = drop::tab_hover_deadline(tab_hover)?;
+        if now < deadline {
+            return Some(deadline);
+        }
+        let (index, _) = tab_hover?;
+        if let Some(Drag::Pane { tab_hover, .. }) = &mut self.drag {
+            *tab_hover = None;
+        }
+        self.change_tab(|workspace| workspace.select(index));
+        self.update_pane_drop(now);
+        self.window.request_redraw();
+        None
+    }
+
+    /// Ends a pane drag on release: the pane is moved onto its target; without target
+    /// or when the move is refused, it is put back as on cancel. A press released
+    /// before the threshold was a click: nothing happens.
+    fn drop_pane(&mut self) {
+        let geometry = self.geometry();
+        let Some(Drag::Pane {
+            pane,
+            started,
+            was_zoomed,
+            target,
+            ..
+        }) = self.drag.take()
+        else {
+            return;
+        };
+        if !started {
+            return;
+        }
+        let old = self.workspace.active_pane_id();
+        let moved = match target {
+            Some(DropTarget::Edge { pane: other, side }) => {
+                self.workspace.move_pane(pane, other, side, geometry)
+            }
+            Some(DropTarget::Center { pane: other }) => self.workspace.swap_panes(pane, other),
+            Some(DropTarget::Tab(index)) => self.workspace.move_pane_to_tab(pane, index, geometry),
+            Some(DropTarget::NewTab) => self.workspace.move_pane_to_new_tab(pane),
+            None => false,
+        };
+        if moved {
+            // Also hides the tab bar shown for the drag of a single tab's pane.
+            self.focus_changed(old);
+        } else {
+            self.restore_dragged_pane(pane, was_zoomed);
+        }
+    }
+
+    /// Cancels the pane drag in progress, if any: the pane gets the focus again, its
+    /// tab shown and zoomed back when it was.
+    fn cancel_pane_drag(&mut self) {
+        let Some(Drag::Pane {
+            pane,
+            started,
+            was_zoomed,
+            ..
+        }) = self.drag
+        else {
+            return;
+        };
+        self.drag = None;
+        if started {
+            self.restore_dragged_pane(pane, was_zoomed);
+        }
+    }
+
+    /// Puts the workspace back as before the drag of `pane`.
+    fn restore_dragged_pane(&mut self, pane: PaneId, was_zoomed: bool) {
+        let old = self.workspace.active_pane_id();
+        self.workspace.focus(pane);
+        if was_zoomed && !self.workspace.active_tab().is_some_and(|tab| tab.zoomed) {
+            self.workspace.toggle_zoom();
+        }
+        self.focus_changed(old);
+    }
+
     fn auto_scroll(&mut self, now: Instant) -> Option<Instant> {
         let position = self.mouse_position;
         let Some(Drag::Selection {
@@ -1602,6 +1909,14 @@ impl Session {
             }
             None => {}
         }
+        // While a pane is dragged, `Escape` cancels the drag and no other key acts, so
+        // nothing changes the workspace under it.
+        if self.pane_dragging() {
+            if event.logical_key == Key::Named(NamedKey::Escape) {
+                self.cancel_pane_drag();
+            }
+            return;
+        }
         let modifiers = self.modifiers;
         let action = self
             .keybindings
@@ -1701,7 +2016,11 @@ impl Session {
     /// Closes the pane `id`; the application exits with the last one.
     fn close_pane(&mut self, id: PaneId, event_loop: &ActiveEventLoop) {
         // The closed pane's selection, and a divider of the tree it leaves, are dropped.
-        // A dragged tab may be the one closing: the drag is dropped.
+        // A dragged tab may be the one closing: the drag is dropped. A dragged pane is
+        // put back, whichever pane closes: the tab indices it holds may shift.
+        if matches!(self.drag, Some(Drag::Pane { .. })) {
+            self.cancel_pane_drag();
+        }
         let shown_tab = self.workspace.tab_of(id) == Some(self.workspace.active_index());
         match self.drag {
             Some(Drag::Selection { pane, .. }) if pane == id => self.drag = None,
@@ -1736,7 +2055,7 @@ impl Session {
         let visible = self.workspace.is_visible(id);
         let active = self.workspace.active_pane_id() == Some(id);
         // The tab bar shows the title of every tab.
-        let bar_shown = tab_bar::shown(self.workspace.tabs().len());
+        let bar_shown = self.tab_bar_shown();
         let Some(pane) = self.workspace.pane_mut(id) else {
             return;
         };
@@ -1817,7 +2136,7 @@ impl Session {
     }
 
     /// Draws every pane of the shown tab, inactive ones dimmed when it shows several,
-    /// then the dividers, the active pane border and the tab bar, then the banner, then
+    /// then the pane title bars, the dividers, the active pane border and the tab bar, then the banner, then
     /// the open dialog or command palette.
     fn redraw(&mut self) {
         let dialog = self.dialog_layout();
@@ -1889,14 +2208,50 @@ impl Session {
             let (x, y) = self.mouse_pixel();
             bar.dragged(*index, bar.along(x, y) - grab_offset);
         }
+        let mut pane_bars = self.pane_bars(&layout, active);
+        match self.hovered_button {
+            Some(chrome::ChromeButton::TabClose(index)) => {
+                if let Some(tab) = bar.as_mut().and_then(|bar| bar.tabs.get_mut(index)) {
+                    tab.close_hovered = true;
+                }
+            }
+            Some(chrome::ChromeButton::PaneClose(id)) => {
+                if let Some(pane_bar) = pane_bars.iter_mut().find(|b| b.pane == id) {
+                    pane_bar.close_hovered = true;
+                }
+            }
+            Some(chrome::ChromeButton::NewTab) => {
+                if let Some(bar) = bar.as_mut() {
+                    bar.new_tab_hovered = true;
+                }
+            }
+            None => {}
+        }
+        let highlight = match &self.drag {
+            Some(Drag::Pane {
+                started: true,
+                target: Some(target),
+                ..
+            }) => drop::highlight(*target, &layout, bar.as_ref()),
+            _ => None,
+        };
         let mut ui = chrome::scene::build(
             &layout,
             active,
+            &pane_bars,
             bar.as_ref(),
             overlay,
             &self.palette.ui,
             self.renderer.is_srgb(),
         );
+        if let Some(highlight) = highlight {
+            chrome::scene::drop_highlight(
+                highlight,
+                &self.palette.ui,
+                self.renderer.is_srgb(),
+                &mut ui,
+            );
+        }
         if let Some(tooltip) = &tooltip {
             chrome::scene::tooltip(tooltip, &self.palette.ui, self.renderer.is_srgb(), &mut ui);
         }
@@ -2051,8 +2406,15 @@ impl App {
             Some(_) => BannerLayout::height(glyphs.cell_size()),
             None => 0.0,
         };
-        let layout = GridLayout::new(
+        let (_, content) = pane_bar::split(
             banner::below_banner(Rect::from_size(size.width, size.height), banner_height),
+            UiMetrics {
+                line_height: glyphs.ui_line_height(UiFont::Chrome),
+                scale,
+            },
+        );
+        let layout = GridLayout::new(
+            content,
             glyphs.cell_size(),
             self.config.window.padding * scale,
         );
@@ -2103,8 +2465,10 @@ impl App {
             hovered_cell: None,
             hovered_link: None,
             link_press: None,
+            pane_bar_clicks: ClickTracker::default(),
             tooltip_hidden: false,
             pointer: None,
+            hovered_button: None,
             window_title: DEFAULT_TITLE.to_owned(),
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),
@@ -2246,6 +2610,7 @@ impl ApplicationHandler<UserEvent> for App {
             let deadline = earliest(session.auto_scroll(now), session.animate(now));
             let deadline = earliest(deadline, session.blink(now));
             let deadline = earliest(deadline, session.fold_animate(now));
+            let deadline = earliest(deadline, session.pane_drag_tick(now));
             session.flush_panes();
             deadline
         });
@@ -2353,6 +2718,9 @@ impl App {
             }
             WindowEvent::Focused(focused) => {
                 session.focused = focused;
+                if !focused {
+                    session.cancel_pane_drag();
+                }
                 if let Some(pane) = session.workspace.active_pane()
                     && let Some(bytes) = mouse::focus_report(focused, pane.mode())
                 {
@@ -2384,11 +2752,7 @@ impl App {
                     self.update_checker.ignore(&tag);
                 }
             }
-            WindowEvent::RedrawRequested => {
-                let t = Instant::now();
-                session.redraw();
-                log::warn!(target: "graphene::tmpframe", "frame {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
-            }
+            WindowEvent::RedrawRequested => session.redraw(),
             _ => {}
         }
         session.flush_panes();
