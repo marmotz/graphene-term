@@ -169,8 +169,9 @@ struct Session {
     tooltip_hidden: bool,
     /// Pointer shape last applied to the window; `None` before the first update.
     pointer: Option<winit::window::CursorIcon>,
-    /// Close button of a tab or a pane bar under the mouse, drawn hovered.
-    hovered_close: Option<chrome::CloseButton>,
+    /// Close button of a tab or a pane bar, or `+` button, under the mouse: drawn
+    /// hovered.
+    hovered_button: Option<chrome::ChromeButton>,
     /// Title last applied to the window.
     window_title: String,
     /// Configuration error banner; `None` once dismissed or without error.
@@ -1021,15 +1022,15 @@ impl Session {
     /// Hand over a fold chevron or an active link, arrow while the application captures
     /// the mouse under the pointer, I-beam otherwise; the window is only updated when the shape changes.
     /// Over a divider, or while dragging one, the resize arrows of its axis. Arrow over
-    /// a pane bar, hand over a close button of a tab or a pane bar, which is then drawn
-    /// hovered.
+    /// a pane bar, hand over a close button of a tab or a pane bar or over the `+`
+    /// button, which is then drawn hovered.
     fn update_pointer(&mut self) {
-        let close = self.close_under_mouse();
-        if close != self.hovered_close {
-            self.hovered_close = close;
+        let button = self.button_under_mouse();
+        if button != self.hovered_button {
+            self.hovered_button = button;
             self.window.request_redraw();
         }
-        if close.is_some() {
+        if button.is_some() {
             self.set_pointer(winit::window::CursorIcon::Pointer);
             return;
         }
@@ -1076,16 +1077,16 @@ impl Session {
         self.set_pointer(icon);
     }
 
-    /// The close button of a tab or a pane bar under the mouse; none while an overlay is
-    /// open or a gesture is in progress.
-    fn close_under_mouse(&self) -> Option<chrome::CloseButton> {
+    /// The close button of a tab or a pane bar, or the `+` button, under the mouse; none
+    /// while an overlay is open or a gesture is in progress.
+    fn button_under_mouse(&self) -> Option<chrome::ChromeButton> {
         if self.overlay.is_some() || self.drag.is_some() {
             return None;
         }
         let (x, y) = self.mouse_pixel();
         let layout = self.shown_layout();
         let metrics = self.ui_metrics(UiFont::Chrome);
-        chrome::close_button_at(self.tab_bar().as_ref(), &layout.panes, x, y, metrics)
+        chrome::button_at(self.tab_bar().as_ref(), &layout.panes, x, y, metrics)
     }
 
     /// Looks the link under the mouse up again when the grid cell under it changed, or
@@ -1157,7 +1158,7 @@ impl Session {
             self.window.request_redraw();
         }
         self.update_pointer();
-        if self.hovered_close.take().is_some() {
+        if self.hovered_button.take().is_some() {
             self.window.request_redraw();
         }
     }
@@ -2208,15 +2209,20 @@ impl Session {
             bar.dragged(*index, bar.along(x, y) - grab_offset);
         }
         let mut pane_bars = self.pane_bars(&layout, active);
-        match self.hovered_close {
-            Some(chrome::CloseButton::Tab(index)) => {
+        match self.hovered_button {
+            Some(chrome::ChromeButton::TabClose(index)) => {
                 if let Some(tab) = bar.as_mut().and_then(|bar| bar.tabs.get_mut(index)) {
                     tab.close_hovered = true;
                 }
             }
-            Some(chrome::CloseButton::Pane(id)) => {
+            Some(chrome::ChromeButton::PaneClose(id)) => {
                 if let Some(pane_bar) = pane_bars.iter_mut().find(|b| b.pane == id) {
                     pane_bar.close_hovered = true;
+                }
+            }
+            Some(chrome::ChromeButton::NewTab) => {
+                if let Some(bar) = bar.as_mut() {
+                    bar.new_tab_hovered = true;
                 }
             }
             None => {}
@@ -2462,7 +2468,7 @@ impl App {
             pane_bar_clicks: ClickTracker::default(),
             tooltip_hidden: false,
             pointer: None,
-            hovered_close: None,
+            hovered_button: None,
             window_title: DEFAULT_TITLE.to_owned(),
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),

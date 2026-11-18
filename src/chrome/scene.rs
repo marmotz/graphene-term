@@ -46,8 +46,8 @@ const PLUS_STROKE: f32 = 1.0 / 15.0;
 /// Thickness of the dialog border, in physical pixels.
 const DIALOG_BORDER: f32 = 1.0;
 
-/// Opacity of the text color in the background of a hovered close button.
-pub const CLOSE_HOVER: f32 = 0.2;
+/// Opacity of the text color in the background of a hovered button.
+pub const BUTTON_HOVER: f32 = 0.2;
 
 /// Opacity of the hovered context-menu row, matching the shortcuts table in settings.
 const MENU_HOVER_HIGHLIGHT: f32 = 0.45;
@@ -338,7 +338,7 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
             color(colors.tab_inactive_text)
         };
         if tab.close_hovered {
-            close_hover(tab.close, text, ui);
+            button_hover(tab.close, text, ui);
         }
         ui.texts.push(UiTextItem {
             text: tab.title.clone(),
@@ -366,6 +366,9 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
         (plus.y + plus.height / 2.0).round(),
     );
     let text = color(colors.tab_inactive_text);
+    if bar.new_tab_hovered {
+        button_hover(plus, text, ui);
+    }
     ui.rects.push(RectInstance::new(
         [cx - arm / 2.0, cy - stroke / 2.0],
         [arm, stroke],
@@ -420,7 +423,7 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
     ui.rects
         .push(rect(bar.rect, gpu_color(background, srgb_target)));
     if bar.close_hovered {
-        close_hover(bar.close, text, ui);
+        button_hover(bar.close, text, ui);
     }
     ui.texts.push(UiTextItem {
         text: bar.title.clone(),
@@ -441,11 +444,11 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
     });
 }
 
-/// The background of a hovered close button: its square in the translucent `text`
-/// color of its glyph.
-fn close_hover(close: Rect, text: [f32; 4], ui: &mut UiLayer) {
+/// The background of a hovered button: its rectangle in the translucent `text` color
+/// of its glyph.
+fn button_hover(button: Rect, text: [f32; 4], ui: &mut UiLayer) {
     let [r, g, b, _] = text;
-    ui.rects.push(rect(close, [r, g, b, CLOSE_HOVER]));
+    ui.rects.push(rect(button, [r, g, b, BUTTON_HOVER]));
 }
 
 fn rect(r: Rect, color: [f32; 4]) -> RectInstance {
@@ -838,7 +841,7 @@ mod tests {
             vec![(
                 [bars[1].close.x, bars[1].close.y],
                 [bars[1].close.width, bars[1].close.height],
-                [r, g, b, CLOSE_HOVER]
+                [r, g, b, BUTTON_HOVER]
             )]
         );
         assert_eq!(rects[3..], plain[2..]);
@@ -864,7 +867,31 @@ mod tests {
             vec![(
                 [close.x, close.y],
                 [close.width, close.height],
-                [r, g, b, CLOSE_HOVER]
+                [r, g, b, BUTTON_HOVER]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_hovered_new_tab_button_gets_a_translucent_text_background() {
+        let single = Layout {
+            panes: vec![(PaneId(1), area(0.0, 30.0, 1000.0, 100.0))],
+            dividers: Vec::new(),
+            divider: 1.0,
+        };
+        let mut bar = bar();
+        bar.new_tab_hovered = true;
+        let ui = build(&single, None, &[], Some(&bar), None, &tab_colors(), false);
+        // Bar background, shown tab background, hover of the `+` button, its strokes.
+        let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
+        let plus = bar.new_tab;
+        assert_eq!(ui.rects.len(), 5);
+        assert_eq!(
+            drawn(&ui.rects[2..3]),
+            vec![(
+                [plus.x, plus.y],
+                [plus.width, plus.height],
+                [r, g, b, BUTTON_HOVER]
             )]
         );
     }

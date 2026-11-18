@@ -92,6 +92,8 @@ pub struct TabBarLayout {
     pub tabs: Vec<TabSlot>,
     /// `+` button after the last tab.
     pub new_tab: Rect,
+    /// Whether the mouse is over the `+` button.
+    pub new_tab_hovered: bool,
     /// Width of every tab.
     pub tab_width: f32,
     /// Height of every tab.
@@ -150,6 +152,7 @@ impl TabBarLayout {
             rect,
             tabs: Vec::with_capacity(titles.len()),
             new_tab: rect,
+            new_tab_hovered: false,
             tab_width,
             tab_height,
             vertical,

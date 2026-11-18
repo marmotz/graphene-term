@@ -13,27 +13,31 @@ use crate::layout::Rect;
 use crate::terminal::PaneId;
 use tab_bar::{TabBarHit, TabBarLayout, UiMetrics};
 
-/// A close button of the chrome: the one of a tab, by index, or of a pane bar.
+/// A button of the chrome drawn hovered under the mouse: the close button of a tab,
+/// by index, or of a pane bar, or the `+` button of the tab bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloseButton {
-    Tab(usize),
-    Pane(PaneId),
+pub enum ChromeButton {
+    TabClose(usize),
+    PaneClose(PaneId),
+    NewTab,
 }
 
-/// The close button under the pixel `(x, y)`: in the tab bar `tab_bar`, then in the
-/// bars of the panes `panes` (pane and rectangle, as a split layout gives them).
-pub fn close_button_at(
+/// The button under the pixel `(x, y)`: in the tab bar `tab_bar`, then in the bars of
+/// the panes `panes` (pane and rectangle, as a split layout gives them).
+pub fn button_at(
     tab_bar: Option<&TabBarLayout>,
     panes: &[(PaneId, Rect)],
     x: f32,
     y: f32,
     metrics: UiMetrics,
-) -> Option<CloseButton> {
-    if let Some(TabBarHit::Close(index)) = tab_bar.and_then(|bar| bar.hit(x, y)) {
-        return Some(CloseButton::Tab(index));
+) -> Option<ChromeButton> {
+    match tab_bar.and_then(|bar| bar.hit(x, y)) {
+        Some(TabBarHit::Close(index)) => return Some(ChromeButton::TabClose(index)),
+        Some(TabBarHit::NewTab) => return Some(ChromeButton::NewTab),
+        _ => {}
     }
     match pane_bar::hit_at(panes, x, y, metrics) {
-        Some((pane, pane_bar::PaneBarHit::Close)) => Some(CloseButton::Pane(pane)),
+        Some((pane, pane_bar::PaneBarHit::Close)) => Some(ChromeButton::PaneClose(pane)),
         _ => None,
     }
 }
@@ -77,14 +81,14 @@ mod tests {
         let bar = tab_bar();
         let close = bar.tabs[1].close;
         assert_eq!(
-            close_button_at(
+            button_at(
                 Some(&bar),
                 &panes(&bar),
                 close.x + 1.0,
                 close.y + 1.0,
                 METRICS
             ),
-            Some(CloseButton::Tab(1))
+            Some(ChromeButton::TabClose(1))
         );
     }
 
@@ -95,17 +99,33 @@ mod tests {
         let close = PaneBarLayout::new(PaneId(2), panes[1].1, String::new(), false, METRICS).close;
         let (x, y) = (close.x + 1.0, close.y + 1.0);
         assert_eq!(
-            close_button_at(Some(&bar), &panes, x, y, METRICS),
-            Some(CloseButton::Pane(PaneId(2)))
+            button_at(Some(&bar), &panes, x, y, METRICS),
+            Some(ChromeButton::PaneClose(PaneId(2)))
         );
         assert_eq!(
-            close_button_at(None, &panes, x, y, METRICS),
-            Some(CloseButton::Pane(PaneId(2)))
+            button_at(None, &panes, x, y, METRICS),
+            Some(ChromeButton::PaneClose(PaneId(2)))
         );
     }
 
     #[test]
-    fn nothing_off_the_close_buttons() {
+    fn finds_the_new_tab_button() {
+        let bar = tab_bar();
+        let plus = bar.new_tab;
+        assert_eq!(
+            button_at(
+                Some(&bar),
+                &panes(&bar),
+                plus.x + 1.0,
+                plus.y + 1.0,
+                METRICS
+            ),
+            Some(ChromeButton::NewTab)
+        );
+    }
+
+    #[test]
+    fn nothing_off_the_buttons() {
         let bar = tab_bar();
         let panes = panes(&bar);
         let tab = bar.tabs[0].rect;
@@ -115,7 +135,7 @@ mod tests {
             (title.title_x, title.rect.y + 1.0),
             (250.0, 400.0),
         ] {
-            assert_eq!(close_button_at(Some(&bar), &panes, x, y, METRICS), None);
+            assert_eq!(button_at(Some(&bar), &panes, x, y, METRICS), None);
         }
     }
 }
