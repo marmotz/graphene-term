@@ -98,9 +98,12 @@ pub struct Card {
     /// Status shown by the stripe and the chevron. `None` for the current block at its
     /// prompt, and for the only block of a shell that sends no signal: a neutral card.
     pub status: Option<Status>,
-    /// Fold chevron on the card's top-right corner: a finished block with output whose
-    /// first row is in the card.
+    /// Fold chevron on the right of the card's first row: a finished block with output
+    /// whose first row is in the card.
     pub chevron: Option<Fold>,
+    /// How far the chevron went from the other fold to `chevron`, from 0 (the fold just
+    /// changed) to 1 (settled).
+    pub fold_progress: f32,
     /// The block is the selected one.
     pub selected: bool,
     /// Scroll indicator of a block showing only part of its output.
@@ -471,6 +474,7 @@ pub fn marks<T>(
                     clipped_top,
                     status: card_status(timeline, id),
                     chevron: chevron(timeline, id).filter(|_| !clipped_top),
+                    fold_progress: 1.0,
                     selected: false,
                     scroll: None,
                 });
@@ -1013,6 +1017,7 @@ mod tests {
             clipped_top: false,
             status,
             chevron,
+            fold_progress: 1.0,
             selected: false,
             scroll: None,
         }

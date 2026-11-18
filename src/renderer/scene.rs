@@ -5,8 +5,9 @@ use std::sync::Arc;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use super::glyphs::GlyphKey;
-use super::rects::{RectInstance, Shape};
-use crate::frame::{self, Card, Fold, Frame, FrameImage, ScrollBar};
+use super::rects::RectInstance;
+use crate::fold_animation;
+use crate::frame::{self, Card, Frame, FrameImage, ScrollBar};
 use crate::graphics::{ImageCell, Pixels};
 use crate::i18n::{self, Msg};
 use crate::layout::GridLayout;
@@ -113,7 +114,7 @@ fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<Rec
     let radius = (cell.height / 4.0).round();
     let stripe = (cell.width / 6.0).round().max(2.0);
     let left = layout.grid_left() - layout.card_pad;
-    let width = layout.grid_right() + layout.card_pad - left;
+    let width = layout.card_right() - left;
     let mut rects = Vec::new();
     for card in &frame.cards {
         let (mut top, bottom) = card_edges(frame, layout, card);
@@ -168,7 +169,7 @@ fn scroll_thumb(
     let track = track_bottom - track_top;
     let height = (bar.length * track).round().clamp(width, track);
     let top = (track_top + (bar.start * track).round()).min(track_bottom - height);
-    let x = layout.grid_right() + ((layout.card_pad - width) / 2.0).max(0.0).round();
+    let x = layout.grid_right() + ((layout.card_pad_right - width) / 2.0).max(0.0).round();
     RectInstance::new(
         [x, top],
         [width, height],
@@ -177,46 +178,32 @@ fn scroll_thumb(
     .with_radius(width / 2.0)
 }
 
-/// Fold chevrons, drawn above the glyphs: a disc in the card color on the card's
-/// top-right corner, then a triangle in the status color.
+/// Fold chevrons, drawn above the glyphs: a stroke in the status color, centered in
+/// the right card padding of the card's first row, bent into a V pointing down
+/// (unfolded) or up (folded), and through a straight line while the fold changes.
 fn chevrons(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<RectInstance> {
-    let radius = layout.chevron_radius;
-    let center_x = layout.grid_right() + layout.card_pad;
-    let side = (radius * 1.2).round();
+    let width = layout.chevron_width;
+    let stroke = (layout.cell.height / 10.0).max(1.5);
+    let height = (width * 0.35).round() + stroke;
+    let center_x = layout.grid_right() + layout.card_pad_right / 2.0;
     let mut rects = Vec::new();
     for card in &frame.cards {
         let Some(fold) = card.chevron else {
             continue;
         };
-        let (center_y, _) = card_edges(frame, layout, card);
-        let disc = if card.selected {
-            frame.block_colors.card_selected
-        } else {
-            frame.block_colors.card
-        };
-        rects.push(
-            RectInstance::new(
-                [center_x - radius, center_y - radius],
-                [2.0 * radius, 2.0 * radius],
-                gpu_color(disc, srgb_target),
-            )
-            .with_radius(radius),
-        );
+        let (top, _) = card_edges(frame, layout, card);
+        let center_y = top + layout.cell.height / 2.0;
         let color = match card.status {
             None | Some(Status::Unknown) => frame.block_colors.dim,
             Some(status) => frame.block_colors.status(status),
         };
-        let shape = match fold {
-            Fold::Folded => Shape::TriangleRight,
-            Fold::Unfolded => Shape::TriangleDown,
-        };
         rects.push(
             RectInstance::new(
-                [center_x - side / 2.0, center_y - side / 2.0],
-                [side, side],
+                [center_x - width / 2.0, center_y - height / 2.0],
+                [width, height],
                 gpu_color(color, srgb_target),
             )
-            .with_shape(shape),
+            .chevron(stroke, fold_animation::bend(fold, card.fold_progress)),
         );
     }
     rects
@@ -487,6 +474,7 @@ mod tests {
         BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration, ScrollBar,
     };
     use crate::layout::{CellSize, Rect};
+    use crate::renderer::rects::Shape;
     use crate::timeline::Status;
 
     const BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -564,6 +552,7 @@ mod tests {
             clipped_top: false,
             status,
             chevron: None,
+            fold_progress: 1.0,
             selected: false,
             scroll: None,
         }
@@ -879,10 +868,10 @@ mod tests {
         let l = margin_layout();
         let scene = build(&f, &l, false);
         let rgb = |c: Rgb| gpu_color(c, false);
-        // Cards from the margin edge (5 px) to the grid right edge plus the card
-        // padding, radius a quarter of the cell height. Stripes 2 px wide (a sixth of
-        // the cell width, at least 2), centered in the 5 px margin, round ends.
-        let width = l.grid_right() + 5.0 - 5.0;
+        // Cards from the margin edge (5 px) to the grid right edge plus the 22 px right
+        // card padding, radius a quarter of the cell height. Stripes 2 px wide (a sixth
+        // of the cell width, at least 2), centered in the 5 px margin, round ends.
+        let width = l.grid_right() + 22.0 - 5.0;
         assert_eq!(
             shapes(&scene.under),
             vec![
@@ -913,13 +902,13 @@ mod tests {
         }];
         let l = margin_layout();
         let scene = build(&f, &l, false);
-        // Card, stripe, then the 2 px thumb centered in the 5 px right card padding:
-        // a quarter of the 60 px track, halfway down.
+        // Card, stripe, then the 2 px thumb centered in the 22 px right card padding,
+        // under the chevron: a quarter of the 60 px track, halfway down.
         assert_eq!(scene.under.len(), 3);
         assert_eq!(
             shapes(&scene.under[2..]),
             vec![(
-                [l.grid_right() + 2.0, 50.0],
+                [l.grid_right() + 10.0, 50.0],
                 [2.0, 15.0],
                 gpu_color(GREY, false),
                 1.0,
@@ -978,7 +967,7 @@ mod tests {
     }
 
     #[test]
-    fn chevron_disc_and_triangle_on_the_card_corner_above_the_glyphs() {
+    fn chevron_in_the_right_card_padding_of_the_first_row_above_the_glyphs() {
         let mut f = frame(vec![vec![cell('a')]; 4]);
         f.row_tops = vec![0, 2, 5, 7];
         f.cards = vec![
@@ -988,6 +977,7 @@ mod tests {
             },
             Card {
                 chevron: Some(Fold::Unfolded),
+                fold_progress: 0.5,
                 selected: true,
                 ..card(2..4, Some(Status::Unknown))
             },
@@ -995,31 +985,26 @@ mod tests {
         let l = margin_layout();
         let scene = build(&f, &l, false);
         let rgb = |c: Rgb| gpu_color(c, false);
-        // Radius round(20 * 0.45) = 9, centered on the card's top-right corner; the
-        // triangle is an 11 px box (round(9 * 1.2)) in its middle.
-        let cx = l.grid_right() + 5.0;
+        // A 12 x 6 box (4 px of bend, a 2 px stroke) centered in the 22 px right card
+        // padding and on the first row (10 px below the card top at 0, then at 50).
+        let x = l.grid_right() + 11.0 - 6.0;
         assert_eq!(
             shapes(&scene.over),
             vec![
-                ([cx - 9.0, -9.0], [18.0, 18.0], rgb(CARD), 9.0, 0),
-                (
-                    [cx - 5.5, -5.5],
-                    [11.0, 11.0],
-                    rgb(RED),
-                    0.0,
-                    Shape::TriangleRight as u32
-                ),
-                ([cx - 9.0, 41.0], [18.0, 18.0], rgb(CARD_SELECTED), 9.0, 0),
+                ([x, 7.0], [12.0, 6.0], rgb(RED), 1.0, Shape::Chevron as u32),
                 // `Unknown`: the dim color.
                 (
-                    [cx - 5.5, 44.5],
-                    [11.0, 11.0],
+                    [x, 57.0],
+                    [12.0, 6.0],
                     rgb(GREY),
-                    0.0,
-                    Shape::TriangleDown as u32
+                    1.0,
+                    Shape::Chevron as u32
                 ),
             ]
         );
+        // Folded: a V pointing up. Halfway through unfolding: a straight line.
+        assert_eq!(scene.over[0].bend, -1.0);
+        assert_eq!(scene.over[1].bend, 0.0);
         // No glyph is drawn for the chevrons.
         assert_eq!(scene.glyphs.len(), 4);
     }
@@ -1140,7 +1125,7 @@ mod tests {
         let text: String = summary.iter().map(|g| g.key.c).collect();
         // Spaces draw no glyph.
         assert_eq!(text, "1lignemasquée");
-        // 37 columns leave 6 px over: the grid is centred 3 px further right.
-        assert_eq!(summary[0].origin, [3.0 + 10.0 + 2.0 * 10.0, 0.0]);
+        // 36 columns leave 8 px over: the grid is centred 4 px further right.
+        assert_eq!(summary[0].origin, [4.0 + 10.0 + 2.0 * 10.0, 0.0]);
     }
 }

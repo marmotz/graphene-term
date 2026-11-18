@@ -1,6 +1,5 @@
 //! Instanced rendering of solid shapes (cell backgrounds, cursor, underlines, cards,
-//! chevrons): rectangles, optionally with rounded corners, and triangles, antialiased
-//! by a signed distance in the fragment shader.
+//! chevrons): rectangles, optionally with rounded corners, and chevron strokes, antialiased by a signed distance in the fragment shader.
 
 use std::borrow::Cow;
 use std::mem;
@@ -16,11 +15,15 @@ pub struct RectInstance {
     pub size: [f32; 2],
     /// Linear RGBA color.
     pub color: [f32; 4],
-    /// Corner radius in pixels, for [`Shape::Rect`]. 0 for square corners.
+    /// Corner radius in pixels, for [`Shape::Rect`]. 0 for square corners. Half the
+    /// stroke width, for [`Shape::Chevron`].
     pub radius: f32,
     /// A [`Shape`] as `u32`.
     pub shape: u32,
-    _padding: [u32; 2],
+    /// Bend of a [`Shape::Chevron`], from -1 (a V pointing up) through 0 (a straight
+    /// line) to 1 (a V pointing down).
+    pub bend: f32,
+    _padding: u32,
 }
 
 /// What a [`RectInstance`] draws inside its box.
@@ -29,10 +32,11 @@ pub struct RectInstance {
 pub enum Shape {
     /// The whole box, corners rounded by the instance's radius.
     Rect = 0,
-    /// A triangle pointing right: left edge of the box to the middle of its right edge.
-    TriangleRight = 1,
-    /// A triangle pointing down: top edge of the box to the middle of its bottom edge.
-    TriangleDown = 2,
+    /// A stroke with round ends across the box, bent into a V by the instance's bend:
+    /// its ends at the box's left and right edges, its middle at the box's horizontal
+    /// center, the bend spanning the box's height. The stroke is the instance's radius
+    /// on each side of that line, inside the box.
+    Chevron = 1,
 }
 
 impl RectInstance {
@@ -44,13 +48,24 @@ impl RectInstance {
             color,
             radius: 0.0,
             shape: Shape::Rect as u32,
-            _padding: [0; 2],
+            bend: 0.0,
+            _padding: 0,
         }
     }
 
     /// The same box with its corners rounded by `radius` pixels.
     pub fn with_radius(self, radius: f32) -> Self {
         Self { radius, ..self }
+    }
+
+    /// The same box drawing a [`Shape::Chevron`] `stroke` pixels wide, bent by `bend`.
+    pub fn chevron(self, stroke: f32, bend: f32) -> Self {
+        Self {
+            radius: stroke / 2.0,
+            shape: Shape::Chevron as u32,
+            bend,
+            ..self
+        }
     }
 
     /// The same box drawing `shape`.
@@ -132,7 +147,8 @@ impl RectRenderer {
                 1 => Float32x2,
                 2 => Float32x4,
                 3 => Float32,
-                4 => Uint32
+                4 => Uint32,
+                5 => Float32
             ],
         };
 
@@ -315,9 +331,14 @@ mod tests {
         assert_eq!(mem::size_of::<RectInstance>(), 48);
         let rect = RectInstance::new([1.0, 2.0], [3.0, 4.0], WHITE);
         assert_eq!((rect.radius, rect.shape), (0.0, Shape::Rect as u32));
-        let shaped = rect.with_radius(5.0).with_shape(Shape::TriangleDown);
-        assert_eq!((shaped.radius, shaped.shape), (5.0, 2));
-        assert_eq!(shaped.position, rect.position);
+        let rounded = rect.with_radius(5.0);
+        assert_eq!((rounded.radius, rounded.shape), (5.0, Shape::Rect as u32));
+        let chevron = rect.chevron(3.0, -0.5);
+        assert_eq!(
+            (chevron.radius, chevron.shape, chevron.bend),
+            (1.5, Shape::Chevron as u32, -0.5)
+        );
+        assert_eq!(chevron.position, rect.position);
     }
 
     #[test]
@@ -338,50 +359,41 @@ mod tests {
         assert!((8..20).any(|i| matches!(red(&pixels, i, i), 1..=254)));
     }
 
-    #[test]
-    fn triangle_right_lights_its_box_only_with_the_tip_on_the_right() {
-        let rect =
-            RectInstance::new([8.0, 8.0], [48.0, 48.0], WHITE).with_shape(Shape::TriangleRight);
-        let Some(pixels) = draw(&[rect]) else {
-            eprintln!("no GPU adapter available, skipped");
-            return;
-        };
-        for y in 0..SIZE {
-            for x in 0..SIZE {
-                if !(8..56).contains(&x) || !(8..56).contains(&y) {
-                    assert_eq!(red(&pixels, x, y), 0, "outside ({x}, {y})");
-                }
-            }
-        }
-        // Base along the left edge, tip at the middle of the right edge.
-        assert_eq!(red(&pixels, 10, 12), 255);
-        assert_eq!(red(&pixels, 10, 51), 255);
-        assert_eq!(red(&pixels, 52, 32), 255);
-        assert_eq!(red(&pixels, 52, 12), 0);
-        assert_eq!(red(&pixels, 52, 51), 0);
+    /// Middle of the lit rows of column `x`.
+    fn lit_center(pixels: &[u8], x: u32) -> f32 {
+        let lit: Vec<u32> = (0..SIZE).filter(|&y| red(pixels, x, y) > 127).collect();
+        assert!(!lit.is_empty(), "column {x} unlit");
+        lit.iter().sum::<u32>() as f32 / lit.len() as f32 + 0.5
     }
 
     #[test]
-    fn triangle_down_lights_its_box_only_with_the_tip_at_the_bottom() {
-        let rect =
-            RectInstance::new([8.0, 8.0], [48.0, 48.0], WHITE).with_shape(Shape::TriangleDown);
-        let Some(pixels) = draw(&[rect]) else {
+    fn chevron_bends_from_a_v_pointing_down_to_a_v_pointing_up() {
+        // A 48 x 16 box at (8, 24), a 4 px stroke: 12 px of bend room.
+        let draw_bent = |bend: f32| {
+            draw(&[RectInstance::new([8.0, 24.0], [48.0, 16.0], WHITE).chevron(4.0, bend)])
+        };
+        let Some(down) = draw_bent(1.0) else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
-        for y in 0..SIZE {
-            for x in 0..SIZE {
-                if !(8..56).contains(&x) || !(8..56).contains(&y) {
-                    assert_eq!(red(&pixels, x, y), 0, "outside ({x}, {y})");
+        let flat = draw_bent(0.0).unwrap();
+        let up = draw_bent(-1.0).unwrap();
+        for pixels in [&down, &flat, &up] {
+            for y in 0..SIZE {
+                for x in 0..SIZE {
+                    if !(8..56).contains(&x) || !(24..40).contains(&y) {
+                        assert_eq!(red(pixels, x, y), 0, "outside ({x}, {y})");
+                    }
                 }
             }
         }
-        // Base along the top edge, tip at the middle of the bottom edge.
-        assert_eq!(red(&pixels, 12, 10), 255);
-        assert_eq!(red(&pixels, 51, 10), 255);
-        assert_eq!(red(&pixels, 32, 52), 255);
-        assert_eq!(red(&pixels, 12, 52), 0);
-        assert_eq!(red(&pixels, 51, 52), 0);
+        // Middle (x 32) against an end (x 12): 12 px of bend room, 20 / 22 of it
+        // between those columns.
+        let drop = |pixels: &[u8]| lit_center(pixels, 32) - lit_center(pixels, 12);
+        assert!((drop(&down) - 10.9).abs() < 1.0, "down {}", drop(&down));
+        assert!(drop(&flat).abs() < 0.5, "flat {}", drop(&flat));
+        assert!((lit_center(&flat, 32) - 32.0).abs() < 0.5);
+        assert!((drop(&up) + 10.9).abs() < 1.0, "up {}", drop(&up));
     }
 
     #[test]
