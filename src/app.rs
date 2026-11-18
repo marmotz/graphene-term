@@ -169,6 +169,8 @@ struct Session {
     tooltip_hidden: bool,
     /// Pointer shape last applied to the window; `None` before the first update.
     pointer: Option<winit::window::CursorIcon>,
+    /// Close button of a tab or a pane bar under the mouse, drawn hovered.
+    hovered_close: Option<chrome::CloseButton>,
     /// Title last applied to the window.
     window_title: String,
     /// Configuration error banner; `None` once dismissed or without error.
@@ -1019,8 +1021,18 @@ impl Session {
     /// Hand over a fold chevron or an active link, arrow while the application captures
     /// the mouse under the pointer, I-beam otherwise; the window is only updated when the shape changes.
     /// Over a divider, or while dragging one, the resize arrows of its axis. Arrow over
-    /// a pane bar.
+    /// a pane bar, hand over a close button of a tab or a pane bar, which is then drawn
+    /// hovered.
     fn update_pointer(&mut self) {
+        let close = self.close_under_mouse();
+        if close != self.hovered_close {
+            self.hovered_close = close;
+            self.window.request_redraw();
+        }
+        if close.is_some() {
+            self.set_pointer(winit::window::CursorIcon::Pointer);
+            return;
+        }
         if self.pane_dragging() {
             self.set_pointer(winit::window::CursorIcon::Grabbing);
             return;
@@ -1062,6 +1074,18 @@ impl Session {
             mouse::pointer_icon(captured, over_chevron || over_link)
         };
         self.set_pointer(icon);
+    }
+
+    /// The close button of a tab or a pane bar under the mouse; none while an overlay is
+    /// open or a gesture is in progress.
+    fn close_under_mouse(&self) -> Option<chrome::CloseButton> {
+        if self.overlay.is_some() || self.drag.is_some() {
+            return None;
+        }
+        let (x, y) = self.mouse_pixel();
+        let layout = self.shown_layout();
+        let metrics = self.ui_metrics(UiFont::Chrome);
+        chrome::close_button_at(self.tab_bar().as_ref(), &layout.panes, x, y, metrics)
     }
 
     /// Looks the link under the mouse up again when the grid cell under it changed, or
@@ -1133,6 +1157,9 @@ impl Session {
             self.window.request_redraw();
         }
         self.update_pointer();
+        if self.hovered_close.take().is_some() {
+            self.window.request_redraw();
+        }
     }
 
     /// End of a left press on a link: opens it when the click calls for it (see
@@ -2180,7 +2207,20 @@ impl Session {
             let (x, y) = self.mouse_pixel();
             bar.dragged(*index, bar.along(x, y) - grab_offset);
         }
-        let pane_bars = self.pane_bars(&layout, active);
+        let mut pane_bars = self.pane_bars(&layout, active);
+        match self.hovered_close {
+            Some(chrome::CloseButton::Tab(index)) => {
+                if let Some(tab) = bar.as_mut().and_then(|bar| bar.tabs.get_mut(index)) {
+                    tab.close_hovered = true;
+                }
+            }
+            Some(chrome::CloseButton::Pane(id)) => {
+                if let Some(pane_bar) = pane_bars.iter_mut().find(|b| b.pane == id) {
+                    pane_bar.close_hovered = true;
+                }
+            }
+            None => {}
+        }
         let highlight = match &self.drag {
             Some(Drag::Pane {
                 started: true,
@@ -2422,6 +2462,7 @@ impl App {
             pane_bar_clicks: ClickTracker::default(),
             tooltip_hidden: false,
             pointer: None,
+            hovered_close: None,
             window_title: DEFAULT_TITLE.to_owned(),
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),

@@ -80,6 +80,8 @@ pub struct TabSlot {
     /// Square close button, at the right end of the tab.
     pub close: Rect,
     pub active: bool,
+    /// Whether the mouse is over the close button.
+    pub close_hovered: bool,
 }
 
 /// The bar on its edge of the window, in pixels.
@@ -226,6 +228,7 @@ impl TabBarLayout {
             title_width: (close.x - padding / 2.0 - title_x).max(0.0),
             close,
             active,
+            close_hovered: false,
         }
     }
 

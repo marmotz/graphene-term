@@ -45,6 +45,9 @@ const PLUS_STROKE: f32 = 1.0 / 15.0;
 /// Thickness of the dialog border, in physical pixels.
 const DIALOG_BORDER: f32 = 1.0;
 
+/// Opacity of the text color in the background of a hovered close button.
+pub const CLOSE_HOVER: f32 = 0.2;
+
 /// Opacity of the hovered context-menu row, matching the shortcuts table in settings.
 const MENU_HOVER_HIGHLIGHT: f32 = 0.45;
 
@@ -333,6 +336,9 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
         } else {
             color(colors.tab_inactive_text)
         };
+        if tab.close_hovered {
+            close_hover(tab.close, text, ui);
+        }
         ui.texts.push(UiTextItem {
             text: tab.title.clone(),
             x: tab.title_x,
@@ -412,6 +418,9 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
     let text = gpu_color(text, srgb_target);
     ui.rects
         .push(rect(bar.rect, gpu_color(background, srgb_target)));
+    if bar.close_hovered {
+        close_hover(bar.close, text, ui);
+    }
     ui.texts.push(UiTextItem {
         text: bar.title.clone(),
         x: bar.title_x,
@@ -429,6 +438,13 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         max_width: bar.close.width,
         font: UiFont::Chrome,
     });
+}
+
+/// The background of a hovered close button: its square in the translucent `text`
+/// color of its glyph.
+fn close_hover(close: Rect, text: [f32; 4], ui: &mut UiLayer) {
+    let [r, g, b, _] = text;
+    ui.rects.push(rect(close, [r, g, b, CLOSE_HOVER]));
 }
 
 fn rect(r: Rect, color: [f32; 4]) -> RectInstance {
@@ -798,6 +814,56 @@ mod tests {
         assert_eq!(background, blend(BAR, ACCENT, INACTIVE_PANE_BAR));
         assert_ne!(background, ACCENT);
         assert_ne!(background, BAR);
+    }
+
+    #[test]
+    fn a_hovered_pane_close_button_gets_a_translucent_text_background() {
+        let layout = two_columns();
+        let colors = UiColors {
+            palette_background: LABEL,
+            ..tab_colors()
+        };
+        let mut bars = pane_bars_of(&layout, Some(PaneId(2)));
+        let plain = pane_rects(&layout, Some(PaneId(2)), &bars, &colors, false);
+        bars[1].close_hovered = true;
+        let rects = pane_rects(&layout, Some(PaneId(2)), &bars, &colors, false);
+        assert_eq!(rects.len(), plain.len() + 1);
+        // Right after the background of the hovered bar, in its text color.
+        let [r, g, b, _] = gpu_color(LABEL, false);
+        assert_eq!(
+            drawn(&rects[2..3]),
+            vec![(
+                [bars[1].close.x, bars[1].close.y],
+                [bars[1].close.width, bars[1].close.height],
+                [r, g, b, CLOSE_HOVER]
+            )]
+        );
+        assert_eq!(rects[3..], plain[2..]);
+    }
+
+    #[test]
+    fn a_hovered_tab_close_button_gets_a_translucent_text_background() {
+        let single = Layout {
+            panes: vec![(PaneId(1), area(0.0, 30.0, 1000.0, 100.0))],
+            dividers: Vec::new(),
+            divider: 1.0,
+        };
+        let mut bar = bar();
+        bar.tabs[0].close_hovered = true;
+        let ui = build(&single, None, &[], Some(&bar), None, &tab_colors(), false);
+        // Bar background, shown tab background, hover of the first tab's button (the
+        // first tab is not shown: inactive text color), then the `+` strokes.
+        let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
+        let close = bar.tabs[0].close;
+        assert_eq!(ui.rects.len(), 5);
+        assert_eq!(
+            drawn(&ui.rects[1..2]),
+            vec![(
+                [close.x, close.y],
+                [close.width, close.height],
+                [r, g, b, CLOSE_HOVER]
+            )]
+        );
     }
 
     const DIALOG_BACKGROUND: Rgb = Rgb { r: 50, g: 0, b: 0 };

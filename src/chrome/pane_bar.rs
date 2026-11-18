@@ -66,6 +66,8 @@ pub struct PaneBarLayout {
     pub close: Rect,
     /// Whether the pane is the active pane of its tab.
     pub active: bool,
+    /// Whether the mouse is over the close button.
+    pub close_hovered: bool,
 }
 
 impl PaneBarLayout {
@@ -90,6 +92,7 @@ impl PaneBarLayout {
             title_width: (close.x - padding / 2.0 - title_x).max(0.0),
             close,
             active,
+            close_hovered: false,
         }
     }
 
