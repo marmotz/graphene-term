@@ -291,6 +291,36 @@ impl Node {
     /// Refused (`false`) when `target` is not in the tree or either half would be
     /// under [`MIN_PANE_COLUMNS`] or [`MIN_PANE_LINES`].
     pub fn split(&mut self, target: PaneId, axis: Axis, new: PaneId, geometry: Geometry) -> bool {
+        self.split_with(target, axis, new, Branch::Second, geometry)
+    }
+
+    /// Splits the pane `target` in two halves along `Axis::of(side)`, the pane `moved`
+    /// on `side`: first for `Left`/`Up`, second for `Right`/`Down`. Refused (`false`)
+    /// like [`Node::split`].
+    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
+    pub fn insert(
+        &mut self,
+        target: PaneId,
+        side: Direction,
+        moved: PaneId,
+        geometry: Geometry,
+    ) -> bool {
+        let branch = match side {
+            Direction::Left | Direction::Up => Branch::First,
+            Direction::Right | Direction::Down => Branch::Second,
+        };
+        self.split_with(target, Axis::of(side), moved, branch, geometry)
+    }
+
+    /// Splits the pane `target` along `axis`, the pane `new` on the `branch` half.
+    fn split_with(
+        &mut self,
+        target: PaneId,
+        axis: Axis,
+        new: PaneId,
+        branch: Branch,
+        geometry: Geometry,
+    ) -> bool {
         debug_assert!(!self.contains(new), "pane {new:?} is already in the tree");
         let Some(path) = self.path_of(target) else {
             return false;
@@ -303,13 +333,53 @@ impl Node {
         if first + EPSILON < min || available - first + EPSILON < min {
             return false;
         }
+        let (first, second) = match branch {
+            Branch::First => (new, target),
+            Branch::Second => (target, new),
+        };
         if let Some(node) = self.node_mut(&path) {
             *node = Node::Split {
                 axis,
                 ratio: 0.5,
-                first: Box::new(Node::Leaf(target)),
-                second: Box::new(Node::Leaf(new)),
+                first: Box::new(Node::Leaf(first)),
+                second: Box::new(Node::Leaf(second)),
             };
+        }
+        true
+    }
+
+    /// Puts the pane `new` in the place of the pane `old`. Refused (`false`) when
+    /// `old` is not in the tree.
+    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
+    pub fn replace(&mut self, old: PaneId, new: PaneId) -> bool {
+        debug_assert!(
+            old == new || !self.contains(new),
+            "pane {new:?} is already in the tree"
+        );
+        match self.path_of(old).and_then(|path| self.node_mut(&path)) {
+            Some(node) => {
+                *node = Node::Leaf(new);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Exchanges the places of the panes `a` and `b`. Refused (`false`) when either is
+    /// not in the tree or they are the same pane.
+    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
+    pub fn swap(&mut self, a: PaneId, b: PaneId) -> bool {
+        if a == b {
+            return false;
+        }
+        let (Some(path_a), Some(path_b)) = (self.path_of(a), self.path_of(b)) else {
+            return false;
+        };
+        if let Some(node) = self.node_mut(&path_a) {
+            *node = Node::Leaf(b);
+        }
+        if let Some(node) = self.node_mut(&path_b) {
+            *node = Node::Leaf(a);
         }
         true
     }
@@ -696,6 +766,90 @@ mod tests {
                 }),
             }
         );
+    }
+
+    #[test]
+    fn insert_puts_the_moved_pane_on_the_given_side() {
+        let g = geometry(1001.0, 601.0);
+        let leaf = |n| Box::new(Node::Leaf(id(n)));
+        let cases = [
+            (Direction::Left, Axis::Horizontal, leaf(2), leaf(1)),
+            (Direction::Right, Axis::Horizontal, leaf(1), leaf(2)),
+            (Direction::Up, Axis::Vertical, leaf(2), leaf(1)),
+            (Direction::Down, Axis::Vertical, leaf(1), leaf(2)),
+        ];
+        for (side, axis, first, second) in cases {
+            let mut tree = Node::Leaf(id(1));
+            assert!(tree.insert(id(1), side, id(2), g), "{side:?}");
+            assert_eq!(
+                tree,
+                Node::Split {
+                    axis,
+                    ratio: 0.5,
+                    first,
+                    second,
+                },
+                "{side:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn insert_into_a_nested_pane_keeps_the_others() {
+        let g = geometry(1001.0, 601.0);
+        let mut tree = l_shape(g);
+        assert!(tree.insert(id(3), Direction::Left, id(4), g));
+        assert_eq!(tree.leaves(), vec![id(1), id(2), id(4), id(3)]);
+    }
+
+    #[test]
+    fn insert_is_refused_when_too_small_or_missing() {
+        // 15 columns: two halves of 7 are under the minimum of 10.
+        let g = geometry(151.0, 601.0);
+        let mut tree = Node::Leaf(id(1));
+        assert!(!tree.insert(id(1), Direction::Left, id(2), g));
+        assert_eq!(tree, Node::Leaf(id(1)));
+        assert!(!tree.insert(id(9), Direction::Down, id(2), g));
+        assert_eq!(tree, Node::Leaf(id(1)));
+    }
+
+    #[test]
+    fn replace_swaps_a_leaf_for_another_pane() {
+        let g = geometry(1001.0, 601.0);
+        let mut tree = l_shape(g);
+        let before = tree.clone();
+        assert!(tree.replace(id(2), id(7)));
+        assert_eq!(tree.leaves(), vec![id(1), id(7), id(3)]);
+        assert!(tree.replace(id(7), id(2)));
+        assert_eq!(tree, before);
+        assert!(!tree.replace(id(9), id(8)));
+        assert_eq!(tree, before);
+    }
+
+    #[test]
+    fn swap_exchanges_two_panes_and_keeps_the_ratios() {
+        let g = geometry(1001.0, 601.0);
+        let mut tree = l_shape(g);
+        assert!(tree.set_divider(&[], 300.0, g));
+        let ratio = |tree: &Node| match tree {
+            Node::Split { ratio, .. } => *ratio,
+            Node::Leaf(_) => panic!("split expected"),
+        };
+        let before = ratio(&tree);
+        assert!(tree.swap(id(1), id(3)));
+        assert_eq!(tree.leaves(), vec![id(3), id(2), id(1)]);
+        assert_eq!(ratio(&tree), before);
+    }
+
+    #[test]
+    fn swap_is_refused_for_a_missing_or_the_same_pane() {
+        let g = geometry(1001.0, 601.0);
+        let mut tree = l_shape(g);
+        let before = tree.clone();
+        assert!(!tree.swap(id(1), id(9)));
+        assert!(!tree.swap(id(9), id(1)));
+        assert!(!tree.swap(id(2), id(2)));
+        assert_eq!(tree, before);
     }
 
     #[test]
