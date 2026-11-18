@@ -16,7 +16,7 @@ if [[ ! -x "$binary" ]]; then
   exit 2
 fi
 
-for command in bash mktemp pgrep timeout; do
+for command in bash cat chmod find head mktemp pgrep rm seq sleep timeout; do
   command -v "$command" >/dev/null || {
     printf 'Required command not found: %s\n' "$command" >&2
     exit 2
@@ -25,8 +25,8 @@ done
 
 case "$backend" in
   x11)
-    : "${DISPLAY:?Run this probe inside an X11 session, e.g. Xvfb}"
-    for command in xdotool xclip; do
+    : "${DISPLAY:?Run this probe inside an X11 session, e.g. xvfb-run}"
+    for command in xdotool; do
       command -v "$command" >/dev/null || {
         printf 'Required command not found: %s\n' "$command" >&2
         exit 2
@@ -34,82 +34,115 @@ case "$backend" in
     done
     ;;
   wayland)
-    : "${WAYLAND_DISPLAY:?Run this probe inside a Wayland session}"
-    : "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required for Wayland}"
-    : "${SWAYSOCK:?Sway must export its IPC socket for display-size detection}"
-    for command in python3 swaymsg wtype wl-paste; do
+    for command in grim sway swaymsg python3 wtype; do
       command -v "$command" >/dev/null || {
         printf 'Required command not found: %s\n' "$command" >&2
         exit 2
       }
     done
     python3 -c 'from wayland_automation import Mouse' >/dev/null 2>&1 || {
-      printf 'Install wayland-automation (see backlog/features/e2e-tests/technical.md)\n' >&2
+      printf 'Install wayland-automation (see docs/development.md)\n' >&2
       exit 2
     }
     ;;
 esac
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/graphene-gui-probe.XXXXXX")
+artifact_root=${GRAPHENE_E2E_ARTIFACTS:-"${TMPDIR:-/tmp}/graphene-e2e-artifacts"}
+mkdir -p "$artifact_root"
+tmp=$(mktemp -d "$artifact_root/$backend.XXXXXX")
 app_pid=
 shell_pid=
-passed=0
+sway_pid=
+
+stop_pid() {
+  local pid=$1
+  [[ -n "$pid" ]] || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
 
 stop_app() {
   [[ -n "$app_pid" ]] || return 0
 
   shell_pid=$(pgrep -P "$app_pid" | head -n1 || true)
   if [[ -n "$shell_pid" ]]; then
-    kill -TERM "$shell_pid" 2>/dev/null || true
+    stop_pid "$shell_pid"
   fi
-
-  for _ in $(seq 1 40); do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.05
-  done
-  if kill -0 "$app_pid" 2>/dev/null; then
-    kill -TERM "$app_pid" 2>/dev/null || true
-  fi
-  wait "$app_pid" 2>/dev/null || true
-
-  if [[ -n "$shell_pid" ]] && kill -0 "$shell_pid" 2>/dev/null; then
-    kill -KILL "$shell_pid" 2>/dev/null || true
-  fi
+  stop_pid "$app_pid"
   app_pid=
   shell_pid=
 }
 
+capture_failure() {
+  case "$backend" in
+    x11)
+      if command -v import >/dev/null; then
+        import -window root "$tmp/screenshot.png" 2>/dev/null || true
+      fi
+      ;;
+    wayland)
+      command -v grim >/dev/null && grim "$tmp/screenshot.png" 2>/dev/null || true
+      ;;
+  esac
+}
+
 cleanup() {
-  result=$?
+  local result=$?
+  trap - EXIT INT TERM
   if ((result == 0)); then
     stop_app
+    stop_pid "$sway_pid"
     rm -rf -- "$tmp"
   else
-    printf 'Probe artifacts kept at %s\n' "$tmp" >&2
+    printf 'E2E artifacts kept at %s\n' "$tmp" >&2
     if [[ -f "$tmp/graphene.log" ]]; then
       cat "$tmp/graphene.log" >&2
     fi
-    case "$backend" in
-      x11)
-        if command -v import >/dev/null; then
-          import -window root "$tmp/screenshot.png" 2>/dev/null || true
-        fi
-        ;;
-      wayland)
-        if command -v grim >/dev/null; then
-          grim "$tmp/screenshot.png" 2>/dev/null || true
-        fi
-        ;;
-    esac
+    if [[ -f "$tmp/sway.log" ]]; then
+      cat "$tmp/sway.log" >&2
+    fi
+    capture_failure
     stop_app
+    stop_pid "$sway_pid"
   fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-mkdir -p "$tmp/home/.config/graphene" "$tmp/state"
-cat >"$tmp/home/.config/graphene/config.toml" <<'EOF'
+mkdir -p \
+  "$tmp/home" \
+  "$tmp/config/graphene" \
+  "$tmp/state" \
+  "$tmp/data" \
+  "$tmp/cache" \
+  "$tmp/runtime"
+chmod 700 "$tmp/runtime"
+
+export HOME="$tmp/home"
+export XDG_CONFIG_HOME="$tmp/config"
+export XDG_STATE_HOME="$tmp/state"
+export XDG_DATA_HOME="$tmp/data"
+export XDG_CACHE_HOME="$tmp/cache"
+export XDG_RUNTIME_DIR="$tmp/runtime"
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+export WGPU_BACKEND=gl
+export GRAPHENE_E2E_PROMPT_READY="$tmp/prompt-ready"
+export GRAPHENE_E2E_COMMAND_RESULT_FILE="$tmp/command-result"
+export SHELL="$tmp/shell"
+export GRAPHENE_SHELL_INTEGRATION=0
+
+cat >"$tmp/config/graphene/config.toml" <<'EOF'
 [updates]
 check = false
 
@@ -121,118 +154,129 @@ EOF
 cat >"$tmp/shell" <<'EOF'
 #!/bin/sh
 printf 'GRAPHENE_E2E_READY\n'
+export PS1=
 export PROMPT_COMMAND=': > "$GRAPHENE_E2E_PROMPT_READY"; unset PROMPT_COMMAND'
 exec /bin/bash --noprofile --norc -i
 EOF
 chmod +x "$tmp/shell"
 
-export HOME="$tmp/home"
-export XDG_CONFIG_HOME="$HOME/.config"
-export XDG_STATE_HOME="$tmp/state"
-export GRAPHENE_E2E_PROMPT_READY="$tmp/prompt-ready"
-export SHELL="$tmp/shell"
-export GRAPHENE_SHELL_INTEGRATION=0
+case "$backend" in
+  x11)
+    unset WAYLAND_DISPLAY SWAYSOCK
+    export WINIT_UNIX_BACKEND=x11
+    ;;
+  wayland)
+    unset DISPLAY WAYLAND_DISPLAY SWAYSOCK
+    export WINIT_UNIX_BACKEND=wayland
+    export WLR_BACKENDS=headless
+    export WLR_RENDERER=pixman
+    export WLR_LIBINPUT_NO_DEVICES=1
+    export WLR_HEADLESS_OUTPUTS=1
+    cat >"$tmp/sway.conf" <<'EOF'
+output HEADLESS-1 mode 1280x800
+EOF
+    sway --unsupported-gpu -d -c "$tmp/sway.conf" >"$tmp/sway.log" 2>&1 &
+    sway_pid=$!
+
+    for _ in $(seq 1 200); do
+      wayland_socket=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-*' -print -quit)
+      sway_socket=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'sway-ipc.*.sock' -print -quit)
+      if [[ -n "$wayland_socket" && -n "$sway_socket" ]]; then
+        export WAYLAND_DISPLAY=${wayland_socket##*/}
+        export SWAYSOCK=$sway_socket
+        if swaymsg -t get_outputs >/dev/null 2>&1; then
+          break
+        fi
+      fi
+      if ! kill -0 "$sway_pid" 2>/dev/null; then
+        printf 'Sway exited before its virtual Wayland session was ready\n' >&2
+        exit 1
+      fi
+      sleep 0.05
+    done
+    if [[ -z "${WAYLAND_DISPLAY:-}" ]] || ! swaymsg -t get_outputs >/dev/null 2>&1; then
+      printf 'Timed out waiting for the virtual Wayland session\n' >&2
+      exit 1
+    fi
+    ;;
+esac
 
 "$binary" >"$tmp/graphene.log" 2>&1 &
 app_pid=$!
 
-wait_for_prompt() {
+wait_for_file() {
+  local file=$1
+  local description=$2
   for _ in $(seq 1 200); do
-    if [[ -f "$GRAPHENE_E2E_PROMPT_READY" ]]; then
+    if [[ -f "$file" ]]; then
+      if ! kill -0 "$app_pid" 2>/dev/null; then
+        printf 'Graphene exited before %s\n' "$description" >&2
+        return 1
+      fi
       return 0
     fi
     if ! kill -0 "$app_pid" 2>/dev/null; then
-      printf 'Graphene exited before its shell prompt was ready\n' >&2
+      printf 'Graphene exited before %s\n' "$description" >&2
       return 1
     fi
     sleep 0.05
   done
-  printf 'Timed out waiting for the controlled shell prompt\n' >&2
+  printf 'Timed out waiting for %s\n' "$description" >&2
   return 1
 }
 
-wait_for_prompt
+wait_for_file "$GRAPHENE_E2E_PROMPT_READY" 'the controlled shell prompt'
 
-read_clipboard() {
-  case "$backend" in
-    x11) xclip -selection clipboard -o 2>/dev/null || true ;;
-    wayland) wl-paste --primary --no-newline 2>/dev/null || true ;;
-  esac
-}
-
-if [[ "$backend" == wayland ]]; then
-  # A clipboard read of the fixture's startup output proves the native window has
-  # rendered and received pointer input before the keyboard probe starts.
-  for _ in $(seq 1 30); do
-    python3 - 50 <<'PY'
-import sys
+focus_wayland_window() {
+  python3 - <<'PY'
 from wayland_automation import Mouse
 
-y = int(sys.argv[1])
 with Mouse() as mouse:
-    mouse.swipe(20, y, 600, y, speed=0.1)
+    mouse.click(100, 60)
 PY
-    copied=$(read_clipboard)
-    if [[ "$copied" == *GRAPHENE_E2E_READY* ]]; then
-      break
-    fi
-    sleep 0.05
-  done
-  if [[ "$copied" != *GRAPHENE_E2E_READY* ]]; then
-    printf 'The Wayland window did not expose the controlled shell output\n' >&2
-    exit 1
-  fi
-fi
+}
 
-# The leading x tolerates the first virtual-key event being consumed while a
-# compositor registers its virtual keyboard; the selection starts after the prompt.
-marker=E2E_KEYBOARD_MARKER
 case "$backend" in
   x11)
     window=$(timeout 15 xdotool search --sync --onlyvisible --classname graphene | head -n1)
     xdotool windowfocus "$window"
-    xdotool type --clearmodifiers "xGUI_$marker"
-    row_y=50
     ;;
   wayland)
-    wtype -- "xGUI_$marker"
-    row_y=70
+    focus_wayland_window
     ;;
 esac
 
+# The command is typed through the GUI driver, so the result proves the keyboard
+# input reached the shell through Graphene's window and PTY. The arithmetic makes the
+# expected text absent from the typed characters. The leading spaces tolerate the
+# first virtual-key events being consumed while a compositor registers its keyboard.
+typed_command="   printf 'E2E_RESULT_%s\\n' \$((6 * 7)) >\"\$GRAPHENE_E2E_COMMAND_RESULT_FILE\""
+expected=E2E_RESULT_42
 case "$backend" in
   x11)
-    xdotool mousemove 140 "$row_y" mousedown 1 \
-      mousemove --sync 700 "$row_y" mouseup 1
-    xdotool key ctrl+shift+c
+    xdotool type --clearmodifiers --delay 20 "$typed_command"
+    xdotool key --clearmodifiers Return
     ;;
   wayland)
-    python3 - "$row_y" <<'PY'
-import sys
-from wayland_automation import Mouse
-
-y = int(sys.argv[1])
-with Mouse() as mouse:
-    mouse.swipe(140, y, 700, y, speed=0.1)
-PY
+    # One wtype process keeps a single virtual keyboard for the text and Return; its
+    # initial sleep lets Graphene receive the new keymap before the first key.
+    wtype -s 500 -d 20 "$typed_command" -P Return -p Return
     ;;
 esac
 
+wait_for_file "$GRAPHENE_E2E_COMMAND_RESULT_FILE" 'the typed command to run'
+result=
 for _ in $(seq 1 100); do
-  copied=$(read_clipboard)
-  if [[ "$copied" == *"$marker"* ]]; then
-    printf '%s keyboard+pointer behavioral probe passed\n' "$backend"
-    passed=1
-    break
-  fi
+  result=$(<"$GRAPHENE_E2E_COMMAND_RESULT_FILE")
+  [[ "$result" == "$expected" ]] && break
   sleep 0.05
 done
-
-if ((passed == 0)); then
-  printf 'Expected %s in the UI selection; got: %s\n' "$marker" "$copied" >&2
+if [[ "$result" != "$expected" ]]; then
+  printf 'Expected command result %s; got: %s\n' "$expected" "$result" >&2
   exit 1
 fi
 
-# Stop the real application; its PTY shell is torn down with the window process.
+printf '%s GUI smoke test passed: typed command produced %s\n' \
+  "$backend" "$result"
 stop_app
-printf 'Graphene process stopped\n'
+stop_pid "$sway_pid"

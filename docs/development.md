@@ -85,6 +85,38 @@ Unit tests live next to the code (`#[cfg(test)]` modules):
 `frame` tests build a `Term<VoidListener>` and feed bytes through
 `vte::ansi::Processor`, so they exercise the real emulator without a PTY or GPU.
 
+## GUI E2E smoke tests
+
+Pull-request CI runs `tests/e2e/gui-automation-probe.sh` on both X11 (Xvfb) and native
+Wayland (headless Sway). The script starts the built `graphene` executable as a separate
+process, gives it a private home and XDG config/state/runtime directories, and disables
+update checks. Once the controlled shell fixture shows its prompt, the test types a
+deterministic `printf` command into the Graphene window with the backend's input driver
+(`xdotool` on X11, `wtype` on Wayland) and checks the exact result the shell writes to an
+isolated file. The application and its shell are stopped at the end of each run.
+Software rendering is enabled for Graphene and the Wayland compositor. On failure, CI
+uploads the application/compositor logs and a screenshot for seven days.
+
+To run locally after installing `xvfb`, `xdotool`, `sway`, `wtype`, `grim`, `imagemagick`,
+`python3-pip`, `libgl1-mesa-dri`, `libx11-6`,
+`libxkbcommon-x11-0`, `libxcursor1`, `libxi6`, `libxinerama1`, and `libxrandr2`:
+
+```bash
+python3 -m pip install --no-deps --target /tmp/wayland-automation wayland-automation==0.3.1
+cargo build
+export PYTHONPATH=/tmp/wayland-automation
+export GRAPHENE_BIN="$PWD/target/debug/graphene"
+export GRAPHENE_E2E_ARTIFACTS=/tmp/graphene-e2e-artifacts
+xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX +render -noreset" \
+  tests/e2e/gui-automation-probe.sh x11
+tests/e2e/gui-automation-probe.sh wayland
+```
+
+The GitHub Actions job check is named **`e2e`**. Add that exact status check as required in
+the repository's branch protection rule or ruleset (Settings → Branches / Rulesets) so a
+failed GUI smoke test blocks merging. Required checks are a repository setting and cannot
+be enabled by the workflow itself.
+
 ## Benchmarks
 
 `cargo bench` runs `benches/render.rs` (criterion) on PTY output recorded at 120x32 in
