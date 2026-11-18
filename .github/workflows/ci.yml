@@ -43,7 +43,7 @@ jobs:
   e2e:
     # Pinned to the Ubuntu release the GUI drivers were validated on (sway 1.9, wtype 0.4).
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             grim imagemagick libgl1-mesa-dri libx11-6 libxkbcommon-x11-0 \
             libxcursor1 libxi6 libxinerama1 libxrandr2 mesa-vulkan-drivers \
-            python3-pip sway tesseract-ocr wtype xdotool xvfb
+            fish python3-pip sway tesseract-ocr wl-clipboard wtype xclip xdotool xvfb zsh
           python3 -m pip install --no-deps --target "$RUNNER_TEMP/wayland-automation" \
             wayland-automation==0.3.1
 
@@ -77,7 +77,7 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/wayland-automation
         run: |
           mkdir -p "$GRAPHENE_E2E_ARTIFACTS"
-          for scenario in smoke tabs palette panes menu dialogs settings; do
+          for scenario in smoke tabs palette panes menu dialogs settings selection clipboard scroll font mouse blocks shell-bash shell-zsh shell-fish; do
             xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX +render -noreset" \
               tests/e2e/gui-automation-probe.sh x11 "$scenario"
             tests/e2e/gui-automation-probe.sh wayland "$scenario"

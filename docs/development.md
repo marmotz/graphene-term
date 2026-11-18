@@ -96,7 +96,10 @@ backend's driver (`xdotool` on X11, `wtype` and `wayland-automation` on Wayland)
 controlled shell fixture assigns each pane a unique ID, so navigation is asserted by
 typing a command into whichever shell has focus; pane sizes are read with `stty size`,
 palette actions through the recent-actions file, and dialog and Settings text with OCR
-(`tesseract`). Screenshots are not compared. The application and its shells are stopped
+(`tesseract`). Terminal scenarios locate words of a known text with OCR, then assert the
+selection and clipboard Graphene fills (`xclip`, `wl-clipboard`). The `shell-*`,
+`blocks` and `scroll` scenarios start a real bash, zsh or fish with Graphene's integration and
+startup files written to the private home. Screenshots are not compared. The application and its shells are stopped
 at the end of each run. Software rendering is enabled for Graphene and the Wayland
 compositor. On failure, CI uploads the application/compositor logs and a screenshot for
 seven days.
@@ -105,8 +108,8 @@ The catalogue lists every scenario and every palette action with the scenario co
 it; a unit test fails when a new action has no row there. Add or update the scenario and
 its catalogue row with any user-facing interaction change.
 
-To run locally after installing `xvfb`, `xdotool`, `sway`, `wtype`, `grim`, `imagemagick`,
-`tesseract-ocr`, `python3-pip`, `libgl1-mesa-dri`, `libx11-6`,
+To run locally after installing `xvfb`, `xdotool`, `xclip`, `sway`, `wtype`,
+`wl-clipboard`, `grim`, `imagemagick`, `tesseract-ocr`, `zsh`, `fish`, `python3-pip`, `libgl1-mesa-dri`, `libx11-6`,
 `libxkbcommon-x11-0`, `libxcursor1`, `libxi6`, `libxinerama1`, and `libxrandr2`:
 
 ```bash
@@ -115,7 +118,8 @@ cargo build
 export PYTHONPATH=/tmp/wayland-automation
 export GRAPHENE_BIN="$PWD/target/debug/graphene"
 export GRAPHENE_E2E_ARTIFACTS=/tmp/graphene-e2e-artifacts
-for scenario in smoke tabs palette panes menu dialogs settings; do
+for scenario in smoke tabs palette panes menu dialogs settings selection clipboard scroll \
+  font mouse blocks shell-bash shell-zsh shell-fish; do
   xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX +render -noreset" \
     tests/e2e/gui-automation-probe.sh x11 "$scenario"
   tests/e2e/gui-automation-probe.sh wayland "$scenario"

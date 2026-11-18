@@ -12,7 +12,7 @@ case "$backend" in
 esac
 
 case "$scenario" in
-  smoke|tabs|palette|panes|menu|dialogs|settings) ;;
+  smoke|tabs|palette|panes|menu|dialogs|settings|selection|clipboard|scroll|font|mouse|blocks|shell-bash|shell-zsh|shell-fish) ;;
   *)
     printf 'Unknown scenario: %s\n' "$scenario" >&2
     exit 2
@@ -35,7 +35,7 @@ done
 case "$backend" in
   x11)
     : "${DISPLAY:?Run this probe inside an X11 session, e.g. xvfb-run}"
-    for command in convert import tesseract xdotool; do
+    for command in convert import tesseract xclip xdotool; do
       command -v "$command" >/dev/null || {
         printf 'Required command not found: %s\n' "$command" >&2
         exit 2
@@ -43,7 +43,7 @@ case "$backend" in
     done
     ;;
   wayland)
-    for command in convert grim sway swaymsg python3 tesseract wtype; do
+    for command in convert grim sway swaymsg python3 tesseract wl-copy wl-paste wtype; do
       command -v "$command" >/dev/null || {
         printf 'Required command not found: %s\n' "$command" >&2
         exit 2
@@ -171,8 +171,59 @@ export GRAPHENE_E2E_PANE_PIDS="$tmp/pane-pids"
 export GRAPHENE_E2E_PANE_SIZES="$tmp/pane-sizes"
 export GRAPHENE_E2E_PANE_COUNTER="$tmp/pane-counter"
 export GRAPHENE_E2E_ACTIVE_PANES="$tmp/active-panes"
-export SHELL="$tmp/shell"
-export GRAPHENE_SHELL_INTEGRATION=0
+export GRAPHENE_E2E_TEXT="$tmp/text"
+export GRAPHENE_E2E_ROWS="$tmp/rows"
+export GRAPHENE_E2E_MOUSE_REPORT="$tmp/mouse-report"
+export GRAPHENE_E2E_MOUSE_READY="$tmp/mouse-ready"
+
+# Shell-integration scenarios start a real bash, zsh or fish with Graphene's hooks;
+# every other scenario uses the controlled fixture below without integration.
+case "$scenario" in
+  shell-bash|blocks|scroll) integration_shell=bash ;;
+  shell-zsh) integration_shell=zsh ;;
+  shell-fish) integration_shell=fish ;;
+  *) integration_shell= ;;
+esac
+if [[ -n "$integration_shell" ]]; then
+  SHELL=$(command -v "$integration_shell") || {
+    printf 'Required command not found: %s\n' "$integration_shell" >&2
+    exit 2
+  }
+  export SHELL
+  unset GRAPHENE_SHELL_INTEGRATION
+  # The only shell in these scenarios is pane 1. The user startup files, written in the
+  # disposable home, give a fixed prompt and the same readiness markers as the fixture;
+  # Graphene's integration loads them after installing its own hooks.
+  export GRAPHENE_E2E_PANE_ID=1
+  printf '1\n' >"$GRAPHENE_E2E_PANE_COUNTER"
+  printf '1\n' >"$GRAPHENE_E2E_PANE_IDS"
+  cat >"$HOME/.bashrc" <<'EOF'
+printf '1 %s\n' "$$" >> "$GRAPHENE_E2E_PANE_PIDS"
+PS1='$ '
+PROMPT_COMMAND=': > "$GRAPHENE_E2E_PROMPT_READY"; printf "1\n" >> "$GRAPHENE_E2E_PROMPT_COUNT"'
+EOF
+  cat >"$HOME/.zshrc" <<'EOF'
+printf '1 %s\n' "$$" >> "$GRAPHENE_E2E_PANE_PIDS"
+PROMPT='$ '
+_e2e_precmd() { : > "$GRAPHENE_E2E_PROMPT_READY"; printf '1\n' >> "$GRAPHENE_E2E_PROMPT_COUNT"; }
+precmd_functions+=(_e2e_precmd)
+EOF
+  mkdir -p "$XDG_CONFIG_HOME/fish"
+  cat >"$XDG_CONFIG_HOME/fish/config.fish" <<'EOF'
+printf '1 %s\n' $fish_pid >> "$GRAPHENE_E2E_PANE_PIDS"
+set -g fish_greeting
+function fish_prompt
+    printf '$ '
+end
+function _e2e_prompt --on-event fish_prompt
+    printf '' > "$GRAPHENE_E2E_PROMPT_READY"
+    printf '1\n' >> "$GRAPHENE_E2E_PROMPT_COUNT"
+end
+EOF
+else
+  export SHELL="$tmp/shell"
+  export GRAPHENE_SHELL_INTEGRATION=0
+fi
 
 cat >"$tmp/config/graphene/config.toml" <<'EOF'
 language = "en"
@@ -199,6 +250,11 @@ export PROMPT_COMMAND=': > "$GRAPHENE_E2E_PROMPT_READY"; printf "%s\n" "$GRAPHEN
 exec /bin/bash --noprofile --norc -i
 EOF
 chmod +x "$tmp/shell"
+
+# Text shown by the terminal scenarios: written by the probe, so the words located on
+# screen never appear in a command line typed on the same screen.
+printf 'ALPHA BRAVO CHARLIE\nDELTA ECHO FOXTROT\n' >"$GRAPHENE_E2E_TEXT"
+seq -f 'ROW %03g' 1 300 >"$GRAPHENE_E2E_ROWS"
 
 case "$backend" in
   x11)
@@ -338,6 +394,9 @@ send_key() {
       tab) x11_parts[-1]=Tab ;;
       pageup) x11_parts[-1]=Page_Up ;;
       pagedown) x11_parts[-1]=Page_Down ;;
+      insert) x11_parts[-1]=Insert ;;
+      home) x11_parts[-1]=Home ;;
+      end) x11_parts[-1]=End ;;
     esac
     local normalized
     normalized=$(IFS=+; printf '%s' "${x11_parts[*]}")
@@ -381,6 +440,9 @@ send_key() {
     tab) part=Tab ;;
     pageup) part=Page_Up ;;
     pagedown) part=Page_Down ;;
+    insert) part=Insert ;;
+    home) part=Home ;;
+    end) part=End ;;
     comma) part=comma ;;
     *) ;;
   esac
@@ -572,6 +634,287 @@ wait_for_foreground_sleep() {
 ocr_text() {
   convert "$1" -colorspace Gray -negate -resize 200% "$1.ocr.png"
   tesseract "$1.ocr.png" stdout -l eng "${@:2}" 2>/dev/null
+}
+
+capture_region() {
+  local x=$1 y=$2 width=$3 height=$4 file=$5
+  if [[ "$backend" == x11 ]]; then
+    import -window root -crop "${width}x${height}+${x}+${y}" +repage "$file"
+  else
+    grim -g "$x,$y ${width}x${height}" "$file"
+  fi
+}
+
+# OCR text of the main window.
+window_text() {
+  local x y width height
+  read -r x y width height <<<"$(main_window_rect)"
+  capture_region "$x" "$y" "$width" "$height" "$tmp/window.png"
+  ocr_text "$tmp/window.png" --psm 11
+}
+
+wait_for_window_text() {
+  local pattern=$1 description=$2
+  for _ in $(seq 1 60); do
+    window_text | grep -Eq -- "$pattern" && return 0
+    sleep 0.05
+  done
+  printf 'Could not read %s (/%s/) in the window\n' "$description" "$pattern" >&2
+  return 1
+}
+
+wait_for_window_text_gone() {
+  local pattern=$1 description=$2
+  for _ in $(seq 1 60); do
+    window_text | grep -Eq -- "$pattern" || return 0
+    sleep 0.05
+  done
+  printf '%s (/%s/) was still visible in the window\n' "$description" "$pattern" >&2
+  return 1
+}
+
+# Screen box `x y width height` of the first word of the main window read as exactly
+# `word`, top to bottom then left to right.
+locate_word() {
+  local word=$1
+  local x y width height box
+  read -r x y width height <<<"$(main_window_rect)"
+  for _ in $(seq 1 60); do
+    capture_region "$x" "$y" "$width" "$height" "$tmp/window.png"
+    if box=$(ocr_text "$tmp/window.png" --psm 11 tsv | python3 -c '
+import sys
+
+word = sys.argv[1]
+found = []
+for row in sys.stdin.read().splitlines()[1:]:
+    columns = row.split("\t")
+    if len(columns) == 12 and columns[11].strip() == word:
+        left, top, width, height = (int(value) // 2 for value in columns[6:10])
+        found.append((top, left, width, height))
+if not found:
+    raise SystemExit(1)
+top, left, width, height = min(found)
+print(left, top, width, height)
+' "$word"); then
+      local left top box_width box_height
+      read -r left top box_width box_height <<<"$box"
+      printf '%s %s %s %s\n' "$((x + left))" "$((y + top))" "$box_width" "$box_height"
+      return 0
+    fi
+    sleep 0.05
+  done
+  printf 'Could not locate the word %s in the window\n' "$word" >&2
+  return 1
+}
+
+# Centre of character `index` (from 0) of a located word of `length` characters.
+char_x() {
+  local left=$1 width=$2 length=$3 index=$4
+  printf '%s\n' "$((left + (2 * index + 1) * width / (2 * length)))"
+}
+
+# A selection includes its first and last cells only from the side facing the rest of
+# the selection: drags start in the left quarter and end in the right quarter of a cell.
+char_start_x() {
+  local left=$1 width=$2 length=$3 index=$4
+  printf '%s\n' "$((left + (4 * index + 1) * width / (4 * length)))"
+}
+
+char_end_x() {
+  local left=$1 width=$2 length=$3 index=$4
+  printf '%s\n' "$((left + (4 * index + 3) * width / (4 * length)))"
+}
+
+# Pointer input. `pointer_clicks x y count [button] [modifier]` clicks `count` times in a
+# row; `pointer_drag x1 y1 x2 y2 [modifier]` drags with the left button. A modifier is
+# held around the gesture: with xdotool on X11, with a wtype keyboard that holds it
+# while the virtual pointer acts on Wayland.
+wayland_pointer() {
+  python3 - "$@" <<'PY'
+import sys
+from wayland_automation import Mouse
+
+with Mouse() as mouse:
+    for operation in sys.argv[1:]:
+        name, *args = operation.split()
+        if name == "click":
+            mouse.click(int(args[0]), int(args[1]), args[2])
+        elif name == "move":
+            mouse.click(int(args[0]), int(args[1]), "nothing")
+        elif name == "down":
+            mouse.mouse_down(int(args[0]), int(args[1]), args[2])
+        elif name == "up":
+            mouse.mouse_up(int(args[0]), int(args[1]), args[2])
+        elif name == "scroll":
+            mouse.scroll(int(args[0]), int(args[1]), int(args[2]))
+PY
+}
+
+with_wayland_modifier() {
+  local modifier=$1
+  shift
+  if [[ -z "$modifier" ]]; then
+    "$@"
+    return
+  fi
+  # The modifier is held for longer than the gesture takes; the gesture starts once the
+  # new virtual keyboard has delivered its keymap and the modifier press.
+  wtype -s "$wtype_settle_ms" -M "$modifier" -s 3000 -m "$modifier" &
+  local holder=$!
+  sleep "$(awk -v ms="$wtype_settle_ms" 'BEGIN { printf "%.3f", (ms + 400) / 1000 }')"
+  "$@"
+  wait "$holder"
+}
+
+pointer_clicks() {
+  local x=$1 y=$2 count=$3 button=${4:-left} modifier=${5:-}
+  if [[ "$backend" == x11 ]]; then
+    local button_number=1
+    [[ "$button" == middle ]] && button_number=2
+    [[ "$button" == right ]] && button_number=3
+    local -a command=(xdotool)
+    [[ -n "$modifier" ]] && command+=(keydown "$modifier")
+    command+=(mousemove --sync "$x" "$y" click --repeat "$count" --delay 60 "$button_number")
+    [[ -n "$modifier" ]] && command+=(keyup "$modifier")
+    "${command[@]}"
+  else
+    local -a operations=()
+    for ((click = 0; click < count; click++)); do
+      operations+=("click $x $y $button")
+    done
+    with_wayland_modifier "$modifier" wayland_pointer "${operations[@]}"
+  fi
+}
+
+pointer_drag() {
+  local x1=$1 y1=$2 x2=$3 y2=$4 modifier=${5:-}
+  local middle_x=$(((x1 + x2) / 2)) middle_y=$(((y1 + y2) / 2))
+  if [[ "$backend" == x11 ]]; then
+    local -a command=(xdotool)
+    [[ -n "$modifier" ]] && command+=(keydown "$modifier")
+    command+=(mousemove --sync "$x1" "$y1" mousedown 1
+      mousemove --sync "$middle_x" "$middle_y" mousemove --sync "$x2" "$y2" mouseup 1)
+    [[ -n "$modifier" ]] && command+=(keyup "$modifier")
+    "${command[@]}"
+  else
+    with_wayland_modifier "$modifier" wayland_pointer "move $x1 $y1" "down $x1 $y1 left" \
+      "move $middle_x $middle_y" "move $x2 $y2" "up $x2 $y2 left"
+  fi
+}
+
+pointer_scroll() {
+  local x=$1 y=$2 clicks=$3
+  if [[ "$backend" == x11 ]]; then
+    local button=4
+    ((clicks < 0)) && button=5
+    xdotool mousemove --sync "$x" "$y" click --repeat "${clicks#-}" --delay 30 "$button"
+  else
+    wayland_pointer "scroll $clicks $x $y"
+  fi
+}
+
+# Clipboard access from outside Graphene: `clipboard` is the regular clipboard,
+# `primary` the selection a mouse selection fills and a middle click pastes.
+read_clipboard() {
+  local kind=$1
+  if [[ "$backend" == x11 ]]; then
+    xclip -selection "$kind" -o 2>/dev/null || true
+  elif [[ "$kind" == primary ]]; then
+    wl-paste --primary --no-newline 2>/dev/null || true
+  else
+    wl-paste --no-newline 2>/dev/null || true
+  fi
+}
+
+set_clipboard() {
+  local kind=$1 text=$2
+  if [[ "$backend" == x11 ]]; then
+    printf '%s' "$text" | xclip -selection "$kind" -i >/dev/null 2>&1
+  elif [[ "$kind" == primary ]]; then
+    printf '%s' "$text" | wl-copy --primary >/dev/null 2>&1
+  else
+    printf '%s' "$text" | wl-copy >/dev/null 2>&1
+  fi
+  for _ in $(seq 1 100); do
+    [[ "$(read_clipboard "$kind")" == "$text" ]] && return 0
+    sleep 0.05
+  done
+  printf 'Could not set the %s selection\n' "$kind" >&2
+  return 1
+}
+
+wait_for_clipboard() {
+  local kind=$1 expected=$2 description=$3 actual=
+  for _ in $(seq 1 100); do
+    actual=$(read_clipboard "$kind")
+    [[ "$actual" == "$expected" ]] && return 0
+    sleep 0.05
+  done
+  printf 'Expected %s in the %s selection after %s; got %q\n' \
+    "$(printf '%q' "$expected")" "$kind" "$description" "$actual" >&2
+  return 1
+}
+
+# Sends `chord` with a sentinel in the clipboard and waits for Graphene to copy
+# `expected` there.
+expect_copy() {
+  local chord=$1 expected=$2 description=$3
+  set_clipboard clipboard "E2E_SENTINEL_$RANDOM"
+  send_key "$chord"
+  wait_for_clipboard clipboard "$expected" "$description"
+}
+
+# Text the primary selection holds after `gesture` (a pointer command and its
+# arguments), once Graphene has replaced the sentinel put there first.
+selection_after() {
+  local sentinel="E2E_SENTINEL_$RANDOM" actual=
+  set_clipboard primary "$sentinel"
+  "$@"
+  for _ in $(seq 1 100); do
+    actual=$(read_clipboard primary)
+    if [[ "$actual" != "$sentinel" ]]; then
+      printf '%s\n' "$actual"
+      return 0
+    fi
+    sleep 0.05
+  done
+  printf 'The pointer gesture "%s" selected nothing\n' "$*" >&2
+  return 1
+}
+
+expect_selection() {
+  local expected=$1 description=$2
+  shift 2
+  local actual
+  actual=$(selection_after "$@")
+  [[ "$actual" == "$expected" ]] || {
+    printf 'Expected %q to be selected by %s; got %q\n' "$expected" "$description" "$actual" >&2
+    return 1
+  }
+}
+
+run_shell_command() {
+  local prompts_before
+  prompts_before=$(prompt_count)
+  type_text "$1"
+  send_key enter
+  wait_for_prompt_count "$((prompts_before + 1))" "the prompt after: $1"
+}
+
+wait_for_command_result() {
+  local expected=$1 description=$2 result=
+  for _ in $(seq 1 200); do
+    [[ -f "$GRAPHENE_E2E_COMMAND_RESULT_FILE" ]] && result=$(<"$GRAPHENE_E2E_COMMAND_RESULT_FILE")
+    [[ "$result" == "$expected" ]] && return 0
+    sleep 0.05
+  done
+  printf 'Expected %s to write %q; got %q\n' "$description" "$expected" "$result" >&2
+  return 1
+}
+
+# Clears the screen and shows the fixture text on its first two rows.
+show_fixture_text() {
+  run_shell_command 'clear; cat "$GRAPHENE_E2E_TEXT"'
 }
 
 wait_for_confirmation_dialog() {
@@ -1159,6 +1502,215 @@ else:
     focus_main_window
     record_active_pane 1
     printf '%s settings navigation passed: section heading observed, config unchanged, Escape returned to terminal\n' "$backend"
+    ;;
+  selection)
+    show_fixture_text
+    box=$(locate_word ALPHA)
+    read -r alpha_x alpha_y alpha_width alpha_height <<<"$box"
+    box=$(locate_word BRAVO)
+    read -r bravo_x bravo_y bravo_width bravo_height <<<"$box"
+    box=$(locate_word CHARLIE)
+    read -r charlie_x charlie_y charlie_width charlie_height <<<"$box"
+    box=$(locate_word ECHO)
+    read -r echo_x echo_y echo_width echo_height <<<"$box"
+    row1_y=$((bravo_y + bravo_height / 2))
+    row2_y=$((echo_y + echo_height / 2))
+    # The selected text is read back from the primary selection, so the words located by
+    # OCR are also proven to be the text Graphene displays in those cells.
+    expect_selection BRAVO 'a double click' \
+      pointer_clicks "$(char_x "$bravo_x" "$bravo_width" 5 2)" "$row1_y" 2
+    expect_selection 'DELTA ECHO FOXTROT' 'a triple click' \
+      pointer_clicks "$(char_x "$echo_x" "$echo_width" 4 1)" "$row2_y" 3
+    expect_selection 'ALPHA BRAVO' 'a drag' \
+      pointer_drag "$(char_start_x "$alpha_x" "$alpha_width" 5 0)" "$row1_y" \
+      "$(char_end_x "$bravo_x" "$bravo_width" 5 4)" "$row1_y"
+    expect_selection 'ALPHA BRAVO CHARLIE' 'a Shift click' \
+      pointer_clicks "$(char_end_x "$charlie_x" "$charlie_width" 7 6)" "$row1_y" 1 left shift
+    expect_copy ctrl+shift+c 'ALPHA BRAVO CHARLIE' 'the copy shortcut'
+    expect_selection "$(printf 'BRAVO\nECHO')" 'a Ctrl drag' \
+      pointer_drag "$(char_start_x "$bravo_x" "$bravo_width" 5 0)" "$row1_y" \
+      "$(char_end_x "$bravo_x" "$bravo_width" 5 4)" "$row2_y" ctrl
+    expect_copy ctrl+shift+c "$(printf 'BRAVO\nECHO')" 'the copy shortcut on a block selection'
+    # A click without drag clears the selection: the copy shortcut then leaves the
+    # clipboard alone. The typed command afterwards proves the shortcut was handled.
+    pointer_clicks "$(char_x "$charlie_x" "$charlie_width" 7 6)" "$((row2_y + 3 * (row2_y - row1_y)))" 1
+    set_clipboard clipboard E2E_CLEARED
+    send_key ctrl+shift+c
+    record_active_pane 1
+    [[ $(read_clipboard clipboard) == E2E_CLEARED ]] || {
+      printf 'Copy after clearing the selection changed the clipboard to %q\n' \
+        "$(read_clipboard clipboard)" >&2
+      exit 1
+    }
+    printf '%s selection passed: word, line, drag, extension, block, clearing and copy\n' "$backend"
+    ;;
+  clipboard)
+    # shellcheck disable=SC2016
+    set_clipboard clipboard 'printf "%s\n" E2E_PASTE_KEYS >"$GRAPHENE_E2E_COMMAND_RESULT_FILE"'
+    send_key ctrl+shift+v
+    send_key enter
+    wait_for_command_result E2E_PASTE_KEYS 'the command pasted with Ctrl+Shift+V'
+    # shellcheck disable=SC2016
+    set_clipboard clipboard 'printf "%s\n" E2E_PASTE_INSERT >"$GRAPHENE_E2E_COMMAND_RESULT_FILE"'
+    send_key shift+insert
+    send_key enter
+    wait_for_command_result E2E_PASTE_INSERT 'the command pasted with Shift+Insert'
+    show_fixture_text
+    box=$(locate_word BRAVO)
+    read -r bravo_x bravo_y bravo_width bravo_height <<<"$box"
+    type_text 'printf "%s\n" '
+    expect_selection BRAVO 'a double click' \
+      pointer_clicks "$(char_x "$bravo_x" "$bravo_width" 5 2)" "$((bravo_y + bravo_height / 2))" 2
+    read -r x y width height <<<"$(main_window_rect)"
+    pointer_clicks "$((x + width / 2))" "$((y + height / 2))" 1 middle
+    # shellcheck disable=SC2016
+    type_text ' >"$GRAPHENE_E2E_COMMAND_RESULT_FILE"'
+    send_key enter
+    wait_for_command_result BRAVO 'the command completed by a middle-click paste'
+    printf '%s clipboard passed: Ctrl+Shift+V, Shift+Insert and middle-click primary paste\n' "$backend"
+    ;;
+  scroll)
+    run_shell_command 'echo E2E_TOP'
+    run_shell_command 'cat "$GRAPHENE_E2E_ROWS"'
+    # The first and last numbered rows the window shows, read with OCR.
+    visible_rows() {
+      window_text | grep -oE 'ROW [0-9]{3}' | awk '
+        { n = $2 + 0; if (min == "" || n < min) min = n; if (n > max) max = n }
+        END { if (min == "") exit 1; print min, max }'
+    }
+    wait_for_rows() {
+      local condition=$1 description=$2 min= max=
+      for _ in $(seq 1 60); do
+        if read -r min max < <(visible_rows) && [[ -n "$min" ]] && eval "$condition"; then
+          printf '%s %s\n' "$min" "$max"
+          return 0
+        fi
+        sleep 0.05
+      done
+      printf 'The visible rows (%s to %s) did not satisfy %s after %s\n' \
+        "${min:-none}" "${max:-none}" "$condition" "$description" >&2
+      return 1
+    }
+    # The 300 rows exceed the view: the block is capped to the view and scrolls its own
+    # output, and it pushes the first block out of the view.
+    rows=$(wait_for_rows '((max == 300))' 'the rows command')
+    read -r bottom_min bottom_max <<<"$rows"
+    wait_for_window_text_gone 'E2E_TOP' 'The block above the capped block'
+    read -r x y width height <<<"$(main_window_rect)"
+    pointer_scroll "$((x + width / 2))" "$((y + height / 2))" 5
+    wait_for_rows "((max < 300 && min < $bottom_min))" 'wheel up over the block' >/dev/null
+    pointer_scroll "$((x + width / 2))" "$((y + height / 2))" -50
+    wait_for_rows '((max == 300))' 'wheel down over the block' >/dev/null
+    send_key ctrl+shift+pageup
+    send_key shift+pageup
+    wait_for_rows "((max < 300 && min < $bottom_min))" 'Shift+PageUp on the selected block' >/dev/null
+    send_key shift+pagedown
+    wait_for_rows '((max == 300))' 'Shift+PageDown on the selected block' >/dev/null
+    # Shift+Home and Shift+End select in the prompt input; they scroll the history while
+    # a command runs.
+    type_text 'sleep 60'
+    send_key enter
+    wait_for_foreground_sleep 1
+    send_key shift+home
+    wait_for_window_text 'E2E_TOP' 'the first block after Shift+Home'
+    send_key shift+end
+    wait_for_window_text_gone 'E2E_TOP' 'The first block after Shift+End'
+    wait_for_rows '((max == 300))' 'Shift+End' >/dev/null
+    prompts_before=$(prompt_count)
+    send_key ctrl+c
+    wait_for_prompt_count "$((prompts_before + 1))" 'the interrupted sleep'
+    printf '%s scrolling passed: wheel and Shift+PageUp/PageDown on a capped block, Shift+Home/End on the history\n' "$backend"
+    ;;
+  font)
+    size=$(measure_active_pane 1)
+    read -r base_rows base_columns <<<"$size"
+    send_key ctrl+equal
+    size=$(wait_for_columns_less 1 "$base_columns")
+    read -r larger_rows larger_columns <<<"$size"
+    ((larger_rows < base_rows)) || {
+      printf 'A larger font kept %s rows\n' "$larger_rows" >&2
+      exit 1
+    }
+    send_key ctrl+minus
+    send_key ctrl+minus
+    wait_for_columns_greater 1 "$base_columns" >/dev/null
+    send_key ctrl+0
+    wait_for_columns_equal_to 1 "$base_columns" >/dev/null
+    printf '%s font size passed: increase, decrease and reset change the terminal grid\n' "$backend"
+    ;;
+  mouse)
+    show_fixture_text
+    box=$(locate_word ALPHA)
+    read -r alpha_x alpha_y alpha_width alpha_height <<<"$box"
+    box=$(locate_word BRAVO)
+    read -r bravo_x bravo_y bravo_width bravo_height <<<"$box"
+    row1_y=$((bravo_y + bravo_height / 2))
+    # The program turns on SGR mouse reporting, then records the first press it reads.
+    # shellcheck disable=SC2016
+    type_text 'printf "\033[?1000h\033[?1006h"; : >"$GRAPHENE_E2E_MOUSE_READY"; IFS= read -rs -d M -t 30 press; IFS= read -rs -d m -t 5 release; printf "\033[?1000l\033[?1006l"; printf "%s\n" "${press#*<}" >"$GRAPHENE_E2E_MOUSE_REPORT"'
+    send_key enter
+    wait_for_file "$GRAPHENE_E2E_MOUSE_READY" 'the mouse-reporting program'
+    # Shift keeps the selection for Graphene while the program captures the mouse.
+    expect_selection BRAVO 'a Shift drag while the program captures the mouse' \
+      pointer_drag "$(char_start_x "$bravo_x" "$bravo_width" 5 0)" "$row1_y" \
+      "$(char_end_x "$bravo_x" "$bravo_width" 5 4)" "$row1_y" shift
+    sentinel="E2E_SENTINEL_$RANDOM"
+    set_clipboard primary "$sentinel"
+    pointer_drag "$(char_start_x "$alpha_x" "$alpha_width" 5 0)" "$row1_y" \
+      "$(char_end_x "$bravo_x" "$bravo_width" 5 4)" "$row1_y"
+    wait_for_file "$GRAPHENE_E2E_MOUSE_REPORT" 'the reported mouse press'
+    report=$(<"$GRAPHENE_E2E_MOUSE_REPORT")
+    [[ "$report" == '0;1;1' ]] || {
+      printf 'Expected a left press on column 1, row 1 to be reported; got %q\n' "$report" >&2
+      exit 1
+    }
+    [[ $(read_clipboard primary) == "$sentinel" ]] || {
+      printf 'A drag captured by the program also changed the selection\n' >&2
+      exit 1
+    }
+    record_active_pane 1
+    printf '%s mouse capture passed: reported press cell, no selection, Shift overrides\n' "$backend"
+    ;;
+  blocks)
+    run_shell_command 'echo E2E_FIRST'
+    run_shell_command "printf 'E2E_OUT_%s\\n' 1 2 3"
+    send_key ctrl+shift+f
+    wait_for_window_text '3 lines hidden' 'the folded last block'
+    send_key ctrl+shift+f
+    wait_for_window_text_gone 'hidden' 'The unfolded block marker'
+    send_key ctrl+shift+alt+f
+    wait_for_window_text '1 line hidden' 'the first block folded by fold all'
+    wait_for_window_text '3 lines hidden' 'the last block folded by fold all'
+    send_key ctrl+shift+alt+f
+    wait_for_window_text_gone 'hidden' 'The marker of blocks unfolded by unfold all'
+    send_key ctrl+shift+f
+    box=$(locate_word hidden)
+    read -r hidden_x hidden_y hidden_width hidden_height <<<"$box"
+    pointer_clicks "$((hidden_x + hidden_width / 2))" "$((hidden_y + hidden_height / 2))" 1
+    wait_for_window_text_gone 'hidden' 'The marker of a block unfolded by a click'
+    expect_copy ctrl+shift+alt+o "$(printf 'E2E_OUT_1\nE2E_OUT_2\nE2E_OUT_3')" 'copying the unfolded output'
+    printf '%s command blocks passed: fold, unfold, fold all, unfold all and click to unfold\n' "$backend"
+    ;;
+  shell-bash|shell-zsh|shell-fish)
+    # Graphene's prompt editor sends Home as a sequence the integration binds.
+    # shellcheck disable=SC2016
+    type_text 'cho E2E_EDITED >"$GRAPHENE_E2E_COMMAND_RESULT_FILE"'
+    send_key home
+    type_text e
+    send_key enter
+    wait_for_command_result E2E_EDITED "the command edited at the $integration_shell prompt"
+    run_shell_command 'echo E2E_FIRST'
+    run_shell_command "printf 'E2E_OUT_%s\\n' 1 2 3"
+    expect_copy ctrl+shift+alt+c "printf 'E2E_OUT_%s\\n' 1 2 3" 'copying the last command'
+    expect_copy ctrl+shift+alt+o "$(printf 'E2E_OUT_1\nE2E_OUT_2\nE2E_OUT_3')" 'copying the last output'
+    send_key ctrl+shift+pageup
+    send_key ctrl+shift+pageup
+    expect_copy ctrl+shift+alt+c 'echo E2E_FIRST' 'copying the command of the previous block'
+    expect_copy ctrl+shift+alt+o E2E_FIRST 'copying the output of the previous block'
+    send_key ctrl+shift+pagedown
+    expect_copy ctrl+shift+alt+c "printf 'E2E_OUT_%s\\n' 1 2 3" 'copying the command of the next block'
+    printf '%s %s integration passed: prompt editing, command blocks, navigation and copies\n' \
+      "$backend" "$integration_shell"
     ;;
 esac
 

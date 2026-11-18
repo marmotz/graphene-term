@@ -73,6 +73,10 @@ fn e2e_job_runs_the_scenarios_on_both_backends_and_blocks_on_failure() {
         "grim",
         "imagemagick",
         "tesseract-ocr",
+        "xclip",
+        "wl-clipboard",
+        "zsh",
+        "fish",
     ] {
         assert!(
             job.contains(package),
