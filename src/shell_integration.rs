@@ -694,8 +694,21 @@ mod tests {
                 self.read_until("the prompt after an empty line", |s| s.prompts() > prompts);
             }
 
-            /// Types `text`, abandons it with Ctrl+C and waits for the next prompt.
+            /// Types `text`, abandons it with Ctrl+C and waits for the next prompt. Waits
+            /// first for the line editor to read, which turns bracketed paste on after
+            /// the last prompt: a Ctrl+C sent before only interrupts the prompt setup,
+            /// with no new prompt.
             fn cancel_line(&mut self, text: &str) {
+                const BRACKETED_PASTE_ON: &[u8] = b"\x1b[?2004h";
+                let last_prompt = |s: &Self| {
+                    s.output
+                        .windows(READY.len())
+                        .rposition(|w| w == READY)
+                        .map_or(0, |at| at + READY.len())
+                };
+                self.read_until("the line editor", |s| {
+                    count(&s.output[last_prompt(s)..], BRACKETED_PASTE_ON) > 0
+                });
                 let (prompts, from) = (self.prompts(), self.output.len());
                 self.write(text);
                 if !text.is_empty() {
