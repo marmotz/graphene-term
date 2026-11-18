@@ -21,7 +21,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{Term, TermMode};
 
-use crate::timeline::{BlockId, Phase, Timeline, content_rows};
+use crate::timeline::{BlockId, Phase, Timeline, content_rows, leading_blank_rows};
 
 /// Where a view row takes its cells from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -197,6 +197,23 @@ pub fn live_rows<L>(live: &Term<L>) -> usize {
     content_rows(grid).max(cursor)
 }
 
+/// First line and number of the live grid rows shown for the current block. Before
+/// the command runs, the blank rows above the prompt are left out, as in its frozen
+/// header ([`leading_blank_rows`]); the cursor row always shows.
+pub fn live_part<L>(timeline: &Timeline, live: &Term<L>) -> (Line, usize) {
+    let grid = live.grid();
+    let top = -(grid.history_size() as i32);
+    let rows = live_rows(live);
+    let lead = match timeline.current().phase {
+        Phase::Prompt => {
+            let cursor = (grid.cursor.point.line.0 - top).max(0) as usize;
+            leading_blank_rows(grid, cursor.min(rows - 1))
+        }
+        Phase::Running => 0,
+    };
+    (Line(top + lead as i32), rows - lead)
+}
+
 /// The blocks, oldest first, the current one last.
 fn shapes<L>(timeline: &Timeline, live: &Term<L>) -> Vec<Shape> {
     let mut shapes: Vec<Shape> = timeline
@@ -219,6 +236,7 @@ fn shapes<L>(timeline: &Timeline, live: &Term<L>) -> Vec<Shape> {
         })
         .collect();
     let current = timeline.current();
+    let (first, rows) = live_part(timeline, live);
     let header = match current.phase {
         Phase::Prompt => None,
         Phase::Running => current.header.as_ref().map(|header| Part {
@@ -232,8 +250,8 @@ fn shapes<L>(timeline: &Timeline, live: &Term<L>) -> Vec<Shape> {
         header,
         body: Some(Part {
             source: RowSource::Live,
-            first: Line(-(live.grid().history_size() as i32)),
-            rows: live_rows(live),
+            first,
+            rows,
         }),
         folded: current.folded,
         scroll: current.scroll,
@@ -677,6 +695,30 @@ mod tests {
         assert_eq!(rows[1].source, RowSource::Output(BlockId(0)));
         assert_eq!(rows[2].source, RowSource::Live);
         assert_eq!(rows[2].block, Some(BlockId(1)));
+    }
+
+    #[test]
+    fn the_prompt_shows_without_its_leading_blank_rows() {
+        let mut session = Session::new(1000);
+        run(&mut session, "a", 1);
+        session.feed("\r\n\r\n$ b");
+        let rows = rows_of(&session, 8);
+        assert_eq!(view(&session, &rows), ["$ a", "a1", "$ b"]);
+
+        // Once the command runs, its output shows from its first row, blank or not.
+        session.feed(&format!("\r\n{}\r\nb1", start("b")));
+        let rows = rows_of(&session, 8);
+        assert_eq!(view(&session, &rows), ["$ a", "a1", "$ b", "", "b1"]);
+    }
+
+    #[test]
+    fn a_blank_prompt_keeps_the_cursor_row() {
+        let mut session = Session::new(1000);
+        run(&mut session, "a", 1);
+        session.feed("\r\n\r\n");
+        let (first, count) = live_part(&session.timeline, &session.term);
+        assert_eq!(count, 1);
+        assert_eq!(first, session.term.grid().cursor.point.line);
     }
 
     #[test]

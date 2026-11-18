@@ -23,19 +23,33 @@ fi
 if [[ -o interactive && -n $_graphene_token ]]; then
   # Set by preexec: a command ran since the last prompt.
   typeset -gi _graphene_command_ran=0
+  # Set once the first prompt is signalled.
+  typeset -gi _graphene_prompted=0
+  # Set by zle-line-finish: the line editor returned a command line, maybe empty.
+  # Ctrl+C at the prompt leaves it unset.
+  typeset -gi _graphene_line_finished=0
 
   # Like fish: no command end for an empty command line, nor before the first prompt.
-  # Then `prompt`: the line editor is about to read a command line, the rich input
-  # editor of Graphene may send its key sequences.
+  # A command line abandoned with Ctrl+C sends `cancel` instead. Then `prompt`: the
+  # line editor is about to read a command line, the rich input editor of Graphene
+  # may send its key sequences.
   _graphene_precmd() {
     local ret=$?
     if (( _graphene_command_ran )); then
       _graphene_command_ran=0
       builtin print -rn -- $'\e]6973;'"$_graphene_token;end;$ret"$'\e\\'
+    elif (( _graphene_prompted && ! _graphene_line_finished )); then
+      builtin print -rn -- $'\e]6973;'"$_graphene_token;cancel"$'\e\\'
     fi
+    _graphene_prompted=1
+    _graphene_line_finished=0
     builtin print -rn -- $'\e]6973;'"$_graphene_token;prompt"$'\e\\'
     return $ret
   }
+
+  typeset -gi _graphene_hooked=0
+  # Returns 0: a failing hook widget stops the other zle-line-finish hooks.
+  _graphene_line_finish() { _graphene_line_finished=1; return 0 }
 
   # $1 is the command line as typed, empty when the history is off.
   _graphene_preexec() {
@@ -87,6 +101,13 @@ if [[ -o interactive && -n $_graphene_token ]]; then
   # configuration or a plugin gets the bindings back.
   _graphene_bind() {
     local seq widget keymap
+    # Through add-zle-hook-widget, which keeps the hooks of the user and of plugins.
+    if (( ! _graphene_hooked )); then
+      _graphene_hooked=1
+      builtin zle -N _graphene_line_finish
+      builtin autoload -Uz add-zle-hook-widget
+      add-zle-hook-widget line-finish _graphene_line_finish
+    fi
     for seq widget in "${_graphene_bindings[@]}"; do
       builtin zle -N $widget
       for keymap in emacs viins; do

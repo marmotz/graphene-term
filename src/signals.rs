@@ -50,6 +50,9 @@ pub enum Signal {
     Start { command: String },
     /// The command ended, with its exit status when given.
     End { status: Option<i32> },
+    /// The command line was abandoned (Ctrl+C) without running anything. Sent just
+    /// before the `prompt` of the next command line.
+    Cancel,
     /// The shell is about to draw its prompt and read a command line.
     Prompt,
 }
@@ -347,6 +350,7 @@ fn parse(rest: &[u8], overflowed: bool) -> Option<Signal> {
                 .and_then(|value| value.parse().ok());
             Some(Signal::End { status })
         }
+        b"cancel" if !overflowed => Some(Signal::Cancel),
         b"prompt" if !overflowed => Some(Signal::Prompt),
         _ => None,
     }
@@ -536,6 +540,15 @@ mod tests {
         assert_eq!(
             events(&[stream.as_bytes()]),
             [Seen::Signal(Signal::Prompt), Seen::Signal(Signal::Prompt)]
+        );
+    }
+
+    #[test]
+    fn cancel_signal() {
+        let stream = format!("\x1b]6973;{TOKEN};cancel\x1b\\\x1b]6973;{TOKEN};prompt\x07");
+        assert_eq!(
+            events(&[stream.as_bytes()]),
+            [Seen::Signal(Signal::Cancel), Seen::Signal(Signal::Prompt)]
         );
     }
 

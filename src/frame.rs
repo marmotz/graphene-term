@@ -180,7 +180,7 @@ impl BlockColors {
             Status::Success => self.success,
             Status::Failure(_) => self.failure,
             Status::Running => self.running,
-            Status::Unknown => self.dim,
+            Status::Unknown | Status::Cancelled | Status::Empty => self.dim,
         }
     }
 }
@@ -450,7 +450,7 @@ pub fn marks<T>(
             summary: matches!(row.source, RowSource::Summary(_)).then_some(row.hidden),
         })
         .collect();
-    let live_top = Line(-(live.grid().history_size() as i32));
+    let live_top = view::live_part(timeline, live).0;
     let mut cards: Vec<Card> = Vec::new();
     for (index, row) in view.iter().enumerate() {
         let Some(id) = row.block else {
@@ -509,7 +509,7 @@ fn scroll_bar<T>(
     let last = rows.clone().rev().find(|&row| output(&view[row]))?;
     let (total, scroll) = match timeline.block(id) {
         Some(block) => (block.output.screen_lines(), block.scroll),
-        None => (view::live_rows(live), timeline.current().scroll),
+        None => (view::live_part(timeline, live).1, timeline.current().scroll),
     };
     let shown = total - max;
     let start = total - shown - scroll.min(max);
@@ -1303,6 +1303,15 @@ mod tests {
         );
         let summaries: Vec<_> = frame.decorations.iter().map(|d| d.summary).collect();
         assert_eq!(summaries, [None, Some(3), None]);
+    }
+
+    #[test]
+    fn the_card_of_a_prompt_with_leading_blank_rows_is_not_clipped() {
+        let mut session = Session::sized(10, 6, 100);
+        session.feed(&format!("$ a\r\n{}a1\r\n{}\r\n$ ", start("a"), end(0)));
+        let frame = capture(&session, &Palette::default(), true);
+        assert_eq!(texts(&frame), ["$ a", "a1", "$"]);
+        assert_eq!(frame.cards[1], card(2..3, None, None));
     }
 
     #[test]
