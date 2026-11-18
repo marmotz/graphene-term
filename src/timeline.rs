@@ -33,6 +33,11 @@ pub enum Status {
     Failure(i32),
     /// The `end` signal carried no status.
     Unknown,
+    /// The command line was abandoned (Ctrl+C) before running: the block holds the
+    /// prompt and what was typed, with no output.
+    Cancelled,
+    /// The command line was empty: the block holds the prompt alone, with no output.
+    Empty,
     /// The command of the current block still runs. Never the status of a finished
     /// block: only shown by its card.
     Running,
@@ -318,46 +323,74 @@ impl Timeline {
     fn signal<L: EventListener>(&mut self, term: &mut Term<L>, signal: Signal) {
         match (signal, self.current.phase) {
             (Signal::Start { command }, Phase::Prompt) => {
-                self.current.header = Some(detach(term, self.scrollback));
+                self.current.header = Some(detach_header(term, self.scrollback));
                 self.current.command = command;
                 self.current.phase = Phase::Running;
                 self.current.editing = false;
             }
             (Signal::End { status }, Phase::Running) => {
                 let output = detach(term, self.scrollback);
-                let id = BlockId(self.next_id);
-                self.next_id += 1;
-                let current = mem::replace(&mut self.current, Current::new(id));
-                let header = current.header.unwrap_or_else(|| empty_term(term.columns()));
-                let mut block = Block {
-                    id: current.id,
-                    header,
-                    output,
-                    command: current.command,
-                    status: Status::from_signal(status),
-                    folded: current.folded,
-                    scroll: current.scroll,
-                    pin_top: current.pin_top,
-                };
+                let block = self.finish(term, output, Status::from_signal(status));
                 // A `clear` command: its block is empty, the next prompt goes on top.
                 if block.pin_top && block.output_is_empty() {
                     block.pin_top = false;
                     self.current.pin_top = true;
                 }
-                self.blocks.push_back(block);
                 self.evict();
             }
+            (Signal::Cancel, Phase::Prompt) if self.current.editing => {
+                self.finish_prompt(term, Status::Cancelled);
+            }
             (Signal::Prompt, Phase::Prompt) => {
+                // A new prompt with no command run since the last one: the command line
+                // was empty.
+                if self.current.editing {
+                    self.finish_prompt(term, Status::Empty);
+                }
                 let grid = term.grid();
                 let cursor = grid.cursor.point;
                 let line = (grid.history_size() as i32 + cursor.line.0).max(0) as usize;
                 self.current.editing = true;
                 self.current.prompt_start = Some((line, cursor.column));
             }
-            // A start while running (missed end), an end at the prompt, a prompt while
-            // running: ignored.
+            // A start while running (missed end), an end or a cancel at the prompt, a
+            // prompt while running: ignored.
             _ => {}
         }
+    }
+
+    /// Turns the prompt drawn for the current block, and the line typed so far, into a
+    /// finished block with no output.
+    fn finish_prompt<L: EventListener>(&mut self, term: &mut Term<L>, status: Status) {
+        self.current.header = Some(detach_header(term, self.scrollback));
+        let output = empty_term(term.columns());
+        self.finish(term, output, status);
+        self.evict();
+    }
+
+    /// Turns the current block into a finished one with `output` and `status`, and
+    /// starts the next current block. Returns the finished block.
+    fn finish<L: EventListener>(
+        &mut self,
+        term: &Term<L>,
+        output: Term<VoidListener>,
+        status: Status,
+    ) -> &mut Block {
+        let id = BlockId(self.next_id);
+        self.next_id += 1;
+        let current = mem::replace(&mut self.current, Current::new(id));
+        let header = current.header.unwrap_or_else(|| empty_term(term.columns()));
+        self.blocks.push_back(Block {
+            id: current.id,
+            header,
+            output,
+            command: current.command,
+            status,
+            folded: current.folded,
+            scroll: current.scroll,
+            pin_top: current.pin_top,
+        });
+        self.blocks.back_mut().expect("block just pushed")
     }
 
     /// A screen clear on the main screen: what was on screen before is dropped from the
@@ -453,6 +486,37 @@ fn reflow(term: &mut Term<VoidListener>, columns: usize) {
     grid.cursor.point = Point::new(Line(lines as i32 - 1), Column(0));
     grid.resize::<Color>(true, lines, columns);
     *term = freeze(grid);
+}
+
+/// Rows of `grid` from the top of its history that are blank, among its first `limit`
+/// rows.
+pub fn leading_blank_rows(grid: &Grid<Cell>, limit: usize) -> usize {
+    let top = -(grid.history_size() as i32);
+    (0..limit)
+        .take_while(|&row| grid[Line(top + row as i32)].is_clear())
+        .count()
+}
+
+/// [`detach`] for a header: the blank rows above the prompt are left out, such as the
+/// empty line some prompts print to stand apart from the output above (powerlevel10k
+/// `PROMPT_ADD_NEWLINE`, starship `add_newline`). Cards already stand apart. One row
+/// stays at least.
+fn detach_header<L: EventListener>(term: &mut Term<L>, scrollback: usize) -> Term<VoidListener> {
+    let header = detach(term, scrollback);
+    let grid = header.grid();
+    let lines = grid.screen_lines();
+    let lead = leading_blank_rows(grid, lines - 1);
+    if lead == 0 {
+        return header;
+    }
+    let mut trimmed = empty_term_sized(grid.columns(), lines - lead);
+    let target = trimmed.grid_mut();
+    for line in 0..lines - lead {
+        target[Line(line as i32)] = grid[Line((line + lead) as i32)].clone();
+    }
+    target.cursor = grid.cursor.clone();
+    target.cursor.point.line = Line((grid.cursor.point.line.0 - lead as i32).max(0));
+    trimmed
 }
 
 fn empty_term(columns: usize) -> Term<VoidListener> {
@@ -579,6 +643,10 @@ pub(crate) mod testing {
 
     pub fn prompt() -> String {
         format!("\x1b]6973;{TOKEN};prompt\x07")
+    }
+
+    pub fn cancel() -> String {
+        format!("\x1b]6973;{TOKEN};cancel\x07")
     }
 
     /// Every row of `term`, history first, trailing spaces trimmed.
@@ -734,6 +802,152 @@ mod tests {
         session.feed(&format!("$ x\r\n{}", start("x")));
         session.feed(&format!("\x1b]6973;{TOKEN};end\x07"));
         assert_eq!(session.timeline.blocks()[0].status, Status::Unknown);
+    }
+
+    #[test]
+    fn cancel_turns_the_abandoned_prompt_into_a_cancelled_block() {
+        let mut session = Session::new(100);
+        session.command("ls", &["a"], 0);
+        session.feed(&format!("{}$ qsd\r\n", prompt()));
+        session.feed(&format!("{}{}$ ", cancel(), prompt()));
+
+        let blocks = session.timeline.blocks();
+        assert_eq!(blocks.len(), 2);
+        let cancelled = &blocks[1];
+        assert_eq!(cancelled.id, BlockId(1));
+        assert_eq!(texts(&cancelled.header), ["$ qsd"]);
+        assert!(cancelled.output_is_empty());
+        assert_eq!(cancelled.command, "");
+        assert_eq!(cancelled.status, Status::Cancelled);
+
+        // The new prompt is the next block, editing from the top of the live grid.
+        let current = session.timeline.current();
+        assert_eq!(current.id, BlockId(2));
+        assert_eq!(current.phase, Phase::Prompt);
+        assert!(current.editing);
+        assert_eq!(
+            current.prompt_start(&session.term),
+            Some(Point::new(Line(0), Column(0)))
+        );
+        assert_eq!(session.live()[0], "$");
+    }
+
+    #[test]
+    fn each_cancel_gives_its_own_block() {
+        let mut session = Session::new(100);
+        session.feed(&format!("{}$ a\r\n", prompt()));
+        session.feed(&format!("{}{}$ \r\n", cancel(), prompt()));
+        session.feed(&format!("{}{}$ ls\r\n{}", cancel(), prompt(), start("ls")));
+        session.feed(&format!("x\r\n{}", end(0)));
+
+        let headers: Vec<_> = session
+            .timeline
+            .blocks()
+            .iter()
+            .map(|block| (texts(&block.header), block.status))
+            .collect();
+        assert_eq!(
+            headers,
+            [
+                (vec!["$ a".to_owned()], Status::Cancelled),
+                (vec!["$".to_owned()], Status::Cancelled),
+                (vec!["$ ls".to_owned()], Status::Success),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_command_line_gives_an_empty_block() {
+        let mut session = Session::new(100);
+        session.feed(&format!("{}$ ", prompt()));
+        assert!(session.timeline.blocks().is_empty());
+
+        session.feed(&format!(
+            "\r\n{}$ \r\n{}$ ls\r\n{}",
+            prompt(),
+            prompt(),
+            start("ls")
+        ));
+        session.feed(&format!("x\r\n{}", end(0)));
+
+        let headers: Vec<_> = session
+            .timeline
+            .blocks()
+            .iter()
+            .map(|block| (texts(&block.header), block.output_is_empty(), block.status))
+            .collect();
+        assert_eq!(
+            headers,
+            [
+                (vec!["$".to_owned()], true, Status::Empty),
+                (vec!["$".to_owned()], true, Status::Empty),
+                (vec!["$ ls".to_owned()], false, Status::Success),
+            ]
+        );
+    }
+
+    #[test]
+    fn prompt_after_a_cancel_gives_no_empty_block() {
+        let mut session = Session::new(100);
+        session.feed(&format!("{}$ a\r\n{}{}$ ", prompt(), cancel(), prompt()));
+
+        let blocks = session.timeline.blocks();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].status, Status::Cancelled);
+        assert!(session.timeline.current().editing);
+    }
+
+    #[test]
+    fn cancel_before_any_prompt_or_while_running_is_ignored() {
+        let mut session = Session::new(100);
+        session.feed(&format!("motd\r\n{}", cancel()));
+        assert!(session.timeline.blocks().is_empty());
+
+        session.feed(&format!("{}$ a\r\n{}", prompt(), start("a")));
+        session.feed(&cancel());
+        assert!(session.timeline.blocks().is_empty());
+        assert_eq!(session.timeline.current().phase, Phase::Running);
+    }
+
+    #[test]
+    fn cancel_after_a_clear_keeps_the_cancelled_block_on_top() {
+        let mut session = Session::new(100);
+        session.command("ls", &["a"], 0);
+        session.feed(&format!("{}\x1b[H\x1b[2J\x1b[3J$ x\r\n", prompt()));
+        session.feed(&format!("{}{}$ ", cancel(), prompt()));
+
+        let cancelled = session.timeline.blocks().back().unwrap();
+        assert_eq!(cancelled.status, Status::Cancelled);
+        assert_eq!(session.timeline.pinned(), Some(cancelled.id));
+    }
+
+    #[test]
+    fn header_leaves_out_the_blank_rows_above_the_prompt() {
+        let mut session = Session::new(100);
+        session.command("a", &["a1"], 0);
+        session.feed(&format!("{}\r\n\r\n$ b\r\n{}", prompt(), start("b")));
+        let header = session.timeline.current().header.as_ref().unwrap();
+        assert_eq!(texts(header), ["$ b"]);
+
+        session.feed(&end(0));
+        session.feed(&format!("{}\r\n$ c\r\n{}{}", prompt(), cancel(), prompt()));
+        session.feed(&format!("\r\n$ \r\n{}", prompt()));
+        let headers: Vec<_> = session
+            .timeline
+            .blocks()
+            .iter()
+            .map(|block| texts(&block.header))
+            .collect();
+        assert_eq!(headers, [vec!["$ a"], vec!["$ b"], vec!["$ c"], vec!["$"]]);
+    }
+
+    #[test]
+    fn a_blank_header_keeps_one_row() {
+        let mut session = Session::new(100);
+        session.feed(&format!("{}\r\n\r\n{}", prompt(), start("")));
+        let header = session.timeline.current().header.as_ref().unwrap();
+        assert_eq!(header.screen_lines(), 1);
+        assert_eq!(texts(header), [""]);
     }
 
     #[test]

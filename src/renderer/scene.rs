@@ -194,7 +194,9 @@ fn chevrons(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<RectIn
         let (top, _) = card_edges(frame, layout, card);
         let center_y = top + layout.cell.height / 2.0;
         let color = match card.status {
-            None | Some(Status::Unknown) => frame.block_colors.dim,
+            None | Some(Status::Unknown | Status::Cancelled | Status::Empty) => {
+                frame.block_colors.dim
+            }
             Some(status) => frame.block_colors.status(status),
         };
         rects.push(

@@ -693,6 +693,17 @@ mod tests {
                 self.write("\r");
                 self.read_until("the prompt after an empty line", |s| s.prompts() > prompts);
             }
+
+            /// Types `text`, abandons it with Ctrl+C and waits for the next prompt.
+            fn cancel_line(&mut self, text: &str) {
+                let (prompts, from) = (self.prompts(), self.output.len());
+                self.write(text);
+                if !text.is_empty() {
+                    self.read_until(text, |s| count(&s.output[from..], text.as_bytes()) > 0);
+                }
+                self.write("\x03");
+                self.read_until("the prompt after Ctrl+C", |s| s.prompts() > prompts);
+            }
         }
 
         fn start(command: &str) -> Signal {
@@ -800,6 +811,52 @@ mod tests {
                 .position(|w| w == b"nonl\x1b[1m\x1b[7m%")
                 .expect("PROMPT_SP mark");
             assert!(mark_at < end_at, "{:?}", String::from_utf8_lossy(output));
+        }
+
+        /// Ctrl+C at the prompt sends `cancel` before the next prompt, every time; an
+        /// empty command line and the first prompt send none.
+        #[test]
+        fn zsh_cancel_at_the_prompt() {
+            if find("zsh").is_none() {
+                eprintln!("zsh not installed, skipped");
+                return;
+            }
+            let home = TempDir::new("zsh-cancel");
+            // A zle-line-finish widget of the user's own stays in use.
+            fs::write(
+                home.0.join(".zshrc"),
+                format!(
+                    "PS1='%# '\n\
+                     user_finish() {{ GRAPHENE_TEST_FINISHED=yes }}\n\
+                     zle -N zle-line-finish user_finish\n\
+                     {ZSH_READY}"
+                ),
+            )
+            .unwrap();
+            let mut session = Session::spawn("zsh", &home.0);
+            session.cancel_line("qsd");
+            session.cancel_line("");
+            session.empty_line();
+            session.run("true");
+            session.cancel_line("x");
+            session.run("echo finished:$GRAPHENE_TEST_FINISHED");
+
+            assert_eq!(
+                session.signals,
+                [
+                    Signal::Cancel,
+                    Signal::Cancel,
+                    start("true"),
+                    end(0),
+                    Signal::Cancel,
+                    start("echo finished:$GRAPHENE_TEST_FINISHED"),
+                    end(0),
+                ],
+                "{:?}",
+                String::from_utf8_lossy(&session.output)
+            );
+            let output = String::from_utf8_lossy(&session.output);
+            assert!(output.contains("finished:yes"), "{output:?}");
         }
 
         const P10K_THEME: &str = "/usr/share/zsh-theme-powerlevel10k/powerlevel10k.zsh-theme";
