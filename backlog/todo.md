@@ -4,11 +4,11 @@
 
 ## Rearrange panes with the mouse  ·  [overview](features/pane-mouse-rearrange/overview.md)
 
-_tâches créées — voir [technical.md](features/pane-mouse-rearrange/technical.md)_ — 0/5 tasks done
+_tâches créées — voir [technical.md](features/pane-mouse-rearrange/technical.md)_ — 1/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#133](https://github.com/marmotz/graphene-term/issues/133) | [Panes] Barre de titre des panes : mise en page et dessin | — |
+| [x]  | [#133](https://github.com/marmotz/graphene-term/issues/133) | [Panes] Barre de titre des panes : mise en page et dessin | — |
 | [ ]  | [#134](https://github.com/marmotz/graphene-term/issues/134) | [Panes] Opérations de déplacement et d'échange de panes dans le workspace | — |
 | [ ]  | [#135](https://github.com/marmotz/graphene-term/issues/135) | [Panes] Cibles de dépôt d'un pane glissé | — |
 | [ ]  | [#136](https://github.com/marmotz/graphene-term/issues/136) | [Panes] Interactions de la barre de titre : focus, fermeture, zoom, menu | #133 |

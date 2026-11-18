@@ -443,6 +443,22 @@ mod tests {
     }
 
     #[test]
+    fn every_built_in_theme_keeps_the_pane_bars_readable() {
+        use crate::chrome::scene::pane_bar_colors;
+        for (name, text) in BUILT_IN {
+            let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
+            for active in [true, false] {
+                let (background, text) = pane_bar_colors(&palette.ui, active);
+                let ratio = contrast(text, background);
+                assert!(
+                    ratio >= 4.5,
+                    "theme {name}: pane bar text contrast {ratio:.2} (active: {active})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_built_in_theme_parses_without_error() {
         for (name, text) in BUILT_IN {
             let (_, errors) = parse(text, &Palette::blank(), Path::new(name));

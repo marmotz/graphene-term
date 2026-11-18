@@ -109,16 +109,19 @@ Product decisions: [overview.md](overview.md).
   included), then, with several panes, the dividers and the active border as today.
   It returns rectangles and title texts, so it now writes into the `UiLayer` like
   `tabs` does.
-- Active bar background: `ui.palette_match` (the active border color). Inactive bar:
-  `blend(ui.tab_bar_background, ui.palette_match, INACTIVE_PANE_BAR)` — a darker version
-  of the same hue, no new theme key. Title and `×` use `tab_active_text` /
-  `tab_inactive_text`.
+- Active bar background: `ui.palette_match` (the active border color), title and `×`
+  in `ui.palette_background` (like the default dialog button). Inactive bar:
+  `blend(ui.tab_bar_background, ui.palette_match, INACTIVE_PANE_BAR)` (0.15) — a muted
+  version of the same hue, no new theme key — title and `×` in `ui.tab_active_text`.
+  (`tab_active_text` on the accent and `tab_inactive_text` anywhere stayed under 4.5 in
+  every built-in theme.) `chrome::scene::pane_bar_colors` holds the choice.
+- `build` takes the laid-out bars (`&[PaneBarLayout]`, built by `Session::pane_bars`
+  from `Workspace::pane_title`), like it takes the `TabBarLayout`.
 - A theme test checks, for every built-in theme, a contrast of at least 4.5 between the
   bar text and both bar backgrounds (same helper as
   `every_built_in_theme_keeps_the_palette_readable`); a theme failing it gets its
   colors adjusted in the same task.
-- `build` takes the pane titles (`&[(PaneId, String)]`, from `Workspace::pane_title`)
-  and the drop highlight (below).
+- `build` also takes the drop highlight (below).
 
 ### Mouse on the bar
 

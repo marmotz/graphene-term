@@ -87,7 +87,8 @@ src/
   chrome/
     command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
-    scene.rs       interface layer: tab bar, dividers, active pane border, dialog or palette overlay (pure)
+    pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing (pure)
+    scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
     tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
   update/
@@ -481,13 +482,18 @@ Design and rationale.
 3. `Session::redraw` captures one frame per pane shown by the active tab. When the tab
    shows several panes, the inactive ones go through `Frame::dimmed(INACTIVE_PANE_DIM)`
    (every color mixed 30 % toward the background). `chrome::scene::build` gives the
-   interface layer (`UiLayer`: rects, then text items): the dividers (`ui.pane_border`)
-   and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
+   interface layer (`UiLayer`: rects, then text items): the title bar of every pane
+   (`chrome::pane_bar::PaneBarLayout`, one interface text line high like a horizontal
+   tab, titled by `Workspace::pane_title`; filled with `ui.palette_match` for the active
+   pane, with `INACTIVE_PANE_BAR` of it mixed into `ui.tab_bar_background` otherwise),
+   then the dividers (`ui.pane_border`) and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
    the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
    there are several tabs, on the edge of `tabs.position` (`TabBarPosition`): side by
    side along the top or bottom edge, stacked in a bar `TAB_MAX_WIDTH` wide (at most a
    third of the window) on the left or right. The panes area is the window minus the
-   bar (`TabBarPosition::content_area`); each grid is centred in its pane. The open dialog
+   bar (`TabBarPosition::content_area`); each grid is centred in its pane under its
+   title bar (`pane_bar::split`), and `Geometry::title_bar` adds the bar to the minimum
+   pane height. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
    the window height) goes to the overlay rects and texts of the layer. The link

@@ -28,6 +28,7 @@ use crate::chrome::context_menu::{
     self, BlockState, Command as MenuCommand, ContextMenu, MenuContext, MenuHit, MenuLayout,
 };
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
+use crate::chrome::pane_bar::{self, PaneBarLayout};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
@@ -272,7 +273,24 @@ impl Session {
                 .content_area(self.chrome_area(), self.tab_bar_thickness()),
             cell: self.renderer.cell_size(),
             divider: DIVIDER_THICKNESS,
+            title_bar: pane_bar::height(self.ui_metrics(UiFont::Chrome)),
         }
+    }
+
+    /// Title bars of the panes of `layout`, the `active` one highlighted.
+    fn pane_bars(&self, layout: &Layout, active: Option<PaneId>) -> Vec<PaneBarLayout> {
+        let metrics = self.ui_metrics(UiFont::Chrome);
+        layout
+            .panes
+            .iter()
+            .map(|&(id, rect)| {
+                let title = self
+                    .workspace
+                    .pane_title(id)
+                    .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
+                PaneBarLayout::new(id, rect, title, Some(id) == active, metrics)
+            })
+            .collect()
     }
 
     /// Layout of the shown tab.
@@ -795,15 +813,17 @@ impl Session {
     }
 
     /// Lays out every tab, hidden ones included, so each shell keeps a correct size;
-    /// only panes whose cell count changed resize their shell. The hidden panes of a
-    /// zoomed tab keep their last size.
+    /// only panes whose cell count changed resize their shell. Each grid fills the pane
+    /// under its title bar. The hidden panes of a zoomed tab keep their last size.
     fn relayout(&mut self) {
         let geometry = self.geometry();
+        let metrics = self.ui_metrics(UiFont::Chrome);
         let padding = self.padding * self.window.scale_factor() as f32;
         for index in 0..self.workspace.tabs().len() {
             for (id, rect) in self.workspace.layout(index, geometry).panes {
+                let (_, content) = pane_bar::split(rect, metrics);
                 if let Some(pane) = self.workspace.pane_mut(id) {
-                    pane.resize(GridLayout::new(rect, geometry.cell, padding));
+                    pane.resize(GridLayout::new(content, geometry.cell, padding));
                 }
             }
         }
@@ -1817,7 +1837,7 @@ impl Session {
     }
 
     /// Draws every pane of the shown tab, inactive ones dimmed when it shows several,
-    /// then the dividers, the active pane border and the tab bar, then the banner, then
+    /// then the pane title bars, the dividers, the active pane border and the tab bar, then the banner, then
     /// the open dialog or command palette.
     fn redraw(&mut self) {
         let dialog = self.dialog_layout();
@@ -1889,9 +1909,11 @@ impl Session {
             let (x, y) = self.mouse_pixel();
             bar.dragged(*index, bar.along(x, y) - grab_offset);
         }
+        let pane_bars = self.pane_bars(&layout, active);
         let mut ui = chrome::scene::build(
             &layout,
             active,
+            &pane_bars,
             bar.as_ref(),
             overlay,
             &self.palette.ui,
@@ -2051,8 +2073,15 @@ impl App {
             Some(_) => BannerLayout::height(glyphs.cell_size()),
             None => 0.0,
         };
-        let layout = GridLayout::new(
+        let (_, content) = pane_bar::split(
             banner::below_banner(Rect::from_size(size.width, size.height), banner_height),
+            UiMetrics {
+                line_height: glyphs.ui_line_height(UiFont::Chrome),
+                scale,
+            },
+        );
+        let layout = GridLayout::new(
+            content,
             glyphs.cell_size(),
             self.config.window.padding * scale,
         );

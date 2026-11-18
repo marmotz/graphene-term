@@ -46,11 +46,12 @@ impl Axis {
         }
     }
 
-    /// Smallest length of a pane along the axis, in pixels.
-    fn min_pane(self, cell: CellSize) -> f32 {
+    /// Smallest length of a pane along the axis, in pixels: its minimum grid, plus its
+    /// title bar along the vertical axis.
+    fn min_pane(self, geometry: Geometry) -> f32 {
         match self {
-            Axis::Horizontal => MIN_PANE_COLUMNS as f32 * cell.width,
-            Axis::Vertical => MIN_PANE_LINES as f32 * cell.height,
+            Axis::Horizontal => MIN_PANE_COLUMNS as f32 * geometry.cell.width,
+            Axis::Vertical => MIN_PANE_LINES as f32 * geometry.cell.height + geometry.title_bar,
         }
     }
 
@@ -136,13 +137,14 @@ pub enum Branch {
 /// Steps from the root down to a node.
 pub type NodePath = Vec<Branch>;
 
-/// Size inputs of a layout: the area divided, the cell size and the divider thickness,
-/// all in physical pixels.
+/// Size inputs of a layout: the area divided, the cell size, the divider thickness and
+/// the height of the title bar at the top of every pane, all in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Geometry {
     pub area: Rect,
     pub cell: CellSize,
     pub divider: f32,
+    pub title_bar: f32,
 }
 
 /// The line between the two children of a split.
@@ -295,7 +297,7 @@ impl Node {
         };
         let rect = self.rect_at(&path, geometry);
         let cell = axis.cell(geometry.cell);
-        let min = axis.min_pane(geometry.cell);
+        let min = axis.min_pane(geometry);
         let available = axis.length(rect) - geometry.divider;
         let first = round_to_cell(available * 0.5, cell);
         if first + EPSILON < min || available - first + EPSILON < min {
@@ -434,7 +436,7 @@ impl Node {
     /// Smallest length of the node along `axis` that keeps every pane at its minimum.
     fn min_length(&self, axis: Axis, geometry: Geometry) -> f32 {
         match self {
-            Node::Leaf(_) => axis.min_pane(geometry.cell),
+            Node::Leaf(_) => axis.min_pane(geometry),
             Node::Split {
                 axis: own,
                 first,
@@ -659,6 +661,7 @@ mod tests {
             },
             cell: CELL,
             divider: 1.0,
+            title_bar: 0.0,
         }
     }
 
@@ -738,6 +741,30 @@ mod tests {
         assert!(tree.split(id(1), Axis::Vertical, id(2), geometry(1001.0, 121.0)));
         let mut tree = Node::Leaf(id(1));
         assert!(!tree.split(id(1), Axis::Vertical, id(2), geometry(1001.0, 120.0)));
+    }
+
+    #[test]
+    fn title_bar_raises_the_minimum_height_only() {
+        let with_bar = |width, height| Geometry {
+            title_bar: 20.0,
+            ..geometry(width, height)
+        };
+        // 3 lines and a 20 px bar: 80 px a pane. 161 px high gives two halves of 80 px.
+        let mut tree = Node::Leaf(id(1));
+        assert!(tree.split(id(1), Axis::Vertical, id(2), with_bar(1001.0, 161.0)));
+        // 121 px was enough without the bar, not with it.
+        let mut tree = Node::Leaf(id(1));
+        assert!(!tree.split(id(1), Axis::Vertical, id(2), with_bar(1001.0, 121.0)));
+        assert_eq!(tree, Node::Leaf(id(1)));
+        // The width minimum ignores the bar.
+        let mut tree = Node::Leaf(id(1));
+        assert!(tree.split(id(1), Axis::Horizontal, id(2), with_bar(201.0, 601.0)));
+        // A resize stops at 3 lines plus the bar.
+        let g = with_bar(1001.0, 601.0);
+        let mut tree = Node::Leaf(id(1));
+        assert!(tree.split(id(1), Axis::Vertical, id(2), g));
+        assert!(tree.resize(id(2), Direction::Up, 1000, g));
+        assert_eq!(rect(&tree.layout(g), 1).height, 80.0);
     }
 
     #[test]

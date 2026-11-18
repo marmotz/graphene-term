@@ -34,7 +34,8 @@ impl UiMetrics {
         (self.line_height + 2.0 * VERTICAL_PADDING * self.scale).round()
     }
 
-    fn padding(self) -> f32 {
+    /// Space before a title and around a close button, in pixels.
+    pub fn padding(self) -> f32 {
         HORIZONTAL_PADDING * self.scale
     }
 }

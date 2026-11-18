@@ -1,11 +1,13 @@
-//! Interface of the window (pure, no GPU access): the tab bar, the dividers between the
-//! panes of the shown tab and the border of its active pane, and the confirmation
-//! dialog or the command palette over everything. Dividers and border are only drawn while the tab shows
-//! several panes, the bar while there are several tabs.
+//! Interface of the window (pure, no GPU access): the title bar of every pane, the tab
+//! bar, the dividers between the panes of the shown tab and the border of its active
+//! pane, and the confirmation dialog or the command palette over everything. Dividers
+//! and border are only drawn while the tab shows several panes, the tab bar while there
+//! are several tabs.
 
 use super::command_palette::PaletteLayout;
 use super::context_menu::{MenuLayout, MenuRow};
 use super::dialog::DialogLayout;
+use super::pane_bar::PaneBarLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
 use crate::layout::Rect;
@@ -18,6 +20,10 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 /// Thickness of the active pane border, in physical pixels.
 pub const ACTIVE_BORDER: f32 = 2.0;
+
+/// Share of the accent color in the background of an inactive pane bar, the rest being
+/// the tab bar background: a muted version of the active bar's hue.
+pub const INACTIVE_PANE_BAR: f32 = 0.15;
 
 /// Character of the tab close buttons.
 const CLOSE: &str = "×";
@@ -40,20 +46,19 @@ pub enum Overlay<'a> {
     Menu(&'a MenuLayout),
 }
 
-/// The interface over the panes of `layout`: the pane rectangles (see [`panes`]), then
-/// the tab bar when `tab_bar` is given, and the `overlay`.
+/// The interface over the panes of `layout`: the pane chrome (see [`panes`]), then the
+/// tab bar when `tab_bar` is given, and the `overlay`.
 pub fn build(
     layout: &Layout,
     active: Option<PaneId>,
+    pane_bars: &[PaneBarLayout],
     tab_bar: Option<&TabBarLayout>,
     overlay: Option<Overlay<'_>>,
     colors: &UiColors,
     srgb_target: bool,
 ) -> UiLayer {
-    let mut ui = UiLayer {
-        rects: panes(layout, active, colors, srgb_target),
-        ..UiLayer::default()
-    };
+    let mut ui = UiLayer::default();
+    panes(layout, active, pane_bars, colors, srgb_target, &mut ui);
     if let Some(bar) = tab_bar {
         tabs(bar, colors, srgb_target, &mut ui);
     }
@@ -142,6 +147,25 @@ fn draw_menu_rows(rows: &[MenuRow], colors: &UiColors, srgb_target: bool, ui: &m
                 font: UiFont::Palette,
             });
         }
+    }
+}
+
+/// Background and text colors of a pane bar. The active pane's bar is filled with the
+/// accent color and labelled in the palette background, like the default dialog
+/// button; an inactive one mixes a little accent into the tab bar background and is
+/// labelled in the shown tab's text color. Built-in themes keep both readable.
+pub fn pane_bar_colors(colors: &UiColors, active: bool) -> (Rgb, Rgb) {
+    if active {
+        (colors.palette_match, colors.palette_background)
+    } else {
+        (
+            blend(
+                colors.tab_bar_background,
+                colors.palette_match,
+                INACTIVE_PANE_BAR,
+            ),
+            colors.tab_active_text,
+        )
     }
 }
 
@@ -328,29 +352,56 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
     ));
 }
 
-/// Rectangles drawn over the panes of `layout`: its dividers, in the pane border color,
-/// then the border of the `active` pane, inside its rectangle, in the accent color
-/// (the one highlighting command palette matches).
+/// The chrome over the panes of `layout`: the title bar of every pane (see
+/// [`pane_bar`]), then, while it shows several panes, its dividers, in the pane border
+/// color, and the border of the `active` pane, inside its rectangle, in the accent
+/// color (the one highlighting command palette matches).
 pub fn panes(
     layout: &Layout,
     active: Option<PaneId>,
+    pane_bars: &[PaneBarLayout],
     colors: &UiColors,
     srgb_target: bool,
-) -> Vec<RectInstance> {
+    ui: &mut UiLayer,
+) {
+    for bar in pane_bars {
+        pane_bar(bar, colors, srgb_target, ui);
+    }
     if layout.panes.len() < 2 {
-        return Vec::new();
+        return;
     }
     let divider = gpu_color(colors.pane_border, srgb_target);
-    let mut rects: Vec<_> = layout
-        .dividers
-        .iter()
-        .map(|d| rect(d.rect, divider))
-        .collect();
+    ui.rects
+        .extend(layout.dividers.iter().map(|d| rect(d.rect, divider)));
     if let Some(pane) = active.and_then(|id| layout.rect_of(id)) {
         let accent = gpu_color(colors.palette_match, srgb_target);
-        rects.extend(border(pane, ACTIVE_BORDER, accent));
+        ui.rects.extend(border(pane, ACTIVE_BORDER, accent));
     }
-    rects
+}
+
+/// One pane title bar: its background, then its title and close button.
+fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let (background, text) = pane_bar_colors(colors, bar.active);
+    let text = gpu_color(text, srgb_target);
+    ui.rects
+        .push(rect(bar.rect, gpu_color(background, srgb_target)));
+    ui.texts.push(UiTextItem {
+        text: bar.title.clone(),
+        x: bar.title_x,
+        y: bar.title_y,
+        color: text,
+        max_width: bar.title_width,
+        font: UiFont::Chrome,
+    });
+    // The glyph is about half the line height wide: centered in its square.
+    ui.texts.push(UiTextItem {
+        text: CLOSE.to_owned(),
+        x: (bar.close.x + bar.close.width / 4.0).round(),
+        y: bar.title_y,
+        color: text,
+        max_width: bar.close.width,
+        font: UiFont::Chrome,
+    });
 }
 
 fn rect(r: Rect, color: [f32; 4]) -> RectInstance {
@@ -428,6 +479,19 @@ mod tests {
         }
     }
 
+    /// Rectangles of the pane chrome alone.
+    fn pane_rects(
+        layout: &Layout,
+        active: Option<PaneId>,
+        bars: &[PaneBarLayout],
+        colors: &UiColors,
+        srgb_target: bool,
+    ) -> Vec<RectInstance> {
+        let mut ui = UiLayer::default();
+        panes(layout, active, bars, colors, srgb_target, &mut ui);
+        ui.rects
+    }
+
     /// (position, size, color) of each rect.
     fn drawn(rects: &[RectInstance]) -> Vec<([f32; 2], [f32; 2], [f32; 4])> {
         rects
@@ -437,22 +501,22 @@ mod tests {
     }
 
     #[test]
-    fn a_single_pane_draws_no_border() {
+    fn a_single_pane_without_bar_draws_nothing() {
         let layout = Layout {
             panes: vec![(PaneId(1), area(0.0, 0.0, 200.0, 100.0))],
             dividers: Vec::new(),
             divider: 1.0,
         };
-        assert!(panes(&layout, Some(PaneId(1)), &colors(), false).is_empty());
+        assert!(pane_rects(&layout, Some(PaneId(1)), &[], &colors(), false).is_empty());
         assert_eq!(
-            build(&layout, Some(PaneId(1)), None, None, &colors(), false),
+            build(&layout, Some(PaneId(1)), &[], None, None, &colors(), false),
             UiLayer::default()
         );
     }
 
     #[test]
     fn several_panes_draw_the_dividers_then_the_active_border() {
-        let rects = panes(&two_columns(), Some(PaneId(2)), &colors(), false);
+        let rects = pane_rects(&two_columns(), Some(PaneId(2)), &[], &colors(), false);
         let border = gpu_color(BORDER, false);
         let accent = gpu_color(ACCENT, false);
         assert_eq!(
@@ -470,19 +534,20 @@ mod tests {
 
     #[test]
     fn unknown_active_pane_draws_only_the_dividers() {
-        let rects = panes(&two_columns(), Some(PaneId(9)), &colors(), false);
+        let rects = pane_rects(&two_columns(), Some(PaneId(9)), &[], &colors(), false);
         assert_eq!(rects.len(), 1);
-        assert!(panes(&two_columns(), None, &colors(), false).len() == 1);
+        assert!(pane_rects(&two_columns(), None, &[], &colors(), false).len() == 1);
     }
 
     #[test]
     fn colors_follow_the_target_encoding() {
-        let rects = panes(&two_columns(), Some(PaneId(1)), &colors(), true);
+        let rects = pane_rects(&two_columns(), Some(PaneId(1)), &[], &colors(), true);
         assert_eq!(rects[0].color, gpu_color(BORDER, true));
         assert_eq!(rects[1].color, gpu_color(ACCENT, true));
     }
 
     const BAR: Rgb = Rgb { r: 10, g: 0, b: 0 };
+
     const ACTIVE_TAB: Rgb = Rgb { r: 20, g: 0, b: 0 };
     const ACTIVE_TEXT: Rgb = Rgb { r: 30, g: 0, b: 0 };
     const INACTIVE_TEXT: Rgb = Rgb { r: 40, g: 0, b: 0 };
@@ -523,6 +588,7 @@ mod tests {
         let ui = build(
             &single,
             Some(PaneId(1)),
+            &[],
             Some(&bar),
             None,
             &tab_colors(),
@@ -568,6 +634,7 @@ mod tests {
         let ui = build(
             &two_columns(),
             Some(PaneId(1)),
+            &[],
             Some(&bar),
             None,
             &tab_colors(),
@@ -576,6 +643,92 @@ mod tests {
         assert_eq!(ui.rects[0].color, gpu_color(BORDER, false));
         assert_eq!(ui.rects[5].color, gpu_color(BAR, false));
         assert!(ui.overlay_rects.is_empty() && ui.overlay_texts.is_empty());
+    }
+
+    const LABEL: Rgb = Rgb { r: 70, g: 0, b: 0 };
+
+    fn pane_bar_metrics() -> UiMetrics {
+        UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        }
+    }
+
+    fn pane_bars_of(layout: &Layout, active: Option<PaneId>) -> Vec<PaneBarLayout> {
+        layout
+            .panes
+            .iter()
+            .map(|&(id, rect)| {
+                let title = format!("pane {}", id.0);
+                PaneBarLayout::new(id, rect, title, Some(id) == active, pane_bar_metrics())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_single_pane_draws_its_title_bar_but_no_border() {
+        let layout = Layout {
+            panes: vec![(PaneId(1), area(0.0, 0.0, 200.0, 100.0))],
+            dividers: Vec::new(),
+            divider: 1.0,
+        };
+        let colors = UiColors {
+            palette_background: LABEL,
+            ..tab_colors()
+        };
+        let bars = pane_bars_of(&layout, Some(PaneId(1)));
+        let ui = build(&layout, Some(PaneId(1)), &bars, None, None, &colors, false);
+        let color = |c| gpu_color(c, false);
+        assert_eq!(
+            drawn(&ui.rects),
+            vec![([0.0, 0.0], [200.0, bars[0].rect.height], color(ACCENT))]
+        );
+        let texts: Vec<(&str, [f32; 4], f32)> = ui
+            .texts
+            .iter()
+            .map(|t| (t.text.as_str(), t.color, t.max_width))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("pane 1", color(LABEL), bars[0].title_width),
+                (CLOSE, color(LABEL), bars[0].close.width),
+            ]
+        );
+        assert!(ui.texts.iter().all(|t| t.font == UiFont::Chrome));
+        assert_eq!(ui.texts[0].x, bars[0].title_x);
+        assert!(ui.texts.iter().all(|t| t.y == bars[0].title_y));
+    }
+
+    #[test]
+    fn pane_bars_come_before_the_dividers_and_the_active_border() {
+        let layout = two_columns();
+        let colors = tab_colors();
+        let bars = pane_bars_of(&layout, Some(PaneId(2)));
+        let rects = pane_rects(&layout, Some(PaneId(2)), &bars, &colors, false);
+        let color = |c| gpu_color(c, false);
+        let inactive = color(blend(BAR, ACCENT, INACTIVE_PANE_BAR));
+        assert_eq!(rects.len(), 2 + 1 + 4);
+        assert_eq!(rects[0].position, [0.0, 0.0]);
+        assert_eq!(rects[0].color, inactive);
+        assert_eq!(rects[1].position, [101.0, 0.0]);
+        assert_eq!(rects[1].color, color(ACCENT));
+        assert_eq!(rects[2].color, color(BORDER));
+        assert!(rects[3..].iter().all(|r| r.color == color(ACCENT)));
+    }
+
+    #[test]
+    fn active_pane_bar_is_the_accent_and_an_inactive_one_a_muted_accent() {
+        let colors = UiColors {
+            palette_background: LABEL,
+            ..tab_colors()
+        };
+        assert_eq!(pane_bar_colors(&colors, true), (ACCENT, LABEL));
+        let (background, text) = pane_bar_colors(&colors, false);
+        assert_eq!(text, ACTIVE_TEXT);
+        assert_eq!(background, blend(BAR, ACCENT, INACTIVE_PANE_BAR));
+        assert_ne!(background, ACCENT);
+        assert_ne!(background, BAR);
     }
 
     const DIALOG_BACKGROUND: Rgb = Rgb { r: 50, g: 0, b: 0 };
@@ -609,6 +762,7 @@ mod tests {
         let ui = build(
             &two_columns(),
             Some(PaneId(1)),
+            &[],
             Some(&bar),
             Some(Overlay::Dialog(&dialog)),
             &colors,
@@ -619,6 +773,7 @@ mod tests {
         let without = build(
             &two_columns(),
             Some(PaneId(1)),
+            &[],
             Some(&bar),
             None,
             &colors,
@@ -692,6 +847,7 @@ mod tests {
         let ui = build(
             &two_columns(),
             Some(PaneId(1)),
+            &[],
             None,
             Some(Overlay::Palette(&layout)),
             &colors,
@@ -757,6 +913,7 @@ mod tests {
         let ui = build(
             &two_columns(),
             Some(PaneId(1)),
+            &[],
             None,
             Some(Overlay::Palette(&layout)),
             &tab_colors(),
@@ -814,6 +971,7 @@ mod tests {
         let ui = build(
             &two_columns(),
             Some(PaneId(1)),
+            &[],
             None,
             Some(Overlay::Menu(&layout)),
             &colors,
@@ -863,7 +1021,15 @@ mod tests {
             |t| t.chars().count() as f32 * 8.0,
         )
         .unwrap();
-        let mut ui = build(&two_columns(), Some(PaneId(1)), None, None, &colors, false);
+        let mut ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            &[],
+            None,
+            None,
+            &colors,
+            false,
+        );
         let before = ui.clone();
         tooltip(&layout, &colors, false, &mut ui);
         assert_eq!((&ui.rects, &ui.texts), (&before.rects, &before.texts));

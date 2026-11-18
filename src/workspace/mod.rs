@@ -553,6 +553,7 @@ mod tests {
                 height: 20.0,
             },
             divider: DIVIDER_THICKNESS,
+            title_bar: 0.0,
         }
     }
 
