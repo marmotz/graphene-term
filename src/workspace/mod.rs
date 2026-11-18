@@ -339,7 +339,6 @@ impl<P> Workspace<P> {
     /// which is shown; both tabs are unzoomed, and a source tab left empty is closed.
     /// `false`, with nothing changed, when either pane is unknown, they are the same
     /// pane, or the target is too small to split.
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn move_pane(
         &mut self,
         id: PaneId,
@@ -371,7 +370,6 @@ impl<P> Workspace<P> {
 
     /// Whether [`Self::move_pane`] would accept moving `id` next to `target` on `side`,
     /// without changing anything.
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn can_move_pane(
         &self,
         id: PaneId,
@@ -408,7 +406,6 @@ impl<P> Workspace<P> {
     /// across two. `a` gets the focus in the tab of `b`, which is shown; in the tab of
     /// `a`, `b` stays active when `a` was. `false` when either pane is unknown or they
     /// are the same pane.
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn swap_panes(&mut self, a: PaneId, b: PaneId) -> bool {
         if a == b {
             return false;
@@ -436,7 +433,6 @@ impl<P> Workspace<P> {
     /// side: `Right` when wider than tall, else `Down` (see [`Self::move_pane`]).
     /// `false`, with nothing changed, for the pane's own tab, an unknown pane or tab,
     /// or a refused move.
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn move_pane_to_tab(&mut self, id: PaneId, index: usize, geometry: Geometry) -> bool {
         let Some(tab) = self.tabs.get(index) else {
             return false;
@@ -458,7 +454,6 @@ impl<P> Workspace<P> {
 
     /// Moves the pane `id` into a new last tab, and shows it. For the only pane of its
     /// tab, the tab itself moves last. `false` when the pane is unknown.
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn move_pane_to_new_tab(&mut self, id: PaneId) -> bool {
         let Some(source) = self.tab_of(id) else {
             return false;

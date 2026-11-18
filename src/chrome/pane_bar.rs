@@ -32,6 +32,17 @@ pub fn split(pane: Rect, metrics: UiMetrics) -> (Rect, Rect) {
     (bar, content)
 }
 
+/// Distance the pointer travels from a press on a title before the pane is dragged,
+/// in logical pixels: a plain click never starts a drag.
+pub const PANE_DRAG_THRESHOLD: f32 = 4.0;
+
+/// Whether the pointer at `position` has moved far enough from the `press` on a title
+/// to drag the pane, both in physical pixels at `scale` physical pixels per logical one.
+pub fn drag_started(press: (f32, f32), position: (f32, f32), scale: f32) -> bool {
+    let (dx, dy) = (position.0 - press.0, position.1 - press.1);
+    dx.hypot(dy) >= PANE_DRAG_THRESHOLD * scale
+}
+
 /// What the mouse is over in a pane bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneBarHit {
@@ -136,6 +147,17 @@ pub fn press_action(button: Button, hit: PaneBarHit, clicks: u8) -> Option<PaneB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drag_starts_past_the_threshold_only() {
+        assert!(!drag_started((10.0, 10.0), (10.0, 10.0), 1.0));
+        assert!(!drag_started((10.0, 10.0), (12.0, 13.0), 1.0));
+        assert!(drag_started((10.0, 10.0), (14.0, 10.0), 1.0));
+        assert!(drag_started((10.0, 10.0), (10.0, 6.0), 1.0));
+        // At twice the scale, the threshold is twice as many physical pixels.
+        assert!(!drag_started((10.0, 10.0), (17.0, 10.0), 2.0));
+        assert!(drag_started((10.0, 10.0), (18.0, 10.0), 2.0));
+    }
 
     const METRICS: UiMetrics = UiMetrics {
         line_height: 18.0,

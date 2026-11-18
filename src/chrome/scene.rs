@@ -25,6 +25,9 @@ pub const ACTIVE_BORDER: f32 = 2.0;
 /// the tab bar background: a muted version of the active bar's hue.
 pub const INACTIVE_PANE_BAR: f32 = 0.15;
 
+/// Opacity of the accent rectangle showing where a dragged pane would land.
+pub const DROP_HIGHLIGHT: f32 = 0.3;
+
 /// Character of the tab close buttons.
 const CLOSE: &str = "×";
 
@@ -277,6 +280,14 @@ fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
             font: UiFont::Chrome,
         });
     }
+}
+
+/// The translucent accent rectangle `area` showing where a dragged pane would land:
+/// pushed after [`build`], it covers the pane chrome and the tab bar, under the overlay.
+pub fn drop_highlight(area: Rect, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let mut color = gpu_color(colors.palette_match, srgb_target);
+    color[3] = DROP_HIGHLIGHT;
+    ui.rects.push(rect(area, color));
 }
 
 /// The link tooltip, last in the overlay so it shows over the dialog or palette: its
@@ -643,6 +654,30 @@ mod tests {
         assert_eq!(ui.rects[0].color, gpu_color(BORDER, false));
         assert_eq!(ui.rects[5].color, gpu_color(BAR, false));
         assert!(ui.overlay_rects.is_empty() && ui.overlay_texts.is_empty());
+    }
+
+    #[test]
+    fn drop_highlight_is_a_translucent_accent_rect_after_the_tab_bar() {
+        let bar = bar();
+        let mut ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            &[],
+            Some(&bar),
+            None,
+            &colors(),
+            false,
+        );
+        let drawn_before = ui.rects.len();
+        let target = area(101.0, 0.0, 50.0, 100.0);
+        drop_highlight(target, &colors(), false, &mut ui);
+        assert_eq!(ui.rects.len(), drawn_before + 1);
+        let [r, g, b, _] = gpu_color(ACCENT, false);
+        assert_eq!(
+            drawn(&ui.rects[drawn_before..]),
+            vec![([101.0, 0.0], [50.0, 100.0], [r, g, b, DROP_HIGHLIGHT])]
+        );
+        assert!(ui.overlay_rects.is_empty());
     }
 
     const LABEL: Rgb = Rgb { r: 70, g: 0, b: 0 };

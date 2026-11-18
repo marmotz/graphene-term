@@ -297,7 +297,6 @@ impl Node {
     /// Splits the pane `target` in two halves along `Axis::of(side)`, the pane `moved`
     /// on `side`: first for `Left`/`Up`, second for `Right`/`Down`. Refused (`false`)
     /// like [`Node::split`].
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn insert(
         &mut self,
         target: PaneId,
@@ -350,7 +349,6 @@ impl Node {
 
     /// Puts the pane `new` in the place of the pane `old`. Refused (`false`) when
     /// `old` is not in the tree.
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn replace(&mut self, old: PaneId, new: PaneId) -> bool {
         debug_assert!(
             old == new || !self.contains(new),
@@ -367,7 +365,6 @@ impl Node {
 
     /// Exchanges the places of the panes `a` and `b`. Refused (`false`) when either is
     /// not in the tree or they are the same pane.
-    #[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
     pub fn swap(&mut self, a: PaneId, b: PaneId) -> bool {
         if a == b {
             return false;

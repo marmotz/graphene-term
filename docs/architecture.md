@@ -498,7 +498,21 @@ Design and rationale.
    bar, pane content; a press on a pane bar (`pane_bar::hit_at`, routed by
    `pane_bar::press_action`) is never reported to the application: `×` closes the pane,
    a right click opens the pane menu, a click on the title focuses the pane and a double
-   click (a `ClickTracker<PaneId>`) toggles the zoom. The open dialog
+   click (a `ClickTracker<PaneId>`) toggles the zoom. A left press on the title also arms
+   a `Drag::Pane` gesture, started once the pointer moves `pane_bar::PANE_DRAG_THRESHOLD`
+   (4 logical pixels) away: the tab is unzoomed (`was_zoomed` remembered), the tab bar is
+   shown even for a single tab (`Session::tab_bar_shown`) and the panes laid out again,
+   the pointer is `Grabbing`. Each move looks the target up with
+   `workspace::drop::target` (a move `Workspace::can_move_pane` refuses is no target, nor
+   the pane's own tab), and `chrome::scene::drop_highlight` draws its
+   `workspace::drop::highlight` as one `ui.palette_match` rect at `DROP_HIGHLIGHT`
+   opacity, after the tab bar and before the overlay. Staying over another tab for
+   `drop::TAB_HOVER_DELAY` shows it (`Session::pane_drag_tick`, a deadline of
+   `about_to_wait`), the drag going on. The release runs `move_pane`, `swap_panes`,
+   `move_pane_to_tab` or `move_pane_to_new_tab`; without target, a refused move,
+   `Escape`, the window losing the focus or any pane closing cancels it: the pane gets
+   the focus back in its tab, zoomed again when it was. While started, the drag takes
+   every key (only `Escape` acts) and ignores the other buttons. The open dialog
    (`chrome::dialog::DialogLayout`, centered) or command palette
    (`chrome::command_palette::PaletteLayout`, at most 600 px wide, its top at 15 % of
    the window height) goes to the overlay rects and texts of the layer. The link

@@ -4,6 +4,8 @@
 //! Pure geometry over the pane layout of the shown tab and the tab bar, so it is
 //! tested without a window.
 
+use std::time::{Duration, Instant};
+
 use crate::chrome::tab_bar::{TabBarHit, TabBarLayout};
 use crate::i18n::Direction;
 use crate::layout::Rect;
@@ -26,7 +28,6 @@ pub enum Zone {
 
 /// What a dragged pane is dropped onto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
 pub enum DropTarget {
     /// Split `pane` on `side`, the moved pane on that side.
     Edge { pane: PaneId, side: Direction },
@@ -36,6 +37,31 @@ pub enum DropTarget {
     Tab(usize),
     /// Into a new tab, last.
     NewTab,
+}
+
+/// How long the dragged pane stays over another tab before that tab is shown.
+pub const TAB_HOVER_DELAY: Duration = Duration::from_secs(1);
+
+/// Tab hovered by the dragged pane and since when, after the pointer moved over the
+/// tab `over` (`None` off the tabs) while tab `shown` is shown, at `now`. Staying over
+/// the same tab keeps its start; the shown tab is never hovered.
+pub fn tab_hover(
+    current: Option<(usize, Instant)>,
+    over: Option<usize>,
+    shown: usize,
+    now: Instant,
+) -> Option<(usize, Instant)> {
+    match (over, current) {
+        (Some(index), _) if index == shown => None,
+        (Some(index), Some((hovered, since))) if hovered == index => Some((index, since)),
+        (Some(index), _) => Some((index, now)),
+        (None, _) => None,
+    }
+}
+
+/// When the tab of `hover` gets shown.
+pub fn tab_hover_deadline(hover: Option<(usize, Instant)>) -> Option<Instant> {
+    hover.map(|(_, since)| since + TAB_HOVER_DELAY)
 }
 
 /// Zone of `rect` the pixel `(x, y)` falls in: the center, else the nearest edge, the
@@ -78,7 +104,6 @@ pub fn zone(rect: Rect, x: f32, y: f32) -> Zone {
 /// button or the empty part of the bar. Over a pane of the shown tab (`panes`): `Edge`
 /// or `Center` by [`zone`], none over `dragged` itself, and none for an `Edge`
 /// `can_insert(pane, side)` refuses (the move would not fit).
-#[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
 pub fn target(
     panes: &Layout,
     tab_bar: Option<&TabBarLayout>,
@@ -110,7 +135,6 @@ pub fn target(
 /// Rectangle highlighting `target`: the half of the pane on the side of an `Edge`,
 /// the whole pane for `Center`, the slot of the tab for `Tab`, the `+` button for
 /// `NewTab`. `None` when the pane or tab is not laid out.
-#[allow(dead_code)] // The pane drag and drop is tracked by issue #137.
 pub fn highlight(
     target: DropTarget,
     panes: &Layout,
@@ -146,6 +170,29 @@ fn half(rect: Rect, side: Direction) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hovering_another_tab_keeps_its_start_until_it_is_left() {
+        let start = Instant::now();
+        let later = start + Duration::from_millis(400);
+        let hover = tab_hover(None, Some(2), 0, start);
+        assert_eq!(hover, Some((2, start)));
+        assert_eq!(tab_hover(hover, Some(2), 0, later), Some((2, start)));
+        assert_eq!(tab_hover(hover, Some(1), 0, later), Some((1, later)));
+        assert_eq!(tab_hover(hover, None, 0, later), None);
+        // The shown tab is never hovered.
+        assert_eq!(tab_hover(hover, Some(0), 0, later), None);
+    }
+
+    #[test]
+    fn the_hovered_tab_is_due_one_second_after_it_was_entered() {
+        let start = Instant::now();
+        assert_eq!(
+            tab_hover_deadline(Some((1, start))),
+            Some(start + Duration::from_secs(1))
+        );
+        assert_eq!(tab_hover_deadline(None), None);
+    }
     use crate::chrome::tab_bar::UiMetrics;
     use crate::workspace::TabBarPosition;
 

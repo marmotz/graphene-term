@@ -167,6 +167,7 @@ Tabs and split panes:
 | Click on a pane title bar     | Focus the pane; double click to zoom, or back   |
 | × on a pane title bar         | Close the pane                                  |
 | Right click on a title bar    | Pane menu                                       |
+| Drag a pane title bar         | Move the pane (see below)                       |
 | Drag a divider                | Resize the panes on both sides                  |
 
 "Equalise panes" and "Move pane to a new tab" have no key: run them from the command
@@ -181,6 +182,11 @@ Right` moves the focus instead of extending the input selection.
 Every pane has a title bar on top, showing its title (set by the shell or the program,
 else the current directory) and a `×` button. The bar of the active pane is drawn in the accent color.
 Clicks on the bar are Graphene's and never reach the program running in the pane.
+Drag a pane by its title bar to move it: drop it near an edge of another pane to put it
+on that side, in the middle of a pane to swap them, on a tab to move it there (holding it
+over a tab for a second shows that tab), or on `+` or the empty part of the tab bar to
+move it to a new tab. The tab bar shows during the drag even with a single tab, and a
+translucent highlight shows where the pane will land. `Escape` cancels the drag.
 
 Every key-bound action can be remapped in the `[keybindings]` section of `config.toml`:
 `"Ctrl+Alt+T" = "new_tab"` adds a shortcut, `"Shift+PageUp" = "none"` gives a default
