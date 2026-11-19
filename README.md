@@ -113,7 +113,7 @@ RUST_LOG=graphene::perf=debug cargo run --release    # startup timing logs
 ```
 
 `cargo bench` measures parsing, frame building and GPU preparation on recorded terminal
-output (see [docs/development.md](docs/development.md#benchmarks)). The `graphene::perf`
+output (see [docs/dev/development.md](docs/dev/development.md#benchmarks)). The `graphene::perf`
 logs print the time of each startup step and of the first frame drawn after the shell's
 first output.
 
@@ -220,7 +220,7 @@ primary selection. Typing, `Backspace`, `Delete`, `Ctrl+Backspace` / `Ctrl+Delet
 
 ## Documentation
 
-- [Vision and roadmap](docs/vision.md)
-- [Architecture](docs/architecture.md)
-- [Technical decisions](docs/decisions.md)
-- [Development guide](docs/development.md)
+- [Vision and roadmap](docs/dev/vision.md)
+- [Architecture](docs/dev/architecture.md)
+- [Technical decisions](docs/dev/decisions.md)
+- [Development guide](docs/dev/development.md)

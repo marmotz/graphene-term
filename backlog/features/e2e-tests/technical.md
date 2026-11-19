@@ -15,12 +15,12 @@ Product decisions: [overview.md](overview.md).
   ([src/app.rs:1971-2029](../../../src/app.rs)).
 - Most current tests are module-local unit tests; the development guide lists the
   covered modules and notes that terminal-frame tests do not need a PTY or GPU
-  ([docs/development.md:69-86](../../../docs/development.md)). The `tests/` integration
+  ([docs/dev/development.md:69-86](../../../docs/dev/development.md)). The `tests/` integration
   tests currently exercise command-line behavior and packaging scripts, not the GUI
   ([tests/config_prune_command.rs:17-27](../../../tests/config_prune_command.rs)).
 - The only documented GUI automation is a manual X11 check using `xdotool` and
   ImageMagick; it uses fixed sleeps and captures a screenshot
-  ([docs/development.md:107-121](../../../docs/development.md)).
+  ([docs/dev/development.md:107-121](../../../docs/dev/development.md)).
 - Pull-request CI currently runs on `ubuntu-latest`, formats, lints, runs `cargo test`,
   and builds the release binary ([.github/workflows/ci.yml:14-41](../../../.github/workflows/ci.yml)).
   There is no GUI test job yet.
