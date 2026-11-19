@@ -2062,6 +2062,7 @@ impl Session {
         };
         match event {
             TermEvent::Wakeup => {
+                pane.terminal.wakeup_handled();
                 if self.first_frame.output() {
                     perf::mark("first PTY output");
                 }

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,21 +40,50 @@ pub enum UserEvent {
     Appearance(crate::appearance::Appearance),
 }
 
+/// Lets at most one `Wakeup` of a pane wait in the event loop: the PTY thread sends one
+/// per read, and a program writing without pause (`yes`, a full-screen animation) would
+/// otherwise fill the queue faster than the UI thread empties it, so redraws never run.
+#[derive(Clone, Default)]
+struct WakeupGate {
+    pending: Arc<AtomicBool>,
+}
+
+impl WakeupGate {
+    /// Whether a `Wakeup` must be sent: `false` while one sent earlier is not handled.
+    fn open(&self) -> bool {
+        !self.pending.swap(true, Ordering::AcqRel)
+    }
+
+    /// Called by the UI thread when it handles a `Wakeup`, before it reads the terminal:
+    /// output parsed from now on sends a new one.
+    fn handled(&self) {
+        self.pending.store(false, Ordering::Release);
+    }
+}
+
 /// Forwards the terminal events of one pane to the winit event loop.
 #[derive(Clone)]
 pub struct EventProxy {
     proxy: EventLoopProxy<UserEvent>,
     pane: PaneId,
+    wakeup: WakeupGate,
 }
 
 impl EventProxy {
     pub fn new(proxy: EventLoopProxy<UserEvent>, pane: PaneId) -> Self {
-        Self { proxy, pane }
+        Self {
+            proxy,
+            pane,
+            wakeup: WakeupGate::default(),
+        }
     }
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
+        if matches!(event, Event::Wakeup) && !self.wakeup.open() {
+            return;
+        }
         // The event loop may already be closed during shutdown.
         let _ = self.proxy.send_event(UserEvent::Terminal(self.pane, event));
     }
@@ -102,6 +132,7 @@ pub struct Terminal {
     sender: pty::Sender,
     /// Process id of the shell.
     shell_pid: u32,
+    wakeup: WakeupGate,
 }
 
 impl Terminal {
@@ -138,6 +169,7 @@ impl Terminal {
 
         let dims = TermSize::new(size.num_cols as usize, size.num_lines as usize);
         let timeline = Arc::new(Mutex::new(Timeline::new(config.scrolling_history)));
+        let wakeup = proxy.wakeup.clone();
         let term = Arc::new(FairMutex::new(Term::new(config, &dims, proxy.clone())));
 
         let images = Arc::new(Mutex::new(ImageStore::new()));
@@ -159,7 +191,13 @@ impl Terminal {
             images,
             sender,
             shell_pid,
+            wakeup,
         })
+    }
+
+    /// To call when the UI thread handles a `Wakeup` of this terminal, before reading it.
+    pub fn wakeup_handled(&self) {
+        self.wakeup.handled();
     }
 
     /// The shell's current directory, `None` when it cannot be read.
@@ -277,5 +315,17 @@ mod tests {
     #[test]
     fn without_a_program_nor_integration_the_default_shell_starts() {
         assert_eq!(launch(None, || None), None);
+    }
+
+    #[test]
+    fn a_pending_wakeup_holds_back_the_next_ones_until_handled() {
+        let gate = WakeupGate::default();
+        let sender = gate.clone();
+        assert!(sender.open());
+        assert!(!sender.open());
+        assert!(!sender.open());
+        gate.handled();
+        assert!(sender.open());
+        assert!(!sender.open());
     }
 }
