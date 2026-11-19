@@ -16,7 +16,7 @@ _tâches créées — voir [technical.md](features/pane-broadcast/technical.md)_
 
 ## Public documentation  ·  [overview](features/public-docs/overview.md)
 
-_tâches créées — voir [technical.md](features/public-docs/technical.md)_ — 6/7 tasks done
+_terminé — voir [technical.md](features/public-docs/technical.md)_ — 7/7 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -26,4 +26,4 @@ _tâches créées — voir [technical.md](features/public-docs/technical.md)_ �
 | [x]  | [#142](https://github.com/marmotz/graphene-term/issues/142) | [Docs] Documentation utilisateur en anglais (docs/en) | #139, #140 |
 | [x]  | [#143](https://github.com/marmotz/graphene-term/issues/143) | [Docs] Documentation utilisateur en français (docs/fr) | #142 |
 | [x]  | [#144](https://github.com/marmotz/graphene-term/issues/144) | [Docs] README anglais, CONTRIBUTING.md et comparatif | #140, #141, #142 |
-| [ ]  | [#145](https://github.com/marmotz/graphene-term/issues/145) | [Docs] README français (README.fr.md) | #143, #144 |
+| [x]  | [#145](https://github.com/marmotz/graphene-term/issues/145) | [Docs] README français (README.fr.md) | #143, #144 |
