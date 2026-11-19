@@ -413,6 +413,15 @@ Renderer::render(pane frames, interface rects)
   neutral card. The frozen rows are capped at the scrollback size, the oldest blocks
   dropped whole. Frozen blocks are reflowed for new columns only when the view shows
   them (`Timeline::reflow`, from `view::prepare`).
+- The integration scripts (`shell-integration/`, embedded in the binary) are written at
+  startup to `$XDG_RUNTIME_DIR/graphene/shell-integration/` (a per-user folder of the
+  temporary directory when that variable is unset) and injected through each shell's
+  startup mechanism, without touching the user's dotfiles: `ZDOTDIR` for zsh (its
+  `.zshenv` restores `ZDOTDIR` and sources the user's), `--posix` + `ENV` for bash
+  (`--rcfile` on macOS; the script turns POSIX mode off and sources the usual startup
+  files), `XDG_DATA_DIRS` for fish (a `vendor_conf.d` script; fish's own OSC 133 marks
+  are ignored). On macOS the shell starts as a login shell. Shells started by hand
+  inside Graphene are left as they are (`shell_integration::prepare`).
 - The session token (32 random hex characters, made by `Terminal::spawn`) is the one
   the scanner expects in the signals. `shell_integration::prepare` passes it to the
   shell in `GRAPHENE_BLOCK_TOKEN`; each script moves it into a non-exported shell
