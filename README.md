@@ -49,80 +49,57 @@ uncomment the line below.
 
 Graphene compared with other Linux terminals, each with its default configuration.
 
-### Performance
+**Performance**: Graphene is in the same range as the other terminals: it takes 0.22 s
+to `cat` an 11 MB text file, against 0.16 s to 0.48 s for the others. It starts slower
+and uses more memory than Alacritty. Measurements, the test machine and how to
+reproduce them are in [Comparing terminals](docs/dev/development.md#comparing-terminals).
 
-<!-- Paste the table printed by `scripts/benchmark-terminals.py run` here. -->
+✅ supported, ❌ not supported, ⚠️ partial (see the notes under the table).
 
-| Terminal | Throughput (s) | Refresh rate (fps) | Startup (ms) | Memory idle (MiB) | Memory under load (MiB) |
-|---|---|---|---|---|---|
-| **Graphene** |  |  |  |  |  |
-| Alacritty |  |  |  |  |  |
-| Kitty |  |  |  |  |  |
-| WezTerm |  |  |  |  |  |
-| foot |  |  |  |  |  |
-| Terminator |  |  |  |  |  |
-| GNOME Terminal |  |  |  |  |  |
-| Konsole |  |  |  |  |  |
+| Feature | Graphene 0.1.3 | Alacritty 0.17.0 | Kitty 0.50.0 | WezTerm 20260716 | Terminator 2.1.6 | GNOME Terminal 3.60.0 |
+|---|---|---|---|---|---|---|
+| **Rendering** | | | | | | |
+| GPU rendering | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Truecolor | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Inline images (kitty graphics protocol, with animations) | ✅ | ❌ | ✅ | ⚠️¹ | ❌ | ❌ |
+| Sixel images | ✅ | ❌ | ❌ | ✅ | ✅ | ⚠️² |
+| Translucent background | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Shell** | | | | | | |
+| Command blocks with exit status | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Fold / unfold outputs | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Copy a command or its output | ✅ | ❌ | ⚠️³ | ⚠️⁴ | ❌ | ❌ |
+| Automatic shell integration (zsh, bash, fish) without editing dotfiles | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Rich prompt editor (mouse cursor, selection, editor shortcuts) | ✅ | ❌ | ⚠️⁵ | ❌ | ❌ | ❌ |
+| **Layout** | | | | | | |
+| Tabs | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Split panes | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| Drag panes to rearrange | ✅ | ❌ | ✅ | ❌ | ✅ | ❌ |
+| Zoom a pane | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| Command palette (fuzzy) | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Interaction** | | | | | | |
+| Clickable links (OSC 8 and detected URLs) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Rectangular selection | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Mouse reporting to applications | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Remappable keybindings | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Configuration** | | | | | | |
+| Settings window (GUI) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Live config reload | ✅ | ✅ | ⚠️⁶ | ✅ | ✅ | ✅ |
+| Themes following the system light/dark mode | ✅ | ❌ | ✅ | ⚠️⁷ | ❌ | ⚠️⁸ |
+| Built-in themes | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Interface translated (en, fr) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Remembered window size | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Update notification | ✅ | ❌ | ⚠️⁹ | ✅ | ❌ | ❌ |
 
-Lower is better, except refresh rate. Each value is the median of several runs.
-Throughput (time to `cat` an 11 MB text file) and refresh rate measure how fast a
-terminal accepts output, not what it draws on screen.
-
-### Features
-
-✅ supported, ❌ not supported, ⚠️ partial (see the note).
-
-<!-- Write the tested version of each terminal in the header, then fill the cells. -->
-
-| Feature | Graphene | Alacritty | Kitty | WezTerm | foot | Terminator | GNOME Terminal | Konsole |
-|---|---|---|---|---|---|---|---|---|
-| **Rendering** | | | | | | | | |
-| GPU rendering | | | | | | | | |
-| Truecolor | | | | | | | | |
-| Inline images (kitty graphics protocol, with animations) | | | | | | | | |
-| Sixel images | | | | | | | | |
-| Translucent background | | | | | | | | |
-| **Shell** | | | | | | | | |
-| Command blocks with exit status | | | | | | | | |
-| Fold / unfold outputs | | | | | | | | |
-| Copy a command or its output | | | | | | | | |
-| Automatic shell integration (zsh, bash, fish) without editing dotfiles | | | | | | | | |
-| Rich prompt editor (mouse cursor, selection, editor shortcuts) | | | | | | | | |
-| **Layout** | | | | | | | | |
-| Tabs | | | | | | | | |
-| Split panes | | | | | | | | |
-| Drag panes to rearrange | | | | | | | | |
-| Zoom a pane | | | | | | | | |
-| Command palette (fuzzy) | | | | | | | | |
-| **Interaction** | | | | | | | | |
-| Clickable links (OSC 8 and detected URLs) | | | | | | | | |
-| Rectangular selection | | | | | | | | |
-| Mouse reporting to applications | | | | | | | | |
-| Remappable keybindings | | | | | | | | |
-| **Configuration** | | | | | | | | |
-| Settings window (GUI) | | | | | | | | |
-| Live config reload | | | | | | | | |
-| Themes following the system light/dark mode | | | | | | | | |
-| Built-in themes | | | | | | | | |
-| Interface translated (en, fr) | | | | | | | | |
-| Remembered window size | | | | | | | | |
-| Update notification | | | | | | | | |
-
-### Test machine and how to reproduce
-
-<!-- Paste the "Machine" block printed by the script here. -->
-
-The tables come from [scripts/benchmark-terminals.py](scripts/benchmark-terminals.py)
-(Python 3, Linux). It runs every installed terminal and prints the performance table
-and the machine:
-
-```bash
-cargo build --release
-scripts/benchmark-terminals.py run
-```
-
-See [Comparing terminals](docs/dev/development.md#comparing-terminals) for what each
-metric measures.
+1. WezTerm implements part of the kitty graphics protocol.
+2. GNOME Terminal: off by default, to turn on in the profile preferences.
+3. Kitty copies or shows the last command's output with a shortcut, not the command.
+4. WezTerm selects a command or its output once you add its shell integration to your
+   dotfiles.
+5. Kitty moves the cursor to a click in the prompt, without mouse selection.
+6. Kitty reloads its configuration with a shortcut (`Ctrl+Shift+F5`), not by itself.
+7. WezTerm needs a few lines of Lua in the configuration.
+8. GNOME Terminal follows the system mode only with the system theme colors.
+9. Kitty checks for updates only in its official builds, not in distribution packages.
 
 ## Install
 

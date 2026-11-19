@@ -36,8 +36,8 @@ décommenter la ligne ci-dessous.
   [onglets et panneaux](docs/fr/tabs-and-panes.md).
 - **Palette de commandes** avec recherche approximative sur toutes les actions :
   [palette de commandes](docs/fr/tabs-and-panes.md#palette-de-commandes).
-- **Images dans le terminal** (protocole graphique de kitty avec animations, sixel) et
-  **liens cliquables** (OSC 8 et URL détectées) :
+- **Images dans le terminal** (protocole graphique de kitty avec animations, sixel) et **liens cliquables** (OSC 8 et
+  URL détectées) :
   [images et liens](docs/fr/images-and-links.md).
 - **Sélection à la souris**, y compris rectangulaire, et transmission de la souris aux
   applications : [sélection et presse-papiers](docs/fr/selection-and-clipboard.md).
@@ -54,83 +54,60 @@ décommenter la ligne ci-dessous.
 
 Graphene comparé à d'autres terminaux Linux, chacun dans sa configuration par défaut.
 
-### Performances
+**Performances** : Graphene est dans la moyenne des autres terminaux : il met 0,22 s à
+afficher avec `cat` un fichier texte de 11 Mo, contre 0,16 s à 0,48 s pour les autres.
+Il démarre plus lentement et consomme plus de mémoire qu'Alacritty. Les mesures, la
+machine de test et la façon de les reproduire sont dans
+[Comparing terminals](docs/dev/development.md#comparing-terminals) (en anglais).
 
-<!-- Coller ici le tableau affiché par `scripts/benchmark-terminals.py run`, en
-traduisant les en-têtes. -->
+✅ pris en charge, ❌ non pris en charge, ⚠️ partiel (voir les notes sous le tableau).
 
-| Terminal | Débit (s) | Taux de rafraîchissement (fps) | Démarrage (ms) | Mémoire au repos (Mio) | Mémoire sous charge (Mio) |
-|---|---|---|---|---|---|
-| **Graphene** |  |  |  |  |  |
-| Alacritty |  |  |  |  |  |
-| Kitty |  |  |  |  |  |
-| WezTerm |  |  |  |  |  |
-| foot |  |  |  |  |  |
-| Terminator |  |  |  |  |  |
-| GNOME Terminal |  |  |  |  |  |
-| Konsole |  |  |  |  |  |
+| Fonctionnalité                                                                              | Graphene 0.1.3 | Alacritty 0.17.0 | Kitty 0.50.0 | WezTerm 20260716 | Terminator 2.1.6 | GNOME Terminal 3.60.0 |
+|---------------------------------------------------------------------------------------------|----------------|------------------|--------------|------------------|------------------|-----------------------|
+| **Rendu**                                                                                   |                |                  |              |                  |                  |                       |
+| Rendu GPU                                                                                   | ✅             | ✅               | ✅           | ✅               | ❌               | ❌                    |
+| Truecolor                                                                                   | ✅             | ✅               | ✅           | ✅               | ✅               | ✅                    |
+| Images dans le terminal (protocole graphique de kitty, avec animations)                     | ✅             | ❌               | ✅           | ⚠️¹              | ❌               | ❌                    |
+| Images sixel                                                                                | ✅             | ❌               | ❌           | ✅               | ✅               | ⚠️²                   |
+| Fond transparent                                                                            | ✅             | ✅               | ✅           | ✅               | ✅               | ❌                    |
+| **Shell**                                                                                   |                |                  |              |                  |                  |                       |
+| Blocs de commande avec code de retour                                                       | ✅             | ❌               | ❌           | ❌               | ❌               | ❌                    |
+| Replier / déplier les sorties                                                               | ✅             | ❌               | ❌           | ❌               | ❌               | ❌                    |
+| Copier une commande ou sa sortie                                                            | ✅             | ❌               | ⚠️³          | ⚠️⁴              | ❌               | ❌                    |
+| Intégration shell automatique (zsh, bash, fish) sans modifier les fichiers de configuration | ✅             | ❌               | ✅           | ❌               | ❌               | ❌                    |
+| Éditeur d'invite enrichi (curseur à la souris, sélection, raccourcis d'éditeur)             | ✅             | ❌               | ⚠️⁵          | ❌               | ❌               | ❌                    |
+| **Disposition**                                                                             |                |                  |              |                  |                  |                       |
+| Onglets                                                                                     | ✅             | ❌               | ✅           | ✅               | ✅               | ✅                    |
+| Panneaux                                                                                    | ✅             | ❌               | ✅           | ✅               | ✅               | ❌                    |
+| Déplacer les panneaux à la souris                                                           | ✅             | ❌               | ✅           | ❌               | ✅               | ❌                    |
+| Zoom sur un panneau                                                                         | ✅             | ❌               | ✅           | ✅               | ✅               | ❌                    |
+| Palette de commandes (recherche approximative)                                              | ✅             | ❌               | ✅           | ✅               | ❌               | ❌                    |
+| **Interaction**                                                                             |                |                  |              |                  |                  |                       |
+| Liens cliquables (OSC 8 et URL détectées)                                                   | ✅             | ✅               | ✅           | ✅               | ✅               | ✅                    |
+| Sélection rectangulaire                                                                     | ✅             | ✅               | ✅           | ✅               | ✅               | ✅                    |
+| Transmission de la souris aux applications                                                  | ✅             | ✅               | ✅           | ✅               | ✅               | ✅                    |
+| Raccourcis clavier modifiables                                                              | ✅             | ✅               | ✅           | ✅               | ✅               | ✅                    |
+| **Configuration**                                                                           |                |                  |              |                  |                  |                       |
+| Fenêtre des paramètres (interface graphique)                                                | ✅             | ❌               | ❌           | ❌               | ✅               | ✅                    |
+| Rechargement à chaud de la configuration                                                    | ✅             | ✅               | ⚠️⁶          | ✅               | ✅               | ✅                    |
+| Thèmes qui suivent le mode clair/sombre du système                                          | ✅             | ❌               | ✅           | ⚠️⁷              | ❌               | ⚠️⁸                   |
+| Thèmes intégrés                                                                             | ✅             | ❌               | ✅           | ✅               | ✅               | ✅                    |
+| Interface traduite (en, fr)                                                                 | ✅             | ❌               | ❌           | ❌               | ✅               | ✅                    |
+| Taille de fenêtre mémorisée                                                                 | ✅             | ❌               | ✅           | ❌               | ❌               | ❌                    |
+| Notification de mise à jour                                                                 | ✅             | ❌               | ⚠️⁹          | ✅               | ❌               | ❌                    |
 
-Plus bas est meilleur, sauf pour le taux de rafraîchissement. Chaque valeur est la
-médiane de plusieurs mesures. Le débit (temps pour afficher avec `cat` un fichier texte
-de 11 Mo) et le taux de rafraîchissement mesurent la vitesse à laquelle un terminal
-absorbe la sortie, pas ce qu'il dessine à l'écran.
-
-### Fonctionnalités comparées
-
-✅ pris en charge, ❌ non pris en charge, ⚠️ partiel (voir la note).
-
-<!-- Écrire la version testée de chaque terminal dans l'en-tête, puis remplir les
-cases (mêmes cases que dans README.md). -->
-
-| Fonctionnalité | Graphene | Alacritty | Kitty | WezTerm | foot | Terminator | GNOME Terminal | Konsole |
-|---|---|---|---|---|---|---|---|---|
-| **Rendu** | | | | | | | | |
-| Rendu GPU | | | | | | | | |
-| Truecolor | | | | | | | | |
-| Images dans le terminal (protocole graphique de kitty, avec animations) | | | | | | | | |
-| Images sixel | | | | | | | | |
-| Fond translucide | | | | | | | | |
-| **Shell** | | | | | | | | |
-| Blocs de commande avec code de retour | | | | | | | | |
-| Replier / déplier les sorties | | | | | | | | |
-| Copier une commande ou sa sortie | | | | | | | | |
-| Intégration shell automatique (zsh, bash, fish) sans modifier les fichiers de configuration | | | | | | | | |
-| Éditeur d'invite enrichi (curseur à la souris, sélection, raccourcis d'éditeur) | | | | | | | | |
-| **Disposition** | | | | | | | | |
-| Onglets | | | | | | | | |
-| Panneaux | | | | | | | | |
-| Déplacer les panneaux à la souris | | | | | | | | |
-| Zoom sur un panneau | | | | | | | | |
-| Palette de commandes (recherche approximative) | | | | | | | | |
-| **Interaction** | | | | | | | | |
-| Liens cliquables (OSC 8 et URL détectées) | | | | | | | | |
-| Sélection rectangulaire | | | | | | | | |
-| Transmission de la souris aux applications | | | | | | | | |
-| Raccourcis clavier modifiables | | | | | | | | |
-| **Configuration** | | | | | | | | |
-| Fenêtre des paramètres (interface graphique) | | | | | | | | |
-| Rechargement à chaud de la configuration | | | | | | | | |
-| Thèmes qui suivent le mode clair/sombre du système | | | | | | | | |
-| Thèmes intégrés | | | | | | | | |
-| Interface traduite (en, fr) | | | | | | | | |
-| Taille de fenêtre mémorisée | | | | | | | | |
-| Notification de mise à jour | | | | | | | | |
-
-### Machine de test et reproduction
-
-<!-- Coller ici le bloc « Machine » affiché par le script. -->
-
-Les tableaux viennent de [scripts/benchmark-terminals.py](scripts/benchmark-terminals.py)
-(Python 3, Linux). Il lance chaque terminal installé et affiche le tableau de
-performances et la machine :
-
-```bash
-cargo build --release
-scripts/benchmark-terminals.py run
-```
-
-Voir [Comparing terminals](docs/dev/development.md#comparing-terminals) (en anglais)
-pour ce que mesure chaque colonne.
+1. WezTerm implémente une partie du protocole graphique de kitty.
+2. GNOME Terminal : désactivé par défaut, à activer dans les préférences du profil.
+3. Kitty copie ou affiche la sortie de la dernière commande avec un raccourci, pas la
+   commande.
+4. WezTerm sélectionne une commande ou sa sortie une fois son intégration shell ajoutée
+   à vos fichiers de configuration.
+5. Kitty déplace le curseur au clic dans l'invite, sans sélection à la souris.
+6. Kitty recharge sa configuration avec un raccourci (`Ctrl+Shift+F5`), pas tout seul.
+7. WezTerm demande quelques lignes de Lua dans la configuration.
+8. GNOME Terminal suit le mode du système uniquement avec les couleurs du thème système.
+9. Kitty ne vérifie les mises à jour que dans ses versions officielles, pas dans les
+   paquets des distributions.
 
 ## Installation
 
