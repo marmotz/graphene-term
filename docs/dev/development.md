@@ -43,7 +43,7 @@ configured entries; an invalid key or action is reported like any invalid value)
 the update check. The configuration directory is watched (`src/watcher.rs`) and a change
 is applied without restarting. The settings window (`src/settings/`) writes each change
 to `config.toml` (`src/config_edit.rs`), and the hot reload applies it.
-`graphene --prune-config [--yes]` removes the keys that equal their default.
+`graphene --prune-config [--yes]` removes the keys the parser does not recognize.
 
 The user documentation lists every key in `docs/en/configuration.md` and
 `docs/fr/configuration.md`: update both pages when a key is added, removed or changes
