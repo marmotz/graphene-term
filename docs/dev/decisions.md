@@ -1,23 +1,72 @@
 # Technical decisions
 
-## Rust + wgpu, native
+Each entry states a technical choice and the reasons behind it. How the code works is in
+[architecture.md](architecture.md).
+
+## Contents
+
+- [Stack](#stack)
+  - [Rust + wgpu, native](#rust--wgpu-native)
+  - [`alacritty_terminal` for emulation](#alacritty_terminal-for-emulation)
+  - [Own PTY loop](#own-pty-loop)
+  - [Environment for the shell](#environment-for-the-shell)
+- [Images](#images)
+  - [Image splitter before the block signal scanner](#image-splitter-before-the-block-signal-scanner)
+  - [Images anchored by placeholder cells](#images-anchored-by-placeholder-cells)
+  - [Kitty animations: frames stored whole, played on the UI thread](#kitty-animations-frames-stored-whole-played-on-the-ui-thread)
+  - [Kitty graphics: unnamed placements and replies](#kitty-graphics-unnamed-placements-and-replies)
+  - [Sixel: square pixels, images padded to whole cells](#sixel-square-pixels-images-padded-to-whole-cells)
+- [Command blocks](#command-blocks)
+  - [One terminal per block: live grid and frozen blocks](#one-terminal-per-block-live-grid-and-frozen-blocks)
+  - [Card space always reserved](#card-space-always-reserved)
+  - [Cards replace the gutter marks](#cards-replace-the-gutter-marks)
+  - [Chevron inside the card](#chevron-inside-the-card)
+  - [Gaps between cards keep the PTY size](#gaps-between-cards-keep-the-pty-size)
+  - [Scroll positions owned by Graphene](#scroll-positions-owned-by-graphene)
+- [Rendering](#rendering)
+  - [Own glyph pipeline on `cosmic-text` (glyphon dropped)](#own-glyph-pipeline-on-cosmic-text-glyphon-dropped)
+  - [Exact cell width, glyphs anchored per cell](#exact-cell-width-glyphs-anchored-per-cell)
+  - [Block cursor baked into cells](#block-cursor-baked-into-cells)
+  - [Inactive panes dimmed in the frame](#inactive-panes-dimmed-in-the-frame)
+  - [Interface font separate from the terminal font](#interface-font-separate-from-the-terminal-font)
+- [Input, selection and clipboard](#input-selection-and-clipboard)
+  - [Selection and copy](#selection-and-copy)
+  - [Copy with an image: own clipboard offers next to `arboard`](#copy-with-an-image-own-clipboard-offers-next-to-arboard)
+  - [IME disabled](#ime-disabled)
+  - [Input editor: shell bindings for private sequences](#input-editor-shell-bindings-for-private-sequences)
+  - [Input editor: rich mode at the prompt](#input-editor-rich-mode-at-the-prompt)
+  - [Links: a simple click opens, `xdg-open`, local files only](#links-a-simple-click-opens-xdg-open-local-files-only)
+- [Interface](#interface)
+  - [Tabs and splits: binary split tree](#tabs-and-splits-binary-split-tree)
+  - [Current directory and foreground program from `/proc`](#current-directory-and-foreground-program-from-proc)
+  - [Own translation table](#own-translation-table)
+  - [Command palette: `nucleo-matcher` and a recent actions file](#command-palette-nucleo-matcher-and-a-recent-actions-file)
+- [Configuration](#configuration)
+  - [Configuration parsed key by key](#configuration-parsed-key-by-key)
+  - [Light/dark appearance from the XDG desktop portal](#lightdark-appearance-from-the-xdg-desktop-portal)
+
+## Stack
+
+### Rust + wgpu, native
 
 Chosen over Tauri/Electron + xterm.js and GTK4/VTE: lowest latency and memory, full
 control over the look. Cost: UI elements (tabs, palette, blocks) must be drawn by hand.
 
-The window renderer creates its wgpu instance with the Vulkan backend alone first and
-falls back to all backends when Vulkan has no compatible adapter: probing every backend
-cost ~100 ms at startup (see `backlog/features/performance/technical.md`).
+The window renderer creates its wgpu instance with the Vulkan backend alone first, then
+tries GL on Linux (every other backend elsewhere) (`BACKEND_ATTEMPTS`): probing every
+backend at once cost ~100 ms at startup. The first backend whose surface can be
+transparent wins; when none can, the first working opaque one is kept, and on X11
+`renderer/x11_presenter.rs` presents the frames through an ARGB window instead.
 
-## `alacritty_terminal` for emulation
+### `alacritty_terminal` for emulation
 
 A correct VT emulator is a large amount of work (escape sequences, alternate screen,
 scroll regions, wide chars, reflow on resize). `alacritty_terminal` provides it, plus
 the PTY, and is battle-tested. We only depend on its public API (`Term`, `tty`, `vte`).
-Graphene-specific features (blocks, input editor) will
-be layered on top.
+Graphene-specific features (blocks, input editor, images)
+are layered on top.
 
-## Own PTY loop
+### Own PTY loop
 
 alacritty's `event_loop::EventLoop` parses whole read buffers, sometimes several reads
 at once, inside its own thread: the cursor position at a given byte of the stream is
@@ -28,7 +77,14 @@ parse step `pty::feed` can be split around signals. alacritty's `tty` module sti
 shell and owns the PTY file descriptors. Poller keys `0` (read/write) and `1` (child
 event) mirror alacritty's unix `tty`, where they are `pub(crate)`.
 
-## Image splitter before the block signal scanner
+### Environment for the shell
+
+`TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=graphene`. We do not call
+`alacritty_terminal::tty::setup_env`, which would select the `alacritty` terminfo.
+
+## Images
+
+### Image splitter before the block signal scanner
 
 `vte` 0.15 drops APC strings and `alacritty_terminal` only logs DCS, so kitty graphics and
 sixel never reach Graphene through the parser. `graphics::sequence::Splitter` cuts them
@@ -41,7 +97,7 @@ budget) is dropped up to its terminator; `ESC`, `CAN` or `SUB` inside a payload 
 as in `vte`. `Term` reports no full reset, so the splitter flags `ESC c` in the passed
 bytes.
 
-## Images anchored by placeholder cells
+### Images anchored by placeholder cells
 
 Every image, kitty or sixel, is anchored in the grid by kitty's Unicode placeholder cells
 (`U+10EEEE`, ids in the foreground and underline colors, row and column as diacritics)
@@ -58,7 +114,7 @@ image is scaled to fit its box of cells, so a font zoom rescales it with the tex
 Textures are keyed on the pixels' uid and dropped when no store holds them, so an
 animation frame or a replaced image needs no explicit invalidation.
 
-## Kitty animations: frames stored whole, played on the UI thread
+### Kitty animations: frames stored whole, played on the UI thread
 
 Each animation frame is stored as a full RGBA canvas, composed when it arrives (`a=f`,
 `a=c`), instead of kitty's lazily applied operations: drawing a frame is then a plain
@@ -71,7 +127,7 @@ only changes the state. A paused or hidden animation resumes from the current ti
 When its loop count runs out it stops on the first frame, and a new `s=3` plays it
 again. An animation control (`a=a`) gets no `OK` reply, as in kitty.
 
-## Kitty graphics: unnamed placements and replies
+### Kitty graphics: unnamed placements and replies
 
 A kitty direct placement without `p` gets its own placement id, counting down from
 `0xFFFFFF` (the placement id travels in a 24-bit underline color), instead of sharing
@@ -82,7 +138,7 @@ Replies are kept by the graphics handler and pushed to the PTY write queue after
 parsed read, so the handler needs no access to the loop's writer and stays testable on
 a plain `Term`.
 
-## Sixel: square pixels, images padded to whole cells
+### Sixel: square pixels, images padded to whole cells
 
 Sixel encoders (libsixel `img2sixel`, `chafa`) target xterm, foot and mlterm, which draw
 square pixels: the VT340 aspect ratio of `p1` and of the raster attributes is ignored.
@@ -95,7 +151,9 @@ sixel is its own image: images that no cell shows any more are left to the store
 budget, since scanning the grid and history after every sixel would cost more than it
 saves.
 
-## One terminal per block: live grid and frozen blocks
+## Command blocks
+
+### One terminal per block: live grid and frozen blocks
 
 The first implementation cut one grid into blocks with the OSC 133 marks the shell
 puts around its prompt, and anchored them in the cells with internal hyperlinks.
@@ -110,7 +168,7 @@ signals are two private OSC sequences carrying a session token (`start` with the
 command line, `end` with the status), so the 133 marks of fish, powerlevel10k, a remote
 shell or a printed file never matter. The prompt is never wrapped or parsed.
 
-## Card space always reserved
+### Card space always reserved
 
 The command blocks are drawn as cards: a margin for the status stripe and half a cell
 of card padding left of the grid, and a wider card padding holding the fold chevron
@@ -118,7 +176,7 @@ right of it. This space is reserved from the start, even when the shell sends no
 so the first block never changes the column count: no reflow mid-session. The cost is
 about three columns fewer for every user.
 
-## Cards replace the gutter marks
+### Cards replace the gutter marks
 
 The first rendering put a one-cell gutter bar, a 1 px separator over the grid and a font
 chevron (`▸` / `▾`) on the command row. With a real prompt (powerlevel10k) it read as
@@ -127,7 +185,7 @@ half under the status bar. Each block is now a card: a rounded background derive
 the palette, a status stripe in the margin and a chevron drawn as an SDF shape in the
 rect pipeline, so it is crisp at any size and needs no font.
 
-## Chevron inside the card
+### Chevron inside the card
 
 The chevron was first a disc with a triangle straddling the card's top-right corner,
 half outside the card. It is now a slight V stroke inside the card, in a right card
@@ -135,7 +193,7 @@ padding widened for it, animated through a straight line when the fold changes. 
 wider padding costs about one and a half columns, in exchange for a chevron that belongs to
 its card and never covers the command row.
 
-## Gaps between cards keep the PTY size
+### Gaps between cards keep the PTY size
 
 Half a line separates two cards. The PTY size never changes: the gaps push the top rows
 of the view out, reachable by scrolling, rather than shrinking the PTY per block (which
@@ -143,7 +201,7 @@ would reflow and redraw full-screen programs). The view is laid out in half-line
 whole rows only; a block is capped one line short of the view, so the gap above it
 always fits and a capped block is always shown whole.
 
-## Scroll positions owned by Graphene
+### Scroll positions owned by Graphene
 
 The view spans several grids, and a block shows at most a view height (its header
 pinned, its output scrolled), which is not alacritty's viewport. The scroll positions
@@ -153,7 +211,9 @@ up, the timeline offset grows by what was added below (`view::follow`), so the v
 stays still while output arrives, which alacritty used to do for its viewport. Folding
 a block replaces its output with one summary row; the grids are untouched.
 
-## Own glyph pipeline on `cosmic-text` (glyphon dropped)
+## Rendering
+
+### Own glyph pipeline on `cosmic-text` (glyphon dropped)
 
 glyphon was used first: it handles shaping, font fallback and a glyph atlas through
 `cosmic-text`. But it shapes text runs, and a terminal frame where a full screen changed
@@ -164,7 +224,7 @@ instanced quad per glyph (see [architecture.md](architecture.md#glyphs)). Single
 characters are still shaped with `Shaping::Advanced` so that fallback fonts work.
 Consequence: programming-font ligatures are never drawn.
 
-## Exact cell width, glyphs anchored per cell
+### Exact cell width, glyphs anchored per cell
 
 `cosmic-text` 0.19 `Buffer::set_monospace_width` does not force glyph advances to the
 cell width (it divides a pixel advance by an em width, so the rounding is ineffective).
@@ -175,17 +235,31 @@ Fix:
 - the cell width is the exact advance of `M`, not rounded;
 - each glyph is positioned at its own cell origin (see [architecture.md](architecture.md#glyphs)).
 
-## Block cursor baked into cells
+### Block cursor baked into cells
 
 Drawing the block cursor as a rect under the text and recoloring the glyph keeps the
 text renderer unaware of the cursor. Non-block shapes are drawn as rects over the text.
 
-## Environment for the shell
+### Inactive panes dimmed in the frame
 
-`TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=graphene`. We do not call
-`alacritty_terminal::tty::setup_env`, which would select the `alacritty` terminfo.
+When a tab shows several panes, the inactive ones are captured then passed through
+`Frame::dimmed`, which mixes every color 30 % toward the background. A translucent rect
+over the pane would cost an extra draw and leave glyph colors untouched; a pure
+function on the frame is free at draw time and unit tested.
 
-## Selection and copy
+### Interface font separate from the terminal font
+
+The tab bar, the pane title bars and the dialog use a sans-serif font at a fixed 13 px
+times the window scale, the command palette and the context menus the same font at
+16 px (the palette is read and typed in, 13 px was too small), independent of the
+terminal font and its zoom. Their
+text is shaped as lines at free positions, not cells, but its glyphs go through the
+same cache and atlas as the grid (keys marked `ui`), so no second text renderer is
+needed.
+
+## Input, selection and clipboard
+
+### Selection and copy
 
 - The selection is `alacritty_terminal`'s `Term::selection`: it follows its text when
   the content scrolls, and handles word, line and block selection, wide characters and
@@ -212,12 +286,25 @@ text renderer unaware of the cursor. Non-block shapes are drawn as rects over th
   scrolled and erased in the same PTY batch leaves stale coordinates; the text then
   differs and the selection is cleared, the safe outcome.
 
-## IME disabled
+### Copy with an image: own clipboard offers next to `arboard`
+
+`arboard` 3.7 sets one format at a time, so text and image cannot be offered together.
+A copy holding exactly one image therefore offers its PNG and its text itself:
+`wl-clipboard-rs` `copy_multi` on Wayland, and on X11 a dedicated `x11rb` connection
+whose thread owns `CLIPBOARD` until another client takes it (the two crates were
+already built through `arboard` and `winit`). Text-only copies, the primary selection
+and paste stay on `arboard`. Several images copy the text only, since a clipboard
+holds one image. The image copied is the part the placement shows (its source
+rectangle) of the frame shown at copy time; a sixel image keeps the transparent
+padding to whole cells. When the window closes, the X11 owner thread dies with the
+process and the image offer is lost (no clipboard manager handoff).
+
+### IME disabled
 
 Enabling winit IME risks double input (key event text + IME commit). Deferred until
 it can be handled and tested properly.
 
-## Input editor: shell bindings for private sequences
+### Input editor: shell bindings for private sequences
 
 The shell keeps the command line buffer; Graphene never edits it. Editor moves are
 private `CSI <code> u` sequences (code points 59136 to 59149, Unicode private use
@@ -244,7 +331,7 @@ and vi insert keymaps.
   it shows: they only run when the cursor is not there. Bound again before a prompt
   when gone (`fish_vi_key_bindings` erases bindings).
 
-## Input editor: rich mode at the prompt
+### Input editor: rich mode at the prompt
 
 - The shell keeps the buffer: Graphene never knows its content. A click, a shortcut or
   a selection becomes private sequences only (see above); every edit is the shell's.
@@ -286,7 +373,22 @@ and vi insert keymaps.
   selection dragged over it counts extra characters, so the replacement may erase more
   than selected. The shell's undo restores the buffer.
 
-## Tabs and splits: binary split tree
+### Links: a simple click opens, `xdg-open`, local files only
+
+A simple click without movement on a link opens it, like in a browser: selecting
+inside a link stays possible by dragging, double or triple-clicking, or holding
+`Shift`, and a click is no less deliberate than `Ctrl` + click. Where the application
+captures the mouse the click is its own, so only `Ctrl` + click opens there and is
+never reported. Links open with `xdg-open` (`open` on macOS) from a detached thread that waits for it,
+like the update banner: the desktop's handler for each scheme, no zombie. Detected
+URLs are limited to `http`, `https`, `file` and `mailto`; OSC 8 links, set on purpose
+by the application, open with any scheme, except a `file://` URI naming a host other
+than empty, `localhost` or this machine's (`gethostname`): the file
+would be looked up locally under a remote name, so it is refused and logged.
+
+## Interface
+
+### Tabs and splits: binary split tree
 
 Each tab is a binary tree whose leaves are panes and whose nodes split their rectangle
 along one axis at a ratio. Every operation (split, remove, resize, equalise) only
@@ -295,32 +397,17 @@ Equalise computes the ratios from leaf counts, so three columns made of two spli
 still get equal widths. Positions are rounded to whole cells, and a split is refused
 when a pane would get fewer than 10 columns or 3 rows.
 
-## Current directory and foreground program from `/proc`
+### Current directory and foreground program from `/proc`
 
 The directory a new pane starts in is `/proc/<shell pid>/cwd`, and the program a close
 confirmation names is the `tpgid` field of `/proc/<shell pid>/stat` (the terminal's
 foreground process group) then `/proc/<tpgid>/comm`. This works with every shell,
 needs no shell integration (OSC 7 is not sent by every shell) and no libc call on the
 PTY descriptor. Lookups happen on close requests, new panes and title refreshes, never
-per frame. Linux only, like the rest of Graphene.
+per frame. Linux only: on macOS the lookups return nothing, so new panes start in
+`$HOME` and closing never asks for confirmation.
 
-## Inactive panes dimmed in the frame
-
-When a tab shows several panes, the inactive ones are captured then passed through
-`Frame::dimmed`, which mixes every color 30 % toward the background. A translucent rect
-over the pane would cost an extra draw and leave glyph colors untouched; a pure
-function on the frame is free at draw time and unit tested.
-
-## Interface font separate from the terminal font
-
-The tab bar and the dialog use a sans-serif font at a fixed 13 px times the window
-scale, the command palette the same font at 16 px (it is read and typed in, 13 px was
-too small), independent of the terminal font and its zoom. Their
-text is shaped as lines at free positions, not cells, but its glyphs go through the
-same cache and atlas as the grid (keys marked `ui`), so no second text renderer is
-needed.
-
-## Own translation table
+### Own translation table
 
 Interface labels are an `i18n::Msg` enum translated by one exhaustive `match` per
 language (English, French; English is the fallback), the language read from
@@ -329,7 +416,7 @@ system settings (an app launched from Finder has no locale variable). A missing 
 runtime dependency or resource file is needed. Fluent would only pay off with many
 languages and translators outside the code.
 
-## Command palette: `nucleo-matcher` and a recent actions file
+### Command palette: `nucleo-matcher` and a recent actions file
 
 The palette matches its query with `nucleo-matcher` (the matcher of the helix editor):
 proven fuzzy scoring, smart case, Unicode normalization and the matched indices used
@@ -338,33 +425,9 @@ for highlighting. Recently run actions are kept in a state file
 every window; tab and pane entries are not stored since they do not outlive the
 session.
 
-## Links: a simple click opens, `xdg-open`, local files only
+## Configuration
 
-A simple click without movement on a link opens it, like in a browser: selecting
-inside a link stays possible by dragging, double or triple-clicking, or holding
-`Shift`, and a click is no less deliberate than `Ctrl` + click. Where the application
-captures the mouse the click is its own, so only `Ctrl` + click opens there and is
-never reported. Links open with `xdg-open` from a detached thread that waits for it,
-like the update banner: the desktop's handler for each scheme, no zombie. Detected
-URLs are limited to `http`, `https`, `file` and `mailto`; OSC 8 links, set on purpose
-by the application, open with any scheme, except a `file://` URI naming a host other
-than empty, `localhost` or this machine's (`/proc/sys/kernel/hostname`): the file
-would be looked up locally under a remote name, so it is refused and logged.
-
-## Copy with an image: own clipboard offers next to `arboard`
-
-`arboard` 3.7 sets one format at a time, so text and image cannot be offered together.
-A copy holding exactly one image therefore offers its PNG and its text itself:
-`wl-clipboard-rs` `copy_multi` on Wayland, and on X11 a dedicated `x11rb` connection
-whose thread owns `CLIPBOARD` until another client takes it (the two crates were
-already built through `arboard` and `winit`). Text-only copies, the primary selection
-and paste stay on `arboard`. Several images copy the text only, since a clipboard
-holds one image. The image copied is the part the placement shows (its source
-rectangle) of the frame shown at copy time; a sixel image keeps the transparent
-padding to whole cells. When the window closes, the X11 owner thread dies with the
-process and the image offer is lost (no clipboard manager handoff).
-
-## Configuration parsed key by key
+### Configuration parsed key by key
 
 `config.toml` is read as a TOML table, key by key, rather than deserialized at once
 with `serde` and `deny_unknown_fields`: one invalid value or unknown key must not
@@ -374,7 +437,7 @@ the applied one on hot reload) and is reported with its line in the log and the 
 banner; only a TOML syntax error ignores the whole file. Themes are read the same way,
 on top of `graphene-night`.
 
-## Light/dark appearance from the XDG desktop portal
+### Light/dark appearance from the XDG desktop portal
 
 winit 0.30 documents `Window::theme` and `ThemeChanged` as unsupported on X11 and
 Wayland, so the appearance comes from the XDG desktop portal

@@ -8,12 +8,18 @@ on machines where rustup has no default toolchain. Edition: 2024.
 ## Commands
 
 ```bash
-cargo run            # debug build
-cargo run --release  # optimized build
-cargo test           # unit tests
-cargo clippy --all-targets
-cargo bench          # criterion benchmarks (benches/render.rs)
+cargo run                         # debug build
+cargo run --release               # optimized build
+cargo run -- -e htop              # run a program instead of the shell in the first pane
+cargo test                        # unit and integration tests
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo bench                       # criterion benchmarks (benches/render.rs)
 ```
+
+CI runs `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+`cargo test --locked` and a release build on Linux, and the tests and release build on
+Apple Silicon and Intel macOS (`.github/workflows/ci.yml`).
 
 The application is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`), so the
 benchmarks can reach its internals through `graphene::bench`.
@@ -30,10 +36,18 @@ commented out, default values) is written there; a write failure is only logged.
 Parsing (`src/config.rs`) reads the file key by key: a missing key takes its default, an
 invalid value or an unknown key is logged with its line and ignored, a TOML syntax error
 ignores the whole file. Every key is applied: interface language (`auto` resolves the
-locale, see `Language::resolve`), font family and size, padding, initial window size,
-background opacity, scrollback, word separators, cursor shape and blinking, tab bar
-position, theme, and keybindings (`src/keybindings.rs`: default table, then the
-configured entries; an invalid key or action is reported like any invalid value).
+locale, see `Language::resolve`), font family and size, window startup mode, size,
+padding and background opacity, scrollback, word separators, cursor shape and blinking,
+tab bar position, theme, keybindings (`src/keybindings.rs`: default table, then the
+configured entries; an invalid key or action is reported like any invalid value) and
+the update check. The configuration directory is watched (`src/watcher.rs`) and a change
+is applied without restarting. The settings window (`src/settings/`) writes each change
+to `config.toml` (`src/config_edit.rs`), and the hot reload applies it.
+`graphene --prune-config [--yes]` removes the keys that equal their default.
+
+The user documentation lists every key in `docs/en/configuration.md` and
+`docs/fr/configuration.md`: update both pages when a key is added, removed or changes
+meaning.
 
 The cursor blinks (`src/cursor_blink.rs`) when its style asks for it (`cursor.blinking`,
 or DECSCUSR from the application) and the window has the focus: the phase toggles every
@@ -44,46 +58,57 @@ In `config.default.toml`, settings and section headers are commented with `# ` a
 documentation lines with `##`: a test uncomments the settings and checks that the result
 equals `Config::default()`, so keep the file in sync with the code.
 
-| Variable   | Default | Effect                   |
-|------------|---------|--------------------------|
-| `RUST_LOG` | `warn`  | Log level (`env_logger`) |
+| Variable                       | Default | Effect                                   |
+|--------------------------------|---------|------------------------------------------|
+| `RUST_LOG`                     | `warn`  | Log level (`env_logger`)                 |
+| `GRAPHENE_SHELL_INTEGRATION`   | unset   | `0` starts the shell without integration |
 
-`RUST_LOG=graphene::perf=debug` logs the time of each startup step since the start of
-`main` (window, glyphs ready, shell spawned, GPU instance and surface, adapter, device,
-renderer ready)
-and of the first frame drawn after the first PTY output.
+### Themes
 
-The theme ("graphene night") is defined in `src/palette.rs`.
+Built-in themes are TOML files in [themes/](../../themes/), embedded in the binary
+(`theme::BUILT_IN`) and parsed by `src/theme.rs` into a `Palette` (`src/palette.rs`
+holds the palette type and the 256-color table). User themes are files in the `themes/`
+subfolder of the configuration directory. A missing or invalid color keeps the value of
+the base theme `graphene-night`, so a partial theme still works. `theme.light` and
+`theme.dark` follow the system appearance (`src/appearance.rs`). To add a built-in
+theme, add its file to `themes/` and an entry to `theme::BUILT_IN`.
+
+### Startup timing
+
+`RUST_LOG=graphene::perf=debug` (`src/perf.rs`) logs the time of each startup step since
+the start of `main`: window created, glyphs ready, shell spawned, GPU instance and
+surface created, adapter ready, device ready, renderer ready, then the first PTY output
+and the first frame drawn after it.
+
+```bash
+RUST_LOG=graphene::perf=debug cargo run --release
+```
 
 ## Shortcuts
 
-| Keys                          | Action                                           |
-|-------------------------------|--------------------------------------------------|
-| Ctrl+Shift+V, Shift+Insert    | Paste (bracketed when the app requests it)       |
-| Ctrl+Shift+C                  | Reserved for copy (no-op until selection exists) |
-| Shift+PageUp / Shift+PageDown | Scroll the selected block, or the timeline       |
-| Shift+Home / Shift+End        | Top / bottom of the timeline                     |
-| Ctrl+= / Ctrl+- / Ctrl+0      | Font size up / down / reset                      |
-| Mouse wheel                   | Block under the pointer, or the timeline         |
+Keyboard shortcuts and mouse gestures are user documentation: see
+[keybindings](../en/keybindings.md). The default table is `keybindings::DEFAULTS`
+in `src/keybindings.rs`.
 
 ## Tests
 
-Unit tests live next to the code (`#[cfg(test)]` modules):
+- **Unit tests** live next to the code, in a `#[cfg(test)] mod tests` at the bottom of
+  nearly every module of `src/`. Logic is kept in pure functions (no window, GPU, PTY
+  or system access) so it can be tested there; many module doc comments state what the
+  module does not touch.
+- **Emulator tests** (`frame`, `timeline`, `selection`, `graphics`...) build a
+  `Term<VoidListener>` (often through `timeline::testing::Session`) and feed it bytes,
+  so they exercise the real emulator without a PTY or GPU.
+- **Renderer tests** that need a GPU (headless render read back) are skipped with a
+  message when no adapter is available.
+- **Integration tests** in `tests/` run the built binary (`version.rs`,
+  `config_prune_command.rs`) or the scripts of `scripts/` in a sandbox with stubbed
+  external tools (`package_script.rs`, `macos_package_script.rs`,
+  `arch_package_script.rs`, `release_notes_script.rs`), and check invariants of the
+  release workflow (`release_workflow.rs`).
 
-| Module            | Covers                                                      |
-|-------------------|-------------------------------------------------------------|
-| `palette`         | 256-color table, overrides, inverse/hidden/dim              |
-| `input`           | key encoding, control codes, cursor modes, action ids, paste |
-| `keybindings`     | default shortcuts, remapping, `none`, key syntax, Shift and physical-key matching |
-| `layout`          | grid size from pixels, padding, minimum size                |
-| `frame`           | capture from a real `Term` fed with escape sequences        |
-| `renderer::scene` | background merging, glyph instances, decorations, sRGB conversion |
-| `renderer::cells` | glyph quad placement, skipped glyphs, frame resolved again after an atlas reset |
-| `renderer`        | headless render read back: glyph pixels land in their cell (skipped without GPU) |
-| `perf`            | timing line format, first output / first frame tracking     |
-
-`frame` tests build a `Term<VoidListener>` and feed bytes through
-`vte::ansi::Processor`, so they exercise the real emulator without a PTY or GPU.
+Run one module's tests with `cargo test <module>::`, one integration file with
+`cargo test --test <name>`.
 
 ## Benchmarks
 

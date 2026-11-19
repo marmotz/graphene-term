@@ -1,6 +1,6 @@
 # Vision
 
-Graphene Term is a modern, GPU-accelerated terminal emulator for Linux.
+Graphene Term is a modern, GPU-accelerated terminal emulator for Linux and macOS.
 
 The idea: using a terminal should not mean living in the 80s. Graphene Term keeps
 full compatibility with existing shells and full-screen programs (vim, htop, tmux...)
@@ -25,22 +25,30 @@ Selected as the project's "modern" pillars:
 4. **Images and links**: inline images (kitty graphics protocol, sixel), clickable
    links (OSC 8 and detected URLs).
 
+## Targets
+
+- Linux (X11 and Wayland) is the primary platform: packaged as `.deb`, `.rpm`,
+  AppImage and `.tar.gz`.
+- macOS (Apple Silicon and Intel) is built and tested in CI and released as `.tar.gz`
+  and `.dmg`. The app is ad-hoc signed, not notarized.
+
 ## Roadmap
 
 | Status  | Item                                                                                 |
 |---------|--------------------------------------------------------------------------------------|
 | Done    | Working terminal: PTY, VT emulation, truecolor, scrollback, resize, paste, font zoom |
 | Done    | Selection and copy                                                                   |
-| Planned | Mouse reporting to applications                                                      |
+| Done    | Mouse reporting to applications                                                      |
 | Done    | Command blocks                                                                       |
 | Done    | Rich input editor                                                                    |
-| Done    | Tabs, splits, command palette                                                        |
-| Planned | Images and clickable links                                                           |
-| Done    | Configuration file and themes                                                        |
+| Done    | Tabs, splits, command palette, panes rearranged with the mouse                       |
+| Done    | Images (kitty graphics protocol, sixel) and clickable links (OSC 8, detected URLs)   |
+| Done    | Configuration file, hot reload, themes and settings window                           |
+| Done    | macOS builds                                                                         |
+| Done    | Update check against GitHub releases                                                 |
 | Planned | IME support                                                                          |
 
 ## Non-goals (for now)
 
-- Windows and macOS support: Linux first. The stack is portable, but nothing is
-  tested elsewhere.
+- Windows support.
 - Being a multiplexer replacement for remote sessions (tmux still has its place).

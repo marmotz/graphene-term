@@ -1,5 +1,27 @@
 # Architecture
 
+How the code is organized and how data flows through it. The reasons behind the
+choices are in [decisions.md](decisions.md).
+
+## Contents
+
+- [Stack](#stack)
+- [Modules](#modules)
+- [Session and panes](#session-and-panes)
+- [Context menus](#context-menus)
+- [Command palette](#command-palette)
+- [Settings window](#settings-window)
+- [Threads](#threads)
+- [Window startup](#window-startup)
+- [Command blocks](#command-blocks)
+- [Rendering pipeline](#rendering-pipeline)
+  - [Banner](#banner)
+  - [Images](#images)
+  - [Glyphs](#glyphs)
+- [Input](#input)
+  - [Mouse selection](#mouse-selection)
+  - [Links](#links)
+
 ## Stack
 
 | Concern                           | Crate                                                    | Version |
@@ -8,7 +30,7 @@
 | GPU                               | `wgpu`                                                   | 30      |
 | Font loading, fallback, raster    | `cosmic-text` (glyphs drawn by our own wgpu pipeline)    | 0.19    |
 | PTY, VT parsing, grid, scrollback | `alacritty_terminal`                                     | 0.26    |
-| Clipboard                         | `arboard` (X11 + Wayland data control, no image support) | 3.7     |
+| Clipboard (text)                  | `arboard` (X11 + Wayland data control)                   | 3.7     |
 | Clipboard with an image           | `wl-clipboard-rs` (Wayland) + `x11rb` (X11 selection owner) | 0.9, 0.13 |
 | Config file                       | `toml` + `serde`                                         | 1       |
 | Config file edits (comments kept) | `toml_edit`                                              | 0.25    |
@@ -16,12 +38,18 @@
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
 | Kitty graphics: PNG, zlib, base64 | `png` + `flate2` + `base64`                              | 0.18, 1, 0.22 |
 | Settings window widgets           | `egui` + `egui-winit` + `egui-wgpu`                      | 0.37    |
+| PTY thread polling                | `polling`                                                | 3       |
+| Config directory watcher          | `notify`                                                 | 8       |
+| System appearance (XDG portal)    | `zbus`                                                   | 6       |
+| UI language on macOS              | `sys-locale`                                             | 0.3     |
 
 ## Modules
 
 ```
 src/
-  main.rs          binary entry point: --version, logger setup, calls lib::run
+  main.rs          binary entry point: --version, --prune-config, -e <program>, logger setup,
+                   calls lib::run
+  build_version.rs version string from the crate version and GRAPHENE_CHANNEL, shared with build.rs
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup timing logs (`graphene::perf` target)
   app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay),
@@ -73,20 +101,26 @@ src/
                    block and timeline scrolls, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors and block marks
+  fold_animation.rs  fold chevron animations, per pane (pure, time passed in)
+  cursor_blink.rs  blink phase of the text cursor (pure, time passed in)
+  timeline_selection.rs  text selection across blocks, split into one Selection per grid
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations
-  input.rs         key -> bytes encoding, app shortcuts, paste wrapping
+  input.rs         key -> bytes encoding, actions and their ids, paste wrapping
+  keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)
+  mouse.rs         mouse, focus and alternate scroll encoding, mouse routing between app and Graphene (pure)
   input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection, selection replacement (pure)
   palette.rs       Palette (terminal, selection and UI colors), 256-color table, color resolution
   theme.rs         theme files: key-by-key parsing, built-in themes, name resolution
   layout.rs        pixels <-> grid geometry, card margins, rows in half-lines, hit-testing
   links.rs         OSC 8 and detected URL under a point, hover / click / open rules (pure)
-  opener.rs        opens a URI with xdg-open from a detached thread
+  opener.rs        opens a URI with xdg-open (open on macOS) from a detached thread
   selection.rs     click counting, mouse capture rule, selection updates, copied text cleanup
                    (image placeholders stripped), image placements inside a selection
   clipboard.rs     copy with an image: text or image choice, PNG of the shown part, Wayland
                    offer (`wl-clipboard-rs`), X11 selection owner thread (`x11rb`, INCR)
   chrome/
     command_palette.rs  palette entries, fuzzy matching, keys, layout, recent actions file (pure)
+    context_menu.rs  pane and tab context menus: entries, submenus, keys, layout (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
     pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing, press routing (pure)
     scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
@@ -96,6 +130,7 @@ src/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
     state.rs       update.json state file (last check, latest release, ignored tag)
     checker.rs     update-check thread, pure tick (check or reuse the cache, next wake-up)
+    releases.fixture.json  GitHub API response used by the tests
   renderer/
     mod.rs         Gpu context (shared), per-window surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + glyph instances (pure, no GPU)
@@ -109,6 +144,7 @@ src/
     rect.wgsl      shader for rectangles
     images.rs      textured image quad pipeline, one texture per image frame
     image.wgsl     shader for images
+    x11_presenter.rs  X11 ARGB presentation when the GPU backend offers only opaque surfaces
 themes/            built-in themes, embedded with include_str!
 shell-integration/ zsh, bash and fish scripts (block signals, editor key bindings), embedded with include_str!
 benches/
@@ -116,7 +152,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`, `settings/model`) hold the logic
+Pure modules (`banner`, `signals`, `keybindings`, `mouse`, `links`, `cursor_blink`, `fold_animation`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`, `settings/model`, `update`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
@@ -143,9 +179,26 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   pane shown by the active tab.
 - Keys go to the active pane; mouse presses and the wheel go to the pane under the
   pointer (a press in an inactive pane focuses it first). A press goes to the first of:
-  the overlay, the banner, the tab bar, a divider, a pane.
+  the overlay, the banner, the tab bar, a divider, a pane title bar, a pane.
 - New panes (split, new tab) start their shell in the active pane's directory
   (`Terminal::current_dir`, from `/proc/<pid>/cwd`), else `$HOME`.
+- `graphene -e <program> [args]` stores the program in `App.first_program`; the first
+  pane takes it (`Option::take`) and `Terminal::spawn` starts it instead of the shell,
+  without shell integration (`terminal::launch`). Every later pane starts the shell.
+
+## Context menus
+
+- A right press on a pane (content or title bar) opens the pane menu
+  (`chrome::context_menu::pane_menu`): the block entries when the press hit a block
+  (copy command, copy output, fold or unfold), then copy, paste, splits, close, zoom,
+  new and close tab, settings, the theme submenu and quit. A right press on a tab
+  opens the tab menu (`tab_menu`), whose close entry keeps the clicked index.
+- The menu is the session overlay (`Overlay::Menu`): it takes the keys and presses
+  while open (a press outside closes it), the wheel scrolls an open submenu, and entries
+  the context disables (`MenuContext`: last pane, only tab...) cannot be chosen. A
+  chosen entry closes the menu, then runs (`Session::menu_outcome`): an action goes
+  through `Session::run_action` like a shortcut, a block entry copies or folds that
+  block, a theme entry writes `theme.name` to `config.toml`.
 
 ## Command palette
 
@@ -345,8 +398,6 @@ Renderer::render(pane frames, interface rects)
   (explicit backgrounds, selection, cursor, banner, interface) stays opaque.
 
 ## Command blocks
-
-Design and rationale.
 
 - Each block is a terminal of its own. The session's `Term` is the live grid: it holds
   the current block (`timeline::Current`). On a `start` signal the live grid is
@@ -646,10 +697,11 @@ is reset with the glyph cache, and the frame is resolved again.
 
 ## Input
 
-- `input::action_for` checks app shortcuts first (paste, scrollback, font size, tabs,
-  panes, command palette). Letters are matched on the character typed, else on the
-  physical key; `Alt+1..9` on the physical digit row. While an overlay is open, keys go
-  to it only.
+- `Keybindings::action` (`src/keybindings.rs`: the default table, then the
+  `[keybindings]` entries) checks app shortcuts first (paste, scrollback, font size,
+  tabs, panes, command palette). Letters are matched on the character typed, else on
+  the physical key; `Alt+1..9` on the physical digit row. While an overlay is open,
+  keys go to it only.
 - Otherwise `input::key_to_bytes` encodes the key following xterm conventions:
   modifier parameter `1 + shift + 2*alt + 4*ctrl`, application cursor mode (`SS3`),
   Alt as ESC prefix, Ctrl+char control codes.

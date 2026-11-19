@@ -16,12 +16,12 @@ _tâches créées — voir [technical.md](features/pane-broadcast/technical.md)_
 
 ## Public documentation  ·  [overview](features/public-docs/overview.md)
 
-_tâches créées — voir [technical.md](features/public-docs/technical.md)_ — 1/7 tasks done
+_tâches créées — voir [technical.md](features/public-docs/technical.md)_ — 2/7 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#139](https://github.com/marmotz/graphene-term/issues/139) | [Docs] Option graphene -e pour lancer une commande | — |
-| [ ]  | [#140](https://github.com/marmotz/graphene-term/issues/140) | [Docs] Docs contributeur : déplacement vers docs/dev et mise à jour | — |
+| [x]  | [#140](https://github.com/marmotz/graphene-term/issues/140) | [Docs] Docs contributeur : déplacement vers docs/dev et mise à jour | — |
 | [ ]  | [#141](https://github.com/marmotz/graphene-term/issues/141) | [Docs] Script de benchmark comparatif des terminaux | #139, #140 |
 | [ ]  | [#142](https://github.com/marmotz/graphene-term/issues/142) | [Docs] Documentation utilisateur en anglais (docs/en) | #139, #140 |
 | [ ]  | [#143](https://github.com/marmotz/graphene-term/issues/143) | [Docs] Documentation utilisateur en français (docs/fr) | #142 |
