@@ -129,6 +129,45 @@ with `cargo bench -- gpu_prepare`; compare two versions with
 `cargo bench -- --save-baseline before`, then `cargo bench -- --baseline before`.
 Re-recording the fixtures is described in `benches/fixtures/README.md`.
 
+### Comparing terminals
+
+`scripts/benchmark-terminals.py` (Python 3, standard library only, Linux only) compares
+Graphene with other installed terminals: Alacritty, Kitty, WezTerm, foot, Terminator,
+GNOME Terminal and Konsole. It opens real windows, so run it on an idle desktop.
+
+```bash
+cargo build --release                                     # Graphene is taken from target/release, else PATH
+scripts/benchmark-terminals.py run                        # every installed terminal, 5 runs each
+scripts/benchmark-terminals.py run --terminals graphene,alacritty --runs 3 --out results.json
+scripts/benchmark-terminals.py render results.json        # print the tables again
+```
+
+| Metric            | How                                                                         | Unit |
+|-------------------|-----------------------------------------------------------------------------|------|
+| Throughput        | time of `/bin/cat shakespeare.txt` inside the terminal                      | s    |
+| Refresh rate      | DOOM-fire frames (256 colors, half blocks, full window) written for 10 s    | fps  |
+| Startup           | wall time of `<terminal> <exec prefix> true`                                | ms   |
+| Memory idle       | PSS of the terminal's processes 3 s after start                             | MiB  |
+| Memory under load | peak PSS sampled every 100 ms during the throughput run                     | MiB  |
+
+- Each metric is the median of `--runs` runs (default 5). Raw values go to `--out`
+  (default `benchmark-results.json`); the Markdown table goes to stdout, Graphene first,
+  best value of each column in bold, followed by the machine (CPU, GPU, kernel, session,
+  resolution) and the terminal versions.
+- Throughput and fps measure how fast a terminal accepts output, not what it draws.
+- PSS is read from `/proc/<pid>/smaps_rollup`, summed over the terminal and its
+  descendants, the payload excluded.
+- `shakespeare.txt` is downloaded once into `$XDG_CACHE_HOME/graphene-benchmark/` and
+  checked against its SHA-256; a mismatch aborts.
+- Missing terminals are skipped and listed on stderr. GNOME Terminal is skipped while
+  another `gnome-terminal-server` runs: the script never kills the user's terminals.
+- A payload that does not report within 60 s gives `n/a`; only the process the script
+  started is killed.
+- Each terminal's launch command is in the `TERMINALS` table at the top of the script;
+  it is the only place to fix when a terminal changes its options.
+- `tests/benchmark_script.rs` covers `render` (on `tests/fixtures/benchmark-results.json`)
+  and the `fire` and `throughput` payloads.
+
 ## Manual check on X11
 
 The app can be driven with `xdotool` and captured with `import` (ImageMagick):
