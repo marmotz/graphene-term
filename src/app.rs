@@ -10,8 +10,8 @@ use alacritty_terminal::term::{Config as TermConfig, TermMode};
 #[cfg(target_os = "linux")]
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
 use winit::dpi::PhysicalPosition;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -44,7 +44,7 @@ use crate::i18n::Lang;
 use crate::input::{self, Action};
 use crate::input_editor;
 use crate::keybindings::Keybindings;
-use crate::layout::{GridLayout, Hit, Rect};
+use crate::layout::{CellSize, GridLayout, Hit, Rect};
 use crate::links::{self, Link};
 use crate::mouse;
 use crate::opener;
@@ -193,6 +193,9 @@ struct Session {
     /// Set by [`Action::OpenSettings`]: the window is owned by [`App`], which opens it
     /// after the event.
     settings_requested: bool,
+    /// Whether the window was sized by `--columns` or `--lines`: its size is then not
+    /// saved to `window.json`.
+    sized_by_grid: bool,
 }
 
 impl Session {
@@ -2306,6 +2309,50 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
     }
 }
 
+/// Window size asked on the command line, in cells of the first pane's grid. A
+/// dimension left unset keeps the size from the configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GridSize {
+    pub columns: Option<u16>,
+    pub lines: Option<u16>,
+}
+
+impl GridSize {
+    fn is_set(self) -> bool {
+        self.columns.is_some() || self.lines.is_some()
+    }
+}
+
+/// Inner size of a window whose single pane shows `grid`, in physical pixels, for
+/// cells of `cell` and `padding` around them, `chrome_height` being the height above
+/// the grid (banner and pane bar). A dimension `grid` leaves unset keeps `current`.
+fn window_size_for_grid(
+    grid: GridSize,
+    current: PhysicalSize<u32>,
+    cell: CellSize,
+    padding: f32,
+    chrome_height: f32,
+) -> PhysicalSize<u32> {
+    let (width, height) = GridLayout::rect_size(
+        grid.columns.unwrap_or(1).into(),
+        grid.lines.unwrap_or(1).into(),
+        cell,
+        padding,
+    );
+    PhysicalSize::new(
+        if grid.columns.is_some() {
+            width
+        } else {
+            current.width
+        },
+        if grid.lines.is_some() {
+            height + chrome_height.ceil() as u32
+        } else {
+            current.height
+        },
+    )
+}
+
 /// The earlier of two optional deadlines.
 /// Size and maximized state of a new window, from `window.startup_mode`. `remembered`
 /// is the last window closed, only read in `remember` mode.
@@ -2366,6 +2413,8 @@ pub struct App {
     /// Program given by `-e`, run by the first pane instead of the shell; taken when
     /// that pane spawns.
     first_program: Option<Vec<String>>,
+    /// Size of the first window asked by `--columns` and `--lines`.
+    grid: GridSize,
 }
 
 /// Whether the window is created transparent for a background `opacity`. Elsewhere
@@ -2383,6 +2432,7 @@ impl App {
             StartupMode::Default | StartupMode::Maximized => None,
         };
         let (initial_size, maximized) = initial_window(&self.config.window, remembered);
+        let maximized = maximized && !self.grid.is_set();
         let attributes = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
             .with_inner_size(initial_size)
@@ -2404,19 +2454,32 @@ impl App {
         glyphs.set_ui_scale(scale);
         perf::mark("glyphs ready");
 
-        let size = window.inner_size();
+        let mut size = window.inner_size();
         // A single tab: no tab bar. A configuration error banner is already shown; the
         // update banner only comes later, from the check thread.
         let banner_height = match self.config_banner {
             Some(_) => BannerLayout::height(glyphs.cell_size()),
             None => 0.0,
         };
+        let ui = UiMetrics {
+            line_height: glyphs.ui_line_height(UiFont::Chrome),
+            scale,
+        };
+        if self.grid.is_set() {
+            let target = window_size_for_grid(
+                self.grid,
+                size,
+                glyphs.cell_size(),
+                self.config.window.padding * scale,
+                banner_height + pane_bar::height(ui),
+            );
+            // Applied later, with a `Resized` event, when the platform cannot resize at
+            // once.
+            size = window.request_inner_size(target).unwrap_or(target);
+        }
         let (_, content) = pane_bar::split(
             banner::below_banner(Rect::from_size(size.width, size.height), banner_height),
-            UiMetrics {
-                line_height: glyphs.ui_line_height(UiFont::Chrome),
-                scale,
-            },
+            ui,
         );
         let layout = GridLayout::new(
             content,
@@ -2485,6 +2548,7 @@ impl App {
             first_frame: perf::FirstFrame::default(),
             restore_size: initial_size,
             settings_requested: false,
+            sized_by_grid: self.grid.is_set(),
         })
     }
 
@@ -2605,7 +2669,9 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(session) = &self.session {
+        if let Some(session) = &self.session
+            && !session.sized_by_grid
+        {
             session.save_window_state();
         }
     }
@@ -2803,7 +2869,7 @@ fn theme_key(theme: &ThemeConfig, appearance: Appearance) -> &'static [&'static 
     }
 }
 
-pub fn run(first_program: Option<Vec<String>>) -> anyhow::Result<()> {
+pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner, load_errors) = load_config();
@@ -2831,6 +2897,7 @@ pub fn run(first_program: Option<Vec<String>>) -> anyhow::Result<()> {
         appearance: Appearance::default(),
         appearance_watched: false,
         first_program,
+        grid,
     };
     if let Some(first) = app.watch_appearance()
         && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)
@@ -2848,6 +2915,52 @@ pub fn run(first_program: Option<Vec<String>>) -> anyhow::Result<()> {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn grid_size_gives_the_window_size_holding_that_grid() {
+        let cell = CellSize {
+            width: 9.0,
+            height: 19.0,
+        };
+        let current = PhysicalSize::new(1000, 700);
+        let grid = GridSize {
+            columns: Some(100),
+            lines: Some(30),
+        };
+        let size = window_size_for_grid(grid, current, cell, 8.0, 30.5);
+        let content = Rect {
+            x: 0.0,
+            y: 30.5,
+            width: size.width as f32,
+            height: size.height as f32 - 30.5,
+        };
+        let layout = GridLayout::new(content, cell, 8.0);
+        assert_eq!((layout.columns, layout.lines), (100, 30));
+    }
+
+    #[test]
+    fn grid_size_keeps_the_dimension_it_leaves_unset() {
+        let cell = CellSize {
+            width: 9.0,
+            height: 19.0,
+        };
+        let current = PhysicalSize::new(1000, 700);
+        let only_lines = GridSize {
+            columns: None,
+            lines: Some(30),
+        };
+        let size = window_size_for_grid(only_lines, current, cell, 8.0, 30.0);
+        assert_eq!(size.width, 1000);
+        assert_ne!(size.height, 700);
+        let only_columns = GridSize {
+            columns: Some(100),
+            lines: None,
+        };
+        let size = window_size_for_grid(only_columns, current, cell, 8.0, 30.0);
+        assert_ne!(size.width, 1000);
+        assert_eq!(size.height, 700);
+        assert!(!GridSize::default().is_set());
+    }
 
     #[test]
     fn macos_window_transparent_only_below_full_opacity() {

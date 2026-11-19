@@ -43,6 +43,7 @@ text with `Shift+Arrow` like in an editor: see [Input editor](input-editor.md).
 |------------------------------------|----------------------------------------------------------------------|
 | `graphene`                         | Opens a window running your shell                                    |
 | `graphene -e <program> [args...]`  | Opens a window whose first pane runs `<program>` instead of the shell |
+| `graphene --columns <n> --lines <n>` | Opens the window sized to show a grid of `<n>` columns and `<n>` lines |
 | `graphene --version`               | Prints the version and exits                                         |
 | `graphene --prune-config [--yes]`  | Removes the settings this version does not know from the configuration file (see [Configuration](configuration.md#removing-unknown-settings)) |
 
@@ -61,6 +62,16 @@ graphene -e vim --clean notes.txt
 - New panes and tabs opened afterwards start your shell as usual.
 - Options placed after `-e` belong to the program: `graphene -e less --version` runs
   `less --version`. `graphene -e` with nothing after it is an error.
+
+### Window size in cells
+
+`--columns` and `--lines` size the first window to hold that grid, whatever the font
+and the `window` settings: `graphene --columns 120 --lines 40 -e htop`.
+
+- Either one can be given alone; the other dimension keeps the configured size.
+- The window opens unmaximized, and its size is not remembered for the next start
+  (`window.startup_mode = "remember"`).
+- The window manager may still refuse the size, a tiling one for instance.
 
 ## Next steps
 

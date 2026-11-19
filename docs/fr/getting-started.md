@@ -47,6 +47,7 @@ déplacer le curseur, et sélectionner du texte avec `Shift+Flèche` comme dans 
 |------------------------------------|----------------------------------------------------------------------|
 | `graphene`                         | Ouvre une fenêtre avec votre shell                                   |
 | `graphene -e <programme> [args...]` | Ouvre une fenêtre dont le premier panneau lance `<programme>` au lieu du shell |
+| `graphene --columns <n> --lines <n>` | Ouvre la fenêtre à la taille d'une grille de `<n>` colonnes et `<n>` lignes |
 | `graphene --version`               | Affiche la version et quitte                                         |
 | `graphene --prune-config [--yes]`  | Retire du fichier de configuration les paramètres que cette version ne connaît pas (voir [Configuration](configuration.md#retirer-les-paramètres-inconnus)) |
 
@@ -67,6 +68,18 @@ graphene -e vim --clean notes.txt
 - Les panneaux et onglets ouverts ensuite lancent votre shell comme d'habitude.
 - Les options placées après `-e` appartiennent au programme : `graphene -e less --version`
   lance `less --version`. `graphene -e` sans rien derrière est une erreur.
+
+### Taille de la fenêtre en cellules
+
+`--columns` et `--lines` dimensionnent la première fenêtre pour qu'elle contienne cette
+grille, quels que soient la police et les réglages `window` :
+`graphene --columns 120 --lines 40 -e htop`.
+
+- Chacune peut être donnée seule ; l'autre dimension garde la taille configurée.
+- La fenêtre s'ouvre sans être maximisée, et sa taille n'est pas retenue pour le
+  prochain lancement (`window.startup_mode = "remember"`).
+- Le gestionnaire de fenêtres peut tout de même refuser la taille, un gestionnaire en
+  mosaïque par exemple.
 
 ## Pour aller plus loin
 
