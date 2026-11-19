@@ -46,9 +46,10 @@ mod workspace;
 /// Version of this build, computed by `build.rs`.
 pub const VERSION: &str = env!("GRAPHENE_VERSION");
 
-/// Opens the window and runs the event loop until the shell exits.
-pub fn run() -> anyhow::Result<()> {
-    app::run()
+/// Opens the window and runs the event loop until its last pane exits. The first pane
+/// runs `program` (the program then its arguments) instead of the shell when given.
+pub fn run(program: Option<Vec<String>>) -> anyhow::Result<()> {
+    app::run(program)
 }
 
 /// Lists and optionally removes unknown entries from the user's configuration file.

@@ -402,6 +402,7 @@ impl Session {
             layout.window_size(),
             config,
             cwd,
+            None,
         ) {
             Ok(terminal) => Some(Pane::new(id, terminal, layout)),
             Err(error) => {
@@ -2361,6 +2362,9 @@ pub struct App {
     appearance: Appearance,
     /// Whether the appearance thread runs: started once a configuration needs it.
     appearance_watched: bool,
+    /// Program given by `-e`, run by the first pane instead of the shell; taken when
+    /// that pane spawns.
+    first_program: Option<Vec<String>>,
 }
 
 /// Whether the window is created transparent for a background `opacity`. Elsewhere
@@ -2372,7 +2376,7 @@ fn window_transparent(opacity: f32, macos: bool) -> bool {
 }
 
 impl App {
-    fn create_session(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Session> {
+    fn create_session(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<Session> {
         let remembered = match self.config.window.startup_mode {
             StartupMode::Remember => window_state::path().and_then(|file| WindowState::load(&file)),
             StartupMode::Default | StartupMode::Maximized => None,
@@ -2425,6 +2429,7 @@ impl App {
             layout.window_size(),
             self.config.term_config(),
             None,
+            self.first_program.take(),
         )?;
         workspace.new_tab(id, Pane::new(id, terminal, layout));
         perf::mark("shell spawned");
@@ -2797,7 +2802,7 @@ fn theme_key(theme: &ThemeConfig, appearance: Appearance) -> &'static [&'static 
     }
 }
 
-pub fn run() -> anyhow::Result<()> {
+pub fn run(first_program: Option<Vec<String>>) -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner, load_errors) = load_config();
@@ -2824,6 +2829,7 @@ pub fn run() -> anyhow::Result<()> {
         load_errors,
         appearance: Appearance::default(),
         appearance_watched: false,
+        first_program,
     };
     if let Some(first) = app.watch_appearance()
         && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)

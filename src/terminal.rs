@@ -59,6 +59,39 @@ impl EventListener for EventProxy {
     }
 }
 
+/// What a new PTY starts instead of the default shell.
+#[derive(Debug, PartialEq, Eq)]
+struct Launch {
+    program: String,
+    args: Vec<String>,
+    /// Variables added to the environment.
+    env: Vec<(String, String)>,
+}
+
+/// Chooses what a new PTY starts: `program` when given, as is (a command is not a
+/// shell: no hooks, no blocks); else the shell with its integration from `integration`
+/// for zsh, bash and fish; `None` to start the user's shell as usual.
+fn launch(
+    program: Option<Vec<String>>,
+    integration: impl FnOnce() -> Option<shell_integration::Injection>,
+) -> Option<Launch> {
+    match program {
+        Some(mut program) if !program.is_empty() => {
+            let args = program.split_off(1);
+            Some(Launch {
+                program: program.remove(0),
+                args,
+                env: Vec::new(),
+            })
+        }
+        _ => integration().map(|injection| Launch {
+            program: injection.program,
+            args: injection.args,
+            env: injection.env,
+        }),
+    }
+}
+
 pub struct Terminal {
     /// The live terminal: its grid holds the current block.
     pub term: Arc<FairMutex<Term<EventProxy>>>,
@@ -73,12 +106,14 @@ pub struct Terminal {
 
 impl Terminal {
     /// Spawns the user's shell in a new PTY, in `cwd` when given (else the current
-    /// directory of this process).
+    /// directory of this process). `program` (the program then its arguments) runs
+    /// instead of the shell when given.
     pub fn spawn(
         proxy: EventProxy,
         size: WindowSize,
         config: Config,
         cwd: Option<PathBuf>,
+        program: Option<Vec<String>>,
     ) -> anyhow::Result<Self> {
         let mut env = HashMap::from([
             ("TERM".to_owned(), "xterm-256color".to_owned()),
@@ -88,10 +123,9 @@ impl Terminal {
         // The hooks put this token in their block signals: a signal printed by a program
         // carries another one.
         let token = session_token();
-        // zsh, bash and fish get the shell integration; other shells start as before.
-        let shell = shell_integration::prepare(&token).map(|injection| {
-            env.extend(injection.env);
-            tty::Shell::new(injection.program, injection.args)
+        let shell = launch(program, || shell_integration::prepare(&token)).map(|launch| {
+            env.extend(launch.env);
+            tty::Shell::new(launch.program, launch.args)
         });
         let options = tty::Options {
             shell,
@@ -204,5 +238,44 @@ mod tests {
     #[test]
     fn hex_is_lowercase_and_padded() {
         assert_eq!(hex(&[0x00, 0x0f, 0xab]), "000fab");
+    }
+
+    fn injection() -> Option<shell_integration::Injection> {
+        Some(shell_integration::Injection {
+            program: "/bin/zsh".to_owned(),
+            args: vec!["-l".to_owned()],
+            env: vec![("ZDOTDIR".to_owned(), "/tmp/hooks".to_owned())],
+        })
+    }
+
+    #[test]
+    fn a_program_runs_as_is_without_the_shell_integration() {
+        let program = Some(vec!["cat".to_owned(), "file.txt".to_owned()]);
+        let launch = launch(program, || panic!("the integration must not be prepared"));
+        assert_eq!(
+            launch,
+            Some(Launch {
+                program: "cat".to_owned(),
+                args: vec!["file.txt".to_owned()],
+                env: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn without_a_program_the_shell_starts_with_its_integration() {
+        assert_eq!(
+            launch(None, injection),
+            Some(Launch {
+                program: "/bin/zsh".to_owned(),
+                args: vec!["-l".to_owned()],
+                env: vec![("ZDOTDIR".to_owned(), "/tmp/hooks".to_owned())],
+            })
+        );
+    }
+
+    #[test]
+    fn without_a_program_nor_integration_the_default_shell_starts() {
+        assert_eq!(launch(None, || None), None);
     }
 }
