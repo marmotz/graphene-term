@@ -4,12 +4,16 @@
 Linux only, Python 3 standard library only.
 
     benchmark-terminals.py run [--terminals a,b,..] [--runs N] [--out results.json]
+                               [--columns N] [--lines N]
     benchmark-terminals.py render results.json
     benchmark-terminals.py payload {throughput|fire|idle} --result FILE [...]
 
 `run` benchmarks every installed terminal and prints a Markdown table, `render` turns
 saved results into that table, and `payload` is what runs inside the terminal under
 test: it writes its measurement to `--result` and exits, which closes the terminal.
+
+Every terminal is opened with the same grid (`--columns` x `--lines`), so that each one
+draws as many cells; the grid each payload saw is recorded and a mismatch reported.
 """
 
 import argparse
@@ -44,30 +48,91 @@ SAMPLE_INTERVAL = 0.1
 IDLE_SAMPLE_AT = 3.0
 IDLE_DURATION = 5.0
 FIRE_DURATION = 10.0
+GRID = (100, 30)
+# First window sizes, in pixels, probed to fit a terminal sized in pixels to the grid.
+CALIBRATION_SIZES = ((800, 600), (1200, 900))
+CALIBRATION_ROUNDS = 4
 
-# How to start each terminal. `prefix` goes between the binary and the command to run;
-# each one was checked against the terminal's `--help` or manual. `server` names the
-# process that holds the windows when the launcher only forwards the request.
+def terminator_config(workdir):
+    """Copy of the user's Terminator configuration whose windows open unmaximized, so
+    that `--geometry` applies. Returns the `{config}` placeholder."""
+    home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    try:
+        text = (home / "terminator" / "config").read_text()
+    except OSError:
+        text = ""
+    text = re.sub(r"(?m)^\s*window_state\s*=.*\n?", "", text)
+    if re.search(r"(?m)^\[global_config\]", text):
+        text = re.sub(
+            r"(?m)^\[global_config\]\n", "[global_config]\n  window_state = normal\n", text
+        )
+    else:
+        text = "[global_config]\n  window_state = normal\n" + text
+    path = Path(workdir) / "terminator.config"
+    path.write_text(text)
+    return {"config": str(path)}
+
+
+# How to start each terminal. `prefix` goes between the binary and the command to run,
+# `{columns}` and `{lines}` replaced by the grid; for a terminal whose `size` is in
+# `pixels`, `{width}` and `{height}` are replaced by a window size fitted to the grid.
+# `setup`, when given, writes files into a temporary directory and returns more
+# placeholders. Each one was checked against the terminal's `--help` or manual. `server`
+# names the process that holds the windows when the launcher only forwards the request.
 TERMINALS = [
-    {"name": "Graphene", "binary": "graphene", "version": ["--version"], "prefix": ["-e"]},
-    {"name": "Alacritty", "binary": "alacritty", "version": ["--version"], "prefix": ["-e"]},
-    {"name": "Kitty", "binary": "kitty", "version": ["--version"], "prefix": []},
+    {
+        "name": "Graphene",
+        "binary": "graphene",
+        "version": ["--version"],
+        "prefix": ["--columns", "{columns}", "--lines", "{lines}", "-e"],
+    },
+    {
+        "name": "Alacritty",
+        "binary": "alacritty",
+        "version": ["--version"],
+        "prefix": [
+            "-o", "window.dimensions.columns={columns}",
+            "-o", "window.dimensions.lines={lines}",
+            "-e",
+        ],
+    },
+    {
+        "name": "Kitty",
+        "binary": "kitty",
+        "version": ["--version"],
+        "prefix": [
+            "-o", "remember_window_size=no",
+            "-o", "initial_window_width={columns}c",
+            "-o", "initial_window_height={lines}c",
+        ],
+    },
     {
         "name": "WezTerm",
         "binary": "wezterm",
         "version": ["--version"],
-        "prefix": ["start", "--always-new-process", "--"],
+        "prefix": [
+            "--config", "initial_cols={columns}",
+            "--config", "initial_rows={lines}",
+            "start", "--always-new-process", "--",
+        ],
     },
-    {"name": "foot", "binary": "foot", "version": ["--version"], "prefix": []},
-    {"name": "Terminator", "binary": "terminator", "version": ["--version"], "prefix": ["-u", "-x"]},
+    {
+        "name": "Terminator",
+        "binary": "terminator",
+        "version": ["--version"],
+        # `--geometry` is in pixels: Terminator sets its cell size hints after parsing it.
+        # A maximized `window_state` in the user's configuration would override it.
+        "prefix": ["-u", "-g", "{config}", "--geometry={width}x{height}", "-x"],
+        "size": "pixels",
+        "setup": terminator_config,
+    },
     {
         "name": "GNOME Terminal",
         "binary": "gnome-terminal",
         "version": ["--version"],
-        "prefix": ["--wait", "--"],
+        "prefix": ["--wait", "--geometry={columns}x{lines}", "--"],
         "server": "gnome-terminal-server",
     },
-    {"name": "Konsole", "binary": "konsole", "version": ["--version"], "prefix": ["-e"]},
 ]
 
 # (key, header, unit format, higher is better)
@@ -86,6 +151,14 @@ METRICS = [
 def median(values):
     present = [v for v in values if v is not None]
     return statistics.median(present) if present else None
+
+
+def unique(items):
+    out = []
+    for item in items:
+        if item not in out:
+            out.append(item)
+    return out
 
 
 def render(results):
@@ -135,6 +208,14 @@ def render(results):
     ]
     if runs is not None:
         lines.append(f"- Runs: median of {runs}")
+    grid = results.get("grid")
+    if grid:
+        lines.append(f"- Grid: {grid[0]}x{grid[1]} cells")
+        for terminal in terminals:
+            seen = [g for g in terminal.get("grids", []) if g != list(grid)]
+            if seen:
+                sizes = ", ".join(f"{g[0]}x{g[1]}" for g in unique(seen))
+                lines.append(f"- Grid mismatch: {terminal['name']} ran at {sizes}")
     lines.append(
         "- Versions: " + ", ".join(t.get("version", t["name"]) for t in terminals)
     )
@@ -144,19 +225,22 @@ def render(results):
 # --- Payloads (run inside the terminal under test) -------------------------------------
 
 
-def write_result(path, value):
-    Path(path).write_text(f"{value}\n")
+def write_result(path, value, grid):
+    """Write the measurement, then the grid `columns lines` the payload ran in."""
+    Path(path).write_text(f"{value}\n{grid[0]} {grid[1]}\n")
 
 
 def payload_throughput(args):
+    grid = terminal_size()
     start = time.monotonic()
     subprocess.run(["/bin/cat", args.file], check=True)
-    write_result(args.result, time.monotonic() - start)
+    write_result(args.result, time.monotonic() - start, grid)
 
 
 def payload_idle(args):
+    grid = terminal_size()
     time.sleep(args.duration)
-    write_result(args.result, args.duration)
+    write_result(args.result, args.duration, grid)
 
 
 def terminal_size():
@@ -228,7 +312,7 @@ def payload_fire(args):
             break
     out.write(b"\x1b[0m\x1b[?25h")
     out.flush()
-    write_result(args.result, written / elapsed)
+    write_result(args.result, written / elapsed, (cols, rows))
 
 
 # --- Process sampling ------------------------------------------------------------------
@@ -310,7 +394,55 @@ class Terminal:
         self.binary = binary
         self.prefix = spec["prefix"]
         self.server = spec.get("server")
+        self.pixels = spec.get("size") == "pixels"
+        self.setup = spec.get("setup")
+        self.size = {}
+        self.extra = {}
         self.version = self.read_version(spec["version"])
+
+    def prepare(self, workdir):
+        """Run the terminal's `setup` in `workdir`, which outlives its launches."""
+        if self.setup is not None:
+            self.extra = self.setup(workdir)
+
+    def set_grid(self, columns, lines, width=None, height=None):
+        """Size the next windows: `width` x `height` pixels for a terminal sized in pixels."""
+        self.size = {"columns": columns, "lines": lines, "width": width, "height": height}
+
+    def fit_pixels(self, columns, lines, workdir):
+        """Find the window size, in pixels, that holds `columns` x `lines` cells.
+
+        Probes two sizes to find the cell size, then corrects the size until the grid
+        matches. Keeps the closest size found when it never matches.
+        """
+        result = os.path.join(workdir, "probe")
+
+        def probe(width, height):
+            self.set_grid(columns, lines, width, height)
+            Path(result).unlink(missing_ok=True)
+            elapsed, _, _ = self.launch(payload_command("idle", result, "--duration", "0"))
+            return None if elapsed is None else read_result(result)[1]
+
+        (w1, h1), (w2, h2) = CALIBRATION_SIZES
+        first, second = probe(w1, h1), probe(w2, h2)
+        if not first or not second or first[0] == second[0] or first[1] == second[1]:
+            self.set_grid(columns, lines, w1, h1)
+            return
+        cell_width = (w2 - w1) / (second[0] - first[0])
+        cell_height = (h2 - h1) / (second[1] - first[1])
+        width = round(w1 + (columns - first[0] + 0.5) * cell_width)
+        height = round(h1 + (lines - first[1] + 0.5) * cell_height)
+        for _ in range(CALIBRATION_ROUNDS):
+            grid = probe(width, height)
+            if grid is None or grid == (columns, lines):
+                break
+            width += round((columns - grid[0]) * cell_width)
+            height += round((lines - grid[1]) * cell_height)
+        self.set_grid(columns, lines, width, height)
+
+    def command(self, command):
+        values = {**self.size, **self.extra}
+        return [self.binary, *(arg.format(**values) for arg in self.prefix), *command]
 
     def read_version(self, args):
         try:
@@ -333,7 +465,7 @@ class Terminal:
         existing = set(processes())
         start = time.monotonic()
         proc = subprocess.Popen(
-            [self.binary, *self.prefix, *command],
+            self.command(command),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -369,46 +501,78 @@ def wait_exit(pid, timeout=30.0):
 
 
 def read_result(path):
+    """The measurement and the grid `(columns, lines)` a payload wrote, each None when
+    missing."""
     try:
-        return float(Path(path).read_text())
-    except (OSError, ValueError):
-        return None
+        lines = Path(path).read_text().splitlines()
+    except OSError:
+        return None, None
+    try:
+        value = float(lines[0])
+    except (IndexError, ValueError):
+        value = None
+    try:
+        columns, rows = (int(n) for n in lines[1].split())
+        grid = (columns, rows)
+    except (IndexError, ValueError):
+        grid = None
+    return value, grid
 
 
 def payload_command(kind, result, *extra):
     return [sys.executable, str(Path(__file__).resolve()), "payload", kind, "--result", result, *extra]
 
 
-def measure(terminal, shakespeare, runs):
+def measure(terminal, shakespeare, runs, grid):
+    """Run every benchmark `runs` times. Returns the values of each metric and the grids
+    the payloads ran in."""
     data = {key: [] for key, *_ in METRICS}
+    grids = []
+
+    def payload(kind, *extra, sample_at=None):
+        Path(result).unlink(missing_ok=True)
+        elapsed, peak, sampled = terminal.launch(
+            payload_command(kind, result, *extra), sample_at=sample_at
+        )
+        if elapsed is None:
+            return None, None, None
+        value, seen = read_result(result)
+        if seen is not None:
+            grids.append(list(seen))
+            if seen != tuple(grid):
+                print(
+                    f"  warning: {terminal.name} ran at {seen[0]}x{seen[1]} cells, "
+                    f"not {grid[0]}x{grid[1]}",
+                    file=sys.stderr,
+                )
+        return value, peak, sampled
+
     with tempfile.TemporaryDirectory(prefix="graphene-benchmark-") as tmp:
         result = os.path.join(tmp, "result")
+        terminal.prepare(tmp)
+        if terminal.pixels:
+            print(f"  {terminal.name}: fitting the window to the grid", file=sys.stderr)
+            terminal.fit_pixels(*grid, tmp)
+        else:
+            terminal.set_grid(*grid)
         for run in range(runs):
             print(f"  {terminal.name}: run {run + 1}/{runs}", file=sys.stderr)
 
             elapsed, _, _ = terminal.launch(["true"])
             data["startup"].append(None if elapsed is None else elapsed * 1000)
 
-            Path(result).unlink(missing_ok=True)
-            elapsed, peak, _ = terminal.launch(
-                payload_command("throughput", result, "--file", str(shakespeare))
-            )
-            data["throughput"].append(read_result(result) if elapsed is not None else None)
-            data["memory_load"].append(peak if elapsed is not None else None)
+            value, peak, _ = payload("throughput", "--file", str(shakespeare))
+            data["throughput"].append(value)
+            data["memory_load"].append(peak if value is not None else None)
 
-            Path(result).unlink(missing_ok=True)
-            elapsed, _, _ = terminal.launch(
-                payload_command("fire", result, "--duration", str(FIRE_DURATION))
-            )
-            data["fps"].append(read_result(result) if elapsed is not None else None)
+            value, _, _ = payload("fire", "--duration", str(FIRE_DURATION))
+            data["fps"].append(value)
 
-            Path(result).unlink(missing_ok=True)
-            elapsed, _, idle = terminal.launch(
-                payload_command("idle", result, "--duration", str(IDLE_DURATION)),
-                sample_at=IDLE_SAMPLE_AT,
+            _, _, idle = payload(
+                "idle", "--duration", str(IDLE_DURATION), sample_at=IDLE_SAMPLE_AT
             )
-            data["memory_idle"].append(idle if elapsed is not None else None)
-    return data
+            data["memory_idle"].append(idle)
+    return data, unique(grids)
 
 
 def shakespeare_file():
@@ -427,10 +591,23 @@ def shakespeare_file():
 
 
 def graphene_binary():
-    built = REPO / "target" / "release" / "graphene"
-    if built.is_file() and os.access(built, os.X_OK):
-        return str(built)
-    return shutil.which("graphene")
+    """Build the current checkout in release mode and return the built binary."""
+    cargo = shutil.which("cargo")
+    if cargo is None:
+        sys.exit("error: cargo is needed to build Graphene")
+    print("Building Graphene (cargo build --release)", file=sys.stderr)
+    done = subprocess.run(
+        [cargo, "build", "--release", "--bin", "graphene"], cwd=REPO, stdout=sys.stderr
+    )
+    if done.returncode != 0:
+        sys.exit(f"error: cargo build --release failed (exit code {done.returncode})")
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or REPO / "target")
+    if not target.is_absolute():
+        target = REPO / target
+    built = target / "release" / "graphene"
+    if not (built.is_file() and os.access(built, os.X_OK)):
+        sys.exit(f"error: {built} not found after the build")
+    return str(built)
 
 
 def machine_info():
@@ -504,15 +681,13 @@ def command_run(args):
         sys.exit("error: no terminal to benchmark")
 
     shakespeare = shakespeare_file()
-    results = {"machine": machine_info(), "runs": args.runs, "terminals": []}
+    grid = [args.columns, args.lines]
+    results = {"machine": machine_info(), "runs": args.runs, "grid": grid, "terminals": []}
     for terminal in terminals:
         print(f"Benchmarking {terminal.name} ({terminal.version})", file=sys.stderr)
+        runs, grids = measure(terminal, shakespeare, args.runs, grid)
         results["terminals"].append(
-            {
-                "name": terminal.name,
-                "version": terminal.version,
-                "runs": measure(terminal, shakespeare, args.runs),
-            }
+            {"name": terminal.name, "version": terminal.version, "runs": runs, "grids": grids}
         )
 
     Path(args.out).write_text(json.dumps(results, indent=2) + "\n")
@@ -532,6 +707,8 @@ def main():
     run.add_argument("--terminals", help="comma-separated names, e.g. graphene,alacritty")
     run.add_argument("--runs", type=int, default=5, help="runs per terminal (median reported)")
     run.add_argument("--out", default="benchmark-results.json", help="raw results JSON")
+    run.add_argument("--columns", type=int, default=GRID[0], help="grid width, in cells")
+    run.add_argument("--lines", type=int, default=GRID[1], help="grid height, in cells")
     run.set_defaults(func=command_run)
 
     rend = sub.add_parser("render", help="print the Markdown tables of a results JSON")
@@ -549,6 +726,8 @@ def main():
     args = parser.parse_args()
     if args.command == "run" and args.runs < 1:
         parser.error("--runs must be at least 1")
+    if args.command == "run" and (args.columns < 2 or args.lines < 1):
+        parser.error("the grid needs at least 2 columns and 1 line")
     args.func(args)
 
 
