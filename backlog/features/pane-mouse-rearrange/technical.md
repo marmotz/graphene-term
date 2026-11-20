@@ -230,7 +230,7 @@ pub enum DropTarget {
 ### Documentation
 
 - README: the pane title bar and the drag and drop.
-- `docs/architecture.md`: the new press order (pane bar before the pane), the
+- `docs/dev/architecture.md`: the new press order (pane bar before the pane), the
   `pane_bar` and `workspace::drop` modules, the `Drag::Pane` gesture.
 
 ### Alternatives considered

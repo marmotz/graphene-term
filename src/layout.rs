@@ -74,6 +74,27 @@ pub struct GridLayout {
     pub lines: usize,
 }
 
+/// Widths reserved around the grid of a [`GridLayout`], from the cell size.
+struct Chrome {
+    margin: f32,
+    card_pad: f32,
+    chevron_width: f32,
+    card_pad_right: f32,
+}
+
+impl Chrome {
+    fn new(cell: CellSize) -> Self {
+        let card_pad = (cell.width / 2.0).round();
+        let chevron_width = (cell.height * 0.6).round();
+        Self {
+            margin: (cell.width / 2.0).round(),
+            card_pad,
+            chevron_width,
+            card_pad_right: 2.0 * card_pad + chevron_width,
+        }
+    }
+}
+
 /// What lies under a pixel of the window. `row` is a view row index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
@@ -112,10 +133,12 @@ impl GridLayout {
     /// least `padding` around the content, and centres the content in the rectangle
     /// with the pixels left over by the whole cells.
     pub fn new(rect: Rect, cell: CellSize, padding: f32) -> Self {
-        let margin = (cell.width / 2.0).round();
-        let card_pad = (cell.width / 2.0).round();
-        let chevron_width = (cell.height * 0.6).round();
-        let card_pad_right = 2.0 * card_pad + chevron_width;
+        let Chrome {
+            margin,
+            card_pad,
+            chevron_width,
+            card_pad_right,
+        } = Chrome::new(cell);
         let horizontal = rect.width - 2.0 * padding - margin - card_pad - card_pad_right;
         let vertical = rect.height - 2.0 * padding;
         let columns = ((horizontal.max(0.0) / cell.width).floor() as usize).max(MIN_COLUMNS);
@@ -140,6 +163,20 @@ impl GridLayout {
             columns,
             lines,
         }
+    }
+
+    /// Smallest rectangle size, in whole physical pixels, in which [`GridLayout::new`]
+    /// lays out `columns` x `lines` cells: the inverse of `new`. Below the minimum grid
+    /// size, `new` still lays out the minimum.
+    pub fn rect_size(columns: usize, lines: usize, cell: CellSize, padding: f32) -> (u32, u32) {
+        let chrome = Chrome::new(cell);
+        let width = columns as f32 * cell.width
+            + 2.0 * padding
+            + chrome.margin
+            + chrome.card_pad
+            + chrome.card_pad_right;
+        let height = lines as f32 * cell.height + 2.0 * padding;
+        (width.ceil() as u32, height.ceil() as u32)
     }
 
     /// Left pixel edge of the content: the rectangle's left edge plus the horizontal
@@ -321,6 +358,37 @@ mod tests {
 
     fn layout() -> GridLayout {
         GridLayout::new(Rect::from_size(WIDTH, HEIGHT), CELL, 8.0)
+    }
+
+    #[test]
+    fn rect_size_is_the_smallest_rect_holding_the_grid() {
+        assert_eq!(GridLayout::rect_size(80, 20, CELL, 8.0), (WIDTH, HEIGHT));
+        for (cell, padding) in [
+            (CELL, 8.0),
+            (
+                CellSize {
+                    width: 8.4,
+                    height: 17.3,
+                },
+                6.0,
+            ),
+            (
+                CellSize {
+                    width: 13.7,
+                    height: 29.05,
+                },
+                0.0,
+            ),
+        ] {
+            for (columns, lines) in [(80, 24), (120, 36), (211, 57)] {
+                let (width, height) = GridLayout::rect_size(columns, lines, cell, padding);
+                let fits = GridLayout::new(Rect::from_size(width, height), cell, padding);
+                assert_eq!((fits.columns, fits.lines), (columns, lines));
+                let smaller =
+                    GridLayout::new(Rect::from_size(width - 1, height - 1), cell, padding);
+                assert_eq!((smaller.columns, smaller.lines), (columns - 1, lines - 1));
+            }
+        }
     }
 
     fn row(top: u32, gap_before: bool, block: Option<u64>) -> ViewRow {

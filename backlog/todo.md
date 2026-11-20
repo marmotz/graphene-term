@@ -1,15 +1,29 @@
-<!-- backlog-sync 2026-11-18T20:00Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-19T08:43Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
-## Rearrange panes with the mouse  ·  [overview](features/pane-mouse-rearrange/overview.md)
+## Broadcast de la saisie sur plusieurs panes  ·  [overview](features/pane-broadcast/overview.md)
 
-_terminé — voir [technical.md](features/pane-mouse-rearrange/technical.md)_ — 5/5 tasks done
+_tâches créées — voir [technical.md](features/pane-broadcast/technical.md)_ — 0/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [x]  | [#133](https://github.com/marmotz/graphene-term/issues/133) | [Panes] Barre de titre des panes : mise en page et dessin | — |
-| [x]  | [#134](https://github.com/marmotz/graphene-term/issues/134) | [Panes] Opérations de déplacement et d'échange de panes dans le workspace | — |
-| [x]  | [#135](https://github.com/marmotz/graphene-term/issues/135) | [Panes] Cibles de dépôt d'un pane glissé | — |
-| [x]  | [#136](https://github.com/marmotz/graphene-term/issues/136) | [Panes] Interactions de la barre de titre : focus, fermeture, zoom, menu | #133 |
-| [x]  | [#137](https://github.com/marmotz/graphene-term/issues/137) | [Panes] Glisser-déposer d'un pane : geste, surbrillance, onglets, annulation | #136, #134, #135 |
+| [ ]  | [#146](https://github.com/marmotz/graphene-term/issues/146) | [Raccourcis] Nouveaux raccourcis par défaut des panes, onglets et zoom | — |
+| [ ]  | [#147](https://github.com/marmotz/graphene-term/issues/147) | [Broadcast] Ensemble de diffusion par onglet dans le workspace | — |
+| [ ]  | [#148](https://github.com/marmotz/graphene-term/issues/148) | [Broadcast] Action Ctrl+Shift+B et diffusion de la frappe et du collage | #146, #147 |
+| [ ]  | [#149](https://github.com/marmotz/graphene-term/issues/149) | [Broadcast] Ctrl+clic pour ajouter ou retirer un pane | #147 |
+| [ ]  | [#150](https://github.com/marmotz/graphene-term/issues/150) | [Broadcast] Indicateur dans la barre de titre et couleur de thème | #147 |
+
+## Public documentation  ·  [overview](features/public-docs/overview.md)
+
+_terminé — voir [technical.md](features/public-docs/technical.md)_ — 7/7 tasks done
+
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [x]  | [#139](https://github.com/marmotz/graphene-term/issues/139) | [Docs] Option graphene -e pour lancer une commande | — |
+| [x]  | [#140](https://github.com/marmotz/graphene-term/issues/140) | [Docs] Docs contributeur : déplacement vers docs/dev et mise à jour | — |
+| [x]  | [#141](https://github.com/marmotz/graphene-term/issues/141) | [Docs] Script de benchmark comparatif des terminaux | #139, #140 |
+| [x]  | [#142](https://github.com/marmotz/graphene-term/issues/142) | [Docs] Documentation utilisateur en anglais (docs/en) | #139, #140 |
+| [x]  | [#143](https://github.com/marmotz/graphene-term/issues/143) | [Docs] Documentation utilisateur en français (docs/fr) | #142 |
+| [x]  | [#144](https://github.com/marmotz/graphene-term/issues/144) | [Docs] README anglais, CONTRIBUTING.md et comparatif | #140, #141, #142 |
+| [x]  | [#145](https://github.com/marmotz/graphene-term/issues/145) | [Docs] README français (README.fr.md) | #143, #144 |

@@ -1,0 +1,131 @@
+{
+  "machine": {
+    "cpu": "Test CPU 9000",
+    "gpu": "Test GPU",
+    "kernel": "6.0.0-test",
+    "session": "x11",
+    "resolution": "1920x1080"
+  },
+  "runs": 3,
+  "terminals": [
+    {
+      "name": "Alacritty",
+      "version": "alacritty 0.17.0",
+      "runs": {
+        "throughput": [
+          1.0,
+          1.1,
+          0.9
+        ],
+        "fps": [
+          100.0,
+          101.0,
+          99.0
+        ],
+        "startup": [
+          70.0,
+          75.0,
+          72.0
+        ],
+        "memory_idle": [
+          80.0,
+          81.0,
+          79.0
+        ],
+        "memory_load": [
+          110.0,
+          112.0,
+          111.0
+        ]
+      },
+      "grids": [
+        [
+          100,
+          30
+        ]
+      ]
+    },
+    {
+      "name": "Graphene",
+      "version": "graphene 0.1.3",
+      "runs": {
+        "throughput": [
+          1.5,
+          1.2,
+          9.0
+        ],
+        "fps": [
+          120.0,
+          118.0,
+          125.0
+        ],
+        "startup": [
+          80.0,
+          90.0,
+          85.0
+        ],
+        "memory_idle": [
+          60.0,
+          61.0,
+          59.0
+        ],
+        "memory_load": [
+          90.0,
+          95.0,
+          92.0
+        ]
+      },
+      "grids": [
+        [
+          100,
+          30
+        ]
+      ]
+    },
+    {
+      "name": "GNOME Terminal",
+      "version": "GNOME Terminal 3.60.0 using VTE 0.84.1 +BIDI +GNUTLS +ICU +SYSTEMD",
+      "runs": {
+        "throughput": [
+          null,
+          null,
+          null
+        ],
+        "fps": [
+          60.0,
+          null,
+          62.0
+        ],
+        "startup": [
+          200.0,
+          210.0,
+          205.0
+        ],
+        "memory_idle": [
+          100.0,
+          101.0,
+          102.0
+        ],
+        "memory_load": [
+          null,
+          null,
+          null
+        ]
+      },
+      "grids": [
+        [
+          100,
+          30
+        ],
+        [
+          98,
+          30
+        ]
+      ]
+    }
+  ],
+  "grid": [
+    100,
+    30
+  ]
+}

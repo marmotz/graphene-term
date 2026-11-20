@@ -131,7 +131,7 @@ if [[ -n $_graphene_token ]]; then
   # Rich input editor: Graphene sends private sequences (CSI <code> u, code points from
   # the Unicode private use area) for the editor moves, mirrored from
   # src/input_editor.rs. Every move is passive and clamped at the buffer ends.
-  # READLINE_POINT counts characters like ${#READLINE_LINE} (see docs/decisions.md).
+  # READLINE_POINT counts characters like ${#READLINE_LINE} (see docs/dev/decisions.md).
   _graphene_char_left() {
     ((READLINE_POINT > 0)) && READLINE_POINT=$((READLINE_POINT - 1))
     return 0

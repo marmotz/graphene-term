@@ -43,12 +43,16 @@ mod watcher;
 mod window_state;
 mod workspace;
 
+pub use app::GridSize;
+
 /// Version of this build, computed by `build.rs`.
 pub const VERSION: &str = env!("GRAPHENE_VERSION");
 
-/// Opens the window and runs the event loop until the shell exits.
-pub fn run() -> anyhow::Result<()> {
-    app::run()
+/// Opens the window and runs the event loop until its last pane exits. The first pane
+/// runs `program` (the program then its arguments) instead of the shell when given;
+/// the window is sized to show `grid` when it sets a dimension.
+pub fn run(program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
+    app::run(program, grid)
 }
 
 /// Lists and optionally removes unknown entries from the user's configuration file.
