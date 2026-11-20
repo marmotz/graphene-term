@@ -22,7 +22,7 @@ Tous les raccourcis ci-dessous sont ceux par défaut ; voir
 |----------------------------------------|--------------------------------------------------|
 | Ouvrir un onglet                       | `Ctrl+Shift+T`, ou cliquez sur `+` dans la barre d'onglets |
 | Fermer l'onglet                        | `Ctrl+Alt+W`, clic du milieu sur l'onglet, ou son `×` |
-| Onglet suivant / précédent             | `Ctrl+Tab` / `Ctrl+Shift+Tab`, ou `Ctrl+PageDown` / `Ctrl+PageUp` |
+| Onglet suivant / précédent             | `Ctrl+PageDown` / `Ctrl+PageUp` |
 | Aller à l'onglet 1 à 9                 | `Alt+1` ... `Alt+9`                              |
 | Afficher un onglet                     | Cliquez dessus                                   |
 | Réordonner les onglets                 | Faites glisser un onglet le long de la barre     |
@@ -41,7 +41,7 @@ onglets sont empilés.
 | Diviser, nouveau panneau en bas        | `Ctrl+Shift+O`                                   |
 | Fermer le panneau                      | `Ctrl+Shift+W`, ou `×` sur sa barre de titre     |
 | Donner le focus à un panneau           | Cliquez dedans, ou `Ctrl+Shift+Flèche`           |
-| Panneau suivant / précédent            | `Ctrl+Shift+N` / `Ctrl+Shift+B`                  |
+| Panneau suivant / précédent            | `Ctrl+Tab` / `Ctrl+Shift+Tab`                  |
 | Redimensionner le panneau              | Faites glisser la séparation entre deux panneaux, ou `Ctrl+Shift+Alt+Flèche` |
 | Donner la même taille à tous les panneaux | **Égaliser les panneaux** dans la palette de commandes |
 | Déplacer le panneau dans un nouvel onglet | **Déplacer le panneau dans un nouvel onglet** dans la palette de commandes, ou faites-le glisser (voir plus bas) |
@@ -93,7 +93,7 @@ surbrillance translucide montre où le panneau va atterrir. `Échap` annule le g
 
 ## Zoom
 
-`Ctrl+Shift+Z`, ou un double clic sur la barre de titre, fait occuper tout l'onglet au
+`Ctrl+Shift+X`, ou un double clic sur la barre de titre, fait occuper tout l'onglet au
 panneau ; la même action rétablit la disposition. Les autres panneaux continuent de
 tourner pendant ce temps.
 

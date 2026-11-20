@@ -63,8 +63,8 @@ Voir [Blocs de commande](command-blocks.md).
 | `Ctrl+Shift+Left` / `Right` / `Up` / `Down`  | Aller au panneau dans cette direction      |
 | `Ctrl+Shift+Alt+Left` / `Right`              | Redimensionner le panneau vers la gauche / la droite |
 | `Ctrl+Shift+Alt+Up` / `Down`, ou `Ctrl+Shift+Alt+PageUp` / `PageDown` | Redimensionner le panneau vers le haut / le bas |
-| `Ctrl+Shift+N` / `Ctrl+Shift+B`              | Panneau suivant / précédent                |
-| `Ctrl+Shift+Z`                               | Agrandir le panneau à tout l'onglet, ou le réduire |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab`              | Panneau suivant / précédent                |
+| `Ctrl+Shift+X`                               | Agrandir le panneau à tout l'onglet, ou le réduire |
 
 Certains bureaux (Cinnamon, par exemple) se réservent `Ctrl+Shift+Alt+Up` / `Down` :
 les variantes `PageUp` / `PageDown` font la même chose.
@@ -77,8 +77,8 @@ Voir [Onglets et panneaux](tabs-and-panes.md).
 |-----------------------------------------|-------------------------|
 | `Ctrl+Shift+T`                          | Nouvel onglet           |
 | `Ctrl+Alt+W`                            | Fermer l'onglet         |
-| `Ctrl+Tab` ou `Ctrl+PageDown`           | Onglet suivant          |
-| `Ctrl+Shift+Tab` ou `Ctrl+PageUp`       | Onglet précédent        |
+| `Ctrl+PageDown`                         | Onglet suivant          |
+| `Ctrl+PageUp`                         | Onglet précédent        |
 | `Alt+1` ... `Alt+9`                     | Aller à l'onglet 1 à 9  |
 
 `Alt+1` à `Alt+9` utilisent la rangée des chiffres du clavier quelle que soit la

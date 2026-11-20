@@ -21,7 +21,7 @@ them.
 |----------------------------------------|--------------------------------------------------|
 | Open a tab                             | `Ctrl+Shift+T`, or click `+` in the tab bar      |
 | Close the tab                          | `Ctrl+Alt+W`, middle click on the tab, or its `×` |
-| Next / previous tab                    | `Ctrl+Tab` / `Ctrl+Shift+Tab`, or `Ctrl+PageDown` / `Ctrl+PageUp` |
+| Next / previous tab                    | `Ctrl+PageDown` / `Ctrl+PageUp` |
 | Go to tab 1 to 9                       | `Alt+1` ... `Alt+9`                              |
 | Show a tab                             | Click it                                         |
 | Reorder the tabs                       | Drag a tab along the bar                         |
@@ -39,7 +39,7 @@ The tab bar appears once there are two tabs. Its edge is set by `position` in th
 | Split, new pane below                  | `Ctrl+Shift+O`                                   |
 | Close the pane                         | `Ctrl+Shift+W`, or `×` on its title bar          |
 | Focus a pane                           | Click in it, or `Ctrl+Shift+Arrow`               |
-| Next / previous pane                   | `Ctrl+Shift+N` / `Ctrl+Shift+B`                  |
+| Next / previous pane                   | `Ctrl+Tab` / `Ctrl+Shift+Tab`                  |
 | Resize the pane                        | Drag the divider between two panes, or `Ctrl+Shift+Alt+Arrow` |
 | Give all panes the same size           | **Equalise panes** in the command palette        |
 | Move the pane to a new tab             | **Move pane to a new tab** in the command palette, or drag it (see below) |
@@ -90,7 +90,7 @@ shows where the pane will land. `Escape` cancels the drag.
 
 ## Zoom
 
-`Ctrl+Shift+Z`, or a double click on the title bar, makes the pane fill the whole tab;
+`Ctrl+Shift+X`, or a double click on the title bar, makes the pane fill the whole tab;
 the same again restores the layout. The other panes keep running meanwhile.
 
 ## Command palette

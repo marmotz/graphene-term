@@ -1310,7 +1310,7 @@ interval = "1w"
         assert!(labels(&m, Action::NewTab).is_empty());
         assert_eq!(
             labels(&m, Action::NextTab),
-            ["Ctrl+Tab", "Ctrl+PageDown", "Ctrl+Shift+T"]
+            ["Ctrl+PageDown", "Ctrl+Shift+T"]
         );
     }
 

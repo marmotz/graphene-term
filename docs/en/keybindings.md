@@ -58,8 +58,8 @@ See [Command blocks](command-blocks.md).
 | `Ctrl+Shift+Left` / `Right` / `Up` / `Down`  | Focus the pane in that direction           |
 | `Ctrl+Shift+Alt+Left` / `Right`              | Resize the pane toward the left / right    |
 | `Ctrl+Shift+Alt+Up` / `Down`, or `Ctrl+Shift+Alt+PageUp` / `PageDown` | Resize the pane upward / downward |
-| `Ctrl+Shift+N` / `Ctrl+Shift+B`              | Next / previous pane                       |
-| `Ctrl+Shift+Z`                               | Zoom the pane to the whole tab, or back    |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab`              | Next / previous pane                       |
+| `Ctrl+Shift+X`                               | Zoom the pane to the whole tab, or back    |
 
 Some desktops (Cinnamon, for example) use `Ctrl+Shift+Alt+Up` / `Down` for themselves:
 the `PageUp` / `PageDown` variants do the same.
@@ -72,8 +72,8 @@ See [Tabs and panes](tabs-and-panes.md).
 |-----------------------------------------|-----------------------|
 | `Ctrl+Shift+T`                          | New tab               |
 | `Ctrl+Alt+W`                            | Close the tab         |
-| `Ctrl+Tab` or `Ctrl+PageDown`           | Next tab              |
-| `Ctrl+Shift+Tab` or `Ctrl+PageUp`       | Previous tab          |
+| `Ctrl+PageDown`                         | Next tab              |
+| `Ctrl+PageUp`                         | Previous tab          |
 | `Alt+1` ... `Alt+9`                     | Go to tab 1 to 9      |
 
 `Alt+1` to `Alt+9` use the digit row of the keyboard on any layout (on AZERTY too,
