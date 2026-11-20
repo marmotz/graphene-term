@@ -101,7 +101,8 @@ program). Graphene shortcuts are never broadcast: they only act on the active pa
 Broadcast continues while a pane is zoomed.
 
 `Ctrl`+click on a pane (or on its title bar) adds it to the broadcast set or removes it,
-without focusing it; on a link, `Ctrl`+click still opens the link. `Ctrl`+drag still
+without focusing it. The first `Ctrl`+click also adds the active pane, so the broadcast
+starts between the two panes; on a link, `Ctrl`+click still opens the link. `Ctrl`+drag still
 makes a rectangular selection, except where the application captures the mouse.
 
 The title bar of a pane in the set is drawn in the theme color `ui.pane_broadcast` and

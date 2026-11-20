@@ -510,6 +510,21 @@ impl<P> Workspace<P> {
         true
     }
 
+    /// Ctrl+click on the pane `id`: like [`Self::toggle_broadcast`], but a pane added to
+    /// the set brings the active pane of its tab along, so that the first click starts a
+    /// broadcast between two panes instead of selecting a lone one. `false` for an
+    /// unknown pane.
+    pub fn toggle_broadcast_click(&mut self, id: PaneId) -> bool {
+        let Some(index) = self.tab_of(id) else {
+            return false;
+        };
+        let tab = &mut self.tabs[index];
+        if !tab.broadcast.contains(&id) && tab.active != id {
+            tab.broadcast.insert(tab.active);
+        }
+        self.toggle_broadcast(id)
+    }
+
     /// On the shown tab: an empty broadcast set becomes every pane, a non-empty one is
     /// emptied. `false` without a shown tab.
     pub fn toggle_broadcast_all(&mut self) -> bool {
@@ -1447,6 +1462,39 @@ mod tests {
 
     fn broadcast_ids(ws: &Workspace<Fake>, index: usize) -> Vec<u64> {
         ws.tabs()[index].broadcast.iter().map(|id| id.0).collect()
+    }
+
+    #[test]
+    fn ctrl_click_on_another_pane_broadcasts_to_it_and_the_active_pane() {
+        let mut ws = workspace(&[3]);
+        let active = ws.active_pane_id().unwrap();
+        let other = PaneId((active.0 + 1) % 3);
+        assert!(ws.toggle_broadcast_click(other));
+        assert!(ws.is_broadcast(active) && ws.is_broadcast(other));
+        assert_eq!(ws.broadcast_count(0), 2);
+        // Clicking it again removes only that pane.
+        assert!(ws.toggle_broadcast_click(other));
+        assert!(ws.is_broadcast(active) && !ws.is_broadcast(other));
+    }
+
+    #[test]
+    fn ctrl_click_on_the_active_pane_does_not_add_anything_else() {
+        let mut ws = workspace(&[3]);
+        let active = ws.active_pane_id().unwrap();
+        assert!(ws.toggle_broadcast_click(active));
+        assert_eq!(ws.broadcast_count(0), 1);
+        assert!(ws.is_broadcast(active));
+    }
+
+    #[test]
+    fn ctrl_click_removing_a_pane_does_not_bring_the_active_one() {
+        let mut ws = workspace(&[3]);
+        let active = ws.active_pane_id().unwrap();
+        let other = PaneId((active.0 + 1) % 3);
+        ws.toggle_broadcast(other);
+        assert!(ws.toggle_broadcast_click(other));
+        assert_eq!(ws.broadcast_count(0), 0);
+        assert!(!ws.toggle_broadcast_click(PaneId(99)));
     }
 
     #[test]

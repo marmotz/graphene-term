@@ -1515,7 +1515,8 @@ impl Session {
         let scale = self.window.scale_factor() as f32;
         let past =
             pane_bar::drag_started((press.x as f32, press.y as f32), self.mouse_pixel(), scale);
-        if selection::broadcast_release_toggles(past) && self.workspace.toggle_broadcast(pane) {
+        if selection::broadcast_release_toggles(past) && self.workspace.toggle_broadcast_click(pane)
+        {
             self.window.request_redraw();
         }
     }
@@ -1537,7 +1538,7 @@ impl Session {
         let ctrl = self.modifiers.control_key();
         match pane_bar::press_action(button, hit, clicks, ctrl) {
             Some(PaneBarAction::Broadcast) => {
-                if self.workspace.toggle_broadcast(pane) {
+                if self.workspace.toggle_broadcast_click(pane) {
                     self.window.request_redraw();
                 }
             }
