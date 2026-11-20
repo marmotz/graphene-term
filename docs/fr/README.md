@@ -30,7 +30,7 @@ paramètres) sont ceux de l'interface en français : voir le paramètre `languag
 | Page                                     | Contenu                                                                  |
 |------------------------------------------|--------------------------------------------------------------------------|
 | [Configuration](configuration.md)        | Le fichier de configuration, la fenêtre des paramètres, chaque paramètre |
-| [Thèmes](themes.md)                      | Thèmes intégrés, vos propres thèmes, suivi du mode clair/sombre du système |
+| [Thèmes](themes.md)                      | Thèmes intégrés, vos propres thèmes, éditeur de thème, suivi du mode clair/sombre du système |
 | [Raccourcis clavier](keybindings.md)     | Tous les raccourcis par défaut et comment les modifier                   |
 
 ## Et aussi

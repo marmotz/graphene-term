@@ -10,6 +10,7 @@ banners).
 - [Built-in themes](#built-in-themes)
 - [Following the system light/dark mode](#following-the-system-lightdark-mode)
 - [Custom themes](#custom-themes)
+- [Theme editor](#theme-editor)
 - [Theme file format](#theme-file-format)
 - [Translucent background](#translucent-background)
 
@@ -80,6 +81,35 @@ The file name, without `.toml`, is the theme name: `themes/my-theme.toml` is use
 - Saving the theme file in use applies it at once.
 - An invalid color or an unknown key is reported in the error banner and ignored; a
   name that matches no theme falls back to `graphene-night`.
+
+To create or change a theme without editing its file by hand, use the
+[theme editor](#theme-editor).
+
+## Theme editor
+
+The **Theme editor** sits at the bottom of the **Theme** section of the settings window
+(`Ctrl+,`). **Theme to edit** picks the theme to change; it opens on the theme in use,
+but any theme can be edited without switching to it.
+
+- **Colors** are grouped as **Terminal colors**, **Normal ANSI colors**, **Bright ANSI
+  colors** and **Interface colors**. Click a swatch to open a color picker; the color is
+  written to the theme file when the picker closes. While you pick a color of the theme
+  in use, the terminal shows it at once; for another theme, only the swatch changes.
+- **Selected text** has a **Keep the text color** box: checked, selected text keeps its
+  own color (`selection_foreground = ""`).
+- **Built-in themes cannot be changed**: their swatches, **Rename** and **Delete** are
+  disabled. Use **Duplicate** first; the copy becomes the theme in use and the edited
+  theme.
+- **Duplicate** and **Rename** ask for a **New name** (**Confirm** or `Enter`,
+  **Cancel** or `Escape`). Renaming updates `name`, `light` and `dark` in the `[theme]`
+  section wherever they named the old theme.
+- **Delete** asks for confirmation, then removes the theme file; `name`, `light` and
+  `dark` that named it go back to `graphene-night`.
+- A name must not be empty, contain `/` or `\`, start with a dot, or be the name of an
+  existing theme (built-in or yours).
+
+The editor only changes the keys you touch: comments and the rest of a hand-written
+theme file are kept.
 
 ## Theme file format
 

@@ -4,7 +4,7 @@
 
 ## Custom themes  ·  [overview](features/custom-themes/overview.md)
 
-_tâches créées — voir [technical.md](features/custom-themes/technical.md)_ — 5/6 tasks done
+_terminé — voir [technical.md](features/custom-themes/technical.md)_ — 6/6 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -13,4 +13,4 @@ _tâches créées — voir [technical.md](features/custom-themes/technical.md)_ 
 | [x]  | [#162](https://github.com/marmotz/graphene-term/issues/162) | [Paramètres] Modèle de l'éditeur de thème | #160 |
 | [x]  | [#163](https://github.com/marmotz/graphene-term/issues/163) | [Paramètres] Vue de l'éditeur de thème | #161, #162 |
 | [x]  | [#164](https://github.com/marmotz/graphene-term/issues/164) | [Paramètres] Aperçu en direct du thème édité dans le terminal | #163 |
-| [ ]  | [#165](https://github.com/marmotz/graphene-term/issues/165) | [Docs] Documenter l'éditeur de thème | #163, #164 |
+| [x]  | [#165](https://github.com/marmotz/graphene-term/issues/165) | [Docs] Documenter l'éditeur de thème | #163, #164 |

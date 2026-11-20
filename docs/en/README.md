@@ -25,7 +25,7 @@ is called `graphene`.
 | Page                                | What it covers                                                         |
 |-------------------------------------|------------------------------------------------------------------------|
 | [Configuration](configuration.md)   | The configuration file, the settings window, every setting             |
-| [Themes](themes.md)                 | Built-in themes, your own theme files, following the system light/dark |
+| [Themes](themes.md)                 | Built-in themes, your own theme files, theme editor, following the system light/dark |
 | [Keyboard shortcuts](keybindings.md) | Every default shortcut and how to change them                          |
 
 ## More

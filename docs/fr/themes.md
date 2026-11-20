@@ -10,6 +10,7 @@ palette de commandes, bandeaux).
 - [Thèmes intégrés](#thèmes-intégrés)
 - [Suivre le mode clair/sombre du système](#suivre-le-mode-clairsombre-du-système)
 - [Thèmes personnalisés](#thèmes-personnalisés)
+- [Éditeur de thème](#éditeur-de-thème)
 - [Format d'un fichier de thème](#format-dun-fichier-de-thème)
 - [Fond translucide](#fond-translucide)
 
@@ -84,6 +85,36 @@ fenêtre des paramètres.
 - Enregistrer le fichier du thème en cours l'applique aussitôt.
 - Une couleur invalide ou une clé inconnue est signalée dans le bandeau d'erreur et
   ignorée ; un nom qui ne correspond à aucun thème revient à `graphene-night`.
+
+Pour créer ou modifier un thème sans éditer son fichier à la main, utilisez
+l'[éditeur de thème](#éditeur-de-thème).
+
+## Éditeur de thème
+
+L'**Éditeur de thème** se trouve en bas de la section **Thème** de la fenêtre des
+paramètres (`Ctrl+,`). **Thème à modifier** choisit le thème à changer ; il s'ouvre sur
+le thème en cours, mais n'importe quel thème peut être modifié sans l'activer.
+
+- **Les couleurs** sont groupées en **Couleurs du terminal**, **Couleurs ANSI
+  normales**, **Couleurs ANSI vives** et **Couleurs de l'interface**. Un clic sur une
+  pastille ouvre un sélecteur de couleur ; la couleur est écrite dans le fichier du
+  thème à la fermeture du sélecteur. Pendant le choix d'une couleur du thème en cours,
+  le terminal l'affiche aussitôt ; pour un autre thème, seule la pastille change.
+- **Texte sélectionné** a une case **Garder la couleur du texte** : cochée, le texte
+  sélectionné garde sa propre couleur (`selection_foreground = ""`).
+- **Les thèmes intégrés ne sont pas modifiables** : leurs pastilles, **Renommer** et
+  **Supprimer** sont désactivés. Utilisez d'abord **Dupliquer** ; la copie devient le
+  thème en cours et le thème modifié.
+- **Dupliquer** et **Renommer** demandent un **Nouveau nom** (**Valider** ou `Entrée`,
+  **Annuler** ou `Échap`). Renommer met à jour `name`, `light` et `dark` de la section
+  `[theme]` qui nommaient l'ancien thème.
+- **Supprimer** demande confirmation, puis efface le fichier du thème ; `name`, `light`
+  et `dark` qui le nommaient reviennent à `graphene-night`.
+- Un nom ne peut pas être vide, contenir `/` ou `\`, commencer par un point, ni être
+  celui d'un thème existant (intégré ou personnel).
+
+L'éditeur ne change que les clés modifiées : les commentaires et le reste d'un fichier
+de thème écrit à la main sont conservés.
 
 ## Format d'un fichier de thème
 
