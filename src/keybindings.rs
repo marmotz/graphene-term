@@ -130,14 +130,13 @@ const DEFAULTS: &[(&str, Action)] = &[
     ),
     ("Ctrl+Shift+Alt+Up", Action::ResizePane(Direction::Up)),
     ("Ctrl+Shift+Alt+Down", Action::ResizePane(Direction::Down)),
-    ("Ctrl+Shift+N", Action::NextPane),
-    ("Ctrl+Shift+B", Action::PreviousPane),
-    ("Ctrl+Shift+Z", Action::ToggleZoom),
+    ("Ctrl+Tab", Action::NextPane),
+    ("Ctrl+Shift+Tab", Action::PreviousPane),
+    ("Ctrl+Shift+X", Action::ToggleZoom),
+    ("Ctrl+Shift+B", Action::ToggleBroadcastAll),
     ("Ctrl+Shift+T", Action::NewTab),
     ("Ctrl+Alt+W", Action::CloseTab),
-    ("Ctrl+Tab", Action::NextTab),
     ("Ctrl+PageDown", Action::NextTab),
-    ("Ctrl+Shift+Tab", Action::PreviousTab),
     ("Ctrl+PageUp", Action::PreviousTab),
     ("Alt+1", Action::GoToTab(1)),
     ("Alt+2", Action::GoToTab(2)),
@@ -679,9 +678,7 @@ mod tests {
             ("E", Action::SplitRight),
             ("O", Action::SplitDown),
             ("W", Action::ClosePane),
-            ("N", Action::NextPane),
-            ("B", Action::PreviousPane),
-            ("Z", Action::ToggleZoom),
+            ("X", Action::ToggleZoom),
         ] {
             assert_eq!(get(&ch(letter), cs()), Some(action), "{letter}");
             assert_eq!(
@@ -701,6 +698,9 @@ mod tests {
             assert_eq!(get(&named(key), csa()), Some(Action::ResizePane(direction)));
             assert_eq!(get(&named(key), CTRL), None);
         }
+        assert_eq!(get(&ch("B"), cs()), Some(Action::ToggleBroadcastAll));
+        assert_eq!(get(&named(NamedKey::Tab), CTRL), Some(Action::NextPane));
+        assert_eq!(get(&named(NamedKey::Tab), cs()), Some(Action::PreviousPane));
         assert_eq!(
             get(&named(NamedKey::PageUp), csa()),
             Some(Action::ResizePane(Direction::Up))
@@ -716,14 +716,15 @@ mod tests {
         let bindings = defaults();
         let get = |key: &Key, mods| action_for(&bindings, key, mods);
         assert_eq!(get(&ch("T"), cs()), Some(Action::NewTab));
-        assert_eq!(get(&named(NamedKey::Tab), CTRL), Some(Action::NextTab));
-        assert_eq!(get(&named(NamedKey::Tab), cs()), Some(Action::PreviousTab));
         assert_eq!(get(&named(NamedKey::PageDown), CTRL), Some(Action::NextTab));
         assert_eq!(
             get(&named(NamedKey::PageUp), CTRL),
             Some(Action::PreviousTab)
         );
         assert_eq!(get(&named(NamedKey::Tab), NONE), None);
+        // Ctrl+Tab now moves between panes, not tabs.
+        assert_ne!(get(&named(NamedKey::Tab), CTRL), Some(Action::NextTab));
+        assert_ne!(get(&named(NamedKey::Tab), cs()), Some(Action::PreviousTab));
     }
 
     #[test]
@@ -757,9 +758,9 @@ mod tests {
             bindings.action(&cyrillic, PhysicalKey::Code(KeyCode::KeyE), cs()),
             Some(Action::SplitRight)
         );
-        // The typed letter wins over its physical place (AZERTY: Z on the W key).
+        // The typed letter wins over its physical place (AZERTY: the typed letter on the W key).
         assert_eq!(
-            bindings.action(&ch("Z"), PhysicalKey::Code(KeyCode::KeyW), cs()),
+            bindings.action(&ch("X"), PhysicalKey::Code(KeyCode::KeyW), cs()),
             Some(Action::ToggleZoom)
         );
         assert_eq!(action_for(&bindings, &cyrillic, cs()), None);
@@ -768,7 +769,7 @@ mod tests {
     #[test]
     fn unmapped_ctrl_shift_letters_stay_with_the_shell() {
         let bindings = defaults();
-        for letter in ["A", "D", "G", "X"] {
+        for letter in ["A", "D", "G", "N", "Z"] {
             assert_eq!(action_for(&bindings, &ch(letter), cs()), None, "{letter}");
         }
     }
@@ -832,8 +833,8 @@ mod tests {
         assert_eq!(action_for(&bindings, &ch("C"), cs()), None);
         assert_eq!(bindings.label(Action::Copy).as_deref(), Some("Copy"));
         // Removing a key that has no action is harmless.
-        let bindings = with(&[("Ctrl+Shift+X", "none")]);
-        assert_eq!(action_for(&bindings, &ch("X"), cs()), None);
+        let bindings = with(&[("Ctrl+Shift+G", "none")]);
+        assert_eq!(action_for(&bindings, &ch("G"), cs()), None);
     }
 
     #[test]

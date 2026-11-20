@@ -30,6 +30,10 @@ pub const DIVIDER_OPACITY: f32 = 0.35;
 /// the tab bar background: a muted version of the active bar's hue.
 pub const INACTIVE_PANE_BAR: f32 = 0.15;
 
+/// Same share for an inactive pane bar in the broadcast set: stronger, so that the
+/// panes receiving the input stand out at a glance.
+pub const INACTIVE_BROADCAST_BAR: f32 = 0.3;
+
 /// Opacity of the accent rectangle showing where a dragged pane would land.
 pub const DROP_HIGHLIGHT: f32 = 0.3;
 
@@ -165,18 +169,74 @@ fn draw_menu_rows(rows: &[MenuRow], colors: &UiColors, srgb_target: bool, ui: &m
 /// accent color and labelled in the palette background, like the default dialog
 /// button; an inactive one mixes a little accent into the tab bar background and is
 /// labelled in the shown tab's text color. Built-in themes keep both readable.
-pub fn pane_bar_colors(colors: &UiColors, active: bool) -> (Rgb, Rgb) {
-    if active {
-        (colors.palette_match, colors.palette_background)
+/// A bar of a pane in the broadcast set uses `pane_broadcast` instead of the accent.
+pub fn pane_bar_colors(colors: &UiColors, active: bool, broadcast: bool) -> (Rgb, Rgb) {
+    let accent = if broadcast {
+        colors.pane_broadcast
     } else {
-        (
-            blend(
-                colors.tab_bar_background,
-                colors.palette_match,
-                INACTIVE_PANE_BAR,
-            ),
-            colors.tab_active_text,
-        )
+        colors.palette_match
+    };
+    if active {
+        (accent, colors.palette_background)
+    } else {
+        let share = if broadcast {
+            INACTIVE_BROADCAST_BAR
+        } else {
+            INACTIVE_PANE_BAR
+        };
+        let background = blend(colors.tab_bar_background, accent, share);
+        if broadcast {
+            (background, readable_on(colors.tab_active_text, background))
+        } else {
+            (background, colors.tab_active_text)
+        }
+    }
+}
+
+/// Minimum WCAG contrast ratio for the text of a pane bar.
+const BAR_TEXT_CONTRAST: f64 = 4.5;
+
+/// `text`, pushed toward white on a dark `background` or toward black on a light one
+/// until it reaches [`BAR_TEXT_CONTRAST`] (or the extreme): a strongly tinted bar must
+/// stay readable whatever the theme's own text color is.
+fn readable_on(text: Rgb, background: Rgb) -> Rgb {
+    let target = if luminance(background) < 0.18 { 255 } else { 0 };
+    let target = Rgb {
+        r: target,
+        g: target,
+        b: target,
+    };
+    (0..=10)
+        .map(|step| blend(text, target, step as f32 / 10.0))
+        .find(|candidate| contrast_ratio(*candidate, background) >= BAR_TEXT_CONTRAST)
+        .unwrap_or(target)
+}
+
+fn luminance(color: Rgb) -> f64 {
+    let channel = |value: u8| {
+        let c = f64::from(value) / 255.0;
+        if c <= 0.039_28 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+}
+
+fn contrast_ratio(a: Rgb, b: Rgb) -> f64 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Glyph announcing the broadcast set, followed by its size, before the title.
+const BROADCAST_GLYPH: &str = "»";
+
+/// The text of a pane bar: the broadcast badge, when the pane is in the set, then the title.
+pub fn pane_bar_text(bar: &PaneBarLayout) -> String {
+    match bar.broadcast {
+        Some(count) => format!("{BROADCAST_GLYPH}{count} {}", bar.title),
+        None => bar.title.clone(),
     }
 }
 
@@ -407,7 +467,7 @@ pub fn panes(
 
 /// One pane title bar: its background, then its title and close button.
 fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
-    let (background, text) = pane_bar_colors(colors, bar.active);
+    let (background, text) = pane_bar_colors(colors, bar.active, bar.broadcast.is_some());
     let text = gpu_color(text, srgb_target);
     ui.rects
         .push(rect(bar.rect, gpu_color(background, srgb_target)));
@@ -415,7 +475,7 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         button_hover(bar.close, text, ui);
     }
     ui.texts.push(UiTextItem {
-        text: bar.title.clone(),
+        text: pane_bar_text(bar),
         x: bar.title_x,
         y: bar.title_y,
         color: text,
@@ -791,12 +851,89 @@ mod tests {
             palette_background: LABEL,
             ..tab_colors()
         };
-        assert_eq!(pane_bar_colors(&colors, true), (ACCENT, LABEL));
-        let (background, text) = pane_bar_colors(&colors, false);
+        assert_eq!(pane_bar_colors(&colors, true, false), (ACCENT, LABEL));
+        let (background, text) = pane_bar_colors(&colors, false, false);
         assert_eq!(text, ACTIVE_TEXT);
         assert_eq!(background, blend(BAR, ACCENT, INACTIVE_PANE_BAR));
         assert_ne!(background, ACCENT);
         assert_ne!(background, BAR);
+    }
+
+    const WARM: Rgb = Rgb {
+        r: 200,
+        g: 100,
+        b: 0,
+    };
+
+    #[test]
+    fn a_broadcast_pane_bar_uses_the_broadcast_color() {
+        let colors = UiColors {
+            palette_background: LABEL,
+            pane_broadcast: WARM,
+            ..tab_colors()
+        };
+        assert_eq!(pane_bar_colors(&colors, true, true), (WARM, LABEL));
+        let (background, text) = pane_bar_colors(&colors, false, true);
+        assert_eq!(background, blend(BAR, WARM, INACTIVE_BROADCAST_BAR));
+        assert!(contrast_ratio(text, background) >= BAR_TEXT_CONTRAST);
+        assert_ne!(background, blend(BAR, ACCENT, INACTIVE_PANE_BAR));
+    }
+
+    #[test]
+    fn readable_on_keeps_a_readable_text_and_fixes_a_dim_one() {
+        let dark = Rgb {
+            r: 10,
+            g: 40,
+            b: 45,
+        };
+        let good = Rgb {
+            r: 240,
+            g: 240,
+            b: 240,
+        };
+        assert_eq!(readable_on(good, dark), good);
+        let dim = Rgb {
+            r: 90,
+            g: 110,
+            b: 110,
+        };
+        let fixed = readable_on(dim, dark);
+        assert!(contrast_ratio(fixed, dark) >= BAR_TEXT_CONTRAST);
+        let light = Rgb {
+            r: 235,
+            g: 230,
+            b: 215,
+        };
+        let pale = Rgb {
+            r: 170,
+            g: 165,
+            b: 150,
+        };
+        let fixed = readable_on(pale, light);
+        assert!(contrast_ratio(fixed, light) >= BAR_TEXT_CONTRAST);
+        assert!(luminance(fixed) < luminance(pale));
+    }
+
+    #[test]
+    fn a_broadcast_pane_bar_shows_the_set_size_before_the_title() {
+        let layout = two_columns();
+        let colors = UiColors {
+            pane_broadcast: WARM,
+            ..tab_colors()
+        };
+        let mut bars = pane_bars_of(&layout, Some(PaneId(2)));
+        let plain = build(&layout, Some(PaneId(2)), &bars, None, None, &colors, false);
+        assert_eq!(plain.texts[0].text, "pane 1");
+        bars[0].broadcast = Some(2);
+        bars[1].broadcast = Some(2);
+        let ui = build(&layout, Some(PaneId(2)), &bars, None, None, &colors, false);
+        assert_eq!(ui.texts[0].text, "»2 pane 1");
+        assert_eq!(ui.texts[0].max_width, bars[0].title_width);
+        assert_eq!(
+            ui.rects[1].color,
+            gpu_color(WARM, false),
+            "the active bar of the set"
+        );
     }
 
     #[test]

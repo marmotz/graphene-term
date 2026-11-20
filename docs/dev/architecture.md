@@ -53,7 +53,7 @@ src/
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup timing logs (`graphene::perf` target)
   app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay),
-                   window event routing (terminal or settings window)
+                   window event routing (terminal or settings window), key and paste fan-out to the broadcast targets
   settings/
     mod.rs         SettingsWindow: winit window, surface on the shared Gpu, egui_winit::State,
                    egui_wgpu::Renderer, redraw on demand
@@ -65,7 +65,7 @@ src/
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
   process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
   workspace/
-    mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, title fallback, pane moves (pure)
+    mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, per-tab broadcast set, title fallback, pane moves (pure)
     drop.rs        drop targets of a dragged pane: edge or center of a pane, tab, new tab, highlight (pure)
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
@@ -105,7 +105,7 @@ src/
   cursor_blink.rs  blink phase of the text cursor (pure, time passed in)
   timeline_selection.rs  text selection across blocks, split into one Selection per grid
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations
-  input.rs         key -> bytes encoding, actions and their ids, paste wrapping
+  input.rs         key -> bytes encoding, per-pane key resolution (editor command, shortcut, input), actions and their ids, paste wrapping
   keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)
   mouse.rs         mouse, focus and alternate scroll encoding, mouse routing between app and Graphene (pure)
   input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection, selection replacement (pure)
@@ -546,7 +546,8 @@ Renderer::render(pane frames, interface rects)
    interface layer (`UiLayer`: rects, then text items): the title bar of every pane
    (`chrome::pane_bar::PaneBarLayout`, one interface text line high like a horizontal
    tab, titled by `Workspace::pane_title`; filled with `ui.palette_match` for the active
-   pane, with `INACTIVE_PANE_BAR` of it mixed into `ui.tab_bar_background` otherwise),
+   pane, with `INACTIVE_PANE_BAR` of it mixed into `ui.tab_bar_background` otherwise; a pane
+   of the broadcast set uses `ui.pane_broadcast` instead of `ui.palette_match` and its text starts with `»<count>`),
    then the dividers (`ui.pane_border`) and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
    the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
    there are several tabs, on the edge of `tabs.position` (`TabBarPosition`): side by

@@ -41,7 +41,7 @@ use crate::cursor_blink::CursorBlink;
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
 use crate::i18n::Lang;
-use crate::input::{self, Action};
+use crate::input::{self, Action, Delivery};
 use crate::input_editor;
 use crate::keybindings::Keybindings;
 use crate::layout::{CellSize, GridLayout, Hit, Rect};
@@ -99,6 +99,17 @@ enum Drag {
         tab_hover: Option<(usize, Instant)>,
         /// Where the pane would land if released now.
         target: Option<DropTarget>,
+    },
+    /// A left press with `Ctrl` in the content of a pane, never reported to the
+    /// application: a click toggles the pane in the broadcast set; a drag past
+    /// [`pane_bar::PANE_DRAG_THRESHOLD`] outside the captured areas becomes a rectangular
+    /// selection, and does nothing inside them.
+    BroadcastClick {
+        pane: PaneId,
+        /// Where the content was pressed.
+        press: PhysicalPosition<f64>,
+        /// The press was in an area the application owns.
+        captured: bool,
     },
 }
 
@@ -323,7 +334,14 @@ impl Session {
                     .workspace
                     .pane_title(id)
                     .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
-                PaneBarLayout::new(id, rect, title, Some(id) == active, metrics)
+                let mut bar = PaneBarLayout::new(id, rect, title, Some(id) == active, metrics);
+                if self.workspace.is_broadcast(id) {
+                    bar.broadcast = Some(
+                        self.workspace
+                            .broadcast_count(self.workspace.active_index()),
+                    );
+                }
+                bar
             })
             .collect()
     }
@@ -1207,8 +1225,16 @@ impl Session {
         let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) else {
             return;
         };
-        if let Some(pane) = self.workspace.active_pane_mut() {
-            pane.send_paste(&text);
+        self.paste_text(&text);
+    }
+
+    /// Pastes `text` into every pane typed input goes to, each bracketing it with its
+    /// own mode.
+    fn paste_text(&mut self, text: &str) {
+        for id in self.workspace.input_targets() {
+            if let Some(pane) = self.workspace.pane_mut(id) {
+                pane.send_paste(text);
+            }
         }
     }
 
@@ -1318,6 +1344,12 @@ impl Session {
         let Some(target) = layout.pane_at(x, y) else {
             return;
         };
+        if button == mouse::Button::Left
+            && self.modifiers.control_key()
+            && self.broadcast_press(target)
+        {
+            return;
+        }
         if self.workspace.active_pane_id() != Some(target) {
             self.focus_pane(target);
         }
@@ -1410,6 +1442,85 @@ impl Session {
         }
     }
 
+    /// A left press with `Ctrl` in the content of `target`: when it is the broadcast
+    /// click (see [`selection::is_broadcast_press`]), records it without focusing the
+    /// pane or reporting it to the application. `false` when the press goes on as usual.
+    fn broadcast_press(&mut self, target: PaneId) -> bool {
+        let (position, modifiers) = (self.mouse_position, self.modifiers);
+        let Some(pane) = self.workspace.pane_mut(target) else {
+            return false;
+        };
+        let (hit, _) = pane.pointer_hit(position);
+        // The margin, the chevrons and the gaps keep their own press.
+        let (on_link, plain) = match hit {
+            Hit::Cell {
+                source,
+                line,
+                column,
+                ..
+            } => {
+                let point = Point::new(line, alacritty_terminal::index::Column(column));
+                (pane.link_at(source, point).is_some(), true)
+            }
+            Hit::Blank => (false, true),
+            Hit::Margin { .. } | Hit::Chevron { .. } | Hit::Gap => (false, false),
+        };
+        if !plain || !selection::is_broadcast_press(modifiers, on_link) {
+            return false;
+        }
+        let captured = selection::mouse_reserved(pane.mode(), modifiers) && pane.reports_at(&hit);
+        self.drag = Some(Drag::BroadcastClick {
+            pane: target,
+            press: position,
+            captured,
+        });
+        true
+    }
+
+    /// The pointer moved with a broadcast click pending.
+    fn broadcast_click_moved(&mut self) {
+        let Some(Drag::BroadcastClick {
+            pane,
+            press,
+            captured,
+        }) = self.drag
+        else {
+            return;
+        };
+        let scale = self.window.scale_factor() as f32;
+        let past =
+            pane_bar::drag_started((press.x as f32, press.y as f32), self.mouse_pixel(), scale);
+        if selection::broadcast_move(past, captured) != selection::BroadcastMove::Select {
+            return;
+        }
+        // The press becomes the start of a rectangular selection, as it was before.
+        self.drag = None;
+        if self.workspace.active_pane_id() != Some(pane) {
+            self.focus_pane(pane);
+        }
+        let (modifiers, lang) = (self.modifiers, self.lang);
+        // The move that follows extends the selection to the pointer.
+        if let Some(target) = self.workspace.pane_mut(pane)
+            && target.left_press(press, modifiers, lang)
+        {
+            self.drag = Some(Drag::Selection {
+                pane,
+                auto_scroll_deadline: None,
+            });
+        }
+    }
+
+    /// The release of a broadcast click: toggles the pane unless the pointer left it.
+    fn broadcast_click_released(&mut self, pane: PaneId, press: PhysicalPosition<f64>) {
+        let scale = self.window.scale_factor() as f32;
+        let past =
+            pane_bar::drag_started((press.x as f32, press.y as f32), self.mouse_pixel(), scale);
+        if selection::broadcast_release_toggles(past) && self.workspace.toggle_broadcast_click(pane)
+        {
+            self.window.request_redraw();
+        }
+    }
+
     /// A press of `button` on `hit` in the bar of `pane`: never reported to the
     /// application (see [`pane_bar::press_action`]).
     fn pane_bar_press(
@@ -1424,7 +1535,13 @@ impl Session {
         } else {
             0
         };
-        match pane_bar::press_action(button, hit, clicks) {
+        let ctrl = self.modifiers.control_key();
+        match pane_bar::press_action(button, hit, clicks, ctrl) {
+            Some(PaneBarAction::Broadcast) => {
+                if self.workspace.toggle_broadcast_click(pane) {
+                    self.window.request_redraw();
+                }
+            }
             Some(PaneBarAction::Close) => self.request_close(Target::Pane(pane), event_loop),
             Some(PaneBarAction::Menu) => self.open_pane_menu(pane, Hit::Blank),
             Some(PaneBarAction::Focus { zoom }) => {
@@ -1465,6 +1582,13 @@ impl Session {
     }
 
     fn release_gesture(&mut self, button: mouse::Button) {
+        if button == mouse::Button::Left
+            && let Some(Drag::BroadcastClick { pane, press, .. }) = self.drag
+        {
+            self.drag = None;
+            self.broadcast_click_released(pane, press);
+            return;
+        }
         if button == mouse::Button::Left && matches!(self.drag, Some(Drag::Pane { .. })) {
             self.drop_pane();
             return;
@@ -1526,6 +1650,12 @@ impl Session {
         if matches!(self.drag, Some(Drag::Tab { .. })) {
             self.window.request_redraw();
             return;
+        }
+        if matches!(self.drag, Some(Drag::BroadcastClick { .. })) {
+            self.broadcast_click_moved();
+            if !matches!(self.drag, Some(Drag::Selection { .. })) {
+                return;
+            }
         }
         if let Some(Drag::Divider { node_path, axis }) = &self.drag {
             let along = match axis {
@@ -1789,9 +1919,7 @@ impl Session {
                     return;
                 }
             };
-            if let Some(pane) = self.workspace.active_pane_mut() {
-                pane.send_paste(&text);
-            }
+            self.paste_text(&text);
         }
     }
 
@@ -1853,6 +1981,11 @@ impl Session {
                 if self.workspace.toggle_zoom() {
                     self.relayout();
                     self.update_pointer();
+                }
+            }
+            Action::ToggleBroadcastAll => {
+                if self.workspace.toggle_broadcast_all() {
+                    self.window.request_redraw();
                 }
             }
             Action::EqualisePanes => {
@@ -1939,38 +2072,61 @@ impl Session {
             self.run_action(action, default_font_size, event_loop);
             return;
         }
-        let Some(pane) = self.workspace.active_pane_mut() else {
-            return;
-        };
-        // At the prompt, editor shortcuts win over the app shortcuts (`Shift+Home/End`)
-        // and the key encoding.
-        let rich = pane.rich_mode(modifiers);
-        if let Some(command) = input_editor::prompt_command(&event.logical_key, modifiers, rich) {
-            let replaced = input_editor::command_replacing_text(command)
-                .is_some_and(|typed| pane.replace_selection(typed));
-            if !replaced {
-                pane.run_editor_command(command);
+        // The active pane decides whether the key is a shortcut (run once, never
+        // broadcast); otherwise every target types it in its own state.
+        let active = self.workspace.active_pane_id();
+        for id in self.workspace.input_targets() {
+            let delivery = self.deliver_key(id, event, modifiers, action.is_some());
+            if delivery == Delivery::Shortcut
+                && Some(id) == active
+                && let Some(action) = action
+            {
+                self.run_action(action, default_font_size, event_loop);
+                return;
             }
-            return;
         }
-        if let Some(action) = action {
-            self.run_action(action, default_font_size, event_loop);
-            return;
+    }
+
+    /// Makes the pane `id` handle a key in its own state and returns what it was.
+    /// A shortcut is not run here.
+    fn deliver_key(
+        &mut self,
+        id: PaneId,
+        event: &KeyEvent,
+        modifiers: ModifiersState,
+        is_shortcut: bool,
+    ) -> Delivery {
+        let Some(pane) = self.workspace.pane_mut(id) else {
+            return Delivery::Shortcut;
+        };
+        let rich = pane.rich_mode(modifiers);
+        let delivery = input::resolve_key(
+            &event.logical_key,
+            event.text.as_deref(),
+            modifiers,
+            rich,
+            pane.mode(),
+            is_shortcut,
+        );
+        match &delivery {
+            Delivery::Editor(command) => {
+                let replaced = input_editor::command_replacing_text(*command)
+                    .is_some_and(|typed| pane.replace_selection(typed));
+                if !replaced {
+                    pane.run_editor_command(*command);
+                }
+            }
+            Delivery::Shortcut => {}
+            Delivery::Input { replacing, bytes } => {
+                let replaced = replacing
+                    .as_ref()
+                    .is_some_and(|typed| pane.replace_selection(typed));
+                if !replaced && let Some(bytes) = bytes {
+                    pane.type_bytes(bytes.clone());
+                }
+            }
         }
-        // At the prompt, typing over a selection in the input replaces it.
-        if rich
-            && let Some(typed) =
-                input_editor::replacing_text(&event.logical_key, event.text.as_deref(), modifiers)
-            && pane.replace_selection(&typed)
-        {
-            return;
-        }
-        let mode = pane.mode();
-        if let Some(bytes) =
-            input::key_to_bytes(&event.logical_key, event.text.as_deref(), modifiers, mode)
-        {
-            pane.type_bytes(bytes);
-        }
+        delivery
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
@@ -2031,7 +2187,11 @@ impl Session {
         }
         let shown_tab = self.workspace.tab_of(id) == Some(self.workspace.active_index());
         match self.drag {
-            Some(Drag::Selection { pane, .. }) if pane == id => self.drag = None,
+            Some(Drag::Selection { pane, .. } | Drag::BroadcastClick { pane, .. })
+                if pane == id =>
+            {
+                self.drag = None
+            }
             Some(Drag::Divider { .. }) if shown_tab => self.drag = None,
             Some(Drag::Tab { .. }) => self.drag = None,
             _ => {}
@@ -2300,6 +2460,7 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::NextPane
         | Action::PreviousPane
         | Action::ToggleZoom
+        | Action::ToggleBroadcastAll
         | Action::EqualisePanes
         | Action::DetachPane
         | Action::NewTab

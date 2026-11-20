@@ -1475,10 +1475,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn temporary_config(contents: Option<&str>) -> (PathBuf, PathBuf) {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        // A clock alone is not unique: macOS has a coarse one, so parallel
+        // tests can read the same value and end up sharing a directory.
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!(
             "graphene-prune-test-{}-{unique}",
             std::process::id()

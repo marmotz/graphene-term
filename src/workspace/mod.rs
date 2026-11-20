@@ -6,7 +6,7 @@
 pub mod drop;
 pub mod tree;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::config::TabPosition;
@@ -86,6 +86,9 @@ pub struct Tab {
     pub tree: Node,
     pub active: PaneId,
     pub zoomed: bool,
+    /// Panes of this tab that typed input is sent to together; empty when broadcast
+    /// is off. Only ever holds panes of this tab.
+    pub broadcast: BTreeSet<PaneId>,
 }
 
 impl Tab {
@@ -94,6 +97,7 @@ impl Tab {
             tree: Node::Leaf(pane),
             active: pane,
             zoomed: false,
+            broadcast: BTreeSet::new(),
         }
     }
 
@@ -250,6 +254,7 @@ impl<P> Workspace<P> {
         };
         self.panes.remove(&id);
         let tab = &mut self.tabs[index];
+        tab.broadcast.remove(&id);
         if tab.is_single() {
             self.remove_tab(index);
             return if self.tabs.is_empty() {
@@ -349,10 +354,12 @@ impl<P> Workspace<P> {
         let Some((source, mut index, tree)) = self.moved_tree(id, target, side, geometry) else {
             return false;
         };
+        let broadcast = std::mem::take(&mut self.tabs[index].broadcast);
         self.tabs[index] = Tab {
             tree,
             active: id,
             zoomed: false,
+            broadcast,
         };
         if source != index {
             if self.tabs[source].is_single() {
@@ -422,7 +429,12 @@ impl<P> Workspace<P> {
             if tab.active == a {
                 tab.active = b;
             }
-            self.tabs[index].tree.replace(b, a);
+            tab.broadcast.remove(&a);
+            tab.broadcast.remove(&b);
+            let target = &mut self.tabs[index];
+            target.tree.replace(b, a);
+            target.broadcast.remove(&a);
+            target.broadcast.remove(&b);
         }
         self.tabs[index].active = a;
         self.active = index;
@@ -460,6 +472,7 @@ impl<P> Workspace<P> {
         };
         let last = self.tabs.len() - 1;
         if self.tabs[source].is_single() {
+            self.tabs[source].broadcast.clear();
             self.move_tab(source, last);
             self.active = last;
             return true;
@@ -475,12 +488,81 @@ impl<P> Workspace<P> {
     fn take_out(&mut self, index: usize, id: PaneId) {
         let tab = &mut self.tabs[index];
         tab.zoomed = false;
+        tab.broadcast.remove(&id);
         if tab.active == id
             && let Some(previous) = tab.tree.previous(id)
         {
             tab.active = previous;
         }
         tab.tree.remove(id);
+    }
+
+    /// Adds the pane `id` to the broadcast set of its tab, or removes it. `false` for
+    /// an unknown pane.
+    pub fn toggle_broadcast(&mut self, id: PaneId) -> bool {
+        let Some(index) = self.tab_of(id) else {
+            return false;
+        };
+        let set = &mut self.tabs[index].broadcast;
+        if !set.remove(&id) {
+            set.insert(id);
+        }
+        true
+    }
+
+    /// Ctrl+click on the pane `id`: like [`Self::toggle_broadcast`], but a pane added to
+    /// the set brings the active pane of its tab along, so that the first click starts a
+    /// broadcast between two panes instead of selecting a lone one. `false` for an
+    /// unknown pane.
+    pub fn toggle_broadcast_click(&mut self, id: PaneId) -> bool {
+        let Some(index) = self.tab_of(id) else {
+            return false;
+        };
+        let tab = &mut self.tabs[index];
+        if !tab.broadcast.contains(&id) && tab.active != id {
+            tab.broadcast.insert(tab.active);
+        }
+        self.toggle_broadcast(id)
+    }
+
+    /// On the shown tab: an empty broadcast set becomes every pane, a non-empty one is
+    /// emptied. `false` without a shown tab.
+    pub fn toggle_broadcast_all(&mut self) -> bool {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        if tab.broadcast.is_empty() {
+            tab.broadcast = tab.tree.leaves().into_iter().collect();
+        } else {
+            tab.broadcast.clear();
+        }
+        true
+    }
+
+    /// Whether the pane `id` is in the broadcast set of its tab.
+    pub fn is_broadcast(&self, id: PaneId) -> bool {
+        self.tab_of(id)
+            .is_some_and(|index| self.tabs[index].broadcast.contains(&id))
+    }
+
+    /// Number of panes in the broadcast set of tab `index`.
+    pub fn broadcast_count(&self, index: usize) -> usize {
+        self.tabs.get(index).map_or(0, |tab| tab.broadcast.len())
+    }
+
+    /// The panes typed input goes to: the active pane alone when it is not in the
+    /// broadcast set of the shown tab, else the whole set with the active pane first.
+    /// A zoom does not change it.
+    pub fn input_targets(&self) -> Vec<PaneId> {
+        let Some(tab) = self.active_tab() else {
+            return Vec::new();
+        };
+        if !tab.broadcast.contains(&tab.active) {
+            return vec![tab.active];
+        }
+        let mut targets = vec![tab.active];
+        targets.extend(tab.broadcast.iter().copied().filter(|&id| id != tab.active));
+        targets
     }
 
     /// Gives the keyboard focus to the pane `id`, showing its tab. A focus change
@@ -1376,5 +1458,202 @@ mod tests {
         );
         assert!(TabBarPosition::Left.is_vertical() && TabBarPosition::Right.is_vertical());
         assert!(!TabBarPosition::Top.is_vertical() && !TabBarPosition::Bottom.is_vertical());
+    }
+
+    fn broadcast_ids(ws: &Workspace<Fake>, index: usize) -> Vec<u64> {
+        ws.tabs()[index].broadcast.iter().map(|id| id.0).collect()
+    }
+
+    #[test]
+    fn ctrl_click_on_another_pane_broadcasts_to_it_and_the_active_pane() {
+        let mut ws = workspace(&[3]);
+        let active = ws.active_pane_id().unwrap();
+        let other = PaneId((active.0 + 1) % 3);
+        assert!(ws.toggle_broadcast_click(other));
+        assert!(ws.is_broadcast(active) && ws.is_broadcast(other));
+        assert_eq!(ws.broadcast_count(0), 2);
+        // Clicking it again removes only that pane.
+        assert!(ws.toggle_broadcast_click(other));
+        assert!(ws.is_broadcast(active) && !ws.is_broadcast(other));
+    }
+
+    #[test]
+    fn ctrl_click_on_the_active_pane_does_not_add_anything_else() {
+        let mut ws = workspace(&[3]);
+        let active = ws.active_pane_id().unwrap();
+        assert!(ws.toggle_broadcast_click(active));
+        assert_eq!(ws.broadcast_count(0), 1);
+        assert!(ws.is_broadcast(active));
+    }
+
+    #[test]
+    fn ctrl_click_removing_a_pane_does_not_bring_the_active_one() {
+        let mut ws = workspace(&[3]);
+        let active = ws.active_pane_id().unwrap();
+        let other = PaneId((active.0 + 1) % 3);
+        ws.toggle_broadcast(other);
+        assert!(ws.toggle_broadcast_click(other));
+        assert_eq!(ws.broadcast_count(0), 0);
+        assert!(!ws.toggle_broadcast_click(PaneId(99)));
+    }
+
+    #[test]
+    fn a_new_tab_and_a_split_start_without_broadcast() {
+        let mut ws = workspace(&[2]);
+        assert_eq!(ws.broadcast_count(0), 0);
+        ws.toggle_broadcast_all();
+        let id = ws.split(Axis::Vertical, geometry(), |_| Some(Fake::default()));
+        assert!(!ws.is_broadcast(id.unwrap()));
+        assert_eq!(ws.broadcast_count(0), 2);
+    }
+
+    #[test]
+    fn toggle_broadcast_adds_then_removes_a_pane() {
+        let mut ws = workspace(&[2, 1]);
+        assert!(ws.toggle_broadcast(PaneId(1)));
+        assert!(ws.is_broadcast(PaneId(1)));
+        assert!(!ws.is_broadcast(PaneId(0)));
+        assert_eq!(ws.broadcast_count(0), 1);
+        assert_eq!(ws.broadcast_count(1), 0);
+        assert!(ws.toggle_broadcast(PaneId(1)));
+        assert!(!ws.is_broadcast(PaneId(1)));
+        assert!(!ws.toggle_broadcast(PaneId(99)));
+        assert!(!ws.is_broadcast(PaneId(99)));
+    }
+
+    #[test]
+    fn toggle_broadcast_all_fills_the_shown_tab_then_empties_it() {
+        let mut ws = workspace(&[3, 2]);
+        assert!(ws.toggle_broadcast_all());
+        assert_eq!(broadcast_ids(&ws, 0), vec![0, 1, 2]);
+        assert_eq!(ws.broadcast_count(1), 0);
+        // A partial set is emptied, not completed.
+        assert!(ws.toggle_broadcast_all());
+        assert_eq!(ws.broadcast_count(0), 0);
+        ws.toggle_broadcast(PaneId(0));
+        assert!(ws.toggle_broadcast_all());
+        assert_eq!(ws.broadcast_count(0), 0);
+        assert!(!Workspace::<Fake>::new().toggle_broadcast_all());
+    }
+
+    #[test]
+    fn input_targets_is_the_active_pane_alone_without_broadcast() {
+        let ws = workspace(&[3]);
+        assert_eq!(ws.input_targets(), vec![PaneId(2)]);
+        assert!(Workspace::<Fake>::new().input_targets().is_empty());
+    }
+
+    #[test]
+    fn input_targets_ignores_a_set_the_active_pane_is_not_in() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_broadcast(PaneId(0));
+        ws.toggle_broadcast(PaneId(1));
+        assert_eq!(ws.input_targets(), vec![PaneId(2)]);
+    }
+
+    #[test]
+    fn input_targets_puts_the_active_pane_first() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_broadcast_all();
+        assert_eq!(ws.input_targets(), vec![PaneId(2), PaneId(0), PaneId(1)]);
+        ws.focus(PaneId(1));
+        assert_eq!(ws.input_targets(), vec![PaneId(1), PaneId(0), PaneId(2)]);
+    }
+
+    #[test]
+    fn input_targets_only_look_at_the_shown_tab_and_survive_a_zoom() {
+        let mut ws = workspace(&[2, 2]);
+        ws.toggle_broadcast_all();
+        ws.toggle_zoom();
+        assert_eq!(ws.input_targets().len(), 2);
+        ws.select(1);
+        assert_eq!(ws.input_targets(), vec![PaneId(3)]);
+    }
+
+    #[test]
+    fn closing_a_pane_removes_it_from_the_set() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_broadcast_all();
+        assert_eq!(ws.close_pane(PaneId(1)), Ok(()));
+        assert_eq!(broadcast_ids(&ws, 0), vec![0, 2]);
+    }
+
+    #[test]
+    fn detaching_a_pane_removes_it_from_the_set() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_broadcast_all();
+        assert!(ws.detach(PaneId(1)));
+        assert_eq!(broadcast_ids(&ws, 0), vec![0, 2]);
+        assert_eq!(ws.broadcast_count(1), 0);
+    }
+
+    #[test]
+    fn moving_a_pane_across_tabs_leaves_the_source_set_and_joins_without_broadcast() {
+        let mut ws = workspace(&[2, 2]);
+        ws.toggle_broadcast_all();
+        ws.select(1);
+        ws.toggle_broadcast(PaneId(2));
+        assert!(ws.move_pane(PaneId(0), PaneId(2), Direction::Right, geometry()));
+        assert_eq!(broadcast_ids(&ws, 0), vec![1]);
+        assert_eq!(broadcast_ids(&ws, 1), vec![2]);
+        assert!(!ws.is_broadcast(PaneId(0)));
+    }
+
+    #[test]
+    fn moving_a_pane_within_its_tab_keeps_the_set() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_broadcast(PaneId(0));
+        ws.toggle_broadcast(PaneId(2));
+        assert!(ws.move_pane(PaneId(2), PaneId(0), Direction::Left, geometry()));
+        assert_eq!(broadcast_ids(&ws, 0), vec![0, 2]);
+    }
+
+    #[test]
+    fn moving_the_last_pane_of_a_tab_does_not_carry_its_set_over() {
+        let mut ws = workspace(&[2, 1]);
+        ws.select(1);
+        ws.toggle_broadcast(PaneId(2));
+        assert!(ws.move_pane(PaneId(2), PaneId(0), Direction::Right, geometry()));
+        assert_eq!(ws.tabs().len(), 1);
+        assert_eq!(ws.broadcast_count(0), 0);
+    }
+
+    #[test]
+    fn swapping_across_tabs_removes_both_panes_from_both_sets() {
+        let mut ws = workspace(&[3, 3]);
+        // Tabs: [0, 1, 2] and [3, 4, 5].
+        ws.toggle_broadcast_all();
+        ws.select(1);
+        ws.toggle_broadcast_all();
+        assert!(ws.swap_panes(PaneId(0), PaneId(3)));
+        assert_eq!(broadcast_ids(&ws, 0), vec![1, 2]);
+        assert_eq!(broadcast_ids(&ws, 1), vec![4, 5]);
+    }
+
+    #[test]
+    fn swapping_within_a_tab_keeps_the_set() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_broadcast_all();
+        assert!(ws.swap_panes(PaneId(0), PaneId(1)));
+        assert_eq!(broadcast_ids(&ws, 0), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn moving_a_pane_to_a_new_tab_leaves_the_set_behind() {
+        let mut ws = workspace(&[3]);
+        ws.toggle_broadcast_all();
+        assert!(ws.move_pane_to_new_tab(PaneId(1)));
+        assert_eq!(broadcast_ids(&ws, 0), vec![0, 2]);
+        assert_eq!(ws.broadcast_count(1), 0);
+    }
+
+    #[test]
+    fn moving_a_single_pane_tab_clears_its_set() {
+        let mut ws = workspace(&[1, 1]);
+        ws.toggle_broadcast(PaneId(0));
+        assert!(ws.move_pane_to_new_tab(PaneId(0)));
+        assert_eq!(ws.broadcast_count(0), 0);
+        assert_eq!(ws.broadcast_count(1), 0);
+        assert!(!ws.is_broadcast(PaneId(0)));
     }
 }

@@ -68,6 +68,8 @@ pub struct PaneBarLayout {
     pub active: bool,
     /// Whether the mouse is over the close button.
     pub close_hovered: bool,
+    /// Size of the broadcast set when the pane is part of it.
+    pub broadcast: Option<usize>,
 }
 
 impl PaneBarLayout {
@@ -93,6 +95,7 @@ impl PaneBarLayout {
             close,
             active,
             close_hovered: false,
+            broadcast: None,
         }
     }
 
@@ -133,14 +136,22 @@ pub enum PaneBarAction {
     Menu,
     /// Focus the pane, then toggle the zoom of its tab when `zoom`.
     Focus { zoom: bool },
+    /// Add the pane to the broadcast set of its tab, or remove it, without focusing it.
+    Broadcast,
 }
 
 /// What a press of `button` on `hit` does, the press being click `clicks` of its series
 /// on the bar (see [`crate::selection::ClickTracker`]): a double click on the title
-/// toggles the zoom.
-pub fn press_action(button: Button, hit: PaneBarHit, clicks: u8) -> Option<PaneBarAction> {
+/// toggles the zoom. With `ctrl`, a press on the title toggles the broadcast instead.
+pub fn press_action(
+    button: Button,
+    hit: PaneBarHit,
+    clicks: u8,
+    ctrl: bool,
+) -> Option<PaneBarAction> {
     match (button, hit) {
         (Button::Left, PaneBarHit::Close) => Some(PaneBarAction::Close),
+        (Button::Left, PaneBarHit::Title) if ctrl => Some(PaneBarAction::Broadcast),
         (Button::Left, PaneBarHit::Title) => Some(PaneBarAction::Focus { zoom: clicks == 2 }),
         (Button::Right, _) => Some(PaneBarAction::Menu),
         (Button::Middle, _) => None,
@@ -297,11 +308,11 @@ mod tests {
     #[test]
     fn left_press_closes_on_the_button_and_focuses_on_the_title() {
         assert_eq!(
-            press_action(Button::Left, PaneBarHit::Close, 1),
+            press_action(Button::Left, PaneBarHit::Close, 1, false),
             Some(PaneBarAction::Close)
         );
         assert_eq!(
-            press_action(Button::Left, PaneBarHit::Title, 1),
+            press_action(Button::Left, PaneBarHit::Title, 1, false),
             Some(PaneBarAction::Focus { zoom: false })
         );
     }
@@ -309,11 +320,11 @@ mod tests {
     #[test]
     fn double_click_on_the_title_toggles_the_zoom_only_on_the_second_click() {
         assert_eq!(
-            press_action(Button::Left, PaneBarHit::Title, 2),
+            press_action(Button::Left, PaneBarHit::Title, 2, false),
             Some(PaneBarAction::Focus { zoom: true })
         );
         assert_eq!(
-            press_action(Button::Left, PaneBarHit::Title, 3),
+            press_action(Button::Left, PaneBarHit::Title, 3, false),
             Some(PaneBarAction::Focus { zoom: false })
         );
     }
@@ -322,10 +333,27 @@ mod tests {
     fn right_press_opens_the_menu_and_middle_press_does_nothing() {
         for hit in [PaneBarHit::Title, PaneBarHit::Close] {
             assert_eq!(
-                press_action(Button::Right, hit, 1),
+                press_action(Button::Right, hit, 1, false),
                 Some(PaneBarAction::Menu)
             );
-            assert_eq!(press_action(Button::Middle, hit, 1), None);
+            assert_eq!(press_action(Button::Middle, hit, 1, false), None);
         }
+    }
+
+    #[test]
+    fn ctrl_press_on_the_title_toggles_the_broadcast_and_on_the_button_still_closes() {
+        assert_eq!(
+            press_action(Button::Left, PaneBarHit::Title, 1, true),
+            Some(PaneBarAction::Broadcast)
+        );
+        assert_eq!(
+            press_action(Button::Left, PaneBarHit::Close, 1, true),
+            Some(PaneBarAction::Close)
+        );
+        // Only the left button: the menu stays reachable.
+        assert_eq!(
+            press_action(Button::Right, PaneBarHit::Title, 1, true),
+            Some(PaneBarAction::Menu)
+        );
     }
 }
