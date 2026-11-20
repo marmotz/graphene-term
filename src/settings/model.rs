@@ -375,9 +375,25 @@ impl SettingsModel {
     }
 
     /// The theme the configuration loads under the current appearance.
-    #[allow(dead_code)] // Used by the live preview, issue #164.
     pub fn active_theme(&self) -> &str {
         self.config.theme.active(self.appearance)
+    }
+
+    /// The colors of the active theme, as the reload loads them.
+    pub fn active_palette(&self) -> Palette {
+        theme::load(self.active_theme(), self.dir.as_deref()).0
+    }
+
+    /// The colors to show in the terminal window while `picked` is chosen for its key:
+    /// the edited palette with that color, only when the edited theme is the active one.
+    pub fn live_preview(&self, picked: Option<(ColorKey, Rgb)>) -> Option<Palette> {
+        let (key, color) = picked?;
+        if self.edited_theme != self.active_theme() {
+            return None;
+        }
+        let mut palette = self.edited_palette.clone();
+        key.set(&mut palette, Some(color));
+        Some(palette)
     }
 
     /// The theme shown in the theme editor.
@@ -1658,6 +1674,40 @@ interval = "1w"
                 assert_eq!(m.theme_op(op(name.to_owned())), Err(error), "{name:?}");
             }
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    const GREEN: Rgb = Rgb {
+        r: 0,
+        g: 0xff,
+        b: 0,
+    };
+
+    #[test]
+    fn the_picked_color_of_the_active_theme_is_previewed() {
+        let dir = theme_dir("preview", &["mine"]);
+        let m = theme_model("[theme]\nname = \"mine\"\n", &dir, Appearance::Dark);
+        assert_eq!(m.live_preview(None), None);
+        let preview = m
+            .live_preview(Some((ColorKey::Cursor, GREEN)))
+            .expect("the edited theme is active");
+        let mut expected = m.edited_palette().clone();
+        expected.cursor = GREEN;
+        assert_eq!(preview, expected);
+
+        // Once written, the reload loads the same colors.
+        crate::theme_edit::set_color(&dir, "mine", ColorKey::Cursor, Some(GREEN)).unwrap();
+        assert_eq!(m.active_palette(), preview);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_theme_that_is_not_active_is_not_previewed() {
+        let dir = theme_dir("no-preview", &["mine", "other"]);
+        let mut m = theme_model("[theme]\nname = \"other\"\n", &dir, Appearance::Dark);
+        m.edit_theme("mine");
+        assert_eq!(m.live_preview(Some((ColorKey::Cursor, GREEN))), None);
+        assert_eq!(m.active_palette(), theme::load("other", Some(&dir)).0);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

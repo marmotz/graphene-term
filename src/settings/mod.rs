@@ -58,6 +58,9 @@ pub struct SettingsWindow {
     repaint_at: Option<Instant>,
     /// Modifiers held, for a captured shortcut.
     modifiers: ModifiersState,
+    /// The colors shown in the terminal window while a color of the active theme is
+    /// picked.
+    preview: LivePreview,
 }
 
 impl SettingsWindow {
@@ -142,6 +145,7 @@ impl SettingsWindow {
             lang,
             repaint_at: None,
             modifiers: ModifiersState::empty(),
+            preview: LivePreview::default(),
         };
         settings.apply(palette, lang, config, errors, appearance);
         Ok(settings)
@@ -178,6 +182,15 @@ impl SettingsWindow {
             self.window.set_title(&i18n::text(lang, &Msg::OpenSettings));
         }
         self.window.request_redraw();
+    }
+
+    /// The colors the terminal window shows after the last event of this window, when
+    /// they changed: the active theme with the color being picked, then the active
+    /// theme as loaded once the picker closes. Read after each event, the window closing
+    /// included.
+    pub fn take_preview(&mut self) -> Option<Palette> {
+        let wanted = self.model.live_preview(self.view.picked());
+        self.preview.update(wanted, || self.model.active_palette())
     }
 
     /// Next time the window wants a frame, when egui asked for a delayed one.
@@ -417,6 +430,32 @@ impl SettingsWindow {
         self.window.pre_present_notify();
         queue.present(frame);
         Ok(())
+    }
+}
+
+/// The colors last sent to the terminal window as a preview.
+#[derive(Debug, Default)]
+struct LivePreview {
+    shown: Option<Palette>,
+}
+
+impl LivePreview {
+    /// Takes the `wanted` preview of this event; returns the colors to show when they
+    /// changed. When the preview ends, the terminal gets the `active` theme's colors
+    /// once: the written color, or the file's when the write failed.
+    fn update(
+        &mut self,
+        wanted: Option<Palette>,
+        active: impl FnOnce() -> Palette,
+    ) -> Option<Palette> {
+        match wanted {
+            Some(palette) if self.shown.as_ref() == Some(&palette) => None,
+            Some(palette) => {
+                self.shown = Some(palette.clone());
+                Some(palette)
+            }
+            None => self.shown.take().map(|_| active()),
+        }
     }
 }
 
@@ -815,5 +854,31 @@ mod tests {
             "[keybindings\n"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn palette_with_cursor(cursor: alacritty_terminal::vte::ansi::Rgb) -> Palette {
+        let mut palette = theme::default_palette().clone();
+        palette.cursor = cursor;
+        palette
+    }
+
+    #[test]
+    fn the_preview_is_sent_while_it_changes_then_ends_on_the_active_theme() {
+        use alacritty_terminal::vte::ansi::Rgb;
+        let green = palette_with_cursor(Rgb { r: 0, g: 255, b: 0 });
+        let blue = palette_with_cursor(Rgb { r: 0, g: 0, b: 255 });
+        let active = || palette_with_cursor(Rgb { r: 1, g: 2, b: 3 });
+        let mut preview = LivePreview::default();
+        assert_eq!(preview.update(None, active), None);
+        assert_eq!(
+            preview.update(Some(green.clone()), active),
+            Some(green.clone())
+        );
+        // An event that does not change the color sends nothing.
+        assert_eq!(preview.update(Some(green.clone()), active), None);
+        assert_eq!(preview.update(Some(blue.clone()), active), Some(blue));
+        // The picker closed: the active theme as loaded, once.
+        assert_eq!(preview.update(None, active), Some(active()));
+        assert_eq!(preview.update(None, active), None);
     }
 }

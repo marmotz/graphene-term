@@ -230,7 +230,6 @@ impl ColorKey {
         color_slot!(self, palette, &).copied()
     }
 
-    #[allow(dead_code)] // Used by the theme editor, issues #161 and #162.
     /// Sets this key in `palette`. `None` only applies to the selection foreground and
     /// is ignored for the other keys.
     pub fn set(self, palette: &mut Palette, color: Option<Rgb>) {

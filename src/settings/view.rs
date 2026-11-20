@@ -136,6 +136,11 @@ impl View {
             || std::mem::take(&mut self.confirm_delete)
     }
 
+    /// The key and color of the open color picker, previewed until it closes.
+    pub fn picked(&self) -> Option<(ColorKey, Rgb)> {
+        self.picking.map(|picking| (picking.key, picking.color))
+    }
+
     /// Closes the open color picker; returns its color to write when it changed.
     /// Called when the picker is no longer drawn (the window closes, another section or
     /// theme is shown).
@@ -1207,6 +1212,22 @@ mod tests {
             view.shown_color(ColorKey::PaneBorder, Some(BLUE)),
             Some(BLUE)
         );
+    }
+
+    #[test]
+    fn the_picked_color_is_previewed_while_the_picker_is_open() {
+        let mut view = View::default();
+        assert_eq!(view.picked(), None);
+        view.picker_frame(ColorKey::Background, Some(RED), RED, true);
+        assert_eq!(view.picked(), Some((ColorKey::Background, RED)));
+        view.picker_frame(ColorKey::Background, Some(RED), GREEN, true);
+        assert_eq!(view.picked(), Some((ColorKey::Background, GREEN)));
+        // Closing writes the color and ends the preview.
+        assert_eq!(
+            view.picker_frame(ColorKey::Background, Some(RED), GREEN, false),
+            Some(ThemeOp::SetColor(ColorKey::Background, Some(GREEN)))
+        );
+        assert_eq!(view.picked(), None);
     }
 
     #[test]

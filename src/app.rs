@@ -899,6 +899,13 @@ impl Session {
         self.window.request_redraw();
     }
 
+    /// Shows `palette` until the next reload: the live preview of the theme being
+    /// edited in the settings window.
+    fn preview_palette(&mut self, palette: &Palette) {
+        palette.clone_into(&mut self.palette);
+        self.window.request_redraw();
+    }
+
     /// Applies a reloaded configuration, `old` being the one applied so far. The window
     /// size and startup mode only affect the windows created afterwards.
     fn apply_config(
@@ -2896,9 +2903,16 @@ impl ApplicationHandler<UserEvent> for App {
                 self.open_requested_settings(event_loop);
             }
             Route::Settings => {
-                if let Some(settings) = self.settings.as_mut()
-                    && settings.window_event(event_loop, &event) == settings::Outcome::Close
+                let Some(settings) = self.settings.as_mut() else {
+                    return;
+                };
+                let outcome = settings.window_event(event_loop, &event);
+                if let Some(palette) = settings.take_preview()
+                    && let Some(session) = self.session.as_mut()
                 {
+                    session.preview_palette(&palette);
+                }
+                if outcome == settings::Outcome::Close {
                     self.settings = None;
                 }
             }
