@@ -95,6 +95,9 @@ but any theme can be edited without switching to it.
   colors** and **Interface colors**. Click a swatch to open a color picker; the color is
   written to the theme file when the picker closes. While you pick a color of the theme
   in use, the terminal shows it at once; for another theme, only the swatch changes.
+- Next to each swatch, its **`#rrggbb` code** can be selected, copied, or replaced by
+  typing or pasting a code (the `#` is optional). The color is written when the field
+  loses focus (`Enter` or a click elsewhere); `Escape` drops the typed code.
 - **Selected text** has a **Keep the text color** box: checked, selected text keeps its
   own color (`selection_foreground = ""`).
 - **Built-in themes cannot be changed**: their swatches, **Rename** and **Delete** are
@@ -107,6 +110,8 @@ but any theme can be edited without switching to it.
   `dark` that named it go back to `graphene-night`.
 - A name must not be empty, contain `/` or `\`, start with a dot, or be the name of an
   existing theme (built-in or yours).
+- **Open the themes folder** opens the `themes/` folder of your configuration in the
+  file manager, creating it when missing.
 
 The editor only changes the keys you touch: comments and the rest of a hand-written
 theme file are kept.

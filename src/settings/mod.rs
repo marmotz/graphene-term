@@ -25,7 +25,7 @@ use crate::config_edit::{self, ConfigEdit};
 use crate::i18n::{self, Lang, Msg};
 use crate::palette::Palette;
 use crate::renderer::Gpu;
-use crate::{theme, theme_edit};
+use crate::{opener, theme, theme_edit};
 
 pub use model::LoadErrors;
 use model::{Change, SettingsModel, ThemeOp};
@@ -296,6 +296,12 @@ impl SettingsWindow {
         if let Some(name) = &edits.edit_theme {
             self.model.edit_theme(name);
         }
+        if edits.open_themes_dir {
+            match themes_dir(&self.dir) {
+                Ok(dir) => opener::open(&dir.to_string_lossy()),
+                Err(error) => log::warn!("cannot create {}: {error}", theme::THEMES_DIR),
+            }
+        }
         self.window.request_redraw();
     }
 
@@ -490,6 +496,13 @@ fn write_changes(dir: &Path, changes: &[Change]) -> Result<(), ConfigError> {
 /// followed by its configuration changes: a theme file that cannot be written leaves the
 /// configuration alone. Stops at the first error. Returns the theme a copy or a rename
 /// made, to show it in the editor, with the result.
+/// The user themes folder of `config_dir`, created when missing so it can be opened.
+fn themes_dir(config_dir: &Path) -> std::io::Result<PathBuf> {
+    let dir = config_dir.join(theme::THEMES_DIR);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 fn write_edits(
     dir: &Path,
     edited: &str,
@@ -561,6 +574,23 @@ mod tests {
     use super::*;
     use crate::config;
     use model::Value;
+
+    #[test]
+    fn the_themes_folder_is_created_before_it_is_opened() {
+        let config_dir = std::env::temp_dir().join(format!(
+            "graphene-settings-themes-dir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let dir = themes_dir(&config_dir).unwrap();
+        assert_eq!(dir, config_dir.join(theme::THEMES_DIR));
+        assert!(dir.is_dir());
+        // An existing folder is kept.
+        assert_eq!(themes_dir(&config_dir).unwrap(), dir);
+        let _ = std::fs::remove_dir_all(&config_dir);
+    }
 
     #[test]
     fn changes_are_written_in_one_write_keeping_the_file() {

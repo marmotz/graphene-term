@@ -265,6 +265,14 @@ pub enum Msg {
     // Theme editor of the settings window.
     /// Heading of the theme editor block.
     ThemeEditor,
+    /// What the theme editor is for, under its heading.
+    ThemeEditorIntro,
+    /// How to change a color, above the colors.
+    ThemeColorsHint,
+    /// A typed color code is not `#rrggbb`.
+    InvalidHexColor,
+    /// Button opening the user themes folder.
+    OpenThemesFolder,
     /// Label of the theme editor's theme selector.
     EditedTheme,
     /// Button copying the edited theme to a new user theme.
@@ -427,6 +435,14 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::AlreadyUsedBy(action) => return format!("Already used by {action}").into(),
         Msg::Replace => "Replace",
         Msg::ThemeEditor => "Theme editor",
+        Msg::ThemeEditorIntro => {
+            "Change the colors of your own themes. Built-in themes cannot be changed: duplicate one to get a copy you can edit."
+        }
+        Msg::ThemeColorsHint => {
+            "Click a swatch to pick a color, or type or paste its #rrggbb code. Each change is saved to the theme file right away."
+        }
+        Msg::InvalidHexColor => "Enter a color as #rrggbb",
+        Msg::OpenThemesFolder => "Open the themes folder",
         Msg::EditedTheme => "Theme to edit",
         Msg::Duplicate => "Duplicate",
         Msg::Rename => "Rename",
@@ -437,7 +453,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             return format!("Delete the theme {name}? Its file is removed.").into();
         }
         Msg::BuiltInTheme => {
-            "Built-in themes cannot be changed: duplicate this one to edit its colors."
+            "This built-in theme cannot be changed. Click Duplicate to create a copy you can edit."
         }
         Msg::KeepTextColor => "Keep the text color",
         Msg::ThemeColorGroup(group) => match group {
@@ -588,6 +604,14 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::AlreadyUsedBy(action) => return format!("Déjà utilisé par {action}").into(),
         Msg::Replace => "Remplacer",
         Msg::ThemeEditor => "Éditeur de thème",
+        Msg::ThemeEditorIntro => {
+            "Modifiez les couleurs de vos propres thèmes. Les thèmes intégrés ne sont pas modifiables : dupliquez-en un pour obtenir une copie modifiable."
+        }
+        Msg::ThemeColorsHint => {
+            "Cliquez sur une pastille pour choisir une couleur, ou saisissez ou collez son code #rrggbb. Chaque changement est enregistré aussitôt dans le fichier du thème."
+        }
+        Msg::InvalidHexColor => "Saisissez une couleur au format #rrggbb",
+        Msg::OpenThemesFolder => "Ouvrir le dossier des thèmes",
         Msg::EditedTheme => "Thème à modifier",
         Msg::Duplicate => "Dupliquer",
         Msg::Rename => "Renommer",
@@ -598,7 +622,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             return format!("Supprimer le thème {name} ? Son fichier est effacé.").into();
         }
         Msg::BuiltInTheme => {
-            "Les thèmes intégrés ne sont pas modifiables : dupliquez celui-ci pour changer ses couleurs."
+            "Ce thème intégré n'est pas modifiable. Cliquez sur Dupliquer pour en créer une copie modifiable."
         }
         Msg::KeepTextColor => "Garder la couleur du texte",
         Msg::ThemeColorGroup(group) => match group {
@@ -826,9 +850,13 @@ mod tests {
             Msg::ThemeColorGroup(_) => 79,
             Msg::ThemeColor(_) => 80,
             Msg::ThemeNameError(_) => 81,
+            Msg::ThemeEditorIntro => 82,
+            Msg::ThemeColorsHint => 83,
+            Msg::InvalidHexColor => 84,
+            Msg::OpenThemesFolder => 85,
         }
     }
-    const VARIANT_COUNT: usize = 82;
+    const VARIANT_COUNT: usize = 86;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -907,6 +935,10 @@ mod tests {
             Msg::AlreadyUsedBy("Copy".into()),
             Msg::Replace,
             Msg::ThemeEditor,
+            Msg::ThemeEditorIntro,
+            Msg::ThemeColorsHint,
+            Msg::InvalidHexColor,
+            Msg::OpenThemesFolder,
             Msg::EditedTheme,
             Msg::Duplicate,
             Msg::Rename,

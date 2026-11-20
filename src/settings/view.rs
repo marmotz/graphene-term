@@ -15,7 +15,7 @@ use super::model::{self, Change, Input, InputError, SettingsModel, ThemeOp, Widg
 use crate::i18n::{self, Lang, Msg, SettingsField as Field, SettingsSection};
 use crate::input::Action;
 use crate::keybindings::Shortcut;
-use crate::theme::{ColorGroup, ColorKey, NameError};
+use crate::theme::{ColorGroup, ColorKey, NameError, format_color, parse_color};
 
 /// Width of the sections sidebar, in points.
 const SIDEBAR_WIDTH: f32 = 180.0;
@@ -29,6 +29,12 @@ const ROW_MARGIN: i8 = 3;
 const LABEL_SHARE: f32 = 0.45;
 /// Strength of the highlight of the shortcut row under the pointer or being edited.
 const HIGHLIGHT: f32 = 0.45;
+/// Width of the `#rrggbb` field of a theme color, in points.
+const HEX_WIDTH: f32 = 80.0;
+/// Indent of the theme colors under their group heading, in points.
+const COLOR_INDENT: f32 = 12.0;
+/// Inner margin of the theme editor's boxes, in points.
+const BOX_MARGIN: i8 = 10;
 
 /// State of the view kept between frames.
 #[derive(Debug, Default)]
@@ -54,6 +60,8 @@ pub struct View {
     naming: Option<Naming>,
     /// Whether the deletion of the edited theme waits for its confirmation.
     confirm_delete: bool,
+    /// The `#rrggbb` code of a theme color being typed, until its field loses focus.
+    hex: Option<HexInput>,
 }
 
 /// What one frame asks to write or change.
@@ -66,12 +74,17 @@ pub struct Edits {
     pub theme_ops: Vec<(Vec<Change>, ThemeOp)>,
     /// The theme to show in the theme editor instead of the edited one.
     pub edit_theme: Option<String>,
+    /// Whether to open the user themes folder.
+    pub open_themes_dir: bool,
 }
 
 impl Edits {
     /// Whether there is nothing to write nor change.
     pub fn is_empty(&self) -> bool {
-        self.changes.is_empty() && self.theme_ops.is_empty() && self.edit_theme.is_none()
+        self.changes.is_empty()
+            && self.theme_ops.is_empty()
+            && self.edit_theme.is_none()
+            && !self.open_themes_dir
     }
 
     /// Checks `op` on the edited theme and adds it.
@@ -89,6 +102,24 @@ struct Picking {
     color: Rgb,
     /// The color of the file when the picker opened.
     saved: Option<Rgb>,
+}
+
+/// The `#rrggbb` code of a theme color being typed, and whether it was refused.
+#[derive(Debug, Clone, PartialEq)]
+struct HexInput {
+    key: ColorKey,
+    text: String,
+    invalid: bool,
+}
+
+/// Parses a typed color code, `#rrggbb` or `rrggbb`, around spaces.
+fn parse_hex(text: &str) -> Option<Rgb> {
+    let text = text.trim();
+    if text.starts_with('#') {
+        parse_color(text)
+    } else {
+        parse_color(&format!("#{text}"))
+    }
 }
 
 /// What a typed theme name is for.
@@ -120,6 +151,7 @@ impl View {
         self.editing.clear();
         self.input_errors.clear();
         self.sliding.clear();
+        self.hex = None;
     }
 
     /// Whether the next key press is captured as a shortcut, so it must not reach egui.
@@ -173,6 +205,22 @@ impl View {
             }
             (false, Some(picked)) if picked == key => self.finish_picking(),
             (false, _) => None,
+        }
+    }
+
+    /// Takes the typed code of `key` when its field loses focus: a valid code other than
+    /// `saved` gives its color to write, an invalid one stays shown with its error.
+    fn commit_hex(&mut self, key: ColorKey, saved: Option<Rgb>) -> Option<ThemeOp> {
+        let hex = self.hex.as_mut().filter(|hex| hex.key == key)?;
+        match parse_hex(&hex.text) {
+            Some(color) => {
+                self.hex = None;
+                (Some(color) != saved).then_some(ThemeOp::SetColor(key, Some(color)))
+            }
+            None => {
+                hex.invalid = true;
+                None
+            }
         }
     }
 
@@ -244,6 +292,7 @@ impl View {
         }
         self.naming = None;
         self.confirm_delete = false;
+        self.hex = None;
         edits.edit_theme = Some(name);
     }
 
@@ -310,6 +359,7 @@ impl View {
                         self.conflict = None;
                         self.naming = None;
                         self.confirm_delete = false;
+                        self.hex = None;
                     }
                 }
             });
@@ -366,73 +416,112 @@ impl View {
         }
     }
 
-    /// The theme editor, below the theme fields: a theme selector independent of the
-    /// active theme, its actions, and its colors by group. A built-in theme can only be
+    /// The theme editor, below the theme fields: what it is for, a box with the theme
+    /// selector (independent of the active theme) and its actions, then the colors of
+    /// every group in one grid, so their swatches line up. A built-in theme can only be
     /// duplicated.
     fn theme_editor(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel, edits: &mut Edits) {
         let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
         let editable = !model.edited_is_built_in();
-        ui.add_space(16.0);
+        ui.add_space(24.0);
         ui.heading(label(Msg::ThemeEditor));
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(label(Msg::EditedTheme));
-            if let Some(name) = theme_selector(ui, model) {
-                self.switch_theme(model, name, edits);
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.button(label(Msg::Duplicate)).clicked() {
-                self.start_naming(model, NameAction::Duplicate);
-            }
-            if ui
-                .add_enabled(editable, Button::new(label(Msg::Rename)))
-                .clicked()
-            {
-                self.start_naming(model, NameAction::Rename);
-            }
-            if ui
-                .add_enabled(editable, Button::new(label(Msg::Delete)))
-                .clicked()
-            {
-                self.request_delete(model);
-            }
-        });
-        self.naming_row(ui, lang, model, edits);
-        if self.confirm_delete {
-            warn_label(
-                ui,
-                &label(Msg::ConfirmDeleteTheme(model.edited_theme().to_owned())),
-            );
-            ui.horizontal(|ui| {
-                if ui.button(label(Msg::Delete)).clicked() {
-                    self.confirm_delete(model, edits);
+        ui.label(label(Msg::ThemeEditorIntro));
+        ui.add_space(8.0);
+        Frame::group(ui.style())
+            .inner_margin(Margin::same(BOX_MARGIN))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(label(Msg::EditedTheme));
+                    if let Some(name) = theme_selector(ui, model) {
+                        self.switch_theme(model, name, edits);
+                    }
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let mut duplicate = Button::new(label(Msg::Duplicate));
+                    if !editable {
+                        // The only action of a built-in theme: shown as the one to take.
+                        duplicate = duplicate.fill(ui.visuals().selection.bg_fill);
+                    }
+                    if ui.add(duplicate).clicked() {
+                        self.start_naming(model, NameAction::Duplicate);
+                    }
+                    if ui
+                        .add_enabled(editable, Button::new(label(Msg::Rename)))
+                        .clicked()
+                    {
+                        self.start_naming(model, NameAction::Rename);
+                    }
+                    if ui
+                        .add_enabled(editable, Button::new(label(Msg::Delete)))
+                        .clicked()
+                    {
+                        self.request_delete(model);
+                    }
+                    ui.separator();
+                    if ui.button(label(Msg::OpenThemesFolder)).clicked() {
+                        edits.open_themes_dir = true;
+                    }
+                });
+                self.naming_row(ui, lang, model, edits);
+                if self.confirm_delete {
+                    ui.add_space(6.0);
+                    warn_label(
+                        ui,
+                        &label(Msg::ConfirmDeleteTheme(model.edited_theme().to_owned())),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(label(Msg::Delete)).clicked() {
+                            self.confirm_delete(model, edits);
+                        }
+                        if ui.button(label(Msg::Cancel)).clicked() {
+                            self.confirm_delete = false;
+                        }
+                    });
                 }
-                if ui.button(label(Msg::Cancel)).clicked() {
-                    self.confirm_delete = false;
+                if !editable {
+                    ui.add_space(6.0);
+                    warn_label(ui, &label(Msg::BuiltInTheme));
                 }
             });
-        }
-        if !editable {
-            ui.label(RichText::new(label(Msg::BuiltInTheme)).weak());
-        }
+        ui.add_space(12.0);
+        ui.label(RichText::new(label(Msg::ThemeColorsHint)).weak());
+        ui.add_space(4.0);
+        let group_size = ui
+            .style()
+            .text_styles
+            .get(&TextStyle::Body)
+            .map_or(14.0, |font| font.size * 1.15);
         ui.add_enabled_ui(editable, |ui| {
-            for group in ColorGroup::ALL {
-                ui.add_space(8.0);
-                ui.strong(label(Msg::ThemeColorGroup(group)));
-                Grid::new(("theme_colors", group))
-                    .num_columns(2)
-                    .spacing([16.0, 6.0])
-                    .show(ui, |ui| {
+            Grid::new("theme_colors")
+                .num_columns(2)
+                .spacing([24.0, 6.0])
+                .show(ui, |ui| {
+                    for (index, group) in ColorGroup::ALL.into_iter().enumerate() {
+                        ui.vertical(|ui| {
+                            ui.add_space(if index == 0 { 4.0 } else { 14.0 });
+                            ui.label(
+                                RichText::new(label(Msg::ThemeColorGroup(group)))
+                                    .strong()
+                                    .size(group_size),
+                            );
+                        });
+                        ui.label("");
+                        ui.end_row();
                         for key in group.keys() {
-                            ui.label(label(Msg::ThemeColor(key)));
+                            ui.horizontal(|ui| {
+                                ui.add_space(COLOR_INDENT);
+                                ui.label(label(Msg::ThemeColor(key)));
+                            });
                             ui.push_id(key, |ui| {
                                 ui.horizontal(|ui| self.color_row(ui, lang, model, key, edits));
                             });
                             ui.end_row();
                         }
-                    });
-            }
+                    }
+                });
         });
     }
 
@@ -485,9 +574,38 @@ impl View {
             })
             .inner;
         let open = saved.is_some() && Popup::is_id_open(ui.ctx(), popup);
+        if open && self.hex.as_ref().is_some_and(|hex| hex.key == key) {
+            // The picker takes over the typed code.
+            self.hex = None;
+        }
         let [r, g, b] = srgb;
         if let Some(op) = self.picker_frame(key, saved, Rgb { r, g, b }, open) {
             let _ = edits.theme_op(model, op);
+        }
+        let typed = self.hex.as_ref().filter(|hex| hex.key == key);
+        let invalid = typed.is_some_and(|hex| hex.invalid);
+        let shown = self.shown_color(key, saved).unwrap_or(palette.foreground);
+        let mut text = typed.map_or_else(|| format_color(shown), |hex| hex.text.clone());
+        let response = ui.add_enabled(
+            saved.is_some(),
+            TextEdit::singleline(&mut text)
+                .font(TextStyle::Monospace)
+                .desired_width(HEX_WIDTH),
+        );
+        if response.changed() {
+            self.hex = Some(HexInput {
+                key,
+                text,
+                invalid: false,
+            });
+        }
+        if response.lost_focus() {
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                // Escape drops the typed code.
+                self.hex = None;
+            } else if let Some(op) = self.commit_hex(key, saved) {
+                let _ = edits.theme_op(model, op);
+            }
         }
         if key == ColorKey::SelectionForeground {
             let mut keep = saved.is_none();
@@ -498,6 +616,9 @@ impl View {
                 let color = (!keep).then_some(palette.foreground);
                 let _ = edits.theme_op(model, ThemeOp::SetColor(key, color));
             }
+        }
+        if invalid {
+            error_label(ui, &i18n::text(lang, &Msg::InvalidHexColor));
         }
     }
 
@@ -1184,6 +1305,55 @@ mod tests {
         );
         assert_eq!(view.picker_frame(key, Some(RED), BLUE, false), None);
         assert_eq!(view.shown_color(key, Some(RED)), Some(RED));
+    }
+
+    fn typed(view: &mut View, key: ColorKey, text: &str) {
+        view.hex = Some(HexInput {
+            key,
+            text: text.to_owned(),
+            invalid: false,
+        });
+    }
+
+    #[test]
+    fn a_typed_or_pasted_code_is_written_when_its_field_loses_focus() {
+        let mut view = View::default();
+        let key = ColorKey::NormalRed;
+        for text in ["#00ff00", "00FF00", "  #00ff00 "] {
+            typed(&mut view, key, text);
+            assert_eq!(
+                view.commit_hex(key, Some(RED)),
+                Some(ThemeOp::SetColor(key, Some(GREEN)))
+            );
+            assert_eq!(view.hex, None);
+        }
+    }
+
+    #[test]
+    fn a_typed_code_equal_to_the_file_writes_nothing() {
+        let mut view = View::default();
+        typed(&mut view, ColorKey::Background, "#ff0000");
+        assert_eq!(view.commit_hex(ColorKey::Background, Some(RED)), None);
+        assert_eq!(view.hex, None);
+    }
+
+    #[test]
+    fn an_invalid_code_stays_shown_with_its_error() {
+        let mut view = View::default();
+        let key = ColorKey::Cursor;
+        for text in ["", "#ff00", "red", "#gg0000", "#ff0000ff"] {
+            typed(&mut view, key, text);
+            assert_eq!(view.commit_hex(key, Some(RED)), None);
+            let hex = view.hex.clone().unwrap();
+            assert_eq!(hex.text, text);
+            assert!(hex.invalid);
+        }
+        // Another key's field losing focus does not take it.
+        assert_eq!(view.commit_hex(ColorKey::Foreground, Some(RED)), None);
+        assert!(view.hex.is_some());
+        // A reload drops it.
+        view.reset_inputs();
+        assert_eq!(view.hex, None);
     }
 
     #[test]

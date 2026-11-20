@@ -100,6 +100,10 @@ le thème en cours, mais n'importe quel thème peut être modifié sans l'active
   pastille ouvre un sélecteur de couleur ; la couleur est écrite dans le fichier du
   thème à la fermeture du sélecteur. Pendant le choix d'une couleur du thème en cours,
   le terminal l'affiche aussitôt ; pour un autre thème, seule la pastille change.
+- À côté de chaque pastille, son **code `#rrggbb`** peut être sélectionné, copié, ou
+  remplacé en saisissant ou en collant un code (le `#` est facultatif). La couleur est
+  écrite quand le champ perd le focus (`Entrée` ou un clic ailleurs) ; `Échap` abandonne
+  le code saisi.
 - **Texte sélectionné** a une case **Garder la couleur du texte** : cochée, le texte
   sélectionné garde sa propre couleur (`selection_foreground = ""`).
 - **Les thèmes intégrés ne sont pas modifiables** : leurs pastilles, **Renommer** et
@@ -112,6 +116,8 @@ le thème en cours, mais n'importe quel thème peut être modifié sans l'active
   et `dark` qui le nommaient reviennent à `graphene-night`.
 - Un nom ne peut pas être vide, contenir `/` ou `\`, commencer par un point, ni être
   celui d'un thème existant (intégré ou personnel).
+- **Ouvrir le dossier des thèmes** ouvre le dossier `themes/` de votre configuration
+  dans le gestionnaire de fichiers, en le créant s'il n'existe pas.
 
 L'éditeur ne change que les clés modifiées : les commentaires et le reste d'un fichier
 de thème écrit à la main sont conservés.
