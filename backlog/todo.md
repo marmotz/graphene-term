@@ -16,12 +16,12 @@ _terminé — voir [technical.md](features/keybindings-file/technical.md)_ — 5
 
 ## Broadcast de la saisie sur plusieurs panes  ·  [overview](features/pane-broadcast/overview.md)
 
-_tâches créées — voir [technical.md](features/pane-broadcast/technical.md)_ — 1/5 tasks done
+_tâches créées — voir [technical.md](features/pane-broadcast/technical.md)_ — 2/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#146](https://github.com/marmotz/graphene-term/issues/146) | [Raccourcis] Nouveaux raccourcis par défaut des panes, onglets et zoom | — |
-| [ ]  | [#147](https://github.com/marmotz/graphene-term/issues/147) | [Broadcast] Ensemble de diffusion par onglet dans le workspace | — |
+| [x]  | [#147](https://github.com/marmotz/graphene-term/issues/147) | [Broadcast] Ensemble de diffusion par onglet dans le workspace | — |
 | [ ]  | [#148](https://github.com/marmotz/graphene-term/issues/148) | [Broadcast] Action Ctrl+Shift+B et diffusion de la frappe et du collage | #146, #147 |
 | [ ]  | [#149](https://github.com/marmotz/graphene-term/issues/149) | [Broadcast] Ctrl+clic pour ajouter ou retirer un pane | #147 |
 | [ ]  | [#150](https://github.com/marmotz/graphene-term/issues/150) | [Broadcast] Indicateur dans la barre de titre et couleur de thème | #147 |
