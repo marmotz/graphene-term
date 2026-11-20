@@ -1,6 +1,6 @@
 # Custom themes
 
-**Statut** : conception technique, voir [technical.md](technical.md)
+**Statut** : tâches créées — voir [technical.md](technical.md)
 
 ## Contexte
 

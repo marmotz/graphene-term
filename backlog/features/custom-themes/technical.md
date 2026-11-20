@@ -187,4 +187,15 @@ file instead of starting from the default config text.
 
 ## Découpage en tâches d'implémentation
 
-Pas encore créées.
+1. [#160](https://github.com/marmotz/graphene-term/issues/160) — `ColorKey` table and
+   name validation (§1).
+2. [#161](https://github.com/marmotz/graphene-term/issues/161) — theme file operations,
+   `theme_edit` (§2). Depends on #160.
+3. [#162](https://github.com/marmotz/graphene-term/issues/162) — editor model (§3).
+   Depends on #160.
+4. [#163](https://github.com/marmotz/graphene-term/issues/163) — editor view, writes and
+   texts (§4, §5). Depends on #161, #162.
+5. [#164](https://github.com/marmotz/graphene-term/issues/164) — live preview in the
+   terminal (§4). Depends on #163.
+6. [#165](https://github.com/marmotz/graphene-term/issues/165) — theme editor docs (§5).
+   Depends on #163, #164.

@@ -1,25 +1,16 @@
-<!-- backlog-sync 2026-11-20T19:13Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-20T19:24Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
-## pane-broadcast
+## Custom themes  ·  [overview](features/custom-themes/overview.md)
 
-0/5 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [ ]  | [#146](https://github.com/marmotz/graphene-term/issues/146) | [Raccourcis] Nouveaux raccourcis par défaut des panes, onglets et zoom | — |
-| [ ]  | [#147](https://github.com/marmotz/graphene-term/issues/147) | [Broadcast] Ensemble de diffusion par onglet dans le workspace | — |
-| [ ]  | [#148](https://github.com/marmotz/graphene-term/issues/148) | [Broadcast] Action Ctrl+Shift+B et diffusion de la frappe et du collage | #146, #147 |
-| [ ]  | [#149](https://github.com/marmotz/graphene-term/issues/149) | [Broadcast] Ctrl+clic pour ajouter ou retirer un pane | #147 |
-| [ ]  | [#150](https://github.com/marmotz/graphene-term/issues/150) | [Broadcast] Indicateur dans la barre de titre et couleur de thème | #147 |
-
-## Bugs
-
-### Dev builds report a new version as available  ·  [overview](bugs/dev-build-update-notice/overview.md)
-
-_terminé, voir [technical.md](bugs/dev-build-update-notice/technical.md)_ — 1/1 tasks done
+_tâches créées — voir [technical.md](features/custom-themes/technical.md)_ — 0/6 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [x]  | [#159](https://github.com/marmotz/graphene-term/issues/159) | fix(update): stop notifying dev builds of their own published version | — |
+| [ ]  | [#160](https://github.com/marmotz/graphene-term/issues/160) | [Thèmes] Table des clés de couleur ColorKey et validation des noms | — |
+| [ ]  | [#161](https://github.com/marmotz/graphene-term/issues/161) | [Thèmes] Opérations sur les fichiers de thème (theme_edit) | #160 |
+| [ ]  | [#162](https://github.com/marmotz/graphene-term/issues/162) | [Paramètres] Modèle de l'éditeur de thème | #160 |
+| [ ]  | [#163](https://github.com/marmotz/graphene-term/issues/163) | [Paramètres] Vue de l'éditeur de thème | #161, #162 |
+| [ ]  | [#164](https://github.com/marmotz/graphene-term/issues/164) | [Paramètres] Aperçu en direct du thème édité dans le terminal | #163 |
+| [ ]  | [#165](https://github.com/marmotz/graphene-term/issues/165) | [Docs] Documenter l'éditeur de thème | #163, #164 |
