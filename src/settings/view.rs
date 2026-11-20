@@ -29,8 +29,9 @@ const ROW_MARGIN: i8 = 3;
 const LABEL_SHARE: f32 = 0.45;
 /// Strength of the highlight of the shortcut row under the pointer or being edited.
 const HIGHLIGHT: f32 = 0.45;
-/// Width of the `#rrggbb` field of a theme color, in points.
-const HEX_WIDTH: f32 = 80.0;
+/// Width of the `#rrggbb` field of a theme color, in monospace digits: the 7
+/// characters and room for the cursor and the frame.
+const HEX_CHARS: f32 = 9.0;
 /// Indent of the theme colors under their group heading, in points.
 const COLOR_INDENT: f32 = 12.0;
 /// Inner margin of the theme editor's boxes, in points.
@@ -586,11 +587,13 @@ impl View {
         let invalid = typed.is_some_and(|hex| hex.invalid);
         let shown = self.shown_color(key, saved).unwrap_or(palette.foreground);
         let mut text = typed.map_or_else(|| format_color(shown), |hex| hex.text.clone());
+        let font = TextStyle::Monospace.resolve(ui.style());
+        let width = HEX_CHARS * ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0'));
         let response = ui.add_enabled(
             saved.is_some(),
             TextEdit::singleline(&mut text)
                 .font(TextStyle::Monospace)
-                .desired_width(HEX_WIDTH),
+                .desired_width(width),
         );
         if response.changed() {
             self.hex = Some(HexInput {
