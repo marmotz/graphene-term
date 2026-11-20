@@ -19,14 +19,15 @@ s'applique aussitôt à la fenêtre ouverte.
 
 ## Emplacement des fichiers
 
-| Système | Fichier de configuration                                   |
-|---------|------------------------------------------------------------|
-| Linux   | `~/.config/graphene/config.toml`                           |
-| macOS   | `~/Library/Application Support/graphene/config.toml`       |
+| Système | Fichier de configuration                                   | Fichier des raccourcis clavier                                |
+|---------|------------------------------------------------------------|---------------------------------------------------------------|
+| Linux   | `~/.config/graphene/config.toml`                           | `~/.config/graphene/keybindings.toml`                         |
+| macOS   | `~/Library/Application Support/graphene/config.toml`       | `~/Library/Application Support/graphene/keybindings.toml`     |
 
-Si `XDG_CONFIG_HOME` est défini, `$XDG_CONFIG_HOME/graphene/config.toml` est utilisé à
-la place, sur les deux systèmes. Vos propres [thèmes](themes.md#thèmes-personnalisés)
-vont dans un dossier `themes` à côté de `config.toml`.
+Si `XDG_CONFIG_HOME` est défini, `$XDG_CONFIG_HOME/graphene/config.toml` et
+`$XDG_CONFIG_HOME/graphene/keybindings.toml` sont utilisés à la place, sur les deux
+systèmes. Vos propres [thèmes](themes.md#thèmes-personnalisés) vont dans un dossier
+`themes` à côté de `config.toml`.
 
 ## Le fichier de configuration
 
@@ -54,8 +55,9 @@ paramètres qu'elle ne connaît pas sont conservés tels quels.
 
 ## Rechargement à chaud et erreurs
 
-Les modifications enregistrées de `config.toml` et de vos fichiers de thème
-s'appliquent aux fenêtres ouvertes sans redémarrer, à quelques exceptions près :
+Les modifications enregistrées de `config.toml`, de `keybindings.toml` et de vos
+fichiers de thème s'appliquent aux fenêtres ouvertes sans redémarrer, à quelques
+exceptions près :
 
 - une nouvelle valeur de `font.size` annule aussi le zoom fait avec `Ctrl+=` / `Ctrl+-` ;
 - `window.width`, `window.height` et `window.startup_mode` ne concernent que les
@@ -77,27 +79,28 @@ Ouvrez-la avec `Ctrl+,`, avec **Paramètres** dans la
 clic droit. Elle présente les mêmes sections que le fichier (**Langue**, **Police**,
 **Fenêtre**, **Historique**, **Curseur**, **Sélection**, **Onglets**, **Thème**,
 **Raccourcis clavier**, **Mises à jour**), et chaque changement est écrit aussitôt dans
-`config.toml`, en conservant les commentaires du fichier, puis appliqué comme une
-modification à la main.
+`config.toml`, ou dans `keybindings.toml` pour les raccourcis clavier, en conservant
+les commentaires des fichiers, puis appliqué comme une modification à la main.
 
 - **Raccourcis clavier** : liste chaque action avec ses raccourcis. Ajoutez un raccourci
   en l'appuyant (`Échap` annule), ou supprimez-en un.
 - Les problèmes du fichier s'affichent sous le paramètre concerné ; les paramètres
   inconnus sont listés en haut.
-- Tant que le fichier contient une erreur de syntaxe, la fenêtre l'affiche et reste en
-  lecture seule jusqu'à ce que vous corrigiez le fichier à la main.
+- Tant qu'un fichier contient une erreur de syntaxe, la fenêtre l'affiche et verrouille
+  ce qui en dépend (les raccourcis clavier pour `keybindings.toml`, les autres sections
+  pour `config.toml`) jusqu'à ce que vous corrigiez le fichier à la main.
 
 ## Retirer les paramètres inconnus
 
 Les paramètres que Graphene ne connaît pas (une faute de frappe, ou un paramètre d'une
-ancienne version) sont ignorés et conservés dans le fichier. Pour les lister et les
-retirer :
+ancienne version) sont ignorés et conservés dans le fichier. Cela concerne `config.toml`
+et `keybindings.toml`. Pour les lister et les retirer :
 
 ```bash
 graphene --prune-config
 ```
 
-La commande liste les paramètres inconnus et demande confirmation. Hors d'un terminal
+La commande liste les paramètres inconnus des deux fichiers et demande confirmation. Hors d'un terminal
 interactif, elle ne change rien sauf si vous ajoutez `--yes` :
 
 ```bash
@@ -105,7 +108,8 @@ graphene --prune-config --yes
 ```
 
 Les paramètres connus sont toujours conservés, même avec une valeur invalide, et un
-fichier contenant une erreur de syntaxe TOML n'est jamais modifié.
+fichier contenant une erreur de syntaxe TOML n'est jamais modifié. Un
+`keybindings.toml` absent est créé à partir de son modèle.
 
 ## Liste des paramètres
 
@@ -181,18 +185,14 @@ par un double clic.
 Si `light` et `dark` sont tous deux définis, Graphene suit l'apparence du système et
 `name` n'est pas utilisé. Voir [Thèmes](themes.md).
 
-### `[keybindings]`
+### Raccourcis clavier
 
-Chaque ligne associe un raccourci à une action, en plus des raccourcis par défaut :
-
-```toml
-[keybindings]
-"Ctrl+Alt+T" = "new_tab"
-"Shift+PageUp" = "none"
-```
-
-La syntaxe, les noms d'actions et les raccourcis par défaut sont sur la page
-[Raccourcis clavier](keybindings.md).
+Les raccourcis ne se règlent pas dans `config.toml` : ils ont leur propre fichier,
+`keybindings.toml` (une section `[keybindings]`, même format). La syntaxe, les noms
+d'actions et les raccourcis par défaut sont sur la page
+[Raccourcis clavier](keybindings.md#modifier-les-raccourcis). Une section
+`[keybindings]` trouvée dans `config.toml` est déplacée vers `keybindings.toml` au
+démarrage.
 
 ### `[updates]`
 

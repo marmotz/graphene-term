@@ -90,8 +90,8 @@ without `Shift`).
 ## Changing shortcuts
 
 Use the **Keyboard shortcuts** section of the settings window (`Ctrl+,`): press a new
-shortcut to add it, or remove one. Or edit the `[keybindings]` section of the
-[configuration file](configuration.md):
+shortcut to add it, or remove one. Or edit `keybindings.toml`, which sits next to the
+[configuration file](configuration.md#file-locations):
 
 ```toml
 [keybindings]
@@ -108,6 +108,12 @@ shortcut to add it, or remove one. Or edit the `[keybindings]` section of the
   application.
 - An action can have several shortcuts.
 - An invalid shortcut or action name is reported in the error banner and ignored.
+- The file has the same format as `config.toml`, with a `[keybindings]` header. Graphene
+  creates it on the first launch, with the defaults documented in comments.
+- Saved changes apply to the open windows without restarting.
+- Shortcuts that were in the `[keybindings]` section of `config.toml` are moved to
+  `keybindings.toml` automatically at startup. Entries already in `keybindings.toml`
+  win over the moved ones.
 
 ### Writing a shortcut
 
