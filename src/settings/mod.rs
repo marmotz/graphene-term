@@ -19,6 +19,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::appearance::Appearance;
 use crate::config::{self, Config, ConfigError};
 use crate::config_edit::{self, ConfigEdit};
 use crate::i18n::{self, Lang, Msg};
@@ -60,7 +61,9 @@ pub struct SettingsWindow {
 
 impl SettingsWindow {
     /// Opens the window on `gpu`, colored by `palette` and labelled in `lang`, showing
-    /// `config` and the `errors` of its last load; changes are written to the files of `dir`.
+    /// `config` and the `errors` of its last load under the system `appearance`; changes
+    /// are written to the files of `dir`.
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         event_loop: &ActiveEventLoop,
         gpu: Arc<Gpu>,
@@ -68,6 +71,7 @@ impl SettingsWindow {
         lang: Lang,
         config: &Config,
         errors: &LoadErrors,
+        appearance: Appearance,
         dir: PathBuf,
     ) -> anyhow::Result<Self> {
         let attributes = Window::default_attributes()
@@ -121,7 +125,7 @@ impl SettingsWindow {
             fonts::install(ctx, font);
         }
         ctx.all_styles_mut(|style| style.text_styles = fonts::text_styles());
-        let mut model = SettingsModel::new(config, errors);
+        let mut model = SettingsModel::new(config, errors, Some(dir.clone()), appearance);
         model.set_font_families(model::monospace_families(fonts));
 
         let mut settings = Self {
@@ -138,7 +142,7 @@ impl SettingsWindow {
             repaint_at: None,
             modifiers: ModifiersState::empty(),
         };
-        settings.apply(palette, lang, config, errors);
+        settings.apply(palette, lang, config, errors, appearance);
         Ok(settings)
     }
 
@@ -152,9 +156,16 @@ impl SettingsWindow {
     }
 
     /// Recolors the window with `palette`, relabels it in `lang` and shows `config`
-    /// and its `errors`, after a reload.
-    pub fn apply(&mut self, palette: &Palette, lang: Lang, config: &Config, errors: &LoadErrors) {
-        self.model.refresh(config, errors);
+    /// and its `errors` under the system `appearance`, after a reload.
+    pub fn apply(
+        &mut self,
+        palette: &Palette,
+        lang: Lang,
+        config: &Config,
+        errors: &LoadErrors,
+        appearance: Appearance,
+    ) {
+        self.model.refresh(config, errors, appearance);
         self.view.reset_inputs();
         self.model
             .set_theme_choices(crate::theme::available(Some(&self.dir)));

@@ -242,7 +242,6 @@ impl ColorKey {
     }
 }
 
-#[allow(dead_code)] // Used by the theme editor model, issue #162.
 /// Why a name cannot be used for a new theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameError {
@@ -270,7 +269,6 @@ fn is_plain(name: &str) -> bool {
     !name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.')
 }
 
-#[allow(dead_code)] // Used by the theme editor model, issue #162.
 /// Checks a name for a new theme (duplicate or rename): non-empty, no path separator,
 /// no leading `.`, and not already used by a user or built-in theme.
 pub fn valid_name(name: &str, config_dir: Option<&Path>) -> Result<(), NameError> {

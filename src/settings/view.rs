@@ -611,6 +611,7 @@ mod tests {
     use winit::keyboard::KeyCode;
 
     use super::model::{LoadErrors, Value};
+    use crate::appearance::Appearance;
     use crate::config::Config;
 
     fn model(text: &str) -> SettingsModel {
@@ -622,6 +623,8 @@ mod tests {
                 config: errors,
                 theme: Vec::new(),
             },
+            None,
+            Appearance::Dark,
         )
     }
 
@@ -733,6 +736,8 @@ mod tests {
                 config: errors,
                 theme: Vec::new(),
             },
+            None,
+            Appearance::Dark,
         );
         assert!(model.locked(SettingsSection::KeyboardShortcuts).is_some());
         let mut view = View {

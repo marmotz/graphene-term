@@ -752,7 +752,7 @@ impl Session {
             self.show_config_error(error);
             return;
         };
-        let key = theme_key(&self.theme, self.appearance);
+        let key = self.theme.active_key(self.appearance);
         if let Err(error) = config_edit::write(
             &file,
             config_edit::default_file_text,
@@ -2733,6 +2733,7 @@ impl App {
                 self.config.language.resolve(Lang::detect),
                 &self.config,
                 &self.load_errors,
+                self.appearance,
             );
         }
         if let Some(session) = self.session.as_mut() {
@@ -2793,6 +2794,7 @@ impl App {
             lang,
             &self.config,
             &self.load_errors,
+            self.appearance,
             dir,
         ) {
             Ok(settings) => self.settings = Some(settings),
@@ -3021,17 +3023,6 @@ fn with_theme(
         theme: theme_errors,
     };
     (config, palette, Banner::config_errors(&all), load_errors)
-}
-
-fn theme_key(theme: &ThemeConfig, appearance: Appearance) -> &'static [&'static str] {
-    if theme.follows_appearance() {
-        match appearance {
-            Appearance::Light => &["theme", "light"],
-            Appearance::Dark => &["theme", "dark"],
-        }
-    } else {
-        &["theme", "name"]
-    }
 }
 
 pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
@@ -3284,8 +3275,8 @@ mod tests {
             light: Some("day".to_owned()),
             dark: Some("night".to_owned()),
         };
-        assert_eq!(theme_key(&theme, Appearance::Light), &["theme", "light"]);
-        assert_eq!(theme_key(&theme, Appearance::Dark), &["theme", "dark"]);
+        assert_eq!(theme.active_key(Appearance::Light), &["theme", "light"]);
+        assert_eq!(theme.active_key(Appearance::Dark), &["theme", "dark"]);
     }
 
     #[test]
@@ -3308,7 +3299,7 @@ mod tests {
             },
         ] {
             for appearance in [Appearance::Light, Appearance::Dark] {
-                assert_eq!(theme_key(&theme, appearance), &["theme", "name"]);
+                assert_eq!(theme.active_key(appearance), &["theme", "name"]);
             }
         }
     }
