@@ -141,6 +141,35 @@ enum Overlay {
     Menu(ContextMenu),
 }
 
+/// A theme of the context menu previewed in the terminal, and the colors to restore
+/// when the menu closes without choosing it.
+#[derive(Debug, Clone)]
+struct MenuTheme {
+    name: String,
+    saved: Palette,
+}
+
+/// What the terminal colors do for the theme the context menu points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuThemeStep<'a> {
+    /// The colors shown are the right ones.
+    Keep,
+    /// Show this theme.
+    Show(&'a str),
+    /// Show the colors saved before the preview again.
+    Restore,
+}
+
+/// The step from the theme previewed so far, `shown`, to the one the menu points at.
+fn menu_theme_step<'a>(shown: Option<&str>, wanted: Option<&'a str>) -> MenuThemeStep<'a> {
+    match (shown, wanted) {
+        (shown, wanted) if shown == wanted => MenuThemeStep::Keep,
+        (_, Some(name)) => MenuThemeStep::Show(name),
+        (Some(_), None) => MenuThemeStep::Restore,
+        (None, None) => MenuThemeStep::Keep,
+    }
+}
+
 struct Session {
     window: Arc<Window>,
     /// Hands the events of new panes' terminals to the event loop.
@@ -154,6 +183,8 @@ struct Session {
     /// Box open over the window, taking the keyboard and the mouse.
     overlay: Option<Overlay>,
     palette: Palette,
+    /// The theme of the context menu previewed in the terminal.
+    menu_theme: Option<MenuTheme>,
     /// Theme settings and system appearance used by the menu.
     theme: ThemeConfig,
     appearance: Appearance,
@@ -613,6 +644,12 @@ impl Session {
         ))
     }
 
+    /// How many themes a menu shows before "More...": as many as the window height holds.
+    fn theme_rows(&self) -> usize {
+        let height = self.window.inner_size().height as f32;
+        context_menu::rows_fitting(height, self.ui_metrics(UiFont::Palette))
+    }
+
     /// Opens a pane menu at the pointer, retaining the pane's text selection.
     fn open_pane_menu(&mut self, pane_id: PaneId, hit: Hit) {
         let tab_index = self
@@ -646,6 +683,7 @@ impl Session {
             let tab = self.workspace.tabs().get(tab_index);
             let themes = theme::available(config::config_dir().as_deref());
             let active_theme = self.theme.active(self.appearance).to_owned();
+            let theme_rows = self.theme_rows();
             let context = MenuContext {
                 copyable: pane.copy_content().is_some(),
                 last_pane: self
@@ -661,6 +699,7 @@ impl Session {
                 block,
                 themes: &themes,
                 active_theme: &active_theme,
+                theme_rows,
             };
             context_menu::pane_menu(&context, &self.keybindings, self.lang)
         };
@@ -689,6 +728,7 @@ impl Session {
             block: None,
             themes: &themes,
             active_theme: &active_theme,
+            theme_rows: self.theme_rows(),
         };
         let items = context_menu::tab_menu(index, &context, &self.keybindings, self.lang);
         self.open_menu(items);
@@ -739,26 +779,65 @@ impl Session {
                     pane.toggle_fold_of(id);
                 }
             }
-            MenuCommand::Theme(name) => self.write_theme(&name),
+            MenuCommand::Theme(name) => {
+                if self.write_theme(&name) {
+                    // The previewed colors stay until the reload shows the same ones.
+                    self.menu_theme = None;
+                }
+            }
         }
     }
 
-    fn write_theme(&mut self, name: &str) {
+    /// Makes `name` the active theme in the configuration file; returns whether it was
+    /// written.
+    fn write_theme(&mut self, name: &str) -> bool {
         let Some(file) = config::config_file() else {
             let error = ConfigError::read(
                 PathBuf::from("config.toml"),
                 "cannot resolve the configuration file path".to_owned(),
             );
             self.show_config_error(error);
-            return;
+            return false;
         };
-        let key = theme_key(&self.theme, self.appearance);
-        if let Err(error) = config_edit::write(
+        let key = self.theme.active_key(self.appearance);
+        match config_edit::write(
             &file,
             config_edit::default_file_text,
             |edit: &mut ConfigEdit| edit.set(key, name),
         ) {
-            self.show_config_error(error);
+            Ok(()) => true,
+            Err(error) => {
+                self.show_config_error(error);
+                false
+            }
+        }
+    }
+
+    /// Shows the theme the context menu points at in the terminal, and the colors from
+    /// before once it points at no theme or closes.
+    fn sync_menu_theme(&mut self) {
+        let wanted = match &self.overlay {
+            Some(Overlay::Menu(menu)) => menu.previewed_theme(),
+            _ => None,
+        };
+        let shown = self.menu_theme.as_ref().map(|theme| theme.name.as_str());
+        match menu_theme_step(shown, wanted) {
+            MenuThemeStep::Keep => {}
+            MenuThemeStep::Show(name) => {
+                let name = name.to_owned();
+                let (palette, _) = theme::load(&name, config::config_dir().as_deref());
+                let saved = self
+                    .menu_theme
+                    .take()
+                    .map_or_else(|| self.palette.clone(), |theme| theme.saved);
+                self.preview_palette(&palette);
+                self.menu_theme = Some(MenuTheme { name, saved });
+            }
+            MenuThemeStep::Restore => {
+                if let Some(theme) = self.menu_theme.take() {
+                    self.preview_palette(&theme.saved);
+                }
+            }
         }
     }
 
@@ -899,6 +978,13 @@ impl Session {
         self.window.request_redraw();
     }
 
+    /// Shows `palette` until the next reload: the live preview of the theme being
+    /// edited in the settings window.
+    fn preview_palette(&mut self, palette: &Palette) {
+        palette.clone_into(&mut self.palette);
+        self.window.request_redraw();
+    }
+
     /// Applies a reloaded configuration, `old` being the one applied so far. The window
     /// size and startup mode only affect the windows created afterwards.
     fn apply_config(
@@ -933,6 +1019,8 @@ impl Session {
         self.window
             .set_transparent(window_transparent(new.window.background_opacity, true));
         self.palette = palette.clone();
+        // A menu still pointing at a theme previews it again over the new colors.
+        self.menu_theme = None;
         self.theme = new.theme.clone();
         self.keybindings = Keybindings::new(&new.keybindings);
         self.lang = new.language.resolve(Lang::detect);
@@ -2130,21 +2218,9 @@ impl Session {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // The menus fit in the window: "More..." pages long theme lists instead of a
+        // scroll, and the wheel does nothing while a menu is open.
         if matches!(&self.overlay, Some(Overlay::Menu(_))) {
-            let rows = match delta {
-                MouseScrollDelta::LineDelta(_, y) => y,
-                MouseScrollDelta::PixelDelta(position) => {
-                    position.y as f32 / self.renderer.ui_line_height(UiFont::Palette)
-                }
-            };
-            let visible = self
-                .menu_layout()
-                .and_then(|layout| layout.submenu.map(|submenu| submenu.visible_rows))
-                .unwrap_or(0);
-            if let Some(Overlay::Menu(menu)) = &mut self.overlay {
-                menu.scroll_submenu(-rows.round() as isize, visible);
-            }
-            self.window.request_redraw();
             return;
         }
         if let Some(Overlay::Palette(palette)) = &mut self.overlay {
@@ -2308,6 +2384,7 @@ impl Session {
     /// then the pane title bars, the dividers, the active pane border and the tab bar, then the banner, then
     /// the open dialog or command palette.
     fn redraw(&mut self) {
+        self.sync_menu_theme();
         let dialog = self.dialog_layout();
         let palette = self.palette_layout();
         let menu = self.menu_layout();
@@ -2687,6 +2764,7 @@ impl App {
             drag: None,
             overlay: None,
             palette: self.palette.clone(),
+            menu_theme: None,
             theme: self.config.theme.clone(),
             appearance: self.appearance,
             clipboard,
@@ -2733,6 +2811,7 @@ impl App {
                 self.config.language.resolve(Lang::detect),
                 &self.config,
                 &self.load_errors,
+                self.appearance,
             );
         }
         if let Some(session) = self.session.as_mut() {
@@ -2793,6 +2872,7 @@ impl App {
             lang,
             &self.config,
             &self.load_errors,
+            self.appearance,
             dir,
         ) {
             Ok(settings) => self.settings = Some(settings),
@@ -2894,9 +2974,16 @@ impl ApplicationHandler<UserEvent> for App {
                 self.open_requested_settings(event_loop);
             }
             Route::Settings => {
-                if let Some(settings) = self.settings.as_mut()
-                    && settings.window_event(event_loop, &event) == settings::Outcome::Close
+                let Some(settings) = self.settings.as_mut() else {
+                    return;
+                };
+                let outcome = settings.window_event(event_loop, &event);
+                if let Some(palette) = settings.take_preview()
+                    && let Some(session) = self.session.as_mut()
                 {
+                    session.preview_palette(&palette);
+                }
+                if outcome == settings::Outcome::Close {
                     self.settings = None;
                 }
             }
@@ -3023,17 +3110,6 @@ fn with_theme(
     (config, palette, Banner::config_errors(&all), load_errors)
 }
 
-fn theme_key(theme: &ThemeConfig, appearance: Appearance) -> &'static [&'static str] {
-    if theme.follows_appearance() {
-        match appearance {
-            Appearance::Light => &["theme", "light"],
-            Appearance::Dark => &["theme", "dark"],
-        }
-    } else {
-        &["theme", "name"]
-    }
-}
-
 pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let update_proxy = event_loop.create_proxy();
@@ -3078,6 +3154,24 @@ pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_menu_theme_is_shown_then_restored() {
+        use super::{MenuThemeStep, menu_theme_step};
+        assert_eq!(menu_theme_step(None, None), MenuThemeStep::Keep);
+        assert_eq!(
+            menu_theme_step(None, Some("dark")),
+            MenuThemeStep::Show("dark")
+        );
+        assert_eq!(
+            menu_theme_step(Some("dark"), Some("dark")),
+            MenuThemeStep::Keep
+        );
+        assert_eq!(
+            menu_theme_step(Some("dark"), Some("light")),
+            MenuThemeStep::Show("light")
+        );
+        assert_eq!(menu_theme_step(Some("dark"), None), MenuThemeStep::Restore);
+    }
 
     use super::*;
 
@@ -3284,8 +3378,8 @@ mod tests {
             light: Some("day".to_owned()),
             dark: Some("night".to_owned()),
         };
-        assert_eq!(theme_key(&theme, Appearance::Light), &["theme", "light"]);
-        assert_eq!(theme_key(&theme, Appearance::Dark), &["theme", "dark"]);
+        assert_eq!(theme.active_key(Appearance::Light), &["theme", "light"]);
+        assert_eq!(theme.active_key(Appearance::Dark), &["theme", "dark"]);
     }
 
     #[test]
@@ -3308,7 +3402,7 @@ mod tests {
             },
         ] {
             for appearance in [Appearance::Light, Appearance::Dark] {
-                assert_eq!(theme_key(&theme, appearance), &["theme", "name"]);
+                assert_eq!(theme.active_key(appearance), &["theme", "name"]);
             }
         }
     }

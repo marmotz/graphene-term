@@ -6,6 +6,8 @@
 
 use std::borrow::Cow;
 
+use crate::theme::{ColorGroup, ColorKey, NameError};
+
 /// Language of the user interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Lang {
@@ -216,6 +218,8 @@ pub enum Msg {
     SplitHorizontal,
     #[allow(dead_code)]
     Themes,
+    /// Last row of a theme menu, opening the themes that do not fit in it.
+    MoreThemes,
     #[allow(dead_code)]
     FoldBlock,
     #[allow(dead_code)]
@@ -260,6 +264,41 @@ pub enum Msg {
     AlreadyUsedBy(String),
     /// Button binding a captured shortcut over the other action.
     Replace,
+    // Theme editor of the settings window.
+    /// Heading of the theme editor block.
+    ThemeEditor,
+    /// What the theme editor is for, under its heading.
+    ThemeEditorIntro,
+    /// How to change a color, above the colors.
+    ThemeColorsHint,
+    /// A typed color code is not `#rrggbb`.
+    InvalidHexColor,
+    /// Button opening the user themes folder.
+    OpenThemesFolder,
+    /// Label of the theme editor's theme selector.
+    EditedTheme,
+    /// Button copying the edited theme to a new user theme.
+    Duplicate,
+    /// Button renaming the edited user theme.
+    Rename,
+    /// Button deleting the edited user theme.
+    Delete,
+    /// Label of the name field of a copy or a rename.
+    NewThemeName,
+    /// Button confirming the name of a copy or a rename.
+    Confirm,
+    /// Confirmation of the deletion of this theme.
+    ConfirmDeleteTheme(String),
+    /// Hint shown for a built-in theme, which cannot be changed.
+    BuiltInTheme,
+    /// Checkbox leaving the selection foreground empty.
+    KeepTextColor,
+    /// Heading of a group of colors.
+    ThemeColorGroup(ColorGroup),
+    /// Label of a theme color.
+    ThemeColor(ColorKey),
+    /// Why a theme name is refused.
+    ThemeNameError(NameError),
     /// Hint shown in the command palette's empty search field.
     PalettePlaceholder,
     // Command palette entries for open tabs and panes (1-based numbers).
@@ -342,6 +381,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::SplitVertical => "Split vertically",
         Msg::SplitHorizontal => "Split horizontally",
         Msg::Themes => "Themes",
+        Msg::MoreThemes => "More...",
         Msg::FoldBlock => "Fold block",
         Msg::UnfoldBlock => "Unfold block",
         Msg::CommandPalette => "Command palette",
@@ -397,6 +437,40 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::PressShortcut => "Press a shortcut · Esc to cancel",
         Msg::AlreadyUsedBy(action) => return format!("Already used by {action}").into(),
         Msg::Replace => "Replace",
+        Msg::ThemeEditor => "Theme editor",
+        Msg::ThemeEditorIntro => {
+            "Change the colors of your own themes. Built-in themes cannot be changed: duplicate one to get a copy you can edit."
+        }
+        Msg::ThemeColorsHint => {
+            "Click a swatch to pick a color, or type or paste its #rrggbb code. Each change is saved to the theme file right away."
+        }
+        Msg::InvalidHexColor => "Enter a color as #rrggbb",
+        Msg::OpenThemesFolder => "Open the themes folder",
+        Msg::EditedTheme => "Theme to edit",
+        Msg::Duplicate => "Duplicate",
+        Msg::Rename => "Rename",
+        Msg::Delete => "Delete",
+        Msg::NewThemeName => "New name",
+        Msg::Confirm => "Confirm",
+        Msg::ConfirmDeleteTheme(name) => {
+            return format!("Delete the theme {name}? Its file is removed.").into();
+        }
+        Msg::BuiltInTheme => {
+            "This built-in theme cannot be changed. Click Duplicate to create a copy you can edit."
+        }
+        Msg::KeepTextColor => "Keep the text color",
+        Msg::ThemeColorGroup(group) => match group {
+            ColorGroup::Terminal => "Terminal colors",
+            ColorGroup::Normal => "Normal ANSI colors",
+            ColorGroup::Bright => "Bright ANSI colors",
+            ColorGroup::Interface => "Interface colors",
+        },
+        Msg::ThemeColor(key) => english_color(*key),
+        Msg::ThemeNameError(error) => match error {
+            NameError::Empty => "Enter a name",
+            NameError::Invalid => "A name cannot contain / or \\ nor start with a dot",
+            NameError::Taken => "A theme with this name already exists",
+        },
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
         Msg::PalettePlaceholder => "Type a command, a tab or a pane",
@@ -477,6 +551,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::SplitVertical => "Diviser verticalement",
         Msg::SplitHorizontal => "Diviser horizontalement",
         Msg::Themes => "Thèmes",
+        Msg::MoreThemes => "Plus...",
         Msg::FoldBlock => "Replier le bloc",
         Msg::UnfoldBlock => "Déplier le bloc",
         Msg::CommandPalette => "Palette de commandes",
@@ -532,6 +607,40 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::PressShortcut => "Appuyez sur un raccourci · Échap pour annuler",
         Msg::AlreadyUsedBy(action) => return format!("Déjà utilisé par {action}").into(),
         Msg::Replace => "Remplacer",
+        Msg::ThemeEditor => "Éditeur de thème",
+        Msg::ThemeEditorIntro => {
+            "Modifiez les couleurs de vos propres thèmes. Les thèmes intégrés ne sont pas modifiables : dupliquez-en un pour obtenir une copie modifiable."
+        }
+        Msg::ThemeColorsHint => {
+            "Cliquez sur une pastille pour choisir une couleur, ou saisissez ou collez son code #rrggbb. Chaque changement est enregistré aussitôt dans le fichier du thème."
+        }
+        Msg::InvalidHexColor => "Saisissez une couleur au format #rrggbb",
+        Msg::OpenThemesFolder => "Ouvrir le dossier des thèmes",
+        Msg::EditedTheme => "Thème à modifier",
+        Msg::Duplicate => "Dupliquer",
+        Msg::Rename => "Renommer",
+        Msg::Delete => "Supprimer",
+        Msg::NewThemeName => "Nouveau nom",
+        Msg::Confirm => "Valider",
+        Msg::ConfirmDeleteTheme(name) => {
+            return format!("Supprimer le thème {name} ? Son fichier est effacé.").into();
+        }
+        Msg::BuiltInTheme => {
+            "Ce thème intégré n'est pas modifiable. Cliquez sur Dupliquer pour en créer une copie modifiable."
+        }
+        Msg::KeepTextColor => "Garder la couleur du texte",
+        Msg::ThemeColorGroup(group) => match group {
+            ColorGroup::Terminal => "Couleurs du terminal",
+            ColorGroup::Normal => "Couleurs ANSI normales",
+            ColorGroup::Bright => "Couleurs ANSI vives",
+            ColorGroup::Interface => "Couleurs de l'interface",
+        },
+        Msg::ThemeColor(key) => french_color(*key),
+        Msg::ThemeNameError(error) => match error {
+            NameError::Empty => "Saisissez un nom",
+            NameError::Invalid => "Un nom ne peut pas contenir / ou \\ ni commencer par un point",
+            NameError::Taken => "Un thème porte déjà ce nom",
+        },
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
         Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
@@ -564,6 +673,86 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::LinesHidden(rows) => return format!("{rows} lignes masquées").into(),
     };
     Cow::Borrowed(text)
+}
+
+/// English label of a theme color.
+fn english_color(key: ColorKey) -> &'static str {
+    match key {
+        ColorKey::Foreground => "Text",
+        ColorKey::Background => "Background",
+        ColorKey::Cursor => "Cursor",
+        ColorKey::CursorText => "Text under the cursor",
+        ColorKey::SelectionBackground => "Selection background",
+        ColorKey::SelectionForeground => "Selected text",
+        ColorKey::NormalBlack => "Normal black",
+        ColorKey::NormalRed => "Normal red",
+        ColorKey::NormalGreen => "Normal green",
+        ColorKey::NormalYellow => "Normal yellow",
+        ColorKey::NormalBlue => "Normal blue",
+        ColorKey::NormalMagenta => "Normal magenta",
+        ColorKey::NormalCyan => "Normal cyan",
+        ColorKey::NormalWhite => "Normal white",
+        ColorKey::BrightBlack => "Bright black",
+        ColorKey::BrightRed => "Bright red",
+        ColorKey::BrightGreen => "Bright green",
+        ColorKey::BrightYellow => "Bright yellow",
+        ColorKey::BrightBlue => "Bright blue",
+        ColorKey::BrightMagenta => "Bright magenta",
+        ColorKey::BrightCyan => "Bright cyan",
+        ColorKey::BrightWhite => "Bright white",
+        ColorKey::TabBarBackground => "Tab bar background",
+        ColorKey::TabActiveBackground => "Active tab background",
+        ColorKey::TabActiveText => "Active tab text",
+        ColorKey::TabInactiveText => "Inactive tab text",
+        ColorKey::PaneBorder => "Pane border",
+        ColorKey::PaneBroadcast => "Broadcast pane title bar",
+        ColorKey::PaletteBackground => "Command palette background",
+        ColorKey::PaletteText => "Command palette text",
+        ColorKey::PaletteMatch => "Command palette matches",
+        ColorKey::PaletteSelectionBackground => "Command palette selection",
+        ColorKey::BannerBackground => "Banner background",
+        ColorKey::BannerText => "Banner text",
+    }
+}
+
+/// French label of a theme color.
+fn french_color(key: ColorKey) -> &'static str {
+    match key {
+        ColorKey::Foreground => "Texte",
+        ColorKey::Background => "Fond",
+        ColorKey::Cursor => "Curseur",
+        ColorKey::CursorText => "Texte sous le curseur",
+        ColorKey::SelectionBackground => "Fond de la sélection",
+        ColorKey::SelectionForeground => "Texte sélectionné",
+        ColorKey::NormalBlack => "Noir normal",
+        ColorKey::NormalRed => "Rouge normal",
+        ColorKey::NormalGreen => "Vert normal",
+        ColorKey::NormalYellow => "Jaune normal",
+        ColorKey::NormalBlue => "Bleu normal",
+        ColorKey::NormalMagenta => "Magenta normal",
+        ColorKey::NormalCyan => "Cyan normal",
+        ColorKey::NormalWhite => "Blanc normal",
+        ColorKey::BrightBlack => "Noir vif",
+        ColorKey::BrightRed => "Rouge vif",
+        ColorKey::BrightGreen => "Vert vif",
+        ColorKey::BrightYellow => "Jaune vif",
+        ColorKey::BrightBlue => "Bleu vif",
+        ColorKey::BrightMagenta => "Magenta vif",
+        ColorKey::BrightCyan => "Cyan vif",
+        ColorKey::BrightWhite => "Blanc vif",
+        ColorKey::TabBarBackground => "Fond de la barre d'onglets",
+        ColorKey::TabActiveBackground => "Fond de l'onglet actif",
+        ColorKey::TabActiveText => "Texte de l'onglet actif",
+        ColorKey::TabInactiveText => "Texte des onglets inactifs",
+        ColorKey::PaneBorder => "Bordure des panneaux",
+        ColorKey::PaneBroadcast => "Barre de titre des panneaux diffusés",
+        ColorKey::PaletteBackground => "Fond de la palette de commandes",
+        ColorKey::PaletteText => "Texte de la palette de commandes",
+        ColorKey::PaletteMatch => "Lettres trouvées dans la palette",
+        ColorKey::PaletteSelectionBackground => "Sélection dans la palette",
+        ColorKey::BannerBackground => "Fond du bandeau",
+        ColorKey::BannerText => "Texte du bandeau",
+    }
 }
 
 #[cfg(test)]
@@ -616,6 +805,7 @@ mod tests {
             Msg::SplitVertical => 63,
             Msg::SplitHorizontal => 64,
             Msg::Themes => 65,
+            Msg::MoreThemes => 86,
             Msg::FoldBlock => 66,
             Msg::UnfoldBlock => 67,
             Msg::CommandPalette => 27,
@@ -652,9 +842,26 @@ mod tests {
             Msg::PressShortcut => 56,
             Msg::AlreadyUsedBy(_) => 57,
             Msg::Replace => 58,
+            Msg::ThemeEditor => 69,
+            Msg::EditedTheme => 70,
+            Msg::Duplicate => 71,
+            Msg::Rename => 72,
+            Msg::Delete => 73,
+            Msg::NewThemeName => 74,
+            Msg::Confirm => 75,
+            Msg::ConfirmDeleteTheme(_) => 76,
+            Msg::BuiltInTheme => 77,
+            Msg::KeepTextColor => 78,
+            Msg::ThemeColorGroup(_) => 79,
+            Msg::ThemeColor(_) => 80,
+            Msg::ThemeNameError(_) => 81,
+            Msg::ThemeEditorIntro => 82,
+            Msg::ThemeColorsHint => 83,
+            Msg::InvalidHexColor => 84,
+            Msg::OpenThemesFolder => 85,
         }
     }
-    const VARIANT_COUNT: usize = 69;
+    const VARIANT_COUNT: usize = 87;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -691,6 +898,7 @@ mod tests {
             Msg::SplitVertical,
             Msg::SplitHorizontal,
             Msg::Themes,
+            Msg::MoreThemes,
             Msg::FoldBlock,
             Msg::UnfoldBlock,
             Msg::CommandPalette,
@@ -732,12 +940,31 @@ mod tests {
             Msg::PressShortcut,
             Msg::AlreadyUsedBy("Copy".into()),
             Msg::Replace,
+            Msg::ThemeEditor,
+            Msg::ThemeEditorIntro,
+            Msg::ThemeColorsHint,
+            Msg::InvalidHexColor,
+            Msg::OpenThemesFolder,
+            Msg::EditedTheme,
+            Msg::Duplicate,
+            Msg::Rename,
+            Msg::Delete,
+            Msg::NewThemeName,
+            Msg::Confirm,
+            Msg::ConfirmDeleteTheme("my-theme".into()),
+            Msg::BuiltInTheme,
+            Msg::KeepTextColor,
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
         messages.extend(TARGETS.map(Msg::ConfirmCloseTitle));
         messages.extend(SettingsSection::ALL.map(Msg::Section));
         messages.extend(SettingsField::ALL.map(Msg::Field));
+        messages.extend(ColorGroup::ALL.map(Msg::ThemeColorGroup));
+        messages.extend(ColorKey::ALL.map(Msg::ThemeColor));
+        messages.extend(
+            [NameError::Empty, NameError::Invalid, NameError::Taken].map(Msg::ThemeNameError),
+        );
         messages
     }
 
@@ -843,6 +1070,26 @@ mod tests {
         assert_eq!(
             text(Lang::Fr, &Msg::Field(SettingsField::ThemeFollow)),
             "Suivre l'apparence du système"
+        );
+    }
+
+    #[test]
+    fn theme_color_labels_are_distinct_within_a_language() {
+        for lang in LANGS {
+            let mut labels: Vec<_> = ColorKey::ALL
+                .map(|key| text(lang, &Msg::ThemeColor(key)))
+                .to_vec();
+            labels.sort();
+            labels.dedup();
+            assert_eq!(labels.len(), ColorKey::ALL.len(), "{lang:?}");
+        }
+        assert_eq!(
+            text(Lang::Fr, &Msg::ConfirmDeleteTheme("mine".into())),
+            "Supprimer le thème mine ? Son fichier est effacé."
+        );
+        assert_eq!(
+            text(Lang::En, &Msg::ThemeNameError(NameError::Invalid)),
+            "A name cannot contain / or \\ nor start with a dot"
         );
     }
 

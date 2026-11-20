@@ -35,6 +35,7 @@ mod shell_integration;
 mod signals;
 mod terminal;
 mod theme;
+mod theme_edit;
 mod timeline;
 mod timeline_selection;
 mod update;

@@ -14,7 +14,7 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
 use crate::config::{CONFIG_FILE, ConfigError, ConfigErrorKind};
-use crate::palette::{Palette, UiColors, build_indexed};
+use crate::palette::{Palette, build_indexed};
 
 /// Theme used when the configured one cannot be found.
 pub const DEFAULT_THEME: &str = "graphene-night";
@@ -52,9 +52,275 @@ pub const BUILT_IN: &[(&str, &str)] = &[
     ),
 ];
 
-const ANSI_NAMES: [&str; 8] = [
-    "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-];
+/// Reference (`&` or `&mut`) to the required color a [`ColorKey`] stores in a
+/// [`Palette`]; `None` for the optional selection foreground.
+macro_rules! color_slot {
+    ($key:expr, $palette:expr, $($r:tt)+) => {{
+        let palette = $palette;
+        match $key {
+            ColorKey::Foreground => Some($($r)+ palette.foreground),
+            ColorKey::Background => Some($($r)+ palette.background),
+            ColorKey::Cursor => Some($($r)+ palette.cursor),
+            ColorKey::CursorText => Some($($r)+ palette.cursor_text),
+            ColorKey::SelectionBackground => Some($($r)+ palette.selection_background),
+            ColorKey::SelectionForeground => None,
+            ColorKey::NormalBlack => Some($($r)+ palette.indexed[0]),
+            ColorKey::NormalRed => Some($($r)+ palette.indexed[1]),
+            ColorKey::NormalGreen => Some($($r)+ palette.indexed[2]),
+            ColorKey::NormalYellow => Some($($r)+ palette.indexed[3]),
+            ColorKey::NormalBlue => Some($($r)+ palette.indexed[4]),
+            ColorKey::NormalMagenta => Some($($r)+ palette.indexed[5]),
+            ColorKey::NormalCyan => Some($($r)+ palette.indexed[6]),
+            ColorKey::NormalWhite => Some($($r)+ palette.indexed[7]),
+            ColorKey::BrightBlack => Some($($r)+ palette.indexed[8]),
+            ColorKey::BrightRed => Some($($r)+ palette.indexed[9]),
+            ColorKey::BrightGreen => Some($($r)+ palette.indexed[10]),
+            ColorKey::BrightYellow => Some($($r)+ palette.indexed[11]),
+            ColorKey::BrightBlue => Some($($r)+ palette.indexed[12]),
+            ColorKey::BrightMagenta => Some($($r)+ palette.indexed[13]),
+            ColorKey::BrightCyan => Some($($r)+ palette.indexed[14]),
+            ColorKey::BrightWhite => Some($($r)+ palette.indexed[15]),
+            ColorKey::TabBarBackground => Some($($r)+ palette.ui.tab_bar_background),
+            ColorKey::TabActiveBackground => Some($($r)+ palette.ui.tab_active_background),
+            ColorKey::TabActiveText => Some($($r)+ palette.ui.tab_active_text),
+            ColorKey::TabInactiveText => Some($($r)+ palette.ui.tab_inactive_text),
+            ColorKey::PaneBorder => Some($($r)+ palette.ui.pane_border),
+            ColorKey::PaneBroadcast => Some($($r)+ palette.ui.pane_broadcast),
+            ColorKey::PaletteBackground => Some($($r)+ palette.ui.palette_background),
+            ColorKey::PaletteText => Some($($r)+ palette.ui.palette_text),
+            ColorKey::PaletteMatch => Some($($r)+ palette.ui.palette_match),
+            ColorKey::PaletteSelectionBackground => {
+                Some($($r)+ palette.ui.palette_selection_background)
+            }
+            ColorKey::BannerBackground => Some($($r)+ palette.ui.banner_background),
+            ColorKey::BannerText => Some($($r)+ palette.ui.banner_text),
+        }
+    }};
+}
+
+/// Every color of a theme file, with its key path. The parser and the theme editor
+/// both resolve keys through this table, so they cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorKey {
+    Foreground,
+    Background,
+    Cursor,
+    CursorText,
+    SelectionBackground,
+    SelectionForeground,
+    NormalBlack,
+    NormalRed,
+    NormalGreen,
+    NormalYellow,
+    NormalBlue,
+    NormalMagenta,
+    NormalCyan,
+    NormalWhite,
+    BrightBlack,
+    BrightRed,
+    BrightGreen,
+    BrightYellow,
+    BrightBlue,
+    BrightMagenta,
+    BrightCyan,
+    BrightWhite,
+    TabBarBackground,
+    TabActiveBackground,
+    TabActiveText,
+    TabInactiveText,
+    PaneBorder,
+    PaneBroadcast,
+    PaletteBackground,
+    PaletteText,
+    PaletteMatch,
+    PaletteSelectionBackground,
+    BannerBackground,
+    BannerText,
+}
+
+impl ColorKey {
+    /// Every key, in theme file order: terminal colors, normal ANSI, bright ANSI, UI.
+    pub const ALL: [ColorKey; 34] = [
+        Self::Foreground,
+        Self::Background,
+        Self::Cursor,
+        Self::CursorText,
+        Self::SelectionBackground,
+        Self::SelectionForeground,
+        Self::NormalBlack,
+        Self::NormalRed,
+        Self::NormalGreen,
+        Self::NormalYellow,
+        Self::NormalBlue,
+        Self::NormalMagenta,
+        Self::NormalCyan,
+        Self::NormalWhite,
+        Self::BrightBlack,
+        Self::BrightRed,
+        Self::BrightGreen,
+        Self::BrightYellow,
+        Self::BrightBlue,
+        Self::BrightMagenta,
+        Self::BrightCyan,
+        Self::BrightWhite,
+        Self::TabBarBackground,
+        Self::TabActiveBackground,
+        Self::TabActiveText,
+        Self::TabInactiveText,
+        Self::PaneBorder,
+        Self::PaneBroadcast,
+        Self::PaletteBackground,
+        Self::PaletteText,
+        Self::PaletteMatch,
+        Self::PaletteSelectionBackground,
+        Self::BannerBackground,
+        Self::BannerText,
+    ];
+
+    /// Key path in a theme file, e.g. `["colors", "normal", "red"]`.
+    pub fn path(self) -> &'static [&'static str] {
+        match self {
+            Self::Foreground => &["colors", "foreground"],
+            Self::Background => &["colors", "background"],
+            Self::Cursor => &["colors", "cursor"],
+            Self::CursorText => &["colors", "cursor_text"],
+            Self::SelectionBackground => &["colors", "selection_background"],
+            Self::SelectionForeground => &["colors", "selection_foreground"],
+            Self::NormalBlack => &["colors", "normal", "black"],
+            Self::NormalRed => &["colors", "normal", "red"],
+            Self::NormalGreen => &["colors", "normal", "green"],
+            Self::NormalYellow => &["colors", "normal", "yellow"],
+            Self::NormalBlue => &["colors", "normal", "blue"],
+            Self::NormalMagenta => &["colors", "normal", "magenta"],
+            Self::NormalCyan => &["colors", "normal", "cyan"],
+            Self::NormalWhite => &["colors", "normal", "white"],
+            Self::BrightBlack => &["colors", "bright", "black"],
+            Self::BrightRed => &["colors", "bright", "red"],
+            Self::BrightGreen => &["colors", "bright", "green"],
+            Self::BrightYellow => &["colors", "bright", "yellow"],
+            Self::BrightBlue => &["colors", "bright", "blue"],
+            Self::BrightMagenta => &["colors", "bright", "magenta"],
+            Self::BrightCyan => &["colors", "bright", "cyan"],
+            Self::BrightWhite => &["colors", "bright", "white"],
+            Self::TabBarBackground => &["ui", "tab_bar_background"],
+            Self::TabActiveBackground => &["ui", "tab_active_background"],
+            Self::TabActiveText => &["ui", "tab_active_text"],
+            Self::TabInactiveText => &["ui", "tab_inactive_text"],
+            Self::PaneBorder => &["ui", "pane_border"],
+            Self::PaneBroadcast => &["ui", "pane_broadcast"],
+            Self::PaletteBackground => &["ui", "palette_background"],
+            Self::PaletteText => &["ui", "palette_text"],
+            Self::PaletteMatch => &["ui", "palette_match"],
+            Self::PaletteSelectionBackground => &["ui", "palette_selection_background"],
+            Self::BannerBackground => &["ui", "banner_background"],
+            Self::BannerText => &["ui", "banner_text"],
+        }
+    }
+
+    /// The key whose path is `path`.
+    pub fn from_path(path: &[&str]) -> Option<Self> {
+        Self::ALL.into_iter().find(|key| key.path() == path)
+    }
+
+    /// Color of this key in `palette`; `None` only for an unset selection foreground.
+    pub fn get(self, palette: &Palette) -> Option<Rgb> {
+        if self == Self::SelectionForeground {
+            return palette.selection_foreground;
+        }
+        color_slot!(self, palette, &).copied()
+    }
+
+    /// Sets this key in `palette`. `None` only applies to the selection foreground and
+    /// is ignored for the other keys.
+    pub fn set(self, palette: &mut Palette, color: Option<Rgb>) {
+        if self == Self::SelectionForeground {
+            palette.selection_foreground = color;
+        } else if let (Some(slot), Some(color)) = (color_slot!(self, palette, &mut), color) {
+            *slot = color;
+        }
+    }
+
+    /// The group this key is shown in by the theme editor.
+    pub fn group(self) -> ColorGroup {
+        match self.path() {
+            ["colors", "normal", _] => ColorGroup::Normal,
+            ["colors", "bright", _] => ColorGroup::Bright,
+            ["colors", ..] => ColorGroup::Terminal,
+            _ => ColorGroup::Interface,
+        }
+    }
+}
+
+/// A group of color keys in the theme editor, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorGroup {
+    /// Text, background, cursor and selection.
+    Terminal,
+    /// The 8 normal ANSI colors.
+    Normal,
+    /// The 8 bright ANSI colors.
+    Bright,
+    /// Tabs, panes, command palette and banners.
+    Interface,
+}
+
+impl ColorGroup {
+    pub const ALL: [ColorGroup; 4] = [Self::Terminal, Self::Normal, Self::Bright, Self::Interface];
+
+    /// The keys of this group, in [`ColorKey::ALL`] order.
+    pub fn keys(self) -> impl Iterator<Item = ColorKey> {
+        ColorKey::ALL
+            .into_iter()
+            .filter(move |key| key.group() == self)
+    }
+}
+
+/// Why a name cannot be used for a new theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameError {
+    Empty,
+    /// Holds `/` or `\`, or starts with `.`: it would point outside the themes directory.
+    Invalid,
+    /// A user or built-in theme already has this name.
+    Taken,
+}
+
+impl std::fmt::Display for NameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Empty => "the theme name is empty",
+            Self::Invalid => "the theme name cannot contain `/` or `\\` nor start with `.`",
+            Self::Taken => "a theme with this name already exists",
+        })
+    }
+}
+
+impl std::error::Error for NameError {}
+
+/// Whether `name` can be read from or written to the themes directory.
+fn is_plain(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.')
+}
+
+/// Checks a name for a new theme (duplicate or rename): non-empty, no path separator,
+/// no leading `.`, and not already used by a user or built-in theme.
+pub fn valid_name(name: &str, config_dir: Option<&Path>) -> Result<(), NameError> {
+    if name.is_empty() {
+        Err(NameError::Empty)
+    } else if !is_plain(name) {
+        Err(NameError::Invalid)
+    } else if available(config_dir).iter().any(|theme| theme == name) {
+        Err(NameError::Taken)
+    } else {
+        Ok(())
+    }
+}
+
+/// User file of a theme, `<config_dir>/themes/<name>.toml`; `None` for a name that
+/// would point outside the themes directory.
+pub fn user_file(config_dir: &Path, name: &str) -> Option<PathBuf> {
+    is_plain(name).then(|| config_dir.join(THEMES_DIR).join(format!("{name}.toml")))
+}
 
 /// The `graphene-night` palette, parsed once.
 pub fn default_palette() -> &'static Palette {
@@ -104,10 +370,9 @@ pub fn available(config_dir: Option<&Path>) -> Vec<String> {
 pub fn load(name: &str, config_dir: Option<&Path>) -> (Palette, Vec<ConfigError>) {
     let base = default_palette();
     // A name with a path separator would read outside the themes directory.
-    let plain = !name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.');
+    let plain = is_plain(name);
 
-    if let (true, Some(dir)) = (plain, config_dir) {
-        let file = dir.join(THEMES_DIR).join(format!("{name}.toml"));
+    if let Some(file) = config_dir.and_then(|dir| user_file(dir, name)) {
         match std::fs::read_to_string(&file) {
             Ok(text) => return parse(&text, base, &file),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -162,7 +427,6 @@ pub fn parse(text: &str, base: &Palette, file: &Path) -> (Palette, Vec<ConfigErr
     };
 
     let mut palette = base.clone();
-    let mut ansi: [Rgb; 16] = palette.indexed[..16].try_into().expect("16 ANSI colors");
     for (key, value) in root.iter() {
         let name = key.get_ref().as_ref();
         let Some(table) = reader.table(name, value) else {
@@ -178,75 +442,39 @@ pub fn parse(text: &str, base: &Palette, file: &Path) -> (Palette, Vec<ConfigErr
                             let Some(table) = reader.table(&path, value) else {
                                 continue;
                             };
-                            let offset = if name == "bright" { 8 } else { 0 };
                             for (key, value) in table.iter() {
                                 let color = key.get_ref().as_ref();
-                                let path = format!("{path}.{color}");
-                                match ANSI_NAMES.iter().position(|ansi| *ansi == color) {
-                                    Some(i) => reader.color(value, &path, &mut ansi[offset + i]),
-                                    None => reader.unknown(key, &path),
-                                }
+                                reader.key_color(
+                                    &mut palette,
+                                    &["colors", name, color],
+                                    key,
+                                    value,
+                                );
                             }
                         }
-                        "selection_foreground" => {
-                            reader.optional_color(value, &mut palette.selection_foreground);
-                        }
-                        _ => {
-                            let path = format!("colors.{name}");
-                            match colors_slot(&mut palette, name) {
-                                Some(slot) => reader.color(value, &path, slot),
-                                None => reader.unknown(key, &path),
-                            }
-                        }
+                        _ => reader.key_color(&mut palette, &["colors", name], key, value),
                     }
                 }
             }
             "ui" => {
                 for (key, value) in table.iter() {
                     let name = key.get_ref().as_ref();
-                    let path = format!("ui.{name}");
-                    match ui_slot(&mut palette.ui, name) {
-                        Some(slot) => reader.color(value, &path, slot),
-                        None => reader.unknown(key, &path),
-                    }
+                    reader.key_color(&mut palette, &["ui", name], key, value);
                 }
             }
             _ => reader.unknown(key, name),
         }
     }
+    let ansi: [Rgb; 16] = palette.indexed[..16].try_into().expect("16 ANSI colors");
     palette.indexed = build_indexed(ansi);
     // Keys are visited in alphabetical order: report errors in file order.
     reader.errors.sort_by_key(|error| error.line);
     (palette, reader.errors)
 }
 
-fn colors_slot<'a>(palette: &'a mut Palette, name: &str) -> Option<&'a mut Rgb> {
-    Some(match name {
-        "foreground" => &mut palette.foreground,
-        "background" => &mut palette.background,
-        "cursor" => &mut palette.cursor,
-        "cursor_text" => &mut palette.cursor_text,
-        "selection_background" => &mut palette.selection_background,
-        _ => return None,
-    })
-}
-
-fn ui_slot<'a>(ui: &'a mut UiColors, name: &str) -> Option<&'a mut Rgb> {
-    Some(match name {
-        "tab_bar_background" => &mut ui.tab_bar_background,
-        "tab_active_background" => &mut ui.tab_active_background,
-        "tab_active_text" => &mut ui.tab_active_text,
-        "tab_inactive_text" => &mut ui.tab_inactive_text,
-        "pane_border" => &mut ui.pane_border,
-        "pane_broadcast" => &mut ui.pane_broadcast,
-        "palette_background" => &mut ui.palette_background,
-        "palette_text" => &mut ui.palette_text,
-        "palette_match" => &mut ui.palette_match,
-        "palette_selection_background" => &mut ui.palette_selection_background,
-        "banner_background" => &mut ui.banner_background,
-        "banner_text" => &mut ui.banner_text,
-        _ => return None,
-    })
+/// Formats a color as `#rrggbb`, the inverse of [`parse_color`].
+pub fn format_color(color: Rgb) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
 }
 
 /// Parses `#rrggbb`.
@@ -353,9 +581,35 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Reads the color at `path` into `palette`, or reports an unknown key.
+    fn key_color(
+        &mut self,
+        palette: &mut Palette,
+        path: &[&str],
+        key: &Spanned<std::borrow::Cow<'_, str>>,
+        value: &Spanned<DeValue<'_>>,
+    ) {
+        let dotted = path.join(".");
+        match ColorKey::from_path(path) {
+            Some(ColorKey::SelectionForeground) => {
+                self.optional_color(value, &dotted, &mut palette.selection_foreground);
+            }
+            Some(color_key) => {
+                if let Some(slot) = color_slot!(color_key, &mut *palette, &mut) {
+                    self.color(value, &dotted, slot);
+                }
+            }
+            None => self.unknown(key, &dotted),
+        }
+    }
+
     /// Like [`Self::color`], an empty string meaning `None`.
-    fn optional_color(&mut self, value: &Spanned<DeValue<'_>>, target: &mut Option<Rgb>) {
-        let path = "colors.selection_foreground";
+    fn optional_color(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        path: &str,
+        target: &mut Option<Rgb>,
+    ) {
         if let Some("") = self.string_quiet(value) {
             *target = None;
             return;
@@ -379,6 +633,7 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::UiColors;
 
     fn rgb(hex: u32) -> Rgb {
         Rgb {
@@ -810,6 +1065,133 @@ banner = "#000000"
                 format!("unknown theme `{name}`, using `graphene-night`")
             );
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn color_groups_split_every_key_once_in_file_order() {
+        let grouped: Vec<ColorKey> = ColorGroup::ALL
+            .into_iter()
+            .flat_map(ColorGroup::keys)
+            .collect();
+        assert_eq!(grouped, ColorKey::ALL);
+        let count = |group: ColorGroup| group.keys().count();
+        assert_eq!(count(ColorGroup::Terminal), 6);
+        assert_eq!(count(ColorGroup::Normal), 8);
+        assert_eq!(count(ColorGroup::Bright), 8);
+        assert_eq!(count(ColorGroup::Interface), 12);
+        assert_eq!(ColorKey::BrightRed.group(), ColorGroup::Bright);
+        assert_eq!(ColorKey::SelectionForeground.group(), ColorGroup::Terminal);
+    }
+
+    #[test]
+    fn color_keys_are_distinct_and_cover_every_palette_color() {
+        let paths: std::collections::HashSet<_> =
+            ColorKey::ALL.iter().map(|key| key.path()).collect();
+        assert_eq!(paths.len(), ColorKey::ALL.len());
+
+        // Setting every key to white on a blank palette yields an all-white palette.
+        let white = rgb(0xffffff);
+        let mut palette = Palette::blank();
+        for key in ColorKey::ALL {
+            key.set(&mut palette, Some(white));
+        }
+        assert_eq!(&palette.indexed[..16], &[white; 16]);
+        assert_eq!(palette.ui, UiColors::uniform(white));
+        for color in [
+            palette.foreground,
+            palette.background,
+            palette.cursor,
+            palette.cursor_text,
+            palette.selection_background,
+        ] {
+            assert_eq!(color, white);
+        }
+        assert_eq!(palette.selection_foreground, Some(white));
+    }
+
+    #[test]
+    fn color_key_get_set_and_path_round_trip() {
+        for (i, key) in ColorKey::ALL.into_iter().enumerate() {
+            assert_eq!(ColorKey::from_path(key.path()), Some(key));
+
+            let mut palette = default_palette().clone();
+            let color = rgb(0x010203 + i as u32);
+            key.set(&mut palette, Some(color));
+            assert_eq!(key.get(&palette), Some(color), "{key:?}");
+            // Only this key changed.
+            for other in ColorKey::ALL.into_iter().filter(|other| *other != key) {
+                assert_eq!(other.get(&palette), other.get(default_palette()), "{key:?}");
+            }
+
+            // The parser reads the key at its path.
+            let (table, name) = key.path().split_at(key.path().len() - 1);
+            let text = format!(
+                "[{}]\n{} = \"{}\"\n",
+                table.join("."),
+                name[0],
+                format_color(color)
+            );
+            let (parsed, errors) = parse_on_default(&text);
+            assert_eq!(errors, Vec::new(), "{key:?}");
+            assert_eq!(key.get(&parsed), Some(color), "{key:?}");
+        }
+        assert_eq!(ColorKey::from_path(&["colors", "normal", "orange"]), None);
+        assert_eq!(ColorKey::from_path(&["ui"]), None);
+    }
+
+    #[test]
+    fn none_only_clears_the_selection_foreground() {
+        let mut palette = default_palette().clone();
+        ColorKey::SelectionForeground.set(&mut palette, None);
+        assert_eq!(ColorKey::SelectionForeground.get(&palette), None);
+        ColorKey::Foreground.set(&mut palette, None);
+        assert_eq!(palette.foreground, default_palette().foreground);
+    }
+
+    #[test]
+    fn format_color_is_the_inverse_of_parse_color() {
+        for hex in [0x000000, 0xffffff, 0x0a0b0c, 0x1c1f26, 0xabcdef] {
+            let color = rgb(hex);
+            let text = format_color(color);
+            assert_eq!(text, format!("#{hex:06x}"));
+            assert_eq!(parse_color(&text), Some(color));
+        }
+    }
+
+    #[test]
+    fn user_file_points_inside_the_themes_directory() {
+        let dir = Path::new("/config");
+        assert_eq!(
+            user_file(dir, "mine"),
+            Some(dir.join(THEMES_DIR).join("mine.toml"))
+        );
+        for name in ["", "a/b", "a\\b", ".hidden", "../config"] {
+            assert_eq!(user_file(dir, name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn valid_name_rejects_empty_invalid_and_taken_names() {
+        let dir = temp_dir("valid-name");
+        std::fs::write(dir.join(THEMES_DIR).join("mine.toml"), "").unwrap();
+
+        assert_eq!(valid_name("fresh", Some(&dir)), Ok(()));
+        assert_eq!(valid_name("my theme", None), Ok(()));
+        assert_eq!(valid_name("", Some(&dir)), Err(NameError::Empty));
+        for name in ["a/b", "a\\b", ".hidden", "../x"] {
+            assert_eq!(
+                valid_name(name, Some(&dir)),
+                Err(NameError::Invalid),
+                "{name}"
+            );
+        }
+        assert_eq!(valid_name("mine", Some(&dir)), Err(NameError::Taken));
+        assert_eq!(
+            valid_name("graphene-night", Some(&dir)),
+            Err(NameError::Taken)
+        );
+        assert_eq!(valid_name("solarized-dark", None), Err(NameError::Taken));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

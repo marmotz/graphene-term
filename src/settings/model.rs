@@ -2,8 +2,12 @@
 //! configuration, errors routed by key, the locked state of an unreadable file, and the
 //! changes an edit makes to `config.toml`. Pure; drawn by `view`.
 
+use std::path::PathBuf;
+
+use alacritty_terminal::vte::ansi::Rgb;
 use cosmic_text::fontdb;
 
+use crate::appearance::Appearance;
 use crate::config::{
     self, Config, ConfigError, ConfigErrorKind, CursorShape, Language, MAX_FONT_SIZE,
     MAX_SCROLLBACK_LINES, MIN_FONT_SIZE, StartupMode, TabPosition, UpdateInterval,
@@ -11,6 +15,8 @@ use crate::config::{
 use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
 use crate::input::Action;
 use crate::keybindings::{self, Keybindings, NONE_ACTION, Shortcut};
+use crate::palette::Palette;
+use crate::theme::{self, ColorKey, NameError};
 
 /// Errors of the last load of the configuration file and of its theme.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -84,6 +90,20 @@ impl From<Value> for toml_edit::Value {
 pub enum Change {
     Set(Vec<String>, Value),
     Remove(Vec<String>),
+}
+
+/// A change to a theme file, made on the theme being edited
+/// ([`SettingsModel::edited_theme`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ThemeOp {
+    /// Sets one color; `None` empties it (only `selection_foreground`).
+    SetColor(ColorKey, Option<Rgb>),
+    /// Copies the theme to a new user theme of this name.
+    Duplicate(String),
+    /// Renames the user theme.
+    Rename(String),
+    /// Deletes the user theme.
+    Delete,
 }
 
 /// Why a typed value is not written.
@@ -294,27 +314,54 @@ pub struct SettingsModel {
     font_families: Vec<String>,
     /// The shortcut table of `config`.
     keybindings: Keybindings,
+    /// The config directory, holding the user themes; `None` for built-in themes only.
+    dir: Option<PathBuf>,
+    /// The system appearance, which picks the active theme when following it.
+    appearance: Appearance,
+    /// The theme shown in the theme editor: the active theme when the window opens.
+    edited_theme: String,
+    /// The colors of `edited_theme`, read again on each reload.
+    edited_palette: Palette,
+    /// Whether `edited_theme` has no user file, and so cannot be changed.
+    edited_is_built_in: bool,
 }
 
 impl SettingsModel {
-    /// The model of the applied `config` and the `errors` of its last load.
-    pub fn new(config: &Config, errors: &LoadErrors) -> Self {
-        Self {
+    /// The model of the applied `config` and the `errors` of its last load, with the
+    /// user themes of `dir` under the system `appearance`. The theme editor shows the
+    /// active theme.
+    pub fn new(
+        config: &Config,
+        errors: &LoadErrors,
+        dir: Option<PathBuf>,
+        appearance: Appearance,
+    ) -> Self {
+        let edited_theme = config.theme.active(appearance).to_owned();
+        let mut model = Self {
             config: config.clone(),
             errors: errors.clone(),
             write_error: None,
-            theme_choices: crate::theme::available(None),
+            theme_choices: theme::available(dir.as_deref()),
             font_families: Vec::new(),
             keybindings: Keybindings::new(&config.keybindings),
-        }
+            dir,
+            appearance,
+            edited_theme,
+            edited_palette: theme::default_palette().clone(),
+            edited_is_built_in: true,
+        };
+        model.reload_edited_theme();
+        model
     }
 
-    /// Takes a reloaded configuration and its errors.
-    pub fn refresh(&mut self, config: &Config, errors: &LoadErrors) {
+    /// Takes a reloaded configuration, its errors and the system appearance.
+    pub fn refresh(&mut self, config: &Config, errors: &LoadErrors, appearance: Appearance) {
         self.config = config.clone();
         self.errors = errors.clone();
+        self.appearance = appearance;
         self.write_error = None;
         self.keybindings = Keybindings::new(&self.config.keybindings);
+        self.reload_edited_theme();
     }
 
     /// Takes the configuration parsed from the file just written, before the reload
@@ -324,11 +371,114 @@ impl SettingsModel {
         self.errors.config = config_errors;
         self.write_error = None;
         self.keybindings = Keybindings::new(&self.config.keybindings);
+        self.reload_edited_theme();
+    }
+
+    /// The theme the configuration loads under the current appearance.
+    pub fn active_theme(&self) -> &str {
+        self.config.theme.active(self.appearance)
+    }
+
+    /// The colors of the active theme, as the reload loads them.
+    pub fn active_palette(&self) -> Palette {
+        theme::load(self.active_theme(), self.dir.as_deref()).0
+    }
+
+    /// The colors to show in the terminal window while `picked` is chosen for its key:
+    /// the edited palette with that color, only when the edited theme is the active one.
+    pub fn live_preview(&self, picked: Option<(ColorKey, Rgb)>) -> Option<Palette> {
+        let (key, color) = picked?;
+        if self.edited_theme != self.active_theme() {
+            return None;
+        }
+        let mut palette = self.edited_palette.clone();
+        key.set(&mut palette, Some(color));
+        Some(palette)
+    }
+
+    /// The theme shown in the theme editor.
+    pub fn edited_theme(&self) -> &str {
+        &self.edited_theme
+    }
+
+    /// The colors of the edited theme.
+    pub fn edited_palette(&self) -> &Palette {
+        &self.edited_palette
+    }
+
+    /// Whether the edited theme is built in (no user file): it cannot be changed, only
+    /// duplicated.
+    pub fn edited_is_built_in(&self) -> bool {
+        self.edited_is_built_in
+    }
+
+    /// Shows `name` in the theme editor, independently of the active theme.
+    pub fn edit_theme(&mut self, name: &str) {
+        name.clone_into(&mut self.edited_theme);
+        self.reload_edited_theme();
+    }
+
+    /// Reads the edited theme again; one that no longer exists (deleted or renamed)
+    /// gives way to the active theme.
+    fn reload_edited_theme(&mut self) {
+        let dir = self.dir.as_deref();
+        if !theme::available(dir).contains(&self.edited_theme) {
+            self.edited_theme = self.config.theme.active(self.appearance).to_owned();
+        }
+        self.edited_palette = theme::load(&self.edited_theme, dir).0;
+        self.edited_is_built_in = !dir
+            .and_then(|dir| theme::user_file(dir, &self.edited_theme))
+            .is_some_and(|file| file.is_file());
+    }
+
+    /// Checks `op` on the edited theme and returns the changes it makes to
+    /// `config.toml`, to write before `op` itself:
+    /// - duplicating points the active theme's key to the copy;
+    /// - renaming moves each of `theme.name`, `theme.light` and `theme.dark` naming the
+    ///   edited theme to the new name;
+    /// - deleting sets those keys back to `graphene-night`.
+    ///
+    /// The new name of a copy or a rename must be free ([`theme::valid_name`]).
+    pub fn theme_op(&self, op: ThemeOp) -> Result<(Vec<Change>, ThemeOp), NameError> {
+        let changes = match &op {
+            ThemeOp::SetColor(..) => Vec::new(),
+            ThemeOp::Duplicate(name) => {
+                theme::valid_name(name, self.dir.as_deref())?;
+                let key = self.config.theme.active_key(self.appearance);
+                vec![Change::Set(owned(key), Value::Text(name.clone()))]
+            }
+            ThemeOp::Rename(name) => {
+                theme::valid_name(name, self.dir.as_deref())?;
+                self.theme_keys_naming_edited(name)
+            }
+            ThemeOp::Delete => self.theme_keys_naming_edited(theme::DEFAULT_THEME),
+        };
+        Ok((changes, op))
+    }
+
+    /// Sets to `name` each of `theme.name`, `theme.light` and `theme.dark` that names
+    /// the edited theme.
+    fn theme_keys_naming_edited(&self, name: &str) -> Vec<Change> {
+        let theme = &self.config.theme;
+        [
+            ("name", Some(&theme.name)),
+            ("light", theme.light.as_ref()),
+            ("dark", theme.dark.as_ref()),
+        ]
+        .into_iter()
+        .filter(|(_, value)| value.is_some_and(|value| *value == self.edited_theme))
+        .map(|(key, _)| Change::Set(owned(&["theme", key]), Value::Text(name.to_owned())))
+        .collect()
     }
 
     /// Records a failed write.
     pub fn write_failed(&mut self, error: &ConfigError) {
         self.write_error = Some(error.to_string());
+    }
+
+    /// The user and built-in themes.
+    pub fn theme_choices(&self) -> &[String] {
+        &self.theme_choices
     }
 
     pub fn set_theme_choices(&mut self, choices: Vec<String>) {
@@ -682,7 +832,7 @@ fn section_of_key(key: &str) -> Option<Section> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::config::{ConfigError, ConfigErrorKind};
@@ -717,6 +867,8 @@ mod tests {
                 config: errors,
                 theme: Vec::new(),
             },
+            None,
+            Appearance::Dark,
         )
     }
 
@@ -988,6 +1140,8 @@ interval = "1w"
                 config: Vec::new(),
                 theme: vec![theme_error],
             },
+            None,
+            Appearance::Dark,
         );
         assert_eq!(m.theme_errors(), ["mine.toml:3: invalid color"]);
         assert!(m.other_errors().is_empty());
@@ -1005,6 +1159,7 @@ interval = "1w"
                 config: errors,
                 theme: Vec::new(),
             },
+            Appearance::Dark,
         );
         let locked = m.locked(Section::Font).expect("locked by the syntax error");
         assert_eq!(locked.kind, ConfigErrorKind::Syntax);
@@ -1019,6 +1174,7 @@ interval = "1w"
                 config: errors,
                 theme: Vec::new(),
             },
+            Appearance::Dark,
         );
         assert!(m.locked(Section::Font).is_none());
         assert_eq!(m.text(Field::FontSize), "18");
@@ -1032,6 +1188,8 @@ interval = "1w"
                 config: vec![ConfigError::read(file(), "denied".into())],
                 theme: Vec::new(),
             },
+            None,
+            Appearance::Dark,
         );
         assert!(m.locked(Section::Font).is_some());
         assert!(m.locked(Section::KeyboardShortcuts).is_none());
@@ -1049,6 +1207,8 @@ interval = "1w"
                 config: vec![keybindings_error],
                 theme: Vec::new(),
             },
+            None,
+            Appearance::Dark,
         );
         assert!(m.locked(Section::KeyboardShortcuts).is_some());
         assert!(m.locked(Section::Font).is_none());
@@ -1060,6 +1220,8 @@ interval = "1w"
                 config: vec![ConfigError::read(file(), "denied".into())],
                 theme: Vec::new(),
             },
+            None,
+            Appearance::Dark,
         );
         assert!(m.locked(Section::KeyboardShortcuts).is_none());
         assert!(m.locked(Section::Font).is_some());
@@ -1323,7 +1485,229 @@ interval = "1w"
         );
         m.written(config, errors);
         assert_eq!(labels(&m, Action::DetachPane), ["F7"]);
-        m.refresh(&Config::default(), &LoadErrors::default());
+        m.refresh(&Config::default(), &LoadErrors::default(), Appearance::Dark);
         assert!(labels(&m, Action::DetachPane).is_empty());
+    }
+
+    /// A config directory of its own, holding the user themes `names` (each a copy of
+    /// `graphene-day` with another background).
+    fn theme_dir(test: &str, names: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-settings-model-{test}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(theme::THEMES_DIR)).unwrap();
+        for name in names {
+            std::fs::write(
+                theme::user_file(&dir, name).unwrap(),
+                "[colors]\nbackground = \"#123456\"\n",
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    /// The model of `text` with the user themes of `dir`, under `appearance`.
+    fn theme_model(text: &str, dir: &Path, appearance: Appearance) -> SettingsModel {
+        let (config, errors) = parse_both(text, &Config::default());
+        SettingsModel::new(
+            &config,
+            &LoadErrors {
+                config: errors,
+                theme: Vec::new(),
+            },
+            Some(dir.to_path_buf()),
+            appearance,
+        )
+    }
+
+    const FOLLOWING: &str = "[theme]\nname = \"mine\"\nlight = \"mine\"\ndark = \"other\"\n";
+
+    #[test]
+    fn the_editor_shows_the_active_theme() {
+        let dir = theme_dir("active", &["mine", "other"]);
+        let m = theme_model(FOLLOWING, &dir, Appearance::Dark);
+        assert_eq!(m.active_theme(), "other");
+        assert_eq!(m.edited_theme(), "other");
+        assert!(!m.edited_is_built_in());
+        assert_eq!(
+            m.edited_palette().background,
+            Rgb {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56
+            }
+        );
+
+        let m = theme_model("", &dir, Appearance::Light);
+        assert_eq!(m.edited_theme(), theme::DEFAULT_THEME);
+        assert!(m.edited_is_built_in());
+        assert_eq!(m.edited_palette(), theme::default_palette());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_edited_theme_is_independent_of_the_active_theme() {
+        let dir = theme_dir("independent", &["mine"]);
+        let mut m = theme_model("", &dir, Appearance::Dark);
+        m.edit_theme("mine");
+        assert_eq!(m.edited_theme(), "mine");
+        assert_eq!(m.active_theme(), theme::DEFAULT_THEME);
+        assert!(!m.edited_is_built_in());
+
+        // A reload keeps it and reads its colors again.
+        std::fs::write(
+            theme::user_file(&dir, "mine").unwrap(),
+            "[colors]\nbackground = \"#654321\"\n",
+        )
+        .unwrap();
+        m.refresh(&Config::default(), &LoadErrors::default(), Appearance::Dark);
+        assert_eq!(m.edited_theme(), "mine");
+        assert_eq!(
+            m.edited_palette().background,
+            Rgb {
+                r: 0x65,
+                g: 0x43,
+                b: 0x21
+            }
+        );
+
+        m.edit_theme("graphene-day");
+        assert!(m.edited_is_built_in());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_removed_edited_theme_falls_back_to_the_active_theme() {
+        let dir = theme_dir("fallback", &["mine", "other"]);
+        let mut m = theme_model("[theme]\nname = \"other\"\n", &dir, Appearance::Dark);
+        m.edit_theme("mine");
+        std::fs::remove_file(theme::user_file(&dir, "mine").unwrap()).unwrap();
+        let config = m.config().clone();
+        m.written(config, Vec::new());
+        assert_eq!(m.edited_theme(), "other");
+        assert!(!m.edited_is_built_in());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn set_color_changes_no_configuration() {
+        let dir = theme_dir("set-color", &["mine"]);
+        let m = theme_model("", &dir, Appearance::Dark);
+        let op = ThemeOp::SetColor(ColorKey::SelectionForeground, None);
+        assert_eq!(m.theme_op(op.clone()), Ok((Vec::new(), op)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn duplicating_points_the_active_key_to_the_copy() {
+        let dir = theme_dir("duplicate", &["mine", "other"]);
+        let copy = ThemeOp::Duplicate("copy".to_owned());
+
+        let m = theme_model("", &dir, Appearance::Dark);
+        assert_eq!(
+            m.theme_op(copy.clone()),
+            Ok((set(&["theme", "name"], text("copy")), copy.clone()))
+        );
+        for (appearance, key) in [(Appearance::Light, "light"), (Appearance::Dark, "dark")] {
+            let m = theme_model(FOLLOWING, &dir, appearance);
+            assert_eq!(
+                m.theme_op(copy.clone()),
+                Ok((set(&["theme", key], text("copy")), copy.clone()))
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn renaming_moves_every_key_naming_the_edited_theme() {
+        let dir = theme_dir("rename", &["mine", "other"]);
+        let mut m = theme_model(FOLLOWING, &dir, Appearance::Dark);
+        m.edit_theme("mine");
+        let op = ThemeOp::Rename("renamed".to_owned());
+        let (changes, returned) = m.theme_op(op.clone()).unwrap();
+        assert_eq!(returned, op);
+        assert_eq!(
+            changes,
+            [
+                Change::Set(owned(&["theme", "name"]), text("renamed")),
+                Change::Set(owned(&["theme", "light"]), text("renamed")),
+            ]
+        );
+
+        // A theme no key names changes no configuration.
+        let mut m = theme_model("", &dir, Appearance::Dark);
+        m.edit_theme("other");
+        assert_eq!(m.theme_op(op.clone()), Ok((Vec::new(), op)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_sets_the_keys_naming_the_edited_theme_back_to_the_default() {
+        let dir = theme_dir("delete", &["mine", "other"]);
+        let m = theme_model(FOLLOWING, &dir, Appearance::Dark);
+        assert_eq!(m.edited_theme(), "other");
+        assert_eq!(
+            m.theme_op(ThemeOp::Delete),
+            Ok((
+                set(&["theme", "dark"], text(theme::DEFAULT_THEME)),
+                ThemeOp::Delete
+            ))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn new_names_must_be_valid_and_free() {
+        let dir = theme_dir("names", &["mine"]);
+        let mut m = theme_model("", &dir, Appearance::Dark);
+        m.edit_theme("mine");
+        for op in [ThemeOp::Duplicate, ThemeOp::Rename] {
+            for (name, error) in [
+                ("", NameError::Empty),
+                ("a/b", NameError::Invalid),
+                (".hidden", NameError::Invalid),
+                ("mine", NameError::Taken),
+                ("graphene-day", NameError::Taken),
+            ] {
+                assert_eq!(m.theme_op(op(name.to_owned())), Err(error), "{name:?}");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    const GREEN: Rgb = Rgb {
+        r: 0,
+        g: 0xff,
+        b: 0,
+    };
+
+    #[test]
+    fn the_picked_color_of_the_active_theme_is_previewed() {
+        let dir = theme_dir("preview", &["mine"]);
+        let m = theme_model("[theme]\nname = \"mine\"\n", &dir, Appearance::Dark);
+        assert_eq!(m.live_preview(None), None);
+        let preview = m
+            .live_preview(Some((ColorKey::Cursor, GREEN)))
+            .expect("the edited theme is active");
+        let mut expected = m.edited_palette().clone();
+        expected.cursor = GREEN;
+        assert_eq!(preview, expected);
+
+        // Once written, the reload loads the same colors.
+        crate::theme_edit::set_color(&dir, "mine", ColorKey::Cursor, Some(GREEN)).unwrap();
+        assert_eq!(m.active_palette(), preview);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_theme_that_is_not_active_is_not_previewed() {
+        let dir = theme_dir("no-preview", &["mine", "other"]);
+        let mut m = theme_model("[theme]\nname = \"other\"\n", &dir, Appearance::Dark);
+        m.edit_theme("mine");
+        assert_eq!(m.live_preview(Some((ColorKey::Cursor, GREEN))), None);
+        assert_eq!(m.active_palette(), theme::load("other", Some(&dir)).0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

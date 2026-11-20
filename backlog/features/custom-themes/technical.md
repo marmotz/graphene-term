@@ -97,7 +97,9 @@ file instead of starting from the default config text.
 - `duplicate(dir, from, to)`: start from the source text (the user file, or the built-in
   source), then `set` every `ColorKey` absent from the document to its effective value
   in `theme::load(from)`. Result: a complete file that keeps the source comments,
-  including the licence header of third-party built-ins. Written with
+  including the licence header of third-party built-ins. The description header of a
+  Graphene built-in ("Graphene night: the default dark theme.") is dropped, since it
+  no longer describes the copy. Written with
   `create_new`-style semantics so an existing file is never overwritten.
 - `rename(dir, from, to)`: `fs::rename` of the file (refused if `to` exists).
 - `delete(dir, name)`: `fs::remove_file`.
@@ -187,4 +189,15 @@ file instead of starting from the default config text.
 
 ## Découpage en tâches d'implémentation
 
-Pas encore créées.
+1. [#160](https://github.com/marmotz/graphene-term/issues/160) — `ColorKey` table and
+   name validation (§1).
+2. [#161](https://github.com/marmotz/graphene-term/issues/161) — theme file operations,
+   `theme_edit` (§2). Depends on #160.
+3. [#162](https://github.com/marmotz/graphene-term/issues/162) — editor model (§3).
+   Depends on #160.
+4. [#163](https://github.com/marmotz/graphene-term/issues/163) — editor view, writes and
+   texts (§4, §5). Depends on #161, #162.
+5. [#164](https://github.com/marmotz/graphene-term/issues/164) — live preview in the
+   terminal (§4). Depends on #163.
+6. [#165](https://github.com/marmotz/graphene-term/issues/165) — theme editor docs (§5).
+   Depends on #163, #164.

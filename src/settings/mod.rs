@@ -19,15 +19,17 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::appearance::Appearance;
 use crate::config::{self, Config, ConfigError};
 use crate::config_edit::{self, ConfigEdit};
 use crate::i18n::{self, Lang, Msg};
 use crate::palette::Palette;
 use crate::renderer::Gpu;
+use crate::{opener, theme, theme_edit};
 
 pub use model::LoadErrors;
-use model::{Change, SettingsModel};
-use view::View;
+use model::{Change, SettingsModel, ThemeOp};
+use view::{Edits, View};
 
 const INITIAL_SIZE: LogicalSize<u32> = LogicalSize::new(1000, 700);
 const MIN_SIZE: LogicalSize<u32> = LogicalSize::new(640, 420);
@@ -56,11 +58,16 @@ pub struct SettingsWindow {
     repaint_at: Option<Instant>,
     /// Modifiers held, for a captured shortcut.
     modifiers: ModifiersState,
+    /// The colors shown in the terminal window while a color of the active theme is
+    /// picked.
+    preview: LivePreview,
 }
 
 impl SettingsWindow {
     /// Opens the window on `gpu`, colored by `palette` and labelled in `lang`, showing
-    /// `config` and the `errors` of its last load; changes are written to the files of `dir`.
+    /// `config` and the `errors` of its last load under the system `appearance`; changes
+    /// are written to the files of `dir`.
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         event_loop: &ActiveEventLoop,
         gpu: Arc<Gpu>,
@@ -68,6 +75,7 @@ impl SettingsWindow {
         lang: Lang,
         config: &Config,
         errors: &LoadErrors,
+        appearance: Appearance,
         dir: PathBuf,
     ) -> anyhow::Result<Self> {
         let attributes = Window::default_attributes()
@@ -121,7 +129,7 @@ impl SettingsWindow {
             fonts::install(ctx, font);
         }
         ctx.all_styles_mut(|style| style.text_styles = fonts::text_styles());
-        let mut model = SettingsModel::new(config, errors);
+        let mut model = SettingsModel::new(config, errors, Some(dir.clone()), appearance);
         model.set_font_families(model::monospace_families(fonts));
 
         let mut settings = Self {
@@ -137,8 +145,9 @@ impl SettingsWindow {
             lang,
             repaint_at: None,
             modifiers: ModifiersState::empty(),
+            preview: LivePreview::default(),
         };
-        settings.apply(palette, lang, config, errors);
+        settings.apply(palette, lang, config, errors, appearance);
         Ok(settings)
     }
 
@@ -152,20 +161,39 @@ impl SettingsWindow {
     }
 
     /// Recolors the window with `palette`, relabels it in `lang` and shows `config`
-    /// and its `errors`, after a reload.
-    pub fn apply(&mut self, palette: &Palette, lang: Lang, config: &Config, errors: &LoadErrors) {
-        self.model.refresh(config, errors);
+    /// and its `errors` under the system `appearance`, after a reload.
+    pub fn apply(
+        &mut self,
+        palette: &Palette,
+        lang: Lang,
+        config: &Config,
+        errors: &LoadErrors,
+        appearance: Appearance,
+    ) {
+        self.model.refresh(config, errors, appearance);
         self.view.reset_inputs();
         self.model
-            .set_theme_choices(crate::theme::available(Some(&self.dir)));
-        let ctx = self.egui.egui_ctx();
-        ctx.set_theme(visuals::theme(palette.background));
-        ctx.set_visuals(visuals::visuals(palette));
+            .set_theme_choices(theme::available(Some(&self.dir)));
+        recolor(self.egui.egui_ctx(), palette);
         if lang != self.lang {
             self.lang = lang;
             self.window.set_title(&i18n::text(lang, &Msg::OpenSettings));
         }
         self.window.request_redraw();
+    }
+
+    /// The colors the terminal window shows after the last event of this window, when
+    /// they changed: the active theme with the color being picked, then the active
+    /// theme as loaded once the picker closes. This window takes them too, so both
+    /// windows follow the picker. Read after each event, the window closing included.
+    pub fn take_preview(&mut self) -> Option<Palette> {
+        let wanted = self.model.live_preview(self.view.picked());
+        let palette = self
+            .preview
+            .update(wanted, || self.model.active_palette())?;
+        recolor(self.egui.egui_ctx(), &palette);
+        self.window.request_redraw();
+        Some(palette)
     }
 
     /// Next time the window wants a frame, when egui asked for a delayed one.
@@ -183,7 +211,7 @@ impl SettingsWindow {
 
     pub fn window_event(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) -> Outcome {
         match event {
-            WindowEvent::CloseRequested => return Outcome::Close,
+            WindowEvent::CloseRequested => return self.close(),
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.redraw(event_loop) {
                     log::error!("settings window render failed: {error:#}");
@@ -204,7 +232,10 @@ impl SettingsWindow {
                     self.modifiers,
                 );
                 if !changes.is_empty() {
-                    self.write(&changes);
+                    self.write(&Edits {
+                        changes,
+                        ..Edits::default()
+                    });
                 }
                 self.window.request_redraw();
                 return Outcome::Keep;
@@ -219,7 +250,7 @@ impl SettingsWindow {
                     self.window.request_redraw();
                     return Outcome::Keep;
                 }
-                return Outcome::Close;
+                return self.close();
             }
             _ => {}
         }
@@ -229,22 +260,49 @@ impl SettingsWindow {
         Outcome::Keep
     }
 
+    /// Writes the color of a picker still open, then lets the window close.
+    fn close(&mut self) -> Outcome {
+        if let Some(op) = self.view.finish_picking() {
+            let mut edits = Edits::default();
+            if let Ok(theme_op) = self.model.theme_op(op) {
+                edits.theme_ops.push(theme_op);
+                self.write(&edits);
+            }
+        }
+        Outcome::Close
+    }
+
     /// Whether egui handles `Escape` itself: it closes a popup or drops a field's focus.
     fn egui_takes_escape(&self) -> bool {
         let ctx = self.egui.egui_ctx();
         egui::Popup::is_any_open(ctx) || ctx.memory(|memory| memory.focused().is_some())
     }
 
-    /// Writes `changes` to the files, and shows the result before the reload reports it.
-    fn write(&mut self, changes: &[Change]) {
-        match write_changes(&self.dir, changes) {
-            Ok(()) => {
-                let (config, errors) = config::reload_from(&self.dir, self.model.config());
-                self.model.written(config, errors);
+    /// Writes the `edits` of a frame to the files, and shows the result before the
+    /// reload reports it.
+    fn write(&mut self, edits: &Edits) {
+        if !edits.changes.is_empty() || !edits.theme_ops.is_empty() {
+            let edited = self.model.edited_theme().to_owned();
+            let (next, result) = write_edits(&self.dir, &edited, &edits.changes, &edits.theme_ops);
+            let (config, errors) = config::reload_from(&self.dir, self.model.config());
+            self.model.written(config, errors);
+            self.model
+                .set_theme_choices(theme::available(Some(&self.dir)));
+            if let Some(name) = next {
+                self.model.edit_theme(&name);
             }
-            Err(error) => {
+            if let Err(error) = result {
                 log::warn!("{error}");
                 self.model.write_failed(&error);
+            }
+        }
+        if let Some(name) = &edits.edit_theme {
+            self.model.edit_theme(name);
+        }
+        if edits.open_themes_dir {
+            match themes_dir(&self.dir) {
+                Ok(dir) => opener::open(&dir.to_string_lossy()),
+                Err(error) => log::warn!("cannot create {}: {error}", theme::THEMES_DIR),
             }
         }
         self.window.request_redraw();
@@ -265,10 +323,10 @@ impl SettingsWindow {
         let view = &mut self.view;
         let model = &self.model;
         let lang = self.lang;
-        let mut changes = Vec::new();
-        let mut output = ctx.run_ui(input, |ui| changes.extend(view.show(ui, lang, model)));
-        if !changes.is_empty() {
-            self.write(&changes);
+        let mut edits = Edits::default();
+        let mut output = ctx.run_ui(input, |ui| edits = view.show(ui, lang, model));
+        if !edits.is_empty() {
+            self.write(&edits);
         }
         self.egui.handle_platform_output_with_event_loop(
             &self.window,
@@ -384,6 +442,38 @@ impl SettingsWindow {
     }
 }
 
+/// Draws the window with the colors of `palette` from the next frame on.
+fn recolor(ctx: &egui::Context, palette: &Palette) {
+    ctx.set_theme(visuals::theme(palette.background));
+    ctx.set_visuals(visuals::visuals(palette));
+}
+
+/// The colors last sent to the terminal window as a preview.
+#[derive(Debug, Default)]
+struct LivePreview {
+    shown: Option<Palette>,
+}
+
+impl LivePreview {
+    /// Takes the `wanted` preview of this event; returns the colors to show when they
+    /// changed. When the preview ends, the terminal gets the `active` theme's colors
+    /// once: the written color, or the file's when the write failed.
+    fn update(
+        &mut self,
+        wanted: Option<Palette>,
+        active: impl FnOnce() -> Palette,
+    ) -> Option<Palette> {
+        match wanted {
+            Some(palette) if self.shown.as_ref() == Some(&palette) => None,
+            Some(palette) => {
+                self.shown = Some(palette.clone());
+                Some(palette)
+            }
+            None => self.shown.take().map(|_| active()),
+        }
+    }
+}
+
 /// Whether a key event is a press of `Escape` with no modifier held.
 fn closes_on_escape(key: &Key, state: ElementState, mods: ModifiersState) -> bool {
     state == ElementState::Pressed && mods.is_empty() && *key == Key::Named(NamedKey::Escape)
@@ -409,6 +499,54 @@ fn write_changes(dir: &Path, changes: &[Change]) -> Result<(), ConfigError> {
         )?;
     }
     Ok(())
+}
+
+/// Writes the configuration `changes`, then each theme operation on the theme `edited`
+/// followed by its configuration changes: a theme file that cannot be written leaves the
+/// configuration alone. Stops at the first error. Returns the theme a copy or a rename
+/// made, to show it in the editor, with the result.
+/// The user themes folder of `config_dir`, created when missing so it can be opened.
+fn themes_dir(config_dir: &Path) -> std::io::Result<PathBuf> {
+    let dir = config_dir.join(theme::THEMES_DIR);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn write_edits(
+    dir: &Path,
+    edited: &str,
+    changes: &[Change],
+    theme_ops: &[(Vec<Change>, ThemeOp)],
+) -> (Option<String>, Result<(), ConfigError>) {
+    let mut next = None;
+    let result = (|| {
+        if !changes.is_empty() {
+            write_changes(dir, changes)?;
+        }
+        let mut edited = edited.to_owned();
+        for (changes, op) in theme_ops {
+            write_theme_op(dir, &edited, op)?;
+            if let ThemeOp::Duplicate(name) | ThemeOp::Rename(name) = op {
+                edited.clone_from(name);
+                next = Some(name.clone());
+            }
+            if !changes.is_empty() {
+                write_changes(dir, changes)?;
+            }
+        }
+        Ok(())
+    })();
+    (next, result)
+}
+
+/// Applies `op` to the user theme `name` of `dir`.
+fn write_theme_op(dir: &Path, name: &str, op: &ThemeOp) -> Result<(), ConfigError> {
+    match op {
+        ThemeOp::SetColor(key, color) => theme_edit::set_color(dir, name, *key, *color),
+        ThemeOp::Duplicate(to) => theme_edit::duplicate(dir, name, to),
+        ThemeOp::Rename(to) => theme_edit::rename(dir, name, to),
+        ThemeOp::Delete => theme_edit::delete(dir, name),
+    }
 }
 
 /// Whether `change` edits a shortcut, which lives in `keybindings.toml`.
@@ -445,6 +583,23 @@ mod tests {
     use super::*;
     use crate::config;
     use model::Value;
+
+    #[test]
+    fn the_themes_folder_is_created_before_it_is_opened() {
+        let config_dir = std::env::temp_dir().join(format!(
+            "graphene-settings-themes-dir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let dir = themes_dir(&config_dir).unwrap();
+        assert_eq!(dir, config_dir.join(theme::THEMES_DIR));
+        assert!(dir.is_dir());
+        // An existing folder is kept.
+        assert_eq!(themes_dir(&config_dir).unwrap(), dir);
+        let _ = std::fs::remove_dir_all(&config_dir);
+    }
 
     #[test]
     fn changes_are_written_in_one_write_keeping_the_file() {
@@ -646,6 +801,80 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    fn theme_name(name: &str) -> Change {
+        Change::Set(path(&["theme", "name"]), Value::Text(name.into()))
+    }
+
+    #[test]
+    fn a_copy_is_written_before_the_configuration_points_to_it() {
+        let dir = temporary_dir("theme-duplicate");
+        std::fs::write(dir.join(config::CONFIG_FILE), "# mine\n").unwrap();
+        let (next, result) = write_edits(
+            &dir,
+            theme::DEFAULT_THEME,
+            &[],
+            &[(vec![theme_name("copy")], ThemeOp::Duplicate("copy".into()))],
+        );
+        result.unwrap();
+        assert_eq!(next.as_deref(), Some("copy"));
+        assert!(dir.join("themes/copy.toml").is_file());
+        let (config, errors) = config::reload_from(&dir, &Config::default());
+        assert_eq!(errors, vec![]);
+        assert_eq!(config.theme.name, "copy");
+        assert_eq!(
+            theme::load("copy", Some(&dir)).0,
+            theme::load(theme::DEFAULT_THEME, None).0
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn theme_operations_follow_a_rename() {
+        let dir = temporary_dir("theme-rename");
+        std::fs::create_dir_all(dir.join("themes")).unwrap();
+        std::fs::write(dir.join("themes/mine.toml"), "# kept\n[colors]\n").unwrap();
+        let green = alacritty_terminal::vte::ansi::Rgb { r: 0, g: 255, b: 0 };
+        let (next, result) = write_edits(
+            &dir,
+            "mine",
+            &[],
+            &[
+                (vec![theme_name("ours")], ThemeOp::Rename("ours".into())),
+                (
+                    vec![],
+                    ThemeOp::SetColor(theme::ColorKey::Cursor, Some(green)),
+                ),
+            ],
+        );
+        result.unwrap();
+        assert_eq!(next.as_deref(), Some("ours"));
+        assert!(!dir.join("themes/mine.toml").exists());
+        let text = std::fs::read_to_string(dir.join("themes/ours.toml")).unwrap();
+        assert!(text.starts_with("# kept\n"), "{text}");
+        assert!(text.contains("cursor = \"#00ff00\""), "{text}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_theme_file_that_cannot_be_written_leaves_the_configuration_alone() {
+        let dir = temporary_dir("theme-fail");
+        std::fs::write(dir.join(config::CONFIG_FILE), "# mine\n").unwrap();
+        // A built-in theme has no file to delete.
+        let (next, result) = write_edits(
+            &dir,
+            theme::DEFAULT_THEME,
+            &[],
+            &[(vec![theme_name("gruvbox-dark")], ThemeOp::Delete)],
+        );
+        assert!(result.is_err());
+        assert_eq!(next, None);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(config::CONFIG_FILE)).unwrap(),
+            "# mine\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn an_invalid_shortcuts_file_is_left_untouched() {
         let dir = temporary_dir("invalid-keybindings");
@@ -664,5 +893,50 @@ mod tests {
             "[keybindings\n"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn palette_with_cursor(cursor: alacritty_terminal::vte::ansi::Rgb) -> Palette {
+        let mut palette = theme::default_palette().clone();
+        palette.cursor = cursor;
+        palette
+    }
+
+    #[test]
+    fn recoloring_draws_the_window_with_the_previewed_colors() {
+        let ctx = egui::Context::default();
+        let palette = Palette {
+            background: alacritty_terminal::vte::ansi::Rgb {
+                r: 250,
+                g: 250,
+                b: 240,
+            },
+            ..Palette::default()
+        };
+        recolor(&ctx, &palette);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert_eq!(
+            ctx.style_of(egui::Theme::Light).visuals,
+            visuals::visuals(&palette)
+        );
+    }
+
+    #[test]
+    fn the_preview_is_sent_while_it_changes_then_ends_on_the_active_theme() {
+        use alacritty_terminal::vte::ansi::Rgb;
+        let green = palette_with_cursor(Rgb { r: 0, g: 255, b: 0 });
+        let blue = palette_with_cursor(Rgb { r: 0, g: 0, b: 255 });
+        let active = || palette_with_cursor(Rgb { r: 1, g: 2, b: 3 });
+        let mut preview = LivePreview::default();
+        assert_eq!(preview.update(None, active), None);
+        assert_eq!(
+            preview.update(Some(green.clone()), active),
+            Some(green.clone())
+        );
+        // An event that does not change the color sends nothing.
+        assert_eq!(preview.update(Some(green.clone()), active), None);
+        assert_eq!(preview.update(Some(blue.clone()), active), Some(blue));
+        // The picker closed: the active theme as loaded, once.
+        assert_eq!(preview.update(None, active), Some(active()));
+        assert_eq!(preview.update(None, active), None);
     }
 }

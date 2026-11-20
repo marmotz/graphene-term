@@ -3,6 +3,7 @@
 use alacritty_terminal::vte::ansi::Rgb;
 use egui::{Color32, Stroke, Theme, Visuals};
 
+use crate::frame::blend;
 use crate::palette::Palette;
 
 /// egui theme matching a background: dark when its luminance is below half.
@@ -30,6 +31,11 @@ pub fn visuals(palette: &Palette) -> Visuals {
     let text = color(palette.foreground);
     let accent = color(ui.palette_match);
     let border = Stroke::new(1.0, color(ui.pane_border));
+    // Controls at rest: the text dimmed halfway toward the background, visible on it.
+    let rest_border = Stroke::new(
+        1.0,
+        color(blend(palette.foreground, palette.background, 0.5)),
+    );
 
     visuals.panel_fill = background;
     visuals.window_fill = color(ui.palette_background);
@@ -49,6 +55,7 @@ pub fn visuals(palette: &Palette) -> Visuals {
         state.bg_fill = color(ui.tab_bar_background);
         state.weak_bg_fill = color(ui.tab_bar_background);
         state.fg_stroke.color = text;
+        state.bg_stroke = rest_border;
     }
     for state in [&mut widgets.hovered, &mut widgets.active] {
         state.bg_fill = color(ui.tab_active_background);
@@ -112,6 +119,11 @@ mod tests {
             Color32::from_rgb(60, 60, 60)
         );
         assert_eq!(widgets.inactive.bg_fill, Color32::from_rgb(5, 5, 5));
+        // Halfway between the text (200, 210, 220) and the background (10, 20, 30).
+        for state in [&widgets.inactive, &widgets.open] {
+            assert_eq!(state.bg_stroke.color, Color32::from_rgb(105, 115, 125));
+            assert!(state.bg_stroke.width > 0.0);
+        }
         assert_eq!(widgets.hovered.bg_fill, Color32::from_rgb(40, 40, 40));
         assert_eq!(
             widgets.active.fg_stroke.color,

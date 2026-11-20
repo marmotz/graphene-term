@@ -580,6 +580,19 @@ impl ThemeConfig {
             _ => &self.name,
         }
     }
+
+    /// Key of the theme loaded for `appearance`: `theme.light` or `theme.dark` when
+    /// following the system appearance, otherwise `theme.name`.
+    pub fn active_key(&self, appearance: Appearance) -> &'static [&'static str] {
+        if self.follows_appearance() {
+            match appearance {
+                Appearance::Light => &["theme", "light"],
+                Appearance::Dark => &["theme", "dark"],
+            }
+        } else {
+            &["theme", "name"]
+        }
+    }
 }
 
 /// The user configuration. `Default` holds the built-in values, so a missing or empty

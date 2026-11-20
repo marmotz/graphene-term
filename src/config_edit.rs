@@ -1381,6 +1381,16 @@ impl ConfigEdit {
         Ok(())
     }
 
+    /// The value of the key at `path`, `None` when it is missing or holds a table.
+    pub(crate) fn value(&self, path: &[&str]) -> Option<&toml_edit::Value> {
+        let (key, parents) = path.split_last()?;
+        let mut table: &dyn toml_edit::TableLike = self.document.as_table();
+        for parent in parents {
+            table = table.get(parent)?.as_table_like()?;
+        }
+        table.get(key)?.as_value()
+    }
+
     /// Removes the key at `path`, if present. An emptied `[keybindings]` table that holds
     /// no comment is removed too.
     pub(crate) fn remove(&mut self, path: &[&str]) {
@@ -1428,19 +1438,36 @@ pub(crate) fn write(
     let text = match fs::read_to_string(file) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => default_text(),
-        Err(error) => {
-            return Err(ConfigError::read(
-                file.to_path_buf(),
-                format!("cannot read the file: {error}"),
-            ));
-        }
+        Err(error) => return Err(read_error(file, &error)),
     };
-    let mut edit = ConfigEdit::parse(&text, file)?;
+    write_text(file, &text, change)
+}
+
+/// Like [`write`], for a file that must already exist (a theme file): a missing file is a
+/// [`ConfigErrorKind::Read`] error instead of a new file.
+pub(crate) fn write_existing(
+    file: &Path,
+    change: impl FnOnce(&mut ConfigEdit) -> Result<(), ConfigError>,
+) -> Result<(), ConfigError> {
+    let text = fs::read_to_string(file).map_err(|error| read_error(file, &error))?;
+    write_text(file, &text, change)
+}
+
+fn write_text(
+    file: &Path,
+    text: &str,
+    change: impl FnOnce(&mut ConfigEdit) -> Result<(), ConfigError>,
+) -> Result<(), ConfigError> {
+    let mut edit = ConfigEdit::parse(text, file)?;
     change(&mut edit)?;
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(|error| write_error(file, &error))?;
     }
     write_atomic(file, &edit.to_string()).map_err(|error| write_error(file, &error))
+}
+
+fn read_error(file: &Path, error: &io::Error) -> ConfigError {
+    ConfigError::read(file.to_path_buf(), format!("cannot read the file: {error}"))
 }
 
 pub(crate) fn write_error(file: &Path, error: &io::Error) -> ConfigError {
@@ -1674,6 +1701,41 @@ mod tests {
         assert_eq!(config.font.size, 13.0);
         assert!(config.cursor.blinking);
         remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn write_existing_fails_on_a_missing_file() {
+        let (directory, path) = temporary_config(None);
+        let error =
+            write_existing(&path, |config| config.set(&["font", "size"], 20.0)).unwrap_err();
+        assert_eq!(error.kind, ConfigErrorKind::Read);
+        assert!(!path.exists());
+        remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn write_existing_edits_only_the_given_key() {
+        let (directory, path) = temporary_config(Some("# Mine.\n[font]\nsize = 12.0 # big\n"));
+        write_existing(&path, |config| config.set(&["font", "size"], 13.0)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# Mine.\n[font]\nsize = 13.0 # big\n"
+        );
+        remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn value_reads_a_nested_key() {
+        let config = edit("[colors.normal]\nred = \"#ff0000\"\n");
+        assert_eq!(
+            config
+                .value(&["colors", "normal", "red"])
+                .and_then(toml_edit::Value::as_str),
+            Some("#ff0000")
+        );
+        assert!(config.value(&["colors", "normal", "blue"]).is_none());
+        assert!(config.value(&["colors", "normal"]).is_none());
+        assert!(config.value(&["ui", "pane_border"]).is_none());
     }
 
     #[test]
