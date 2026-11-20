@@ -222,7 +222,6 @@ impl ColorKey {
         Self::ALL.into_iter().find(|key| key.path() == path)
     }
 
-    #[allow(dead_code)] // Used by the theme editor model, issue #162.
     /// Color of this key in `palette`; `None` only for an unset selection foreground.
     pub fn get(self, palette: &Palette) -> Option<Rgb> {
         if self == Self::SelectionForeground {
@@ -442,7 +441,6 @@ pub fn parse(text: &str, base: &Palette, file: &Path) -> (Palette, Vec<ConfigErr
     (palette, reader.errors)
 }
 
-#[allow(dead_code)] // Used by the theme file operations, issue #161.
 /// Formats a color as `#rrggbb`, the inverse of [`parse_color`].
 pub fn format_color(color: Rgb) -> String {
     format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
