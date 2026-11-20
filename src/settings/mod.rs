@@ -174,9 +174,7 @@ impl SettingsWindow {
         self.view.reset_inputs();
         self.model
             .set_theme_choices(theme::available(Some(&self.dir)));
-        let ctx = self.egui.egui_ctx();
-        ctx.set_theme(visuals::theme(palette.background));
-        ctx.set_visuals(visuals::visuals(palette));
+        recolor(self.egui.egui_ctx(), palette);
         if lang != self.lang {
             self.lang = lang;
             self.window.set_title(&i18n::text(lang, &Msg::OpenSettings));
@@ -186,11 +184,16 @@ impl SettingsWindow {
 
     /// The colors the terminal window shows after the last event of this window, when
     /// they changed: the active theme with the color being picked, then the active
-    /// theme as loaded once the picker closes. Read after each event, the window closing
-    /// included.
+    /// theme as loaded once the picker closes. This window takes them too, so both
+    /// windows follow the picker. Read after each event, the window closing included.
     pub fn take_preview(&mut self) -> Option<Palette> {
         let wanted = self.model.live_preview(self.view.picked());
-        self.preview.update(wanted, || self.model.active_palette())
+        let palette = self
+            .preview
+            .update(wanted, || self.model.active_palette())?;
+        recolor(self.egui.egui_ctx(), &palette);
+        self.window.request_redraw();
+        Some(palette)
     }
 
     /// Next time the window wants a frame, when egui asked for a delayed one.
@@ -437,6 +440,12 @@ impl SettingsWindow {
         queue.present(frame);
         Ok(())
     }
+}
+
+/// Draws the window with the colors of `palette` from the next frame on.
+fn recolor(ctx: &egui::Context, palette: &Palette) {
+    ctx.set_theme(visuals::theme(palette.background));
+    ctx.set_visuals(visuals::visuals(palette));
 }
 
 /// The colors last sent to the terminal window as a preview.
@@ -890,6 +899,25 @@ mod tests {
         let mut palette = theme::default_palette().clone();
         palette.cursor = cursor;
         palette
+    }
+
+    #[test]
+    fn recoloring_draws_the_window_with_the_previewed_colors() {
+        let ctx = egui::Context::default();
+        let palette = Palette {
+            background: alacritty_terminal::vte::ansi::Rgb {
+                r: 250,
+                g: 250,
+                b: 240,
+            },
+            ..Palette::default()
+        };
+        recolor(&ctx, &palette);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert_eq!(
+            ctx.style_of(egui::Theme::Light).visuals,
+            visuals::visuals(&palette)
+        );
     }
 
     #[test]
