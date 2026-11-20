@@ -141,6 +141,35 @@ enum Overlay {
     Menu(ContextMenu),
 }
 
+/// A theme of the context menu previewed in the terminal, and the colors to restore
+/// when the menu closes without choosing it.
+#[derive(Debug, Clone)]
+struct MenuTheme {
+    name: String,
+    saved: Palette,
+}
+
+/// What the terminal colors do for the theme the context menu points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuThemeStep<'a> {
+    /// The colors shown are the right ones.
+    Keep,
+    /// Show this theme.
+    Show(&'a str),
+    /// Show the colors saved before the preview again.
+    Restore,
+}
+
+/// The step from the theme previewed so far, `shown`, to the one the menu points at.
+fn menu_theme_step<'a>(shown: Option<&str>, wanted: Option<&'a str>) -> MenuThemeStep<'a> {
+    match (shown, wanted) {
+        (shown, wanted) if shown == wanted => MenuThemeStep::Keep,
+        (_, Some(name)) => MenuThemeStep::Show(name),
+        (Some(_), None) => MenuThemeStep::Restore,
+        (None, None) => MenuThemeStep::Keep,
+    }
+}
+
 struct Session {
     window: Arc<Window>,
     /// Hands the events of new panes' terminals to the event loop.
@@ -154,6 +183,8 @@ struct Session {
     /// Box open over the window, taking the keyboard and the mouse.
     overlay: Option<Overlay>,
     palette: Palette,
+    /// The theme of the context menu previewed in the terminal.
+    menu_theme: Option<MenuTheme>,
     /// Theme settings and system appearance used by the menu.
     theme: ThemeConfig,
     appearance: Appearance,
@@ -739,26 +770,65 @@ impl Session {
                     pane.toggle_fold_of(id);
                 }
             }
-            MenuCommand::Theme(name) => self.write_theme(&name),
+            MenuCommand::Theme(name) => {
+                if self.write_theme(&name) {
+                    // The previewed colors stay until the reload shows the same ones.
+                    self.menu_theme = None;
+                }
+            }
         }
     }
 
-    fn write_theme(&mut self, name: &str) {
+    /// Makes `name` the active theme in the configuration file; returns whether it was
+    /// written.
+    fn write_theme(&mut self, name: &str) -> bool {
         let Some(file) = config::config_file() else {
             let error = ConfigError::read(
                 PathBuf::from("config.toml"),
                 "cannot resolve the configuration file path".to_owned(),
             );
             self.show_config_error(error);
-            return;
+            return false;
         };
         let key = self.theme.active_key(self.appearance);
-        if let Err(error) = config_edit::write(
+        match config_edit::write(
             &file,
             config_edit::default_file_text,
             |edit: &mut ConfigEdit| edit.set(key, name),
         ) {
-            self.show_config_error(error);
+            Ok(()) => true,
+            Err(error) => {
+                self.show_config_error(error);
+                false
+            }
+        }
+    }
+
+    /// Shows the theme the context menu points at in the terminal, and the colors from
+    /// before once it points at no theme or closes.
+    fn sync_menu_theme(&mut self) {
+        let wanted = match &self.overlay {
+            Some(Overlay::Menu(menu)) => menu.previewed_theme(),
+            _ => None,
+        };
+        let shown = self.menu_theme.as_ref().map(|theme| theme.name.as_str());
+        match menu_theme_step(shown, wanted) {
+            MenuThemeStep::Keep => {}
+            MenuThemeStep::Show(name) => {
+                let name = name.to_owned();
+                let (palette, _) = theme::load(&name, config::config_dir().as_deref());
+                let saved = self
+                    .menu_theme
+                    .take()
+                    .map_or_else(|| self.palette.clone(), |theme| theme.saved);
+                self.preview_palette(&palette);
+                self.menu_theme = Some(MenuTheme { name, saved });
+            }
+            MenuThemeStep::Restore => {
+                if let Some(theme) = self.menu_theme.take() {
+                    self.preview_palette(&theme.saved);
+                }
+            }
         }
     }
 
@@ -940,6 +1010,8 @@ impl Session {
         self.window
             .set_transparent(window_transparent(new.window.background_opacity, true));
         self.palette = palette.clone();
+        // A menu still pointing at a theme previews it again over the new colors.
+        self.menu_theme = None;
         self.theme = new.theme.clone();
         self.keybindings = Keybindings::new(&new.keybindings);
         self.lang = new.language.resolve(Lang::detect);
@@ -2315,6 +2387,7 @@ impl Session {
     /// then the pane title bars, the dividers, the active pane border and the tab bar, then the banner, then
     /// the open dialog or command palette.
     fn redraw(&mut self) {
+        self.sync_menu_theme();
         let dialog = self.dialog_layout();
         let palette = self.palette_layout();
         let menu = self.menu_layout();
@@ -2694,6 +2767,7 @@ impl App {
             drag: None,
             overlay: None,
             palette: self.palette.clone(),
+            menu_theme: None,
             theme: self.config.theme.clone(),
             appearance: self.appearance,
             clipboard,
@@ -3083,6 +3157,24 @@ pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_menu_theme_is_shown_then_restored() {
+        use super::{MenuThemeStep, menu_theme_step};
+        assert_eq!(menu_theme_step(None, None), MenuThemeStep::Keep);
+        assert_eq!(
+            menu_theme_step(None, Some("dark")),
+            MenuThemeStep::Show("dark")
+        );
+        assert_eq!(
+            menu_theme_step(Some("dark"), Some("dark")),
+            MenuThemeStep::Keep
+        );
+        assert_eq!(
+            menu_theme_step(Some("dark"), Some("light")),
+            MenuThemeStep::Show("light")
+        );
+        assert_eq!(menu_theme_step(Some("dark"), None), MenuThemeStep::Restore);
+    }
 
     use super::*;
 

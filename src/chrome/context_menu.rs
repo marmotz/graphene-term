@@ -268,6 +268,10 @@ pub struct ContextMenu {
     pub hovered: Option<usize>,
     submenu: Option<SubmenuState>,
     active_theme: Option<String>,
+    /// Whether the submenu selection was moved by the pointer or the arrows since the
+    /// submenu opened, so its theme is previewed: opening it selects its first entry
+    /// without previewing it.
+    theme_preview: bool,
 }
 
 impl ContextMenu {
@@ -278,6 +282,7 @@ impl ContextMenu {
             hovered: None,
             submenu: None,
             active_theme: None,
+            theme_preview: false,
         }
     }
 
@@ -288,6 +293,22 @@ impl ContextMenu {
 
     pub fn from_context(anchor: (f32, f32), items: Vec<Item>, context: &MenuContext<'_>) -> Self {
         Self::new(anchor, items).with_active_theme(context.active_theme)
+    }
+
+    /// The theme of the submenu entry under the pointer or the arrows, previewed in the
+    /// terminal until the menu closes.
+    pub fn previewed_theme(&self) -> Option<&str> {
+        if !self.theme_preview {
+            return None;
+        }
+        let state = self.submenu?;
+        match submenu_items(&self.items, state.parent).get(state.selected?)? {
+            Item::Entry {
+                command: Command::Theme(name),
+                ..
+            } => Some(name),
+            _ => None,
+        }
     }
 
     pub fn submenu_open(&self) -> bool {
@@ -387,6 +408,7 @@ impl ContextMenu {
             } => {
                 if let Some(state) = &mut self.submenu {
                     state.selected = Some(index);
+                    self.theme_preview = true;
                 }
             }
             MenuHit::Separator {
@@ -458,6 +480,7 @@ impl ContextMenu {
             selected,
             scroll: 0,
         });
+        self.theme_preview = false;
     }
 
     fn move_main(&mut self, delta: isize) {
@@ -474,6 +497,7 @@ impl ContextMenu {
         };
         let entries = submenu_items(&self.items, state.parent);
         state.selected = move_selectable(entries, state.selected, delta);
+        self.theme_preview = true;
         if let Some(selected) = state.selected {
             if selected < state.scroll {
                 state.scroll = selected;
@@ -1089,6 +1113,88 @@ mod tests {
         assert_eq!(menu.submenu_scroll(), 2);
         let scrolled = MenuLayout::new(&menu, Rect::from_size(150, 100), METRICS, width);
         assert_eq!(scrolled.submenu.unwrap().first_index, 2);
+    }
+
+    fn theme_menu() -> ContextMenu {
+        let theme = |name: &str| Item::Entry {
+            label: name.into(),
+            shortcut: None,
+            enabled: true,
+            command: Command::Theme(name.into()),
+        };
+        ContextMenu::new(
+            (0.0, 0.0),
+            vec![
+                entry(
+                    Msg::Quit,
+                    None,
+                    true,
+                    Command::Action(Action::Quit),
+                    Lang::En,
+                ),
+                Item::Submenu {
+                    label: "Themes".into(),
+                    entries: vec![theme("Dark"), theme("Light")],
+                },
+            ],
+        )
+    }
+
+    const THEMES_ROW: MenuHit = MenuHit::Entry {
+        level: MenuLevel::Main,
+        index: 1,
+    };
+
+    fn theme_row(index: usize) -> MenuHit {
+        MenuHit::Entry {
+            level: MenuLevel::Submenu,
+            index,
+        }
+    }
+
+    #[test]
+    fn the_theme_under_the_pointer_is_previewed() {
+        let mut menu = theme_menu();
+        // Opening the submenu selects its first theme without previewing it.
+        menu.hover(THEMES_ROW);
+        assert!(menu.submenu_open());
+        assert_eq!(menu.previewed_theme(), None);
+
+        menu.hover(theme_row(1));
+        assert_eq!(menu.previewed_theme(), Some("Light"));
+        menu.hover(theme_row(0));
+        assert_eq!(menu.previewed_theme(), Some("Dark"));
+        // Blank space of the submenu keeps the last theme.
+        menu.hover(MenuHit::Box);
+        assert_eq!(menu.previewed_theme(), Some("Dark"));
+
+        // Back on the main menu, or outside it: no preview.
+        menu.hover(THEMES_ROW);
+        assert_eq!(menu.previewed_theme(), None);
+        menu.hover(theme_row(1));
+        menu.hover(MenuHit::Entry {
+            level: MenuLevel::Main,
+            index: 0,
+        });
+        assert_eq!(menu.previewed_theme(), None);
+        menu.hover(theme_row(1));
+        menu.hover(MenuHit::Outside);
+        assert_eq!(menu.previewed_theme(), None);
+    }
+
+    #[test]
+    fn the_theme_reached_with_the_arrows_is_previewed() {
+        let mut menu = theme_menu();
+        menu.key(&Key::Named(NamedKey::ArrowDown));
+        menu.key(&Key::Named(NamedKey::ArrowDown));
+        menu.key(&Key::Named(NamedKey::ArrowRight));
+        assert!(menu.submenu_open());
+        assert_eq!(menu.previewed_theme(), None);
+        menu.key(&Key::Named(NamedKey::ArrowDown));
+        assert_eq!(menu.previewed_theme(), Some("Light"));
+        // Escape closes the submenu and ends the preview.
+        menu.key(&Key::Named(NamedKey::Escape));
+        assert_eq!(menu.previewed_theme(), None);
     }
 
     #[test]

@@ -18,7 +18,9 @@ banners).
 
 Any of these switches the theme at once:
 
-- right click in the window, then **Themes**;
+- right click in the window, then **Themes**: pointing at a theme (or reaching it with
+  the arrow keys) previews it in the terminal, and closing the menu without choosing one
+  brings the colors back;
 - the **Theme** section of the settings window (`Ctrl+,`);
 - `name` in the `[theme]` section of the [configuration file](configuration.md):
 
