@@ -60,6 +60,7 @@ See [Command blocks](command-blocks.md).
 | `Ctrl+Shift+Alt+Up` / `Down`, or `Ctrl+Shift+Alt+PageUp` / `PageDown` | Resize the pane upward / downward |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab`              | Next / previous pane                       |
 | `Ctrl+Shift+X`                               | Zoom the pane to the whole tab, or back    |
+| `Ctrl+Shift+B`                               | Broadcast input to every pane of the tab, or stop |
 
 Some desktops (Cinnamon, for example) use `Ctrl+Shift+Alt+Up` / `Down` for themselves:
 the `PageUp` / `PageDown` variants do the same.

@@ -53,7 +53,7 @@ src/
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup timing logs (`graphene::perf` target)
   app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay),
-                   window event routing (terminal or settings window)
+                   window event routing (terminal or settings window), key and paste fan-out to the broadcast targets
   settings/
     mod.rs         SettingsWindow: winit window, surface on the shared Gpu, egui_winit::State,
                    egui_wgpu::Renderer, redraw on demand
@@ -105,7 +105,7 @@ src/
   cursor_blink.rs  blink phase of the text cursor (pure, time passed in)
   timeline_selection.rs  text selection across blocks, split into one Selection per grid
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations
-  input.rs         key -> bytes encoding, actions and their ids, paste wrapping
+  input.rs         key -> bytes encoding, per-pane key resolution (editor command, shortcut, input), actions and their ids, paste wrapping
   keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)
   mouse.rs         mouse, focus and alternate scroll encoding, mouse routing between app and Graphene (pure)
   input_editor.rs  rich input editor: rich mode, prompt shortcuts, private key sequences, buffer distance, click moves, keyboard selection, selection replacement (pure)

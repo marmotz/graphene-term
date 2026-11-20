@@ -205,6 +205,7 @@ pub enum Msg {
     NextPane,
     PreviousPane,
     ToggleZoom,
+    ToggleBroadcastAll,
     #[allow(dead_code)] // Used by the context menu; its event integration is issue #103.
     ZoomPane,
     #[allow(dead_code)]
@@ -335,6 +336,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::NextPane => "Next pane",
         Msg::PreviousPane => "Previous pane",
         Msg::ToggleZoom => "Zoom / unzoom pane",
+        Msg::ToggleBroadcastAll => "Broadcast input to all panes / stop",
         Msg::ZoomPane => "Zoom the pane",
         Msg::UnzoomPane => "Unzoom the pane",
         Msg::SplitVertical => "Split vertically",
@@ -469,6 +471,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::NextPane => "Panneau suivant",
         Msg::PreviousPane => "Panneau précédent",
         Msg::ToggleZoom => "Agrandir / réduire le panneau",
+        Msg::ToggleBroadcastAll => "Diffuser la saisie à tous les panneaux / arrêter",
         Msg::ZoomPane => "Agrandir le panneau",
         Msg::UnzoomPane => "Réduire le panneau",
         Msg::SplitVertical => "Diviser verticalement",
@@ -607,6 +610,7 @@ mod tests {
             Msg::NextPane => 24,
             Msg::PreviousPane => 25,
             Msg::ToggleZoom => 26,
+            Msg::ToggleBroadcastAll => 68,
             Msg::ZoomPane => 61,
             Msg::UnzoomPane => 62,
             Msg::SplitVertical => 63,
@@ -650,7 +654,7 @@ mod tests {
             Msg::Replace => 58,
         }
     }
-    const VARIANT_COUNT: usize = 68;
+    const VARIANT_COUNT: usize = 69;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -681,6 +685,7 @@ mod tests {
             Msg::NextPane,
             Msg::PreviousPane,
             Msg::ToggleZoom,
+            Msg::ToggleBroadcastAll,
             Msg::ZoomPane,
             Msg::UnzoomPane,
             Msg::SplitVertical,

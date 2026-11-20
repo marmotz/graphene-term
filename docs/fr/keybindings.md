@@ -65,6 +65,7 @@ Voir [Blocs de commande](command-blocks.md).
 | `Ctrl+Shift+Alt+Up` / `Down`, ou `Ctrl+Shift+Alt+PageUp` / `PageDown` | Redimensionner le panneau vers le haut / le bas |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab`              | Panneau suivant / précédent                |
 | `Ctrl+Shift+X`                               | Agrandir le panneau à tout l'onglet, ou le réduire |
+| `Ctrl+Shift+B`                               | Diffuser la saisie à tous les panneaux de l'onglet, ou arrêter |
 
 Certains bureaux (Cinnamon, par exemple) se réservent `Ctrl+Shift+Alt+Up` / `Down` :
 les variantes `PageUp` / `PageDown` font la même chose.

@@ -4,6 +4,7 @@ use alacritty_terminal::term::TermMode;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::i18n::{Direction, Msg};
+use crate::input_editor::{self, EditorCommand};
 
 /// Actions handled by Graphene Term itself rather than forwarded to the shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,8 @@ pub enum Action {
     PreviousPane,
     /// Zooms the active pane to the whole tab, or back.
     ToggleZoom,
+    /// Sends the typed input to every pane of the tab, or stops doing so.
+    ToggleBroadcastAll,
     /// Gives every pane of the tab an equal share; no default key.
     EqualisePanes,
     /// Moves the active pane into a new tab; no default key.
@@ -57,7 +60,7 @@ pub enum Action {
 impl Action {
     /// Every action the command palette lists, in its default order. The tabs are
     /// listed by the palette itself, so `GoToTab` is left out, and so is the palette.
-    pub const ALL: [Action; 37] = [
+    pub const ALL: [Action; 38] = [
         Action::NewTab,
         Action::CloseTab,
         Action::ClosePane,
@@ -76,6 +79,7 @@ impl Action {
         Action::ResizePane(Direction::Up),
         Action::ResizePane(Direction::Down),
         Action::ToggleZoom,
+        Action::ToggleBroadcastAll,
         Action::EqualisePanes,
         Action::DetachPane,
         Action::Copy,
@@ -131,6 +135,7 @@ impl Action {
             Action::NextPane => "next_pane",
             Action::PreviousPane => "previous_pane",
             Action::ToggleZoom => "toggle_zoom",
+            Action::ToggleBroadcastAll => "toggle_broadcast_all",
             Action::EqualisePanes => "equalise_panes",
             Action::DetachPane => "detach_pane",
             Action::NewTab => "new_tab",
@@ -187,6 +192,7 @@ impl Action {
             Action::NextPane => Msg::NextPane,
             Action::PreviousPane => Msg::PreviousPane,
             Action::ToggleZoom => Msg::ToggleZoom,
+            Action::ToggleBroadcastAll => Msg::ToggleBroadcastAll,
             Action::EqualisePanes => Msg::EqualisePanes,
             Action::DetachPane => Msg::DetachPane,
             Action::NewTab => Msg::NewTab,
@@ -198,6 +204,49 @@ impl Action {
             Action::OpenSettings => Msg::OpenSettings,
             Action::Quit => Msg::Quit,
         }
+    }
+}
+
+/// What a pane does with a key press, given its own state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Delivery {
+    /// An editor command at the prompt.
+    Editor(EditorCommand),
+    /// A Graphene shortcut: run once by the active pane, never sent to the others.
+    Shortcut,
+    /// Typed input: `replacing` is what the key types over an input selection (tried
+    /// first, at the prompt), `bytes` what is written to the shell otherwise.
+    Input {
+        replacing: Option<Vec<u8>>,
+        bytes: Option<Vec<u8>>,
+    },
+}
+
+/// How a pane with the rich flag `rich` and the terminal mode `mode` handles a key.
+/// `is_shortcut` tells whether the key is bound to an action. The order is the editor
+/// commands, then the shortcuts, then the input.
+pub fn resolve_key(
+    key: &Key,
+    text: Option<&str>,
+    mods: ModifiersState,
+    rich: bool,
+    mode: TermMode,
+    is_shortcut: bool,
+) -> Delivery {
+    if let Some(command) = input_editor::prompt_command(key, mods, rich) {
+        return Delivery::Editor(command);
+    }
+    if is_shortcut {
+        return Delivery::Shortcut;
+    }
+    let replacing = if rich {
+        input_editor::replacing_text(key, text, mods)
+    } else {
+        None
+    };
+    Delivery::Input {
+        replacing,
+        bytes: key_to_bytes(key, text, mods, mode),
     }
 }
 
@@ -348,6 +397,75 @@ mod tests {
     }
 
     const NONE: ModifiersState = ModifiersState::empty();
+
+    #[test]
+    fn broadcast_action_has_its_stable_id() {
+        assert_eq!(Action::ToggleBroadcastAll.id(), "toggle_broadcast_all");
+        assert_eq!(
+            Action::from_id("toggle_broadcast_all"),
+            Some(Action::ToggleBroadcastAll)
+        );
+        assert!(Action::ALL.contains(&Action::ToggleBroadcastAll));
+    }
+
+    fn resolve(key: &Key, rich: bool, mode: TermMode, is_shortcut: bool) -> Delivery {
+        resolve_key(key, None, NONE, rich, mode, is_shortcut)
+    }
+
+    #[test]
+    fn a_shortcut_is_never_typed() {
+        let key = named(NamedKey::ScrollLock);
+        assert_eq!(
+            resolve(&key, false, TermMode::empty(), true),
+            Delivery::Shortcut
+        );
+    }
+
+    #[test]
+    fn an_editor_command_wins_over_a_shortcut_at_the_prompt() {
+        let key = named(NamedKey::Home);
+        let mods = ModifiersState::SHIFT;
+        // Shift+Home is an editor command at the prompt, a shortcut elsewhere.
+        assert!(matches!(
+            resolve_key(&key, None, mods, true, TermMode::empty(), true),
+            Delivery::Editor(_)
+        ));
+        assert_eq!(
+            resolve_key(&key, None, mods, false, TermMode::empty(), true),
+            Delivery::Shortcut
+        );
+    }
+
+    #[test]
+    fn the_same_key_gives_different_bytes_in_two_modes() {
+        let up = named(NamedKey::ArrowUp);
+        assert_eq!(
+            resolve(&up, false, TermMode::empty(), false),
+            Delivery::Input {
+                replacing: None,
+                bytes: Some(b"\x1b[A".to_vec())
+            }
+        );
+        assert_eq!(
+            resolve(&up, false, TermMode::APP_CURSOR, false),
+            Delivery::Input {
+                replacing: None,
+                bytes: Some(b"\x1bOA".to_vec())
+            }
+        );
+    }
+
+    #[test]
+    fn typing_over_a_selection_is_only_offered_at_the_prompt() {
+        let key = ch("a");
+        let typed = |rich| match resolve_key(&key, Some("a"), NONE, rich, TermMode::empty(), false)
+        {
+            Delivery::Input { replacing, bytes } => (replacing, bytes),
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(typed(true), (Some(b"a".to_vec()), Some(b"a".to_vec())));
+        assert_eq!(typed(false), (None, Some(b"a".to_vec())));
+    }
 
     #[test]
     fn action_ids_are_unique_snake_case() {

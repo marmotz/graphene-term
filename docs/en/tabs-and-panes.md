@@ -93,6 +93,13 @@ shows where the pane will land. `Escape` cancels the drag.
 `Ctrl+Shift+X`, or a double click on the title bar, makes the pane fill the whole tab;
 the same again restores the layout. The other panes keep running meanwhile.
 
+## Broadcast
+
+`Ctrl+Shift+B` sends what you type and paste to every pane of the tab at once; the same
+shortcut again stops it. Each pane handles the keys in its own state (prompt, running
+program). Graphene shortcuts are never broadcast: they only act on the active pane.
+Broadcast continues while a pane is zoomed.
+
 ## Command palette
 
 `Ctrl+Shift+P` opens the command palette: every action with its shortcut, then the open

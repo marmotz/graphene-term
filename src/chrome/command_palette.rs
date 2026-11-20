@@ -180,7 +180,10 @@ pub fn available<P>(
         Action::ResizePane(direction) => {
             workspace.can_resize_active(direction, RESIZE_STEP_CELLS, geometry)
         }
-        Action::ToggleZoom | Action::EqualisePanes | Action::DetachPane => several_panes,
+        Action::ToggleZoom
+        | Action::ToggleBroadcastAll
+        | Action::EqualisePanes
+        | Action::DetachPane => several_panes,
         Action::FontSizeIncrease => context.font_size < MAX_FONT_SIZE,
         Action::FontSizeDecrease => context.font_size > MIN_FONT_SIZE,
         Action::FontSizeReset => {
@@ -1064,6 +1067,7 @@ mod tests {
             Action::FocusPane(Direction::Left),
             Action::ResizePane(Direction::Left),
             Action::ToggleZoom,
+            Action::ToggleBroadcastAll,
             Action::EqualisePanes,
             Action::DetachPane,
         ] {
@@ -1144,6 +1148,7 @@ mod tests {
                     | Action::FocusPane(_)
                     | Action::ResizePane(_)
                     | Action::ToggleZoom
+                    | Action::ToggleBroadcastAll
                     | Action::EqualisePanes
                     | Action::DetachPane
                     | Action::FontSizeReset

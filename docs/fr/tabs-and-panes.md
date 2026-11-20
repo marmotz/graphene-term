@@ -97,6 +97,13 @@ surbrillance translucide montre où le panneau va atterrir. `Échap` annule le g
 panneau ; la même action rétablit la disposition. Les autres panneaux continuent de
 tourner pendant ce temps.
 
+## Diffusion
+
+`Ctrl+Shift+B` envoie ce que vous tapez et collez à tous les panneaux de l'onglet à la
+fois ; le même raccourci l'arrête. Chaque panneau traite les touches selon son propre
+état (invite, programme en cours). Les raccourcis de Graphene ne sont jamais diffusés :
+ils n'agissent que sur le panneau actif. La diffusion continue pendant un zoom.
+
 ## Palette de commandes
 
 `Ctrl+Shift+P` ouvre la palette de commandes : toutes les actions avec leur raccourci,

@@ -41,7 +41,7 @@ use crate::cursor_blink::CursorBlink;
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::graphics;
 use crate::i18n::Lang;
-use crate::input::{self, Action};
+use crate::input::{self, Action, Delivery};
 use crate::input_editor;
 use crate::keybindings::Keybindings;
 use crate::layout::{CellSize, GridLayout, Hit, Rect};
@@ -1207,8 +1207,16 @@ impl Session {
         let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) else {
             return;
         };
-        if let Some(pane) = self.workspace.active_pane_mut() {
-            pane.send_paste(&text);
+        self.paste_text(&text);
+    }
+
+    /// Pastes `text` into every pane typed input goes to, each bracketing it with its
+    /// own mode.
+    fn paste_text(&mut self, text: &str) {
+        for id in self.workspace.input_targets() {
+            if let Some(pane) = self.workspace.pane_mut(id) {
+                pane.send_paste(text);
+            }
         }
     }
 
@@ -1789,9 +1797,7 @@ impl Session {
                     return;
                 }
             };
-            if let Some(pane) = self.workspace.active_pane_mut() {
-                pane.send_paste(&text);
-            }
+            self.paste_text(&text);
         }
     }
 
@@ -1853,6 +1859,11 @@ impl Session {
                 if self.workspace.toggle_zoom() {
                     self.relayout();
                     self.update_pointer();
+                }
+            }
+            Action::ToggleBroadcastAll => {
+                if self.workspace.toggle_broadcast_all() {
+                    self.window.request_redraw();
                 }
             }
             Action::EqualisePanes => {
@@ -1939,38 +1950,61 @@ impl Session {
             self.run_action(action, default_font_size, event_loop);
             return;
         }
-        let Some(pane) = self.workspace.active_pane_mut() else {
-            return;
-        };
-        // At the prompt, editor shortcuts win over the app shortcuts (`Shift+Home/End`)
-        // and the key encoding.
-        let rich = pane.rich_mode(modifiers);
-        if let Some(command) = input_editor::prompt_command(&event.logical_key, modifiers, rich) {
-            let replaced = input_editor::command_replacing_text(command)
-                .is_some_and(|typed| pane.replace_selection(typed));
-            if !replaced {
-                pane.run_editor_command(command);
+        // The active pane decides whether the key is a shortcut (run once, never
+        // broadcast); otherwise every target types it in its own state.
+        let active = self.workspace.active_pane_id();
+        for id in self.workspace.input_targets() {
+            let delivery = self.deliver_key(id, event, modifiers, action.is_some());
+            if delivery == Delivery::Shortcut
+                && Some(id) == active
+                && let Some(action) = action
+            {
+                self.run_action(action, default_font_size, event_loop);
+                return;
             }
-            return;
         }
-        if let Some(action) = action {
-            self.run_action(action, default_font_size, event_loop);
-            return;
+    }
+
+    /// Makes the pane `id` handle a key in its own state and returns what it was.
+    /// A shortcut is not run here.
+    fn deliver_key(
+        &mut self,
+        id: PaneId,
+        event: &KeyEvent,
+        modifiers: ModifiersState,
+        is_shortcut: bool,
+    ) -> Delivery {
+        let Some(pane) = self.workspace.pane_mut(id) else {
+            return Delivery::Shortcut;
+        };
+        let rich = pane.rich_mode(modifiers);
+        let delivery = input::resolve_key(
+            &event.logical_key,
+            event.text.as_deref(),
+            modifiers,
+            rich,
+            pane.mode(),
+            is_shortcut,
+        );
+        match &delivery {
+            Delivery::Editor(command) => {
+                let replaced = input_editor::command_replacing_text(*command)
+                    .is_some_and(|typed| pane.replace_selection(typed));
+                if !replaced {
+                    pane.run_editor_command(*command);
+                }
+            }
+            Delivery::Shortcut => {}
+            Delivery::Input { replacing, bytes } => {
+                let replaced = replacing
+                    .as_ref()
+                    .is_some_and(|typed| pane.replace_selection(typed));
+                if !replaced && let Some(bytes) = bytes {
+                    pane.type_bytes(bytes.clone());
+                }
+            }
         }
-        // At the prompt, typing over a selection in the input replaces it.
-        if rich
-            && let Some(typed) =
-                input_editor::replacing_text(&event.logical_key, event.text.as_deref(), modifiers)
-            && pane.replace_selection(&typed)
-        {
-            return;
-        }
-        let mode = pane.mode();
-        if let Some(bytes) =
-            input::key_to_bytes(&event.logical_key, event.text.as_deref(), modifiers, mode)
-        {
-            pane.type_bytes(bytes);
-        }
+        delivery
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
@@ -2300,6 +2334,7 @@ fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::NextPane
         | Action::PreviousPane
         | Action::ToggleZoom
+        | Action::ToggleBroadcastAll
         | Action::EqualisePanes
         | Action::DetachPane
         | Action::NewTab

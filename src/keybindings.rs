@@ -133,6 +133,7 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Ctrl+Tab", Action::NextPane),
     ("Ctrl+Shift+Tab", Action::PreviousPane),
     ("Ctrl+Shift+X", Action::ToggleZoom),
+    ("Ctrl+Shift+B", Action::ToggleBroadcastAll),
     ("Ctrl+Shift+T", Action::NewTab),
     ("Ctrl+Alt+W", Action::CloseTab),
     ("Ctrl+PageDown", Action::NextTab),
@@ -697,6 +698,7 @@ mod tests {
             assert_eq!(get(&named(key), csa()), Some(Action::ResizePane(direction)));
             assert_eq!(get(&named(key), CTRL), None);
         }
+        assert_eq!(get(&ch("B"), cs()), Some(Action::ToggleBroadcastAll));
         assert_eq!(get(&named(NamedKey::Tab), CTRL), Some(Action::NextPane));
         assert_eq!(get(&named(NamedKey::Tab), cs()), Some(Action::PreviousPane));
         assert_eq!(
@@ -767,7 +769,7 @@ mod tests {
     #[test]
     fn unmapped_ctrl_shift_letters_stay_with_the_shell() {
         let bindings = defaults();
-        for letter in ["A", "D", "G", "N", "Z", "B"] {
+        for letter in ["A", "D", "G", "N", "Z"] {
             assert_eq!(action_for(&bindings, &ch(letter), cs()), None, "{letter}");
         }
     }
