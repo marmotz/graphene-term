@@ -18,8 +18,8 @@
 
 ### Dev builds report a new version as available  ·  [overview](bugs/dev-build-update-notice/overview.md)
 
-_tâches créées, voir [technical.md](bugs/dev-build-update-notice/technical.md)_ — 0/1 tasks done
+_terminé, voir [technical.md](bugs/dev-build-update-notice/technical.md)_ — 1/1 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#159](https://github.com/marmotz/graphene-term/issues/159) | fix(update): stop notifying dev builds of their own published version | — |
+| [x]  | [#159](https://github.com/marmotz/graphene-term/issues/159) | fix(update): stop notifying dev builds of their own published version | — |

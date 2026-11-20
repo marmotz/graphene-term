@@ -94,8 +94,9 @@ pub fn due(last_check: u64, interval: Duration) -> u64 {
     last_check.saturating_add(interval.as_secs())
 }
 
-/// The release to show: `latest` when it is newer than `current` and not the ignored
-/// tag. A tag that is not a version is never shown.
+/// The release to show: `latest` when it is newer than the release part of `current`
+/// and not the ignored tag, so a dev build of `X.Y.Z` is only notified of a release
+/// strictly greater than `X.Y.Z`. A tag that is not a version is never shown.
 pub fn notice(
     current: &Version,
     latest: Option<&Release>,
@@ -106,7 +107,13 @@ pub fn notice(
         return None;
     }
     let version = parse_tag(&latest.tag)?;
-    (version > *current).then(|| latest.clone())
+    (version > release_floor(current)).then(|| latest.clone())
+}
+
+/// `current` without its pre-release and build metadata: a dev build of `X.Y.Z` is
+/// made from code at or after the published `X.Y.Z`.
+fn release_floor(current: &Version) -> Version {
+    Version::new(current.major, current.minor, current.patch)
 }
 
 /// The highest version among `releases`, drafts and tags that are not a version
@@ -260,18 +267,35 @@ mod tests {
     #[test]
     fn notice_newer_release() {
         let current = version("0.1.0-dev.20261101000000");
-        let latest = release("v0.1.0-dev.20261112000000");
-        assert_eq!(notice(&current, Some(&latest), None), Some(latest));
+        let stable = release("v0.1.1");
+        let pre_release = release("v0.1.1-dev.20261112000000");
+        assert_eq!(notice(&current, Some(&stable), None), Some(stable));
+        assert_eq!(
+            notice(&current, Some(&pre_release), None),
+            Some(pre_release)
+        );
     }
 
     #[test]
     fn notice_equal_or_older_release() {
         let current = version("0.1.0-dev.20261112000000");
+        let later = release("v0.1.0-dev.20261120000000");
         let equal = release("v0.1.0-dev.20261112000000");
         let older = release("v0.1.0-dev.20261101000000");
+        let previous = release("v0.0.9");
+        assert_eq!(notice(&current, Some(&later), None), None);
         assert_eq!(notice(&current, Some(&equal), None), None);
         assert_eq!(notice(&current, Some(&older), None), None);
+        assert_eq!(notice(&current, Some(&previous), None), None);
         assert_eq!(notice(&current, None, None), None);
+    }
+
+    #[test]
+    fn notice_stable_build() {
+        let current = version("0.1.0");
+        let newer = release("v0.1.1");
+        assert_eq!(notice(&current, Some(&release("v0.1.0")), None), None);
+        assert_eq!(notice(&current, Some(&newer), None), Some(newer));
     }
 
     #[test]
@@ -292,10 +316,10 @@ mod tests {
     }
 
     #[test]
-    fn notice_stable_release_newer_than_dev() {
+    fn notice_skips_the_release_of_a_dev_build() {
         let current = version("0.1.0-dev.20261112000000");
         let latest = release("v0.1.0");
-        assert_eq!(notice(&current, Some(&latest), None), Some(latest));
+        assert_eq!(notice(&current, Some(&latest), None), None);
     }
 
     #[test]
