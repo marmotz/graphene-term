@@ -170,11 +170,67 @@ fn reload_keybindings_file(
 }
 
 fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
-    let (mut config, mut errors) = load_config_file(dir);
-    let (keybindings, keybinding_errors) = load_keybindings_file(dir);
+    let (merged_keybindings, mut errors) = migrate_keybindings_section(dir);
+    let (mut config, config_errors) = load_config_file(dir);
+    errors.extend(config_errors);
+    let (keybindings, keybinding_errors) = load_keybindings_file(dir, merged_keybindings);
     config.keybindings = keybindings;
     errors.extend(keybinding_errors);
     (config, errors)
+}
+
+/// Moves the `[keybindings]` section of `config.toml` into `keybindings.toml`:
+/// `keybindings.toml` is written first, so a crash between the two writes leaves the
+/// shortcuts in both files, never in neither. Returns the merged text of
+/// `keybindings.toml` (kept even when a write fails) and the errors to report.
+fn migrate_keybindings_section(dir: &Path) -> (Option<String>, Vec<ConfigError>) {
+    let config_file = dir.join(CONFIG_FILE);
+    let keybindings_file = dir.join(KEYBINDINGS_FILE);
+    let Ok(config_text) = std::fs::read_to_string(&config_file) else {
+        return (None, Vec::new());
+    };
+    let keybindings_text = match std::fs::read_to_string(&keybindings_file) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return (None, Vec::new()),
+    };
+    let Some(migration) = crate::config_edit::migrate_keybindings(
+        &config_text,
+        keybindings_text.as_deref(),
+        &keybindings_file,
+    ) else {
+        return (None, Vec::new());
+    };
+
+    if let Some(text) = &migration.keybindings
+        && let Err(error) = crate::config_edit::write_atomic(&keybindings_file, text)
+    {
+        log::warn!("cannot write {}: {error}", keybindings_file.display());
+        return (
+            migration.keybindings,
+            vec![crate::config_edit::write_error(&keybindings_file, &error)],
+        );
+    }
+    if let Err(error) = crate::config_edit::write_atomic(&config_file, &migration.config) {
+        log::warn!("cannot write {}: {error}", config_file.display());
+        return (
+            migration.keybindings,
+            vec![crate::config_edit::write_error(&config_file, &error)],
+        );
+    }
+
+    let errors = if migration.moved {
+        vec![ConfigError {
+            file: config_file,
+            line: None,
+            key: Some(key_path(&["keybindings"])),
+            kind: ConfigErrorKind::Moved,
+            message: format!("keyboard shortcuts moved to {KEYBINDINGS_FILE}"),
+        }]
+    } else {
+        Vec::new()
+    };
+    (migration.keybindings, errors)
 }
 
 fn load_config_file(dir: &Path) -> (Config, Vec<ConfigError>) {
@@ -214,9 +270,13 @@ fn load_config_file(dir: &Path) -> (Config, Vec<ConfigError>) {
     }
 }
 
-fn load_keybindings_file(dir: &Path) -> (BTreeMap<String, String>, Vec<ConfigError>) {
+/// `merged` is the text of the file after a migration, used instead of reading it.
+fn load_keybindings_file(
+    dir: &Path,
+    merged: Option<String>,
+) -> (BTreeMap<String, String>, Vec<ConfigError>) {
     let file = dir.join(KEYBINDINGS_FILE);
-    match std::fs::read_to_string(&file) {
+    match merged.map_or_else(|| std::fs::read_to_string(&file), Ok) {
         Ok(text) => {
             let text = match crate::config_edit::complete_keybindings_defaults(&text) {
                 Ok(Some(updated)) => match crate::config_edit::write_atomic(&file, &updated) {
@@ -1795,17 +1855,266 @@ interval = "2d"
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    fn read(dir: &Path, name: &str) -> String {
+        std::fs::read_to_string(dir.join(name)).unwrap()
+    }
+
+    fn generated_keybindings_block() -> String {
+        let mut block = String::from("# [keybindings]\n");
+        for line in DEFAULT_KEYBINDINGS.lines().filter(|l| l.starts_with("##")) {
+            block.push_str(line);
+            block.push('\n');
+        }
+        block.push_str("# \"Ctrl+Shift+C\" = \"copy\"\n");
+        block
+    }
+
     #[test]
-    fn load_reports_a_keybindings_section_left_in_config_file() {
-        let dir = temp_dir("load-moved");
-        std::fs::write(dir.join(CONFIG_FILE), "[keybindings]\n\"F7\" = \"copy\"\n").unwrap();
+    fn load_migrates_the_keybindings_section_to_the_new_file() {
+        let dir = temp_dir("migrate-simple");
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            "[font]\nsize = 9\n\n[keybindings]\n# my tab key\n\"Ctrl+Alt+T\" = \"new_tab\" # inline\n\n[updates]\ncheck = false\n",
+        )
+        .unwrap();
 
         let (config, errors) = load_from(&dir);
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("keybindings"), ConfigErrorKind::Moved)]
+        );
+        assert_eq!(errors[0].file, dir.join(CONFIG_FILE));
+        assert_eq!(
+            errors[0].message,
+            "keyboard shortcuts moved to keybindings.toml"
+        );
+        assert_eq!(config.font.size, 9.0);
+        assert_eq!(
+            config.keybindings,
+            BTreeMap::from([("Ctrl+Alt+T".to_owned(), "new_tab".to_owned())])
+        );
+        let moved = read(&dir, KEYBINDINGS_FILE);
+        assert!(
+            moved.contains("# my tab key\n\"Ctrl+Alt+T\" = \"new_tab\" # inline\n"),
+            "{moved}"
+        );
+        let remaining = read(&dir, CONFIG_FILE);
+        assert!(!remaining.contains("keybindings"), "{remaining}");
+        assert!(!remaining.contains("Ctrl+Alt+T"), "{remaining}");
+        assert!(remaining.contains("[font]\n"), "{remaining}");
+        assert!(remaining.contains("size = 9\n"), "{remaining}");
+        assert!(remaining.contains("check = false\n"), "{remaining}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migration_keeps_the_shortcut_of_keybindings_file_on_conflict() {
+        let dir = temp_dir("migrate-conflict");
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            "[keybindings]\n\"F7\" = \"copy\"\n\"F8\" = \"paste\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(KEYBINDINGS_FILE),
+            "[keybindings]\n\"F7\" = \"quit\"\n",
+        )
+        .unwrap();
+
+        let (config, errors) = load_from(&dir);
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("keybindings"), ConfigErrorKind::Moved)]
+        );
+        assert_eq!(
+            config.keybindings,
+            BTreeMap::from([
+                ("F7".to_owned(), "quit".to_owned()),
+                ("F8".to_owned(), "paste".to_owned()),
+            ])
+        );
+        assert!(!read(&dir, CONFIG_FILE).contains("keybindings"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migration_removes_a_generated_commented_block_silently() {
+        let dir = temp_dir("migrate-commented");
+        let config = format!(
+            "[font]\nsize = 9\n\n{}\n# [updates]\n# check = true\n",
+            generated_keybindings_block()
+        );
+        std::fs::write(dir.join(CONFIG_FILE), &config).unwrap();
+
+        let (loaded, errors) = load_from(&dir);
+        assert_eq!(errors, Vec::new());
+        assert!(loaded.keybindings.is_empty());
+        let remaining = read(&dir, CONFIG_FILE);
+        assert!(!remaining.contains("keybindings"), "{remaining}");
+        assert!(!remaining.contains("Each string shortcut"), "{remaining}");
+        assert!(!remaining.contains("Ctrl+Shift+C"), "{remaining}");
+        assert!(remaining.contains("size = 9\n"), "{remaining}");
+        assert!(remaining.contains("# [updates]\n"), "{remaining}");
+        assert!(read(&dir, KEYBINDINGS_FILE).contains("[keybindings]"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migration_keeps_unrecognized_commented_lines_in_config_file() {
+        let dir = temp_dir("migrate-user-comments");
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            "# [keybindings]\n# remember to bind F9\n# \"F9\" = \"copy\"\n# \"Ctrl+Shift+C\" = \"copy\"\n",
+        )
+        .unwrap();
+
+        let (_, errors) = load_from(&dir);
+        assert_eq!(errors, Vec::new());
+        let remaining = read(&dir, CONFIG_FILE);
+        assert!(
+            remaining.starts_with("# remember to bind F9\n# \"F9\" = \"copy\"\n"),
+            "{remaining}"
+        );
+        assert!(!remaining.contains("[keybindings]"), "{remaining}");
+        assert!(!remaining.contains("Ctrl+Shift+C"), "{remaining}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migration_drops_generated_lines_but_moves_user_ones_of_an_active_section() {
+        let dir = temp_dir("migrate-active-generated");
+        let doc: String = DEFAULT_KEYBINDINGS
+            .lines()
+            .filter(|l| l.starts_with("##"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            format!(
+                "[keybindings]\n{doc}# \"Ctrl+Shift+C\" = \"copy\"\n# mine\n\"F7\" = \"copy\"\n"
+            ),
+        )
+        .unwrap();
+
+        let (config, _) = load_from(&dir);
+        assert_eq!(config.keybindings.len(), 1);
+        let remaining = read(&dir, CONFIG_FILE);
+        assert!(!remaining.contains("keybindings"), "{remaining}");
+        assert!(!remaining.contains("Ctrl+Shift+C"), "{remaining}");
+        assert!(!remaining.contains("Each string shortcut"), "{remaining}");
+        let moved = read(&dir, KEYBINDINGS_FILE);
+        assert!(moved.contains("# mine\nF7 = \"copy\"\n"), "{moved}");
+        assert_eq!(moved.matches("## Each string shortcut").count(), 1, "{moved}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let dir = temp_dir("migrate-idempotent");
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            "[font]\nsize = 9\n\n[keybindings]\n\"F7\" = \"copy\"\n",
+        )
+        .unwrap();
+
+        let _ = load_from(&dir);
+        let config_text = read(&dir, CONFIG_FILE);
+        let keybindings_text = read(&dir, KEYBINDINGS_FILE);
+        let (config, errors) = load_from(&dir);
+        assert_eq!(errors, Vec::new());
+        assert_eq!(config.keybindings.len(), 1);
+        assert_eq!(read(&dir, CONFIG_FILE), config_text);
+        assert_eq!(read(&dir, KEYBINDINGS_FILE), keybindings_text);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migration_resumes_after_a_crash_between_the_two_writes() {
+        let dir = temp_dir("migrate-crash");
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            "[keybindings]\n\"F7\" = \"copy\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(KEYBINDINGS_FILE),
+            "[keybindings]\n\"F7\" = \"copy\"\n",
+        )
+        .unwrap();
+
+        let (config, errors) = load_from(&dir);
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("keybindings"), ConfigErrorKind::Moved)]
+        );
+        assert_eq!(config.keybindings.len(), 1);
+        assert!(!read(&dir, CONFIG_FILE).contains("keybindings"));
+        assert_eq!(read(&dir, KEYBINDINGS_FILE).matches("\"F7\"").count(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migration_does_not_touch_files_when_keybindings_file_is_invalid() {
+        let dir = temp_dir("migrate-invalid-destination");
+        let config_text = "[keybindings]\n\"F7\" = \"copy\"\n";
+        std::fs::write(dir.join(CONFIG_FILE), config_text).unwrap();
+        std::fs::write(dir.join(KEYBINDINGS_FILE), "[keybindings\n").unwrap();
+
+        let (_, errors) = load_from(&dir);
+        assert!(errors.iter().any(|e| e.kind == ConfigErrorKind::Syntax));
+        assert!(read(&dir, CONFIG_FILE).contains(config_text));
+        assert_eq!(read(&dir, KEYBINDINGS_FILE), "[keybindings\n");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_keeps_merged_shortcuts_in_memory_when_writing_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("migrate-write-failure");
+        let config_text = "[keybindings]\n\"F7\" = \"copy\"\n";
+        std::fs::write(dir.join(CONFIG_FILE), config_text).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let writable = std::fs::File::create(dir.join("probe")).is_ok();
+
+        let (config, errors) = load_from(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !writable {
+            assert!(errors.iter().any(|e| e.kind == ConfigErrorKind::Write));
+            assert_eq!(
+                config.keybindings,
+                BTreeMap::from([("F7".to_owned(), "copy".to_owned())])
+            );
+            assert_eq!(read(&dir, CONFIG_FILE), config_text);
+            assert!(!dir.join(KEYBINDINGS_FILE).exists());
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_does_not_migrate_the_keybindings_section() {
+        let dir = temp_dir("reload-no-migration");
+        let config_text = "[keybindings]\n\"F7\" = \"copy\"\n";
+        std::fs::write(dir.join(CONFIG_FILE), config_text).unwrap();
+
+        let (config, errors) = reload_from(&dir, &Config::default());
         assert!(config.keybindings.is_empty());
         assert_eq!(
             keys(&errors),
             vec![(Some("keybindings"), ConfigErrorKind::Moved)]
         );
+        assert_eq!(read(&dir, CONFIG_FILE), config_text);
+        assert!(!dir.join(KEYBINDINGS_FILE).exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

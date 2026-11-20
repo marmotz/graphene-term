@@ -4,12 +4,12 @@
 
 ## Keybindings file  ·  [overview](features/keybindings-file/overview.md)
 
-_tâches créées — voir [technical.md](features/keybindings-file/technical.md)_ — 1/5 tasks done
+_tâches créées — voir [technical.md](features/keybindings-file/technical.md)_ — 2/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#152](https://github.com/marmotz/graphene-term/issues/152) | [Raccourcis] Fichier keybindings.toml : modèle, lecture et rechargement | — |
-| [ ]  | [#153](https://github.com/marmotz/graphene-term/issues/153) | [Raccourcis] Migration de la section [keybindings] de config.toml | #152 |
+| [x]  | [#153](https://github.com/marmotz/graphene-term/issues/153) | [Raccourcis] Migration de la section [keybindings] de config.toml | #152 |
 | [ ]  | [#154](https://github.com/marmotz/graphene-term/issues/154) | [Raccourcis] Fenêtre de réglages : écriture dans keybindings.toml et verrouillage par fichier | #152 |
 | [ ]  | [#155](https://github.com/marmotz/graphene-term/issues/155) | [Raccourcis] prune-config traite aussi keybindings.toml | #152 |
 | [ ]  | [#156](https://github.com/marmotz/graphene-term/issues/156) | [Raccourcis] Documentation EN/FR de keybindings.toml | #153, #154, #155 |
