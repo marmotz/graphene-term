@@ -106,3 +106,39 @@ fn prune_dispatch_leaves_invalid_toml_untouched() {
     assert_eq!(fs::read_to_string(file).unwrap(), original);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn prune_yes_cleans_both_files_with_prefixed_keys() {
+    let root = config_dir();
+    let config = root.join("graphene");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(
+        config.join("config.toml"),
+        "future_root = 1\nlanguage = \"fr\"\n",
+    )
+    .unwrap();
+    fs::write(
+        config.join("keybindings.toml"),
+        "[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n[future]\nvalue = 1\n",
+    )
+    .unwrap();
+
+    let output = run_prune(&root, true);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("config.toml: future_root"));
+    assert!(stdout.contains("keybindings.toml: future"));
+    let shortcuts = fs::read_to_string(config.join("keybindings.toml")).unwrap();
+    assert!(shortcuts.contains("\"Ctrl+Alt+T\" = \"new_tab\""));
+    assert!(!shortcuts.contains("future"));
+    assert!(
+        !fs::read_to_string(config.join("config.toml"))
+            .unwrap()
+            .contains("future_root")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
