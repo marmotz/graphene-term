@@ -334,7 +334,14 @@ impl Session {
                     .workspace
                     .pane_title(id)
                     .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
-                PaneBarLayout::new(id, rect, title, Some(id) == active, metrics)
+                let mut bar = PaneBarLayout::new(id, rect, title, Some(id) == active, metrics);
+                if self.workspace.is_broadcast(id) {
+                    bar.broadcast = Some(
+                        self.workspace
+                            .broadcast_count(self.workspace.active_index()),
+                    );
+                }
+                bar
             })
             .collect()
     }

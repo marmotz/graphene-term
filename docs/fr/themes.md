@@ -124,6 +124,7 @@ tab_active_background = "#1c1f26"
 tab_active_text = "#d7dae0"
 tab_inactive_text = "#7f8590"
 pane_border = "#2a2e37"
+pane_broadcast = "#ff9e64"       # title bars of the broadcast panes
 palette_background = "#1c1f26"
 palette_text = "#d7dae0"
 palette_match = "#82aaff"        # matched letters in the command palette

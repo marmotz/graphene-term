@@ -165,18 +165,31 @@ fn draw_menu_rows(rows: &[MenuRow], colors: &UiColors, srgb_target: bool, ui: &m
 /// accent color and labelled in the palette background, like the default dialog
 /// button; an inactive one mixes a little accent into the tab bar background and is
 /// labelled in the shown tab's text color. Built-in themes keep both readable.
-pub fn pane_bar_colors(colors: &UiColors, active: bool) -> (Rgb, Rgb) {
+/// A bar of a pane in the broadcast set uses `pane_broadcast` instead of the accent.
+pub fn pane_bar_colors(colors: &UiColors, active: bool, broadcast: bool) -> (Rgb, Rgb) {
+    let accent = if broadcast {
+        colors.pane_broadcast
+    } else {
+        colors.palette_match
+    };
     if active {
-        (colors.palette_match, colors.palette_background)
+        (accent, colors.palette_background)
     } else {
         (
-            blend(
-                colors.tab_bar_background,
-                colors.palette_match,
-                INACTIVE_PANE_BAR,
-            ),
+            blend(colors.tab_bar_background, accent, INACTIVE_PANE_BAR),
             colors.tab_active_text,
         )
+    }
+}
+
+/// Glyph announcing the broadcast set, followed by its size, before the title.
+const BROADCAST_GLYPH: &str = "»";
+
+/// The text of a pane bar: the broadcast badge, when the pane is in the set, then the title.
+pub fn pane_bar_text(bar: &PaneBarLayout) -> String {
+    match bar.broadcast {
+        Some(count) => format!("{BROADCAST_GLYPH}{count} {}", bar.title),
+        None => bar.title.clone(),
     }
 }
 
@@ -407,7 +420,7 @@ pub fn panes(
 
 /// One pane title bar: its background, then its title and close button.
 fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
-    let (background, text) = pane_bar_colors(colors, bar.active);
+    let (background, text) = pane_bar_colors(colors, bar.active, bar.broadcast.is_some());
     let text = gpu_color(text, srgb_target);
     ui.rects
         .push(rect(bar.rect, gpu_color(background, srgb_target)));
@@ -415,7 +428,7 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         button_hover(bar.close, text, ui);
     }
     ui.texts.push(UiTextItem {
-        text: bar.title.clone(),
+        text: pane_bar_text(bar),
         x: bar.title_x,
         y: bar.title_y,
         color: text,
@@ -791,12 +804,54 @@ mod tests {
             palette_background: LABEL,
             ..tab_colors()
         };
-        assert_eq!(pane_bar_colors(&colors, true), (ACCENT, LABEL));
-        let (background, text) = pane_bar_colors(&colors, false);
+        assert_eq!(pane_bar_colors(&colors, true, false), (ACCENT, LABEL));
+        let (background, text) = pane_bar_colors(&colors, false, false);
         assert_eq!(text, ACTIVE_TEXT);
         assert_eq!(background, blend(BAR, ACCENT, INACTIVE_PANE_BAR));
         assert_ne!(background, ACCENT);
         assert_ne!(background, BAR);
+    }
+
+    const WARM: Rgb = Rgb {
+        r: 200,
+        g: 100,
+        b: 0,
+    };
+
+    #[test]
+    fn a_broadcast_pane_bar_uses_the_broadcast_color() {
+        let colors = UiColors {
+            palette_background: LABEL,
+            pane_broadcast: WARM,
+            ..tab_colors()
+        };
+        assert_eq!(pane_bar_colors(&colors, true, true), (WARM, LABEL));
+        let (background, text) = pane_bar_colors(&colors, false, true);
+        assert_eq!(text, ACTIVE_TEXT);
+        assert_eq!(background, blend(BAR, WARM, INACTIVE_PANE_BAR));
+        assert_ne!(background, blend(BAR, ACCENT, INACTIVE_PANE_BAR));
+    }
+
+    #[test]
+    fn a_broadcast_pane_bar_shows_the_set_size_before_the_title() {
+        let layout = two_columns();
+        let colors = UiColors {
+            pane_broadcast: WARM,
+            ..tab_colors()
+        };
+        let mut bars = pane_bars_of(&layout, Some(PaneId(2)));
+        let plain = build(&layout, Some(PaneId(2)), &bars, None, None, &colors, false);
+        assert_eq!(plain.texts[0].text, "pane 1");
+        bars[0].broadcast = Some(2);
+        bars[1].broadcast = Some(2);
+        let ui = build(&layout, Some(PaneId(2)), &bars, None, None, &colors, false);
+        assert_eq!(ui.texts[0].text, "»2 pane 1");
+        assert_eq!(ui.texts[0].max_width, bars[0].title_width);
+        assert_eq!(
+            ui.rects[1].color,
+            gpu_color(WARM, false),
+            "the active bar of the set"
+        );
     }
 
     #[test]

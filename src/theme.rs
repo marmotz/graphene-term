@@ -238,6 +238,7 @@ fn ui_slot<'a>(ui: &'a mut UiColors, name: &str) -> Option<&'a mut Rgb> {
         "tab_active_text" => &mut ui.tab_active_text,
         "tab_inactive_text" => &mut ui.tab_inactive_text,
         "pane_border" => &mut ui.pane_border,
+        "pane_broadcast" => &mut ui.pane_broadcast,
         "palette_background" => &mut ui.palette_background,
         "palette_text" => &mut ui.palette_text,
         "palette_match" => &mut ui.palette_match,
@@ -448,13 +449,27 @@ mod tests {
         for (name, text) in BUILT_IN {
             let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
             for active in [true, false] {
-                let (background, text) = pane_bar_colors(&palette.ui, active);
-                let ratio = contrast(text, background);
-                assert!(
-                    ratio >= 4.5,
-                    "theme {name}: pane bar text contrast {ratio:.2} (active: {active})"
-                );
+                for broadcast in [true, false] {
+                    let (background, text) = pane_bar_colors(&palette.ui, active, broadcast);
+                    let ratio = contrast(text, background);
+                    assert!(
+                        ratio >= 4.5,
+                        "theme {name}: pane bar text contrast {ratio:.2} (active: {active}, broadcast: {broadcast})"
+                    );
+                }
             }
+        }
+    }
+
+    #[test]
+    fn every_built_in_theme_defines_a_distinct_broadcast_color() {
+        for (name, text) in BUILT_IN {
+            assert!(text.contains("\npane_broadcast = \"#"), "theme {name}");
+            let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
+            assert_ne!(
+                palette.ui.pane_broadcast, palette.ui.palette_match,
+                "theme {name}"
+            );
         }
     }
 

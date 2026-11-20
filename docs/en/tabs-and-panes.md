@@ -104,6 +104,9 @@ Broadcast continues while a pane is zoomed.
 without focusing it; on a link, `Ctrl`+click still opens the link. `Ctrl`+drag still
 makes a rectangular selection, except where the application captures the mouse.
 
+The title bar of a pane in the set is drawn in the theme color `ui.pane_broadcast` and
+starts with `»` and the number of panes in the set.
+
 ## Command palette
 
 `Ctrl+Shift+P` opens the command palette: every action with its shortcut, then the open

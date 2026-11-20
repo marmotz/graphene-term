@@ -32,6 +32,8 @@ pub struct UiColors {
     pub tab_active_text: Rgb,
     pub tab_inactive_text: Rgb,
     pub pane_border: Rgb,
+    /// Title bar of the panes in the broadcast set.
+    pub pane_broadcast: Rgb,
     pub palette_background: Rgb,
     pub palette_text: Rgb,
     /// Highlight of the characters matching the search in the command palette.
@@ -51,6 +53,7 @@ impl UiColors {
             tab_active_text: color,
             tab_inactive_text: color,
             pane_border: color,
+            pane_broadcast: color,
             palette_background: color,
             palette_text: color,
             palette_match: color,

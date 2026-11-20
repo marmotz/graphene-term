@@ -546,7 +546,8 @@ Renderer::render(pane frames, interface rects)
    interface layer (`UiLayer`: rects, then text items): the title bar of every pane
    (`chrome::pane_bar::PaneBarLayout`, one interface text line high like a horizontal
    tab, titled by `Workspace::pane_title`; filled with `ui.palette_match` for the active
-   pane, with `INACTIVE_PANE_BAR` of it mixed into `ui.tab_bar_background` otherwise),
+   pane, with `INACTIVE_PANE_BAR` of it mixed into `ui.tab_bar_background` otherwise; a pane
+   of the broadcast set uses `ui.pane_broadcast` instead of `ui.palette_match` and its text starts with `»<count>`),
    then the dividers (`ui.pane_border`) and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
    the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
    there are several tabs, on the edge of `tabs.position` (`TabBarPosition`): side by

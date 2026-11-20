@@ -109,6 +109,9 @@ retire, sans lui donner le focus ; sur un lien, `Ctrl`+clic ouvre toujours le li
 `Ctrl`+glisser fait toujours une sélection rectangulaire, sauf là où l'application
 capture la souris.
 
+La barre de titre d'un panneau de la diffusion prend la couleur de thème `ui.pane_broadcast`
+et commence par `»` suivi du nombre de panneaux.
+
 ## Palette de commandes
 
 `Ctrl+Shift+P` ouvre la palette de commandes : toutes les actions avec leur raccourci,

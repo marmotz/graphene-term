@@ -68,6 +68,8 @@ pub struct PaneBarLayout {
     pub active: bool,
     /// Whether the mouse is over the close button.
     pub close_hovered: bool,
+    /// Size of the broadcast set when the pane is part of it.
+    pub broadcast: Option<usize>,
 }
 
 impl PaneBarLayout {
@@ -93,6 +95,7 @@ impl PaneBarLayout {
             close,
             active,
             close_hovered: false,
+            broadcast: None,
         }
     }
 
