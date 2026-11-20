@@ -95,7 +95,7 @@ fn menu(layout: &MenuLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLa
     ui.overlay_rects
         .extend(border(layout.rect, DIALOG_BORDER, border_color));
     draw_menu_rows(&layout.rows, colors, srgb_target, ui);
-    if let Some(submenu) = &layout.submenu {
+    for submenu in &layout.submenus {
         ui.overlay_rects.push(rect(submenu.rect, background));
         ui.overlay_rects
             .extend(border(submenu.rect, DIALOG_BORDER, border_color));
@@ -1241,7 +1241,7 @@ mod tests {
             text.chars().count() as f32 * 8.0
         });
         menu.hover(MenuHit::Entry {
-            level: MenuLevel::Main,
+            level: MenuLevel::MAIN,
             index: layout.rows[0].index,
         });
         let layout = MenuLayout::new(&menu, area(0.0, 0.0, 300.0, 200.0), metrics, |text| {

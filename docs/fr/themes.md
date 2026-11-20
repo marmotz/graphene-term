@@ -20,7 +20,8 @@ Chacun de ces moyens change le thème aussitôt :
 
 - clic droit dans la fenêtre, puis **Thèmes** : survoler un thème (ou l'atteindre avec
   les flèches) l'affiche en aperçu dans le terminal, et fermer le menu sans en choisir
-  un rétablit les couleurs ;
+  un rétablit les couleurs. Quand les thèmes ne tiennent pas tous dans la hauteur de la
+  fenêtre, la dernière ligne, **Plus...**, ouvre les suivants ;
 - la section **Thème** de la fenêtre des paramètres (`Ctrl+,`) ;
 - `name` dans la section `[theme]` du [fichier de configuration](configuration.md) :
 

@@ -218,6 +218,8 @@ pub enum Msg {
     SplitHorizontal,
     #[allow(dead_code)]
     Themes,
+    /// Last row of a theme menu, opening the themes that do not fit in it.
+    MoreThemes,
     #[allow(dead_code)]
     FoldBlock,
     #[allow(dead_code)]
@@ -379,6 +381,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::SplitVertical => "Split vertically",
         Msg::SplitHorizontal => "Split horizontally",
         Msg::Themes => "Themes",
+        Msg::MoreThemes => "More...",
         Msg::FoldBlock => "Fold block",
         Msg::UnfoldBlock => "Unfold block",
         Msg::CommandPalette => "Command palette",
@@ -548,6 +551,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::SplitVertical => "Diviser verticalement",
         Msg::SplitHorizontal => "Diviser horizontalement",
         Msg::Themes => "Thèmes",
+        Msg::MoreThemes => "Plus...",
         Msg::FoldBlock => "Replier le bloc",
         Msg::UnfoldBlock => "Déplier le bloc",
         Msg::CommandPalette => "Palette de commandes",
@@ -801,6 +805,7 @@ mod tests {
             Msg::SplitVertical => 63,
             Msg::SplitHorizontal => 64,
             Msg::Themes => 65,
+            Msg::MoreThemes => 86,
             Msg::FoldBlock => 66,
             Msg::UnfoldBlock => 67,
             Msg::CommandPalette => 27,
@@ -856,7 +861,7 @@ mod tests {
             Msg::OpenThemesFolder => 85,
         }
     }
-    const VARIANT_COUNT: usize = 86;
+    const VARIANT_COUNT: usize = 87;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -893,6 +898,7 @@ mod tests {
             Msg::SplitVertical,
             Msg::SplitHorizontal,
             Msg::Themes,
+            Msg::MoreThemes,
             Msg::FoldBlock,
             Msg::UnfoldBlock,
             Msg::CommandPalette,

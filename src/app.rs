@@ -644,6 +644,12 @@ impl Session {
         ))
     }
 
+    /// How many themes a menu shows before "More...": as many as the window height holds.
+    fn theme_rows(&self) -> usize {
+        let height = self.window.inner_size().height as f32;
+        context_menu::rows_fitting(height, self.ui_metrics(UiFont::Palette))
+    }
+
     /// Opens a pane menu at the pointer, retaining the pane's text selection.
     fn open_pane_menu(&mut self, pane_id: PaneId, hit: Hit) {
         let tab_index = self
@@ -677,6 +683,7 @@ impl Session {
             let tab = self.workspace.tabs().get(tab_index);
             let themes = theme::available(config::config_dir().as_deref());
             let active_theme = self.theme.active(self.appearance).to_owned();
+            let theme_rows = self.theme_rows();
             let context = MenuContext {
                 copyable: pane.copy_content().is_some(),
                 last_pane: self
@@ -692,6 +699,7 @@ impl Session {
                 block,
                 themes: &themes,
                 active_theme: &active_theme,
+                theme_rows,
             };
             context_menu::pane_menu(&context, &self.keybindings, self.lang)
         };
@@ -720,6 +728,7 @@ impl Session {
             block: None,
             themes: &themes,
             active_theme: &active_theme,
+            theme_rows: self.theme_rows(),
         };
         let items = context_menu::tab_menu(index, &context, &self.keybindings, self.lang);
         self.open_menu(items);
@@ -2209,21 +2218,9 @@ impl Session {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // The menus fit in the window: "More..." pages long theme lists instead of a
+        // scroll, and the wheel does nothing while a menu is open.
         if matches!(&self.overlay, Some(Overlay::Menu(_))) {
-            let rows = match delta {
-                MouseScrollDelta::LineDelta(_, y) => y,
-                MouseScrollDelta::PixelDelta(position) => {
-                    position.y as f32 / self.renderer.ui_line_height(UiFont::Palette)
-                }
-            };
-            let visible = self
-                .menu_layout()
-                .and_then(|layout| layout.submenu.map(|submenu| submenu.visible_rows))
-                .unwrap_or(0);
-            if let Some(Overlay::Menu(menu)) = &mut self.overlay {
-                menu.scroll_submenu(-rows.round() as isize, visible);
-            }
-            self.window.request_redraw();
             return;
         }
         if let Some(Overlay::Palette(palette)) = &mut self.overlay {
