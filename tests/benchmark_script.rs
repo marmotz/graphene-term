@@ -4,7 +4,6 @@
 //! Skipped when `python3` is missing.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -314,9 +313,13 @@ fn throughput_payload_writes_a_positive_duration() {
     assert_eq!(grid, "80 24");
 }
 
-/// Runs `run --terminals graphene` with a fake `cargo` first on `PATH`. The fake records
+/// Runs `run --terminals graphene` with a fake `cargo` first on `PATH`. `run` measures
+/// Linux processes only: on other systems it stops before building. The fake records
 /// its arguments and working directory, then exits with `exit_code`.
+#[cfg(target_os = "linux")]
 fn run_with_fake_cargo(sandbox: &Sandbox, exit_code: i32) -> (Output, String) {
+    use std::os::unix::fs::PermissionsExt;
+
     let bin = sandbox.0.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let log = sandbox.0.join("cargo.log");
@@ -350,6 +353,7 @@ fn run_with_fake_cargo(sandbox: &Sandbox, exit_code: i32) -> (Output, String) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn run_builds_graphene_in_release_mode_from_the_checkout() {
     if !python_available() {
         return;
@@ -366,6 +370,7 @@ fn run_builds_graphene_in_release_mode_from_the_checkout() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn run_aborts_when_the_release_build_fails() {
     if !python_available() {
         return;
@@ -382,6 +387,7 @@ fn run_aborts_when_the_release_build_fails() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn run_aborts_when_the_built_binary_is_missing() {
     if !python_available() {
         return;
@@ -395,4 +401,29 @@ fn run_aborts_when_the_built_binary_is_missing() {
         stderr.contains(&format!("{} not found after the build", expected.display())),
         "unexpected stderr: {stderr}"
     );
+}
+
+#[test]
+#[cfg(not(target_os = "linux"))]
+fn run_refuses_other_systems_than_linux() {
+    if !python_available() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let output = script(&[
+        "run",
+        "--terminals",
+        "graphene",
+        "--runs",
+        "1",
+        "--out",
+        sandbox.0.join("results.json").to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("the benchmark runs on Linux only"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(!sandbox.0.join("results.json").exists());
 }
