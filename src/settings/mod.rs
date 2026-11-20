@@ -19,7 +19,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-use crate::config::{Config, ConfigError};
+use crate::config::{self, Config, ConfigError};
 use crate::config_edit::{self, ConfigEdit};
 use crate::i18n::{self, Lang, Msg};
 use crate::palette::Palette;
@@ -49,8 +49,8 @@ pub struct SettingsWindow {
     renderer: egui_wgpu::Renderer,
     view: View,
     model: SettingsModel,
-    /// The `config.toml` edited.
-    file: PathBuf,
+    /// The config directory, holding the `config.toml` and `keybindings.toml` edited.
+    dir: PathBuf,
     lang: Lang,
     /// When egui asked for the next frame, for a delayed repaint (tooltips, animations).
     repaint_at: Option<Instant>,
@@ -60,7 +60,7 @@ pub struct SettingsWindow {
 
 impl SettingsWindow {
     /// Opens the window on `gpu`, colored by `palette` and labelled in `lang`, showing
-    /// `config` and the `errors` of its last load; changes are written to `file`.
+    /// `config` and the `errors` of its last load; changes are written to the files of `dir`.
     pub fn open(
         event_loop: &ActiveEventLoop,
         gpu: Arc<Gpu>,
@@ -68,7 +68,7 @@ impl SettingsWindow {
         lang: Lang,
         config: &Config,
         errors: &LoadErrors,
-        file: PathBuf,
+        dir: PathBuf,
     ) -> anyhow::Result<Self> {
         let attributes = Window::default_attributes()
             .with_title(i18n::text(lang, &Msg::OpenSettings))
@@ -133,7 +133,7 @@ impl SettingsWindow {
             renderer,
             view: View::default(),
             model,
-            file,
+            dir,
             lang,
             repaint_at: None,
             modifiers: ModifiersState::empty(),
@@ -157,7 +157,7 @@ impl SettingsWindow {
         self.model.refresh(config, errors);
         self.view.reset_inputs();
         self.model
-            .set_theme_choices(crate::theme::available(self.file.parent()));
+            .set_theme_choices(crate::theme::available(Some(&self.dir)));
         let ctx = self.egui.egui_ctx();
         ctx.set_theme(visuals::theme(palette.background));
         ctx.set_visuals(visuals::visuals(palette));
@@ -235,16 +235,13 @@ impl SettingsWindow {
         egui::Popup::is_any_open(ctx) || ctx.memory(|memory| memory.focused().is_some())
     }
 
-    /// Writes `changes` to the file, and shows the result before the reload reports it.
+    /// Writes `changes` to the files, and shows the result before the reload reports it.
     fn write(&mut self, changes: &[Change]) {
-        match write_changes(&self.file, changes) {
-            Ok(()) => match std::fs::read_to_string(&self.file) {
-                Ok(text) => {
-                    let (config, errors) = Config::parse(&text, self.model.config(), &self.file);
-                    self.model.written(config, errors);
-                }
-                Err(error) => log::warn!("cannot read {}: {error}", self.file.display()),
-            },
+        match write_changes(&self.dir, changes) {
+            Ok(()) => {
+                let (config, errors) = config::reload_from(&self.dir, self.model.config());
+                self.model.written(config, errors);
+            }
             Err(error) => {
                 log::warn!("{error}");
                 self.model.write_failed(&error);
@@ -392,9 +389,41 @@ fn closes_on_escape(key: &Key, state: ElementState, mods: ModifiersState) -> boo
     state == ElementState::Pressed && mods.is_empty() && *key == Key::Named(NamedKey::Escape)
 }
 
-/// Applies `changes` to `file` in one write.
-fn write_changes(file: &Path, changes: &[Change]) -> Result<(), ConfigError> {
-    config_edit::write(file, |edit: &mut ConfigEdit| {
+/// Applies `changes` to the files of `dir`: the shortcuts to `keybindings.toml`, the rest
+/// to `config.toml`, one write per file touched.
+fn write_changes(dir: &Path, changes: &[Change]) -> Result<(), ConfigError> {
+    let (shortcuts, others): (Vec<&Change>, Vec<&Change>) =
+        changes.iter().partition(|change| is_shortcut(change));
+    if !others.is_empty() {
+        write_file(
+            &dir.join(config::CONFIG_FILE),
+            config_edit::default_file_text,
+            &others,
+        )?;
+    }
+    if !shortcuts.is_empty() {
+        write_file(
+            &dir.join(config::KEYBINDINGS_FILE),
+            config_edit::default_keybindings_text,
+            &shortcuts,
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether `change` edits a shortcut, which lives in `keybindings.toml`.
+fn is_shortcut(change: &Change) -> bool {
+    let (Change::Set(path, _) | Change::Remove(path)) = change;
+    path.first().is_some_and(|key| key == "keybindings")
+}
+
+/// Applies `changes` to `file` in one write; a missing file starts from `default_text`.
+fn write_file(
+    file: &Path,
+    default_text: fn() -> String,
+    changes: &[&Change],
+) -> Result<(), ConfigError> {
+    config_edit::write(file, default_text, |edit: &mut ConfigEdit| {
         for change in changes {
             match change {
                 Change::Set(path, value) => {
@@ -431,7 +460,7 @@ mod tests {
         .unwrap();
         let path = |segments: &[&str]| segments.iter().map(|s| (*s).to_owned()).collect();
         write_changes(
-            &file,
+            &dir,
             &[
                 Change::Set(path(&["font", "size"]), Value::Float(16.0)),
                 Change::Remove(path(&["theme", "light"])),
@@ -475,7 +504,7 @@ mod tests {
         let file = dir.join(config::CONFIG_FILE);
         std::fs::write(&file, "font = 3\n").unwrap();
         let error = write_changes(
-            &file,
+            &dir,
             &[Change::Set(
                 vec!["font".into(), "size".into()],
                 Value::Float(16.0),
@@ -484,6 +513,156 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.key.as_deref(), Some("font"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "font = 3\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn temporary_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-settings-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn path(segments: &[&str]) -> Vec<String> {
+        segments.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn shortcuts_go_to_keybindings_toml_and_the_rest_to_config_toml() {
+        let dir = temporary_dir("split");
+        std::fs::write(
+            dir.join(config::CONFIG_FILE),
+            "# mine\n[font]\nsize = 12.0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(config::KEYBINDINGS_FILE),
+            "# keys\n[keybindings]\n\"Ctrl+Alt+Y\" = \"new_tab\"\n",
+        )
+        .unwrap();
+        write_changes(
+            &dir,
+            &[
+                Change::Set(path(&["font", "size"]), Value::Float(16.0)),
+                Change::Set(
+                    path(&["keybindings", "Ctrl+Alt+T"]),
+                    Value::Text("new_tab".into()),
+                ),
+                Change::Remove(path(&["keybindings", "Ctrl+Alt+Y"])),
+            ],
+        )
+        .unwrap();
+
+        let config_text = std::fs::read_to_string(dir.join(config::CONFIG_FILE)).unwrap();
+        assert!(config_text.starts_with("# mine\n"), "{config_text}");
+        assert!(!config_text.contains("keybindings"), "{config_text}");
+        assert!(config_text.contains("size = 16.0"), "{config_text}");
+        let keys_text = std::fs::read_to_string(dir.join(config::KEYBINDINGS_FILE)).unwrap();
+        assert!(keys_text.starts_with("# keys\n"), "{keys_text}");
+        assert!(
+            keys_text.contains("\"Ctrl+Alt+T\" = \"new_tab\""),
+            "{keys_text}"
+        );
+        assert!(!keys_text.contains("Ctrl+Alt+Y"), "{keys_text}");
+        assert!(!keys_text.contains("size"), "{keys_text}");
+
+        let (config, errors) = config::reload_from(&dir, &Config::default());
+        assert_eq!(errors, vec![]);
+        assert_eq!(config.font.size, 16.0);
+        assert_eq!(
+            config.keybindings.get("Ctrl+Alt+T").map(String::as_str),
+            Some("new_tab")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_shortcut_change_leaves_config_toml_alone() {
+        let dir = temporary_dir("only-shortcuts");
+        std::fs::write(dir.join(config::CONFIG_FILE), "font = 3\n").unwrap();
+        write_changes(
+            &dir,
+            &[Change::Set(
+                path(&["keybindings", "Ctrl+Alt+T"]),
+                Value::Text("new_tab".into()),
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(config::CONFIG_FILE)).unwrap(),
+            "font = 3\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_shortcuts_file_starts_from_its_template() {
+        let dir = temporary_dir("missing-keybindings");
+        write_changes(
+            &dir,
+            &[Change::Set(
+                path(&["keybindings", "Ctrl+Alt+Y"]),
+                Value::Text("new_tab".into()),
+            )],
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(dir.join(config::KEYBINDINGS_FILE)).unwrap();
+        let template = config_edit::default_keybindings_text();
+        let header = template.split("\n[keybindings]\n").next().unwrap();
+        assert!(text.starts_with(header), "{text}");
+        assert!(text.contains("\n# \"Ctrl+Shift+C\" = \"copy\"\n"), "{text}");
+        assert!(text.contains("\"Ctrl+Alt+Y\" = \"new_tab\""), "{text}");
+        assert!(!dir.join(config::CONFIG_FILE).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_keybindings_table_stays_after_the_last_shortcut_is_removed() {
+        let dir = temporary_dir("last-shortcut");
+        write_changes(
+            &dir,
+            &[Change::Set(
+                path(&["keybindings", "Ctrl+Alt+Y"]),
+                Value::Text("new_tab".into()),
+            )],
+        )
+        .unwrap();
+        write_changes(
+            &dir,
+            &[Change::Remove(path(&["keybindings", "Ctrl+Alt+Y"]))],
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(dir.join(config::KEYBINDINGS_FILE)).unwrap();
+        assert!(text.contains("\n[keybindings]\n"), "{text}");
+        assert!(!text.contains("Ctrl+Alt+Y\" ="), "{text}");
+        let (_, errors) = config::reload_from(&dir, &Config::default());
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.kind != crate::config::ConfigErrorKind::Syntax),
+            "{errors:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_invalid_shortcuts_file_is_left_untouched() {
+        let dir = temporary_dir("invalid-keybindings");
+        std::fs::write(dir.join(config::KEYBINDINGS_FILE), "[keybindings\n").unwrap();
+        let error = write_changes(
+            &dir,
+            &[Change::Set(
+                path(&["keybindings", "Ctrl+Alt+T"]),
+                Value::Text("new_tab".into()),
+            )],
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, crate::config::ConfigErrorKind::Syntax);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(config::KEYBINDINGS_FILE)).unwrap(),
+            "[keybindings\n"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

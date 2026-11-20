@@ -95,8 +95,9 @@ disposition (en AZERTY aussi, sans `Shift`).
 ## Modifier les raccourcis
 
 Utilisez la section **Raccourcis clavier** de la fenêtre des paramètres (`Ctrl+,`) :
-appuyez sur un nouveau raccourci pour l'ajouter, ou supprimez-en un. Ou modifiez la
-section `[keybindings]` du [fichier de configuration](configuration.md) :
+appuyez sur un nouveau raccourci pour l'ajouter, ou supprimez-en un. Ou modifiez
+`keybindings.toml`, situé à côté du
+[fichier de configuration](configuration.md#emplacement-des-fichiers) :
 
 ```toml
 [keybindings]
@@ -107,6 +108,13 @@ section `[keybindings]` du [fichier de configuration](configuration.md) :
 
 Dans cet exemple, la première ligne ajoute un raccourci (`Ctrl+Shift+T` fonctionne
 toujours), la deuxième supprime un raccourci par défaut.
+
+Le fichier a le même format que `config.toml`, avec un en-tête `[keybindings]`.
+Graphene le crée au premier lancement, avec les valeurs par défaut documentées en
+commentaires. Les modifications enregistrées s'appliquent aux fenêtres ouvertes sans
+redémarrer. Les raccourcis qui se trouvaient dans la section `[keybindings]` de
+`config.toml` sont déplacés automatiquement vers `keybindings.toml` au démarrage ; les
+entrées déjà présentes dans `keybindings.toml` l'emportent sur celles déplacées.
 
 - Chaque ligne associe **un raccourci** à **une action**. Vos lignes s'ajoutent aux
   raccourcis par défaut : un raccourci par défaut reste actif sauf si vous l'associez à

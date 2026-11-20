@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use notify::event::{Event, EventKind};
 use notify::{RecursiveMode, Watcher};
 
-use crate::config::CONFIG_FILE;
+use crate::config::{CONFIG_FILE, KEYBINDINGS_FILE};
 use crate::theme::THEMES_DIR;
 
 /// Quiet time after the last event before the change is reported.
@@ -101,9 +101,9 @@ fn is_relevant(event: &Event, dir: &Path) -> bool {
     changes && event.paths.iter().any(|path| watched_file(path, dir))
 }
 
-/// Whether `path` is `config.toml` or a theme file of `dir`.
+/// Whether `path` is `config.toml`, `keybindings.toml` or a theme file of `dir`.
 fn watched_file(path: &Path, dir: &Path) -> bool {
-    if path == dir.join(CONFIG_FILE) {
+    if path == dir.join(CONFIG_FILE) || path == dir.join(KEYBINDINGS_FILE) {
         return true;
     }
     path.parent() == Some(&dir.join(THEMES_DIR))
@@ -164,9 +164,10 @@ mod tests {
     }
 
     #[test]
-    fn config_and_theme_files_are_watched() {
+    fn config_keybindings_and_theme_files_are_watched() {
         let dir = Path::new(DIR);
         assert!(watched_file(&dir.join("config.toml"), dir));
+        assert!(watched_file(&dir.join("keybindings.toml"), dir));
         assert!(watched_file(&dir.join("themes/mine.toml"), dir));
     }
 
@@ -175,6 +176,8 @@ mod tests {
         let dir = Path::new(DIR);
         for path in [
             "config.toml~",
+            "keybindings.toml~",
+            ".keybindings.toml.4242.0.tmp",
             ".config.toml.swp",
             "config.toml.tmp",
             ".config.toml.4242.0.tmp",

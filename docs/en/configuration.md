@@ -18,14 +18,14 @@ both write the same file, and every change applies to the open window at once.
 
 ## File locations
 
-| System | Configuration file                                         |
-|--------|------------------------------------------------------------|
-| Linux  | `~/.config/graphene/config.toml`                           |
-| macOS  | `~/Library/Application Support/graphene/config.toml`       |
+| System | Configuration file                                         | Keyboard shortcuts file                                       |
+|--------|------------------------------------------------------------|---------------------------------------------------------------|
+| Linux  | `~/.config/graphene/config.toml`                           | `~/.config/graphene/keybindings.toml`                         |
+| macOS  | `~/Library/Application Support/graphene/config.toml`       | `~/Library/Application Support/graphene/keybindings.toml`     |
 
-When `XDG_CONFIG_HOME` is set, `$XDG_CONFIG_HOME/graphene/config.toml` is used instead,
-on both systems. Your own [themes](themes.md#custom-themes) go in a `themes` folder
-next to `config.toml`.
+When `XDG_CONFIG_HOME` is set, `$XDG_CONFIG_HOME/graphene/config.toml` and
+`$XDG_CONFIG_HOME/graphene/keybindings.toml` are used instead, on both systems. Your
+own [themes](themes.md#custom-themes) go in a `themes` folder next to `config.toml`.
 
 ## The configuration file
 
@@ -53,7 +53,7 @@ are kept as they are.
 
 ## Live reload and errors
 
-Saved changes to `config.toml` and to your theme files apply to the open windows
+Saved changes to `config.toml`, `keybindings.toml` and your theme files apply to the open windows
 without restarting, with a few exceptions:
 
 - a new `font.size` also resets the zoom made with `Ctrl+=` / `Ctrl+-`;
@@ -74,26 +74,28 @@ describes each problem (click it to hide it):
 Open it with `Ctrl+,`, with **Settings** in the [command palette](tabs-and-panes.md#command-palette),
 or from the right-click menu. It shows the same sections as the file (language, font,
 window, scrollback, cursor, selection, tabs, theme, keyboard shortcuts, updates), and
-each change is written to `config.toml` at once, keeping the file's comments, then applied like a hand
-edit.
+each change is written at once to `config.toml`, or to `keybindings.toml` for keyboard
+shortcuts, keeping the files' comments, then applied like a hand edit.
 
 - **Keyboard shortcuts**: lists every action with its shortcuts. Add a shortcut by
   pressing it (`Escape` cancels), or remove one.
 - Problems in the file are shown under the setting concerned; unknown settings are
   listed at the top.
-- While the file has a syntax error, the window shows it and stays read-only until you
-  fix the file by hand.
+- While a file has a syntax error, the window shows it and locks what depends on that
+  file (the keyboard shortcuts for `keybindings.toml`, the other sections for
+  `config.toml`) until you fix the file by hand.
 
 ## Removing unknown settings
 
 Settings that Graphene does not know (a typo, or a setting from an older version) are
-ignored and kept in the file. To list and remove them:
+ignored and kept in the file. This covers `config.toml` and `keybindings.toml`. To list
+and remove them:
 
 ```bash
 graphene --prune-config
 ```
 
-It lists the unknown settings and asks for confirmation. Outside an interactive
+It lists the unknown settings of both files and asks for confirmation. Outside an interactive
 terminal it changes nothing unless you add `--yes`:
 
 ```bash
@@ -101,7 +103,8 @@ graphene --prune-config --yes
 ```
 
 Known settings are always kept, even with an invalid value, and a file with a TOML
-syntax error is never changed.
+syntax error is never changed. A missing `keybindings.toml` is created from its
+template.
 
 ## Settings reference
 
@@ -176,18 +179,13 @@ word_separators = ",│`|\"' ()[]{}<>\t"
 With both `light` and `dark` set, Graphene follows the system appearance and `name` is
 not used. See [Themes](themes.md).
 
-### `[keybindings]`
+### Keyboard shortcuts
 
-Each line maps a shortcut to an action, on top of the default shortcuts:
-
-```toml
-[keybindings]
-"Ctrl+Alt+T" = "new_tab"
-"Shift+PageUp" = "none"
-```
-
-The syntax, the action names and the default shortcuts are on the
-[Keyboard shortcuts](keybindings.md) page.
+Shortcuts are not set in `config.toml`: they live in their own file, `keybindings.toml`
+(a `[keybindings]` section, same format). See the
+[Keyboard shortcuts](keybindings.md#changing-shortcuts) page for the syntax, the action
+names and the default shortcuts. A `[keybindings]` section found in `config.toml` is
+moved to `keybindings.toml` at startup.
 
 ### `[updates]`
 

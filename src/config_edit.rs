@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use toml_edit::DocumentMut;
 
-use crate::config::{ConfigError, ConfigErrorKind, DEFAULT_CONFIG, key_path};
+use crate::config::{ConfigError, ConfigErrorKind, DEFAULT_CONFIG, DEFAULT_KEYBINDINGS, key_path};
 
 #[derive(Debug, Clone)]
 struct OptionLine {
@@ -23,7 +23,22 @@ struct OptionLine {
 /// Completes supported options and their value documentation without changing configured
 /// values. `None` means the document is already complete. Invalid TOML is never rewritten.
 pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit::TomlError> {
-    let options = option_lines();
+    complete_with(text, option_lines(), &[])
+}
+
+/// [`complete_defaults`] for `keybindings.toml`: the documentation of the shortcuts and
+/// one commented line per default shortcut.
+pub(super) fn complete_keybindings_defaults(
+    text: &str,
+) -> Result<Option<String>, toml_edit::TomlError> {
+    complete_with(text, keybinding_option_lines(), &keybinding_documentation())
+}
+
+fn complete_with(
+    text: &str,
+    options: Vec<OptionLine>,
+    keybinding_documentation: &[String],
+) -> Result<Option<String>, toml_edit::TomlError> {
     let legacy = normalize_legacy_documentation(text);
     let source = legacy.as_deref().unwrap_or(text);
     let malformed = normalize_malformed_comments(source, &options);
@@ -46,7 +61,7 @@ pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit:
         )
         .next()
     {
-        let documentation = missing_keybinding_documentation(text, block);
+        let documentation = missing_keybinding_documentation(text, keybinding_documentation);
         if !documentation.is_empty() {
             insertions.push((
                 section_header_end(text, block),
@@ -55,7 +70,12 @@ pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit:
         }
     }
     insertions.extend(commented_documentation_insertions(text, &options, &newline));
-    insertions.extend(active_documentation_insertions(text, &options, &newline));
+    insertions.extend(active_documentation_insertions(
+        text,
+        &options,
+        keybinding_documentation,
+        &newline,
+    ));
 
     for option in &options {
         if active_item(&document, option).is_none()
@@ -104,7 +124,7 @@ pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit:
                 if section == "keybindings" {
                     append_documentation(
                         &mut appended_sections,
-                        &keybinding_documentation(),
+                        keybinding_documentation,
                         &newline,
                     );
                 }
@@ -254,6 +274,7 @@ fn commented_documentation_insertions(
 fn active_documentation_insertions(
     text: &str,
     options: &[OptionLine],
+    keybinding_documentation: &[String],
     newline: &str,
 ) -> Vec<(usize, String)> {
     let mut insertions = Vec::new();
@@ -271,7 +292,7 @@ fn active_documentation_insertions(
             let paths = active_paths(section.as_deref(), trimmed);
             if section.is_none() && paths.contains(&(None, "keybindings".to_owned())) {
                 let documentation =
-                    missing_option_documentation(text, offset, &keybinding_documentation());
+                    missing_option_documentation(text, offset, keybinding_documentation);
                 if !documentation.is_empty() {
                     insertions.push((offset, render_documentation(&documentation, newline)));
                 }
@@ -332,28 +353,23 @@ fn append_documentation(output: &mut String, documentation: &[String], newline: 
     }
 }
 
+/// The `##` documentation lines of [`DEFAULT_KEYBINDINGS`] (the usage example, which holds
+/// an `=`, is not repeated into existing files).
 fn keybinding_documentation() -> Vec<String> {
-    let mut in_keybindings = false;
-    let mut documentation = Vec::new();
-    for line in DEFAULT_CONFIG.lines() {
-        let Some(body) = comment_body(line) else {
-            continue;
-        };
-        if let Some(header) = table_header(body) {
-            in_keybindings = header == "keybindings";
-            continue;
-        }
-        if in_keybindings && line.trim_start().starts_with("##") && !body.contains('=') {
-            documentation.push(body.to_owned());
-        }
-    }
-    documentation
+    DEFAULT_KEYBINDINGS
+        .lines()
+        .filter(|line| line.trim_start().starts_with("##"))
+        .filter_map(comment_body)
+        .filter(|body| !body.contains('='))
+        .map(str::to_owned)
+        .collect()
 }
 
-fn missing_keybinding_documentation(text: &str, block: &SectionBlock) -> Vec<String> {
-    keybinding_documentation()
-        .into_iter()
-        .filter(|line| !text[block.start..block.end].contains(&format!("## {line}")))
+fn missing_keybinding_documentation(text: &str, documentation: &[String]) -> Vec<String> {
+    documentation
+        .iter()
+        .filter(|line| !text.contains(&format!("## {line}")))
+        .cloned()
         .collect()
 }
 
@@ -683,57 +699,142 @@ pub(super) fn write_atomic(path: &Path, contents: &str) -> io::Result<()> {
     result
 }
 
+/// A file `--prune-config` cleans, which decides the parser that classifies its keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PruneKind {
+    Config,
+    Keybindings,
+}
+
+impl PruneKind {
+    fn default_text(self) -> anyhow::Result<String> {
+        match self {
+            Self::Config => Ok(complete_defaults(DEFAULT_CONFIG)
+                .map_err(|error| {
+                    anyhow::anyhow!("invalid embedded default configuration: {error}")
+                })?
+                .unwrap_or_else(|| DEFAULT_CONFIG.to_owned())),
+            Self::Keybindings => Ok(default_keybindings_text()),
+        }
+    }
+
+    fn unknown_keys(self, text: &str, path: &Path) -> Vec<crate::config::UnknownConfigKey> {
+        let previous = crate::config::Config::default();
+        match self {
+            Self::Config => crate::config::Config::parse_with_unknown_keys(text, &previous, path).2,
+            Self::Keybindings => crate::config::Config::parse_keybindings(text, &previous, path).2,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PruneOutcome {
-    CreatedDefault,
     NothingToPrune,
     Declined(Vec<String>),
     Pruned(Vec<String>),
 }
 
-/// Removes only keys the configuration parser does not recognize. The callback is
-/// invoked with the complete list before any file is modified.
-pub(crate) fn prune_file(
-    path: &Path,
-    mut confirm: impl FnMut(&[String]) -> bool,
-) -> anyhow::Result<PruneOutcome> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let defaults = complete_defaults(DEFAULT_CONFIG)
-                .map_err(|error| {
-                    anyhow::anyhow!("invalid embedded default configuration: {error}")
-                })?
-                .unwrap_or_else(|| DEFAULT_CONFIG.to_owned());
-            write_atomic(path, &defaults)?;
-            return Ok(PruneOutcome::CreatedDefault);
-        }
-        Err(error) => return Err(error.into()),
-    };
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PruneReport {
+    /// Missing files created from their default text (never asks for confirmation).
+    pub(crate) created: Vec<PathBuf>,
+    pub(crate) outcome: PruneOutcome,
+}
 
-    // Validate syntax before asking for confirmation or computing any edits. In
-    // particular, never rewrite a file that toml_edit cannot parse.
+struct PrunePlan<'a> {
+    path: &'a Path,
+    kind: PruneKind,
+    text: String,
+    unknown: Vec<crate::config::UnknownConfigKey>,
+}
+
+/// Removes only keys the file parsers do not recognize. The callback is invoked once with
+/// the complete list (each key prefixed by its file name) before any file is modified.
+/// A missing file is created from its default text.
+pub(crate) fn prune_files(
+    targets: &[(PruneKind, &Path)],
+    mut confirm: impl FnMut(&[String]) -> bool,
+) -> anyhow::Result<PruneReport> {
+    let mut created = Vec::new();
+    let mut plans = Vec::new();
+    for &(kind, path) in targets {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                write_atomic(path, &kind.default_text()?)?;
+                created.push(path.to_path_buf());
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        // Validate syntax before asking for confirmation or computing any edits. In
+        // particular, never rewrite a file that toml_edit cannot parse.
+        toml_edit::Document::parse(text.to_owned())
+            .map_err(|error| anyhow::anyhow!("invalid TOML in {}: {error}", path.display()))?;
+        let unknown = kind.unknown_keys(&text, path);
+        if !unknown.is_empty() {
+            plans.push(PrunePlan {
+                path,
+                kind,
+                text,
+                unknown,
+            });
+        }
+    }
+    if plans.is_empty() {
+        return Ok(PruneReport {
+            created,
+            outcome: PruneOutcome::NothingToPrune,
+        });
+    }
+
+    let paths: Vec<String> = plans
+        .iter()
+        .flat_map(|plan| {
+            let file = plan
+                .path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            plan.unknown
+                .iter()
+                .map(move |key| format!("{file}: {}", key.path))
+        })
+        .collect();
+    if !confirm(&paths) {
+        return Ok(PruneReport {
+            created,
+            outcome: PruneOutcome::Declined(paths),
+        });
+    }
+
+    // Compute every edit before writing any file: one failure leaves all untouched.
+    let mut updates = Vec::with_capacity(plans.len());
+    for plan in &plans {
+        updates.push((plan.path, pruned_text(plan)?));
+    }
+    for (path, updated) in updates {
+        write_atomic(path, &updated)?;
+    }
+    Ok(PruneReport {
+        created,
+        outcome: PruneOutcome::Pruned(paths),
+    })
+}
+
+fn pruned_text(plan: &PrunePlan) -> anyhow::Result<String> {
+    let PrunePlan {
+        path,
+        kind,
+        text,
+        unknown,
+    } = plan;
     let document = toml_edit::Document::parse(text.to_owned())
         .map_err(|error| anyhow::anyhow!("invalid TOML in {}: {error}", path.display()))?;
-    let (_, _, unknown) = crate::config::Config::parse_with_unknown_keys(
-        &text,
-        &crate::config::Config::default(),
-        path,
-    );
-    if unknown.is_empty() {
-        return Ok(PruneOutcome::NothingToPrune);
-    }
-
-    let paths: Vec<_> = unknown.iter().map(|key| key.path.clone()).collect();
-    if !confirm(&paths) {
-        return Ok(PruneOutcome::Declined(paths));
-    }
-
     let mut ranges = Vec::with_capacity(unknown.len());
-    for key in &unknown {
+    for key in unknown {
         let item = match &key.section {
             None => document.as_table().get(&key.key),
             Some(section) => document
@@ -748,7 +849,7 @@ pub(crate) fn prune_file(
         })?;
         let range = if key.whole_section && item.as_table().is_some() {
             let section_span = span.start..item_source_end(item).unwrap_or(span.end);
-            full_line_range(&text, section_span)?
+            full_line_range(text, section_span)?
         } else {
             match &key.section {
                 Some(section)
@@ -766,9 +867,9 @@ pub(crate) fn prune_file(
                         .key(&key.key)
                         .and_then(toml_edit::Key::span)
                         .ok_or_else(|| anyhow::anyhow!("cannot locate key `{}`", key.path))?;
-                    inline_entry_range(&text, key_span.start..span.end)?
+                    inline_entry_range(text, key_span.start..span.end)?
                 }
-                _ => full_line_range(&text, span)?,
+                _ => full_line_range(text, span)?,
             }
         };
         ranges.push(range);
@@ -796,19 +897,14 @@ pub(crate) fn prune_file(
     updated
         .parse::<DocumentMut>()
         .map_err(|error| anyhow::anyhow!("pruning would produce invalid TOML: {error}"))?;
-    let (_, _, remaining) = crate::config::Config::parse_with_unknown_keys(
-        &updated,
-        &crate::config::Config::default(),
-        path,
-    );
+    let remaining = kind.unknown_keys(&updated, path);
     if !remaining.is_empty() {
         anyhow::bail!(
             "pruning did not remove all unknown configuration keys: {:?}",
             remaining.iter().map(|key| &key.path).collect::<Vec<_>>()
         );
     }
-    write_atomic(path, &updated)?;
-    Ok(PruneOutcome::Pruned(paths))
+    Ok(updated)
 }
 
 fn item_source_end(item: &toml_edit::Item) -> Option<usize> {
@@ -870,37 +966,48 @@ fn inline_entry_range(text: &str, span: Range<usize>) -> anyhow::Result<Range<us
 
 /// Runs the explicit cleanup command using the standard XDG configuration location.
 pub(crate) fn prune_config(yes: bool) -> anyhow::Result<()> {
-    let path = crate::config::config_file().ok_or_else(|| {
+    let dir = crate::config::config_dir().ok_or_else(|| {
         anyhow::anyhow!("cannot locate the configuration directory: set HOME or XDG_CONFIG_HOME")
     })?;
+    let config = dir.join(crate::config::CONFIG_FILE);
+    let keybindings = dir.join(crate::config::KEYBINDINGS_FILE);
     let stdin_tty = io::stdin().is_terminal();
     let stdout_tty = io::stdout().is_terminal();
-    let outcome = prune_file(&path, |paths| {
-        println!("Unknown configuration keys:");
-        for key in paths {
-            println!("  - {key}");
+    let report = prune_files(
+        &[
+            (PruneKind::Config, &config),
+            (PruneKind::Keybindings, &keybindings),
+        ],
+        |paths| {
+            println!("Unknown configuration keys:");
+            for key in paths {
+                println!("  - {key}");
+            }
+            if yes {
+                return true;
+            }
+            if !stdin_tty || !stdout_tty {
+                eprintln!("Not pruning configuration: confirmation requires a terminal or --yes.");
+                return false;
+            }
+            print!("Remove these keys? [y/N] ");
+            let _ = io::stdout().flush();
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer).is_ok()
+                && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+        },
+    )?;
+    for path in &report.created {
+        println!(
+            "Created {} from the default configuration; nothing to prune.",
+            path.display()
+        );
+    }
+    match report.outcome {
+        PruneOutcome::NothingToPrune if report.created.is_empty() => {
+            println!("No unknown configuration keys to prune.")
         }
-        if yes {
-            return true;
-        }
-        if !stdin_tty || !stdout_tty {
-            eprintln!("Not pruning configuration: confirmation requires a terminal or --yes.");
-            return false;
-        }
-        print!("Remove these keys? [y/N] ");
-        let _ = io::stdout().flush();
-        let mut answer = String::new();
-        io::stdin().read_line(&mut answer).is_ok()
-            && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-    })?;
-    match outcome {
-        PruneOutcome::CreatedDefault => {
-            println!(
-                "Created {} from the default configuration; nothing to prune.",
-                path.display()
-            );
-        }
-        PruneOutcome::NothingToPrune => println!("No unknown configuration keys to prune."),
+        PruneOutcome::NothingToPrune => {}
         PruneOutcome::Declined(_) => println!("Configuration left unchanged."),
         PruneOutcome::Pruned(paths) => {
             println!("Removed {} unknown configuration key(s).", paths.len())
@@ -937,9 +1044,6 @@ fn option_lines() -> Vec<OptionLine> {
             documentation.clear();
             continue;
         }
-        if section.as_deref() == Some("keybindings") {
-            continue;
-        }
         if let Some(keys) = commented_keys(section.as_deref(), body) {
             for key in keys {
                 options.push(OptionLine {
@@ -955,17 +1059,19 @@ fn option_lines() -> Vec<OptionLine> {
             documentation.clear();
         }
     }
+    options
+}
 
-    for (key, action) in crate::keybindings::defaults() {
-        let line = format!("{key:?} = {:?}", action.id());
-        options.push(OptionLine {
+/// One commented line per default shortcut, in the `[keybindings]` table.
+fn keybinding_option_lines() -> Vec<OptionLine> {
+    crate::keybindings::defaults()
+        .map(|(key, action)| OptionLine {
             section: Some("keybindings".to_owned()),
             key: key.to_owned(),
-            line,
+            line: format!("{key:?} = {:?}", action.id()),
             documentation: Vec::new(),
-        });
-    }
-    options
+        })
+        .collect()
 }
 
 fn commented_options(text: &str) -> HashSet<(Option<String>, String)> {
@@ -1034,6 +1140,157 @@ pub(crate) fn default_file_text() -> String {
         .ok()
         .flatten()
         .unwrap_or_else(|| DEFAULT_CONFIG.to_owned())
+}
+
+/// The text of a new `keybindings.toml`: [`DEFAULT_KEYBINDINGS`] with every default
+/// shortcut as a commented line.
+pub(crate) fn default_keybindings_text() -> String {
+    complete_keybindings_defaults(DEFAULT_KEYBINDINGS)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| DEFAULT_KEYBINDINGS.to_owned())
+}
+
+/// What moving the `[keybindings]` section out of `config.toml` changes.
+#[derive(Debug)]
+pub(crate) struct KeybindingsMigration {
+    /// The new text of `config.toml`: no `[keybindings]` section nor generated block.
+    pub(crate) config: String,
+    /// The new text of `keybindings.toml` when at least one shortcut was merged into it.
+    pub(crate) keybindings: Option<String>,
+    /// An active section holding shortcuts was found (a commented block alone is not).
+    pub(crate) moved: bool,
+}
+
+/// Moves the shortcuts of an active `[keybindings]` section of `config.toml` into
+/// `keybindings_text` (the text of `keybindings.toml`, `None` when the file is missing) and
+/// removes that section and the generated commented block from `config.toml`. A shortcut
+/// already active in `keybindings.toml` is not replaced. `None` means there is nothing to
+/// do, or that a file is not valid TOML (neither is ever rewritten then).
+pub(crate) fn migrate_keybindings(
+    config_text: &str,
+    keybindings_text: Option<&str>,
+    keybindings_file: &Path,
+) -> Option<KeybindingsMigration> {
+    let legacy = normalize_legacy_documentation(config_text);
+    let text = legacy.as_deref().unwrap_or(config_text);
+    text.parse::<DocumentMut>().ok()?;
+    let blocks: Vec<SectionBlock> = section_blocks(text)
+        .into_iter()
+        .filter(|block| block.name == "keybindings")
+        .collect();
+    if blocks.is_empty() {
+        return None;
+    }
+
+    let generated = GeneratedKeybindingLines::new();
+    let mut entries: Vec<(String, toml_edit::Value, String)> = Vec::new();
+    let mut config = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for block in &blocks {
+        config.push_str(&text[cursor..block.start]);
+        cursor = block.end;
+        let body = &text[block.start..block.end];
+        let leftover = if block.active {
+            let document = body.parse::<DocumentMut>().ok()?;
+            let table = document.get("keybindings")?.as_table()?;
+            for (key, item) in table {
+                let value = item.as_value()?;
+                let (key_node, _) = table.get_key_value(key)?;
+                let prefix = key_node
+                    .leaf_decor()
+                    .prefix()
+                    .and_then(toml_edit::RawString::as_str)
+                    .unwrap_or_default();
+                entries.push((key.to_owned(), value.clone(), generated.strip(prefix)));
+            }
+            generated.strip(document.trailing().as_str().unwrap_or_default())
+        } else {
+            let header = body.split_inclusive('\n').next().unwrap_or_default();
+            generated.strip(&body[header.len()..])
+        };
+        if !leftover.trim().is_empty() {
+            config.push_str(&leftover);
+        }
+    }
+    config.push_str(&text[cursor..]);
+
+    let mut merged = None;
+    if !entries.is_empty() {
+        let destination = keybindings_text.map_or_else(default_keybindings_text, str::to_owned);
+        let mut edit = ConfigEdit::parse(&destination, keybindings_file).ok()?;
+        let mut added = false;
+        for (key, value, prefix) in &entries {
+            let present = edit
+                .document
+                .get("keybindings")
+                .and_then(toml_edit::Item::as_table_like)
+                .is_some_and(|table| table.contains_key(key));
+            if present {
+                continue;
+            }
+            edit.set(&["keybindings", key], value.clone()).ok()?;
+            if prefix.contains('#')
+                && let Some(mut node) = edit
+                    .document
+                    .get_mut("keybindings")
+                    .and_then(toml_edit::Item::as_table_mut)
+                    .and_then(|table| table.key_mut(key))
+            {
+                node.leaf_decor_mut().set_prefix(prefix.clone());
+            }
+            added = true;
+        }
+        if added {
+            merged = Some(edit.to_string());
+        }
+    }
+
+    Some(KeybindingsMigration {
+        config,
+        keybindings: merged,
+        moved: !entries.is_empty(),
+    })
+}
+
+/// The lines Graphene generates in `config.toml` for the shortcuts: the `##`
+/// documentation and one commented line per default shortcut.
+struct GeneratedKeybindingLines {
+    documentation: HashSet<String>,
+    shortcuts: HashSet<String>,
+}
+
+impl GeneratedKeybindingLines {
+    fn new() -> Self {
+        Self {
+            documentation: DEFAULT_KEYBINDINGS
+                .lines()
+                .filter(|line| line.trim_start().starts_with("##"))
+                .filter_map(comment_body)
+                .map(str::to_owned)
+                .collect(),
+            shortcuts: keybinding_option_lines()
+                .into_iter()
+                .map(|option| option.line)
+                .collect(),
+        }
+    }
+
+    fn is_generated(&self, line: &str) -> bool {
+        let trimmed = line.trim();
+        let Some(body) = comment_body(trimmed) else {
+            return false;
+        };
+        (trimmed.starts_with("##") && self.documentation.contains(body))
+            || self.shortcuts.contains(body)
+    }
+
+    /// `text` without its generated lines.
+    fn strip(&self, text: &str) -> String {
+        text.split_inclusive('\n')
+            .filter(|line| !self.is_generated(line))
+            .collect()
+    }
 }
 
 /// A `config.toml` document edited key by key, keeping comments, whitespace and key
@@ -1160,15 +1417,17 @@ impl std::fmt::Display for ConfigEdit {
 }
 
 /// Applies `change` to `file`: the file is read again first so hand edits made meanwhile
-/// are kept (a missing file starts from [`default_file_text`]), then written next to it
-/// and renamed over it, which the watcher sees as one change.
+/// are kept (a missing file starts from `default_text`: [`default_file_text`] for
+/// `config.toml`, [`default_keybindings_text`] for `keybindings.toml`), then written next
+/// to it and renamed over it, which the watcher sees as one change.
 pub(crate) fn write(
     file: &Path,
+    default_text: fn() -> String,
     change: impl FnOnce(&mut ConfigEdit) -> Result<(), ConfigError>,
 ) -> Result<(), ConfigError> {
     let text = match fs::read_to_string(file) {
         Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => default_file_text(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => default_text(),
         Err(error) => {
             return Err(ConfigError::read(
                 file.to_path_buf(),
@@ -1184,7 +1443,7 @@ pub(crate) fn write(
     write_atomic(file, &edit.to_string()).map_err(|error| write_error(file, &error))
 }
 
-fn write_error(file: &Path, error: &io::Error) -> ConfigError {
+pub(crate) fn write_error(file: &Path, error: &io::Error) -> ConfigError {
     ConfigError {
         file: file.to_path_buf(),
         line: None,
@@ -1318,11 +1577,14 @@ mod tests {
             .unwrap();
         let text = config.to_string();
         assert_eq!(text, "[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n");
+        let (keybindings, errors, _) = crate::config::Config::parse_keybindings(
+            &text,
+            &crate::config::Config::default(),
+            Path::new("keybindings.toml"),
+        );
+        assert_eq!(errors, Vec::new());
         assert_eq!(
-            parse_config(&text)
-                .keybindings
-                .get("Ctrl+Alt+T")
-                .map(String::as_str),
+            keybindings.get("Ctrl+Alt+T").map(String::as_str),
             Some("new_tab")
         );
     }
@@ -1374,7 +1636,10 @@ mod tests {
     #[test]
     fn write_starts_from_the_defaults_when_the_file_is_missing() {
         let (directory, path) = temporary_config(None);
-        write(&path, |config| config.set(&["font", "size"], 20.0)).unwrap();
+        write(&path, default_file_text, |config| {
+            config.set(&["font", "size"], 20.0)
+        })
+        .unwrap();
 
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.starts_with(&default_file_text()));
@@ -1386,13 +1651,19 @@ mod tests {
     #[test]
     fn write_reads_the_file_again_and_keeps_hand_edits() {
         let (directory, path) = temporary_config(Some("# Mine.\n[font]\nsize = 12.0\n"));
-        write(&path, |config| config.set(&["window", "padding"], 4)).unwrap();
+        write(&path, default_file_text, |config| {
+            config.set(&["window", "padding"], 4)
+        })
+        .unwrap();
         fs::write(
             &path,
             "# Mine.\n[font]\nsize = 13.0\n[window]\npadding = 4\n",
         )
         .unwrap();
-        write(&path, |config| config.set(&["cursor", "blinking"], true)).unwrap();
+        write(&path, default_file_text, |config| {
+            config.set(&["cursor", "blinking"], true)
+        })
+        .unwrap();
 
         let text = fs::read_to_string(&path).unwrap();
         assert_eq!(
@@ -1408,7 +1679,10 @@ mod tests {
     #[test]
     fn write_leaves_an_invalid_file_untouched() {
         let (directory, path) = temporary_config(Some("[font\n"));
-        let error = write(&path, |config| config.set(&["font", "size"], 20.0)).unwrap_err();
+        let error = write(&path, default_file_text, |config| {
+            config.set(&["font", "size"], 20.0)
+        })
+        .unwrap_err();
         assert_eq!(error.kind, ConfigErrorKind::Syntax);
         assert_eq!(fs::read_to_string(&path).unwrap(), "[font\n");
         remove_temporary_config(directory);
@@ -1417,29 +1691,30 @@ mod tests {
     #[test]
     fn write_keeps_the_file_when_the_change_fails() {
         let (directory, path) = temporary_config(Some("font = 3\n"));
-        let error = write(&path, |config| config.set(&["font", "size"], 20.0)).unwrap_err();
+        let error = write(&path, default_file_text, |config| {
+            config.set(&["font", "size"], 20.0)
+        })
+        .unwrap_err();
         assert_eq!(error.kind, ConfigErrorKind::InvalidValue);
         assert_eq!(fs::read_to_string(&path).unwrap(), "font = 3\n");
         remove_temporary_config(directory);
     }
 
     #[test]
-    fn completion_adds_all_documented_options_and_default_keybindings() {
+    fn completion_adds_all_documented_options() {
         let completed = complete_defaults("").unwrap().unwrap();
         for option in option_lines() {
-            if option.section.as_deref() != Some("keybindings") {
-                assert!(
-                    !option.documentation.is_empty(),
-                    "missing documentation for option: {:?}",
-                    option
-                );
-                assert_eq!(
-                    option.documentation.len(),
-                    1,
-                    "duplicate help lines for option: {:?}",
-                    option
-                );
-            }
+            assert!(
+                !option.documentation.is_empty(),
+                "missing documentation for option: {:?}",
+                option
+            );
+            assert_eq!(
+                option.documentation.len(),
+                1,
+                "duplicate help lines for option: {:?}",
+                option
+            );
             assert!(
                 completed.contains(&format!("# {}\n", option.line)),
                 "missing generated option: {:?}",
@@ -1453,14 +1728,53 @@ mod tests {
                 );
             }
         }
+        assert!(!completed.contains("keybindings"));
+        assert!(commented_options(&completed).contains(&(None, "language".to_owned())));
+        assert_eq!(complete_defaults(&completed).unwrap(), None);
+    }
+
+    #[test]
+    fn keybindings_completion_adds_documentation_and_default_shortcuts() {
+        let completed = complete_keybindings_defaults("").unwrap().unwrap();
         for documentation in keybinding_documentation() {
             assert!(completed.contains(&format!("## {documentation}\n")));
         }
+        assert_eq!(completed.matches("[keybindings]").count(), 1);
         for (key, action) in crate::keybindings::defaults() {
             assert!(completed.contains(&format!("# {key:?} = {:?}\n", action.id())));
         }
-        assert!(commented_options(&completed).contains(&(None, "language".to_owned())));
-        assert_eq!(complete_defaults(&completed).unwrap(), None);
+        assert_eq!(complete_keybindings_defaults(&completed).unwrap(), None);
+    }
+
+    #[test]
+    fn default_keybindings_text_is_complete_with_an_active_header() {
+        let text = default_keybindings_text();
+        assert_eq!(complete_keybindings_defaults(&text).unwrap(), None);
+        assert_eq!(text.matches("\n[keybindings]\n").count(), 1);
+        assert!(text.starts_with("## Each string shortcut key maps"));
+        assert!(text.contains("## Example: `\"Ctrl+Alt+T\" = \"new_tab\"` adds a shortcut.\n"));
+        let (keybindings, errors, unknown) = crate::config::Config::parse_keybindings(
+            &text,
+            &crate::config::Config::default(),
+            Path::new("keybindings.toml"),
+        );
+        assert!(keybindings.is_empty());
+        assert!(errors.is_empty());
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn keybindings_completion_keeps_user_shortcuts_and_adds_missing_documentation() {
+        let original =
+            "# mine\n[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n\"Ctrl+Shift+C\" = \"none\"\n";
+        let updated = complete_keybindings_defaults(original).unwrap().unwrap();
+        assert!(updated.starts_with("# mine\n[keybindings]\n## Each string shortcut key maps"));
+        assert!(updated.contains("\"Ctrl+Alt+T\" = \"new_tab\"\n"));
+        // An active shortcut is not repeated as a commented default.
+        assert!(!updated.contains("# \"Ctrl+Shift+C\" = \"copy\""));
+        assert!(updated.contains("# \"Ctrl+Shift+V\" = \"paste\""));
+        assert_eq!(updated.matches("## Allowed actions:").count(), 1);
+        assert_eq!(complete_keybindings_defaults(&updated).unwrap(), None);
     }
 
     #[test]
@@ -1539,7 +1853,9 @@ mod tests {
 
     #[test]
     fn existing_keybinding_sections_get_one_shared_help_block() {
-        let updated = complete_defaults("# [keybindings]\n").unwrap().unwrap();
+        let updated = complete_keybindings_defaults("# [keybindings]\n")
+            .unwrap()
+            .unwrap();
 
         assert_eq!(updated.matches("# [keybindings]").count(), 1);
         assert!(updated.contains("## Each string shortcut key maps to one string action name."));
@@ -1651,14 +1967,6 @@ mod tests {
             "## Font family name. Empty: the system monospace font.\n",
             "## Type: string. Empty uses the system monospace font.\n",
             "# family = \"\"\n",
-            "# [keybindings]\n",
-            "## Type: string shortcut key mapped to a string action.\n",
-            "## \"Keys\" = \"action\". The action \"none\" disables a default shortcut, so the key goes\n",
-            "## to the shell. Keys: modifiers Ctrl, Shift, Alt, Super joined with \"+\", then a key\n",
-            "## name (PageUp, F5, Insert, Left...) or one character. Letters ignore case; Shift is\n",
-            "## ignored for other characters (\"Ctrl++\"). Alt+digit uses the digit row on any layout.\n",
-            "## Actions: copy, paste, scroll_page_up, scroll_page_down, scroll_to_top,\n",
-            "## command_palette. Example: \"Ctrl+Alt+T\" = \"new_tab\" adds a shortcut;\n",
             "## Type: user-specific plugin note.\n",
             "[plugin]\n",
             "value = 42\n",
@@ -1675,12 +1983,37 @@ mod tests {
         );
         assert_eq!(updated.matches("fc-list : family").count(), 1);
         assert!(!updated.contains("## Type: string."));
+        assert!(updated.contains("## Type: user-specific plugin note."));
+        assert!(updated.contains("language = \"fr\""));
+        assert!(updated.contains("# family = \"\""));
+    }
+
+    #[test]
+    fn legacy_keybinding_help_is_replaced_in_keybindings_file() {
+        let original = concat!(
+            "# [keybindings]\n",
+            "## Type: string shortcut key mapped to a string action.\n",
+            "## \"Keys\" = \"action\". The action \"none\" disables a default shortcut, so the key goes\n",
+            "## to the shell. Keys: modifiers Ctrl, Shift, Alt, Super joined with \"+\", then a key\n",
+            "## name (PageUp, F5, Insert, Left...) or one character. Letters ignore case; Shift is\n",
+            "## ignored for other characters (\"Ctrl++\"). Alt+digit uses the digit row on any layout.\n",
+            "## Actions: copy, paste, scroll_page_up, scroll_page_down, scroll_to_top,\n",
+            "## command_palette. Example: \"Ctrl+Alt+T\" = \"new_tab\" adds a shortcut;\n",
+            "## Type: user-specific plugin note.\n",
+            "\"F7\" = \"copy\"\n",
+        );
+
+        let updated =
+            complete_keybindings_defaults(&original.replace("# [keybindings]", "[keybindings]"))
+                .unwrap()
+                .unwrap();
+
+        assert!(!updated.contains("## Type: string shortcut"));
         assert!(!updated.contains("## Actions:"));
         assert!(!updated.contains("\"Keys\" = \"action\""));
         assert_eq!(updated.matches("## Allowed actions:").count(), 1);
         assert!(updated.contains("## Type: user-specific plugin note."));
-        assert!(updated.contains("language = \"fr\""));
-        assert!(updated.contains("# family = \"\""));
+        assert!(updated.contains("\"F7\" = \"copy\""));
     }
 
     #[test]
@@ -1705,15 +2038,157 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    fn prune_one(
+        path: &Path,
+        kind: PruneKind,
+        confirm: impl FnMut(&[String]) -> bool,
+    ) -> anyhow::Result<PruneOutcome> {
+        Ok(prune_files(&[(kind, path)], confirm)?.outcome)
+    }
+
+    /// Both files of a configuration folder, with the given contents (`None` = absent).
+    fn temporary_pair(
+        config: Option<&str>,
+        keybindings: Option<&str>,
+    ) -> (PathBuf, PathBuf, PathBuf) {
+        let (directory, config_path) = temporary_config(config);
+        let keybindings_path = directory.join("keybindings.toml");
+        if let Some(contents) = keybindings {
+            fs::write(&keybindings_path, contents).unwrap();
+        }
+        (directory, config_path, keybindings_path)
+    }
+
+    fn prune_pair(
+        config: &Path,
+        keybindings: &Path,
+        confirm: impl FnMut(&[String]) -> bool,
+    ) -> anyhow::Result<PruneReport> {
+        prune_files(
+            &[
+                (PruneKind::Config, config),
+                (PruneKind::Keybindings, keybindings),
+            ],
+            confirm,
+        )
+    }
+
+    #[test]
+    fn prune_lists_unknown_keys_of_both_files_and_asks_once() {
+        let (directory, config, keybindings) = temporary_pair(
+            Some("language = \"fr\"\nfuture_root = 1\n"),
+            Some("[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n[future]\nvalue = 1\n"),
+        );
+        let mut asked = 0;
+        let report = prune_pair(&config, &keybindings, |keys| {
+            asked += 1;
+            assert_eq!(
+                keys,
+                &["config.toml: future_root", "keybindings.toml: future"]
+            );
+            true
+        })
+        .unwrap();
+        assert_eq!(asked, 1);
+        assert_eq!(
+            report.outcome,
+            PruneOutcome::Pruned(vec![
+                "config.toml: future_root".into(),
+                "keybindings.toml: future".into()
+            ])
+        );
+        let config_text = fs::read_to_string(&config).unwrap();
+        assert!(config_text.contains("language = \"fr\"") && !config_text.contains("future_root"));
+        let keybindings_text = fs::read_to_string(&keybindings).unwrap();
+        assert!(keybindings_text.contains("\"Ctrl+Alt+T\" = \"new_tab\""));
+        assert!(!keybindings_text.contains("future") && !keybindings_text.contains("value"));
+        remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn prune_prunes_a_single_file_when_only_it_has_unknown_keys() {
+        let (directory, config, keybindings) = temporary_pair(
+            Some("language = \"fr\"\n"),
+            Some("[keybindings]\n[future]\nvalue = 1\n"),
+        );
+        let config_before = fs::read_to_string(&config).unwrap();
+        let report = prune_pair(&config, &keybindings, |keys| {
+            assert_eq!(keys, &["keybindings.toml: future"]);
+            true
+        })
+        .unwrap();
+        assert!(matches!(report.outcome, PruneOutcome::Pruned(_)));
+        assert_eq!(fs::read_to_string(&config).unwrap(), config_before);
+        assert!(!fs::read_to_string(&keybindings).unwrap().contains("future"));
+        remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn prune_refusal_leaves_both_files_untouched() {
+        let config_text = "future_root = 1\n";
+        let keybindings_text = "[keybindings]\n[future]\nvalue = 1\n";
+        let (directory, config, keybindings) =
+            temporary_pair(Some(config_text), Some(keybindings_text));
+        let report = prune_pair(&config, &keybindings, |_| false).unwrap();
+        assert!(matches!(report.outcome, PruneOutcome::Declined(keys) if keys.len() == 2));
+        assert_eq!(fs::read_to_string(&config).unwrap(), config_text);
+        assert_eq!(fs::read_to_string(&keybindings).unwrap(), keybindings_text);
+        remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn prune_creates_the_missing_keybindings_file_from_its_template() {
+        let (directory, config, keybindings) = temporary_pair(Some("language = \"fr\"\n"), None);
+        let report = prune_pair(&config, &keybindings, |_| {
+            panic!("nothing to prune must not ask")
+        })
+        .unwrap();
+        assert_eq!(report.created, vec![keybindings.clone()]);
+        assert_eq!(report.outcome, PruneOutcome::NothingToPrune);
+        assert_eq!(
+            fs::read_to_string(&keybindings).unwrap(),
+            default_keybindings_text()
+        );
+        remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn prune_never_removes_a_moved_keybindings_section_from_config() {
+        let original = "language = \"fr\"\n[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n";
+        let (directory, config, keybindings) =
+            temporary_pair(Some(original), Some("[keybindings]\n"));
+        let report = prune_pair(&config, &keybindings, |_| {
+            panic!("moved section is not unknown")
+        })
+        .unwrap();
+        assert_eq!(report.outcome, PruneOutcome::NothingToPrune);
+        assert_eq!(fs::read_to_string(&config).unwrap(), original);
+        remove_temporary_config(directory);
+    }
+
+    #[test]
+    fn prune_does_not_touch_any_file_when_one_is_invalid_toml() {
+        let config_text = "future_root = 1\n";
+        let (directory, config, keybindings) =
+            temporary_pair(Some(config_text), Some("[keybindings\n"));
+        assert!(prune_pair(&config, &keybindings, |_| panic!("must not ask")).is_err());
+        assert_eq!(fs::read_to_string(&config).unwrap(), config_text);
+        remove_temporary_config(directory);
+    }
+
     #[test]
     fn prune_removes_only_unknown_root_and_nested_keys() {
         let (directory, path) = temporary_config(Some(
             "language = \"fr\"\nfuture_root_option = \"preserve until confirmed\"\n[font]\nsize = \"invalid-but-known\"\nfuture_font_option = 12\n[plugin]\nfuture_plugin_option = true\n[window]\nwidth = 1024\n",
         ));
-        let outcome = prune_file(&path, |keys| {
+        let outcome = prune_one(&path, PruneKind::Config, |keys| {
             assert_eq!(
                 keys,
-                &["font.future_font_option", "future_root_option", "plugin"]
+                &[
+                    "config.toml: font.future_font_option",
+                    "config.toml: future_root_option",
+                    "config.toml: plugin"
+                ]
             );
             true
         })
@@ -1721,16 +2196,16 @@ mod tests {
         assert_eq!(
             outcome,
             PruneOutcome::Pruned(vec![
-                "font.future_font_option".to_owned(),
-                "future_root_option".to_owned(),
-                "plugin".to_owned()
+                "config.toml: font.future_font_option".to_owned(),
+                "config.toml: future_root_option".to_owned(),
+                "config.toml: plugin".to_owned()
             ])
         );
         let updated = fs::read_to_string(&path).unwrap();
         assert!(updated.contains("language = \"fr\""));
         assert!(updated.contains("size = \"invalid-but-known\""));
         assert!(updated.contains("width = 1024"));
-        assert!(!updated.contains("future_root_option"));
+        assert!(!updated.contains("config.toml: future_root_option"));
         assert!(!updated.contains("future_font_option"));
         assert!(!updated.contains("[plugin]"));
         remove_temporary_config(directory);
@@ -1740,14 +2215,14 @@ mod tests {
     fn prune_refusal_does_not_modify_the_file() {
         let original = "[font]\nfuture_option = 1\nsize = 16\n";
         let (directory, path) = temporary_config(Some(original));
-        let outcome = prune_file(&path, |keys| {
-            assert_eq!(keys, &["font.future_option"]);
+        let outcome = prune_one(&path, PruneKind::Config, |keys| {
+            assert_eq!(keys, &["config.toml: font.future_option"]);
             false
         })
         .unwrap();
         assert_eq!(
             outcome,
-            PruneOutcome::Declined(vec!["font.future_option".into()])
+            PruneOutcome::Declined(vec!["config.toml: font.future_option".into()])
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
         remove_temporary_config(directory);
@@ -1757,14 +2232,14 @@ mod tests {
     fn prune_confirmation_yes_removes_keys_and_preserves_inline_known_values() {
         let original = "font = { size = \"invalid-but-known\", future_option = 1 }\n";
         let (directory, path) = temporary_config(Some(original));
-        let outcome = prune_file(&path, |keys| {
-            assert_eq!(keys, &["font.future_option"]);
+        let outcome = prune_one(&path, PruneKind::Config, |keys| {
+            assert_eq!(keys, &["config.toml: font.future_option"]);
             true
         })
         .unwrap();
         assert_eq!(
             outcome,
-            PruneOutcome::Pruned(vec!["font.future_option".into()])
+            PruneOutcome::Pruned(vec!["config.toml: font.future_option".into()])
         );
         let updated = fs::read_to_string(&path).unwrap();
         assert!(updated.contains("size = \"invalid-but-known\""));
@@ -1777,12 +2252,15 @@ mod tests {
     fn prune_removes_unknown_nested_table_contents_without_touching_parent_settings() {
         let original = "[font]\nsize = 17\n[font.future]\nvalue = 1\n[window]\nwidth = 900\n";
         let (directory, path) = temporary_config(Some(original));
-        let outcome = prune_file(&path, |keys| {
-            assert_eq!(keys, &["font.future"]);
+        let outcome = prune_one(&path, PruneKind::Config, |keys| {
+            assert_eq!(keys, &["config.toml: font.future"]);
             true
         })
         .unwrap();
-        assert_eq!(outcome, PruneOutcome::Pruned(vec!["font.future".into()]));
+        assert_eq!(
+            outcome,
+            PruneOutcome::Pruned(vec!["config.toml: font.future".into()])
+        );
         let updated = fs::read_to_string(&path).unwrap();
         assert!(updated.contains("size = 17"));
         assert!(updated.contains("width = 900"));
@@ -1795,10 +2273,14 @@ mod tests {
     #[test]
     fn prune_creates_completed_default_file_when_missing_without_confirmation() {
         let (directory, path) = temporary_config(None);
-        let outcome = prune_file(&path, |_| panic!("default creation must not ask")).unwrap();
-        assert_eq!(outcome, PruneOutcome::CreatedDefault);
+        let report = prune_files(&[(PruneKind::Config, &path)], |_| {
+            panic!("default creation must not ask")
+        })
+        .unwrap();
+        assert_eq!(report.created, vec![path.clone()]);
+        assert_eq!(report.outcome, PruneOutcome::NothingToPrune);
         let contents = fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("# \"Ctrl+Shift+T\" = \"new_tab\""));
+        assert!(!contents.contains("keybindings"));
         assert!(contents.parse::<DocumentMut>().is_ok());
         remove_temporary_config(directory);
     }
@@ -1807,7 +2289,12 @@ mod tests {
     fn invalid_toml_is_never_changed_or_confirmed() {
         let original = "[font\nsize = 12\n";
         let (directory, path) = temporary_config(Some(original));
-        assert!(prune_file(&path, |_| panic!("invalid TOML must not ask")).is_err());
+        assert!(
+            prune_one(&path, PruneKind::Config, |_| panic!(
+                "invalid TOML must not ask"
+            ))
+            .is_err()
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
         remove_temporary_config(directory);
     }
@@ -1817,10 +2304,63 @@ mod tests {
         let original = "language = \"fr\"\n";
         let (directory, path) = temporary_config(Some(original));
         assert_eq!(
-            prune_file(&path, |_| panic!("nothing to prune must not ask")).unwrap(),
+            prune_one(&path, PruneKind::Config, |_| panic!(
+                "nothing to prune must not ask"
+            ))
+            .unwrap(),
             PruneOutcome::NothingToPrune
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
         remove_temporary_config(directory);
+    }
+
+    fn migrate(config: &str, keybindings: Option<&str>) -> Option<KeybindingsMigration> {
+        migrate_keybindings(config, keybindings, Path::new("keybindings.toml"))
+    }
+
+    #[test]
+    fn migration_cuts_the_section_and_keeps_the_neighbours() {
+        let migration = migrate(
+            "[font]\nsize = 9\n\n[keybindings]\n# why\n\"F7\" = \"copy\"\n\n[updates]\ncheck = false\n",
+            Some("[keybindings]\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            migration.config,
+            "[font]\nsize = 9\n\n[updates]\ncheck = false\n"
+        );
+        assert_eq!(
+            migration.keybindings.as_deref(),
+            Some("[keybindings]\n# why\nF7 = \"copy\"\n")
+        );
+        assert!(migration.moved);
+    }
+
+    #[test]
+    fn migration_of_a_commented_block_alone_changes_nothing_else() {
+        let block: String = DEFAULT_KEYBINDINGS
+            .lines()
+            .filter(|line| line.starts_with("##"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let migration = migrate(
+            &format!("[font]\nsize = 9\n\n# [keybindings]\n{block}\n# [updates]\n"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(migration.config, "[font]\nsize = 9\n\n# [updates]\n");
+        assert_eq!(migration.keybindings, None);
+        assert!(!migration.moved);
+    }
+
+    #[test]
+    fn migration_needs_a_keybindings_block() {
+        assert!(migrate("[font]\nsize = 9\n", None).is_none());
+    }
+
+    #[test]
+    fn migration_skips_invalid_toml() {
+        assert!(migrate("[keybindings\n", None).is_none());
+        assert!(migrate("[keybindings]\n\"F7\" = \"copy\"\n", Some("[oops")).is_none());
     }
 }

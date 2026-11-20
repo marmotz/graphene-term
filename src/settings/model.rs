@@ -343,12 +343,14 @@ impl SettingsModel {
         &self.config
     }
 
-    /// The syntax or read error that keeps the file from being edited, if any.
-    pub fn locked(&self) -> Option<&ConfigError> {
-        self.errors
-            .config
-            .iter()
-            .find(|error| matches!(error.kind, ConfigErrorKind::Syntax | ConfigErrorKind::Read))
+    /// The syntax or read error that keeps `section` from being edited, if any: one of
+    /// `keybindings.toml` locks the keyboard shortcuts, one of `config.toml` the others.
+    pub fn locked(&self, section: Section) -> Option<&ConfigError> {
+        let shortcuts = section == Section::KeyboardShortcuts;
+        self.errors.config.iter().find(|error| {
+            matches!(error.kind, ConfigErrorKind::Syntax | ConfigErrorKind::Read)
+                && in_keybindings_file(error) == shortcuts
+        })
     }
 
     pub fn write_error(&self) -> Option<&str> {
@@ -650,6 +652,14 @@ impl SettingsModel {
     }
 }
 
+/// Whether `error` was found in `keybindings.toml`.
+fn in_keybindings_file(error: &ConfigError) -> bool {
+    error
+        .file
+        .file_name()
+        .is_some_and(|name| name == config::KEYBINDINGS_FILE)
+}
+
 /// Raw path of a `[keybindings]` entry.
 fn keybinding(keys: &str) -> Vec<String> {
     vec!["keybindings".to_owned(), keys.to_owned()]
@@ -675,14 +685,32 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::config::{ConfigError, ConfigErrorKind};
 
     fn file() -> PathBuf {
         PathBuf::from("/home/user/.config/graphene/config.toml")
     }
 
+    /// `text` read as `config.toml` and `keybindings.toml` at once: both files share the
+    /// same TOML here, each reading only its own part.
+    fn parse_both(text: &str, previous: &Config) -> (Config, Vec<ConfigError>) {
+        let (mut config, mut errors) = Config::parse(text, previous, &file());
+        errors.retain(|error| error.kind != ConfigErrorKind::Moved);
+        let (keybindings, keybinding_errors, _) =
+            Config::parse_keybindings(text, previous, &file());
+        config.keybindings = keybindings;
+        errors.extend(
+            keybinding_errors
+                .into_iter()
+                .filter(|error| error.kind != ConfigErrorKind::UnknownKey),
+        );
+        errors.sort_by_key(|error| error.line);
+        (config, errors)
+    }
+
     /// The model of `text` parsed over the defaults.
     fn model(text: &str) -> SettingsModel {
-        let (config, errors) = Config::parse(text, &Config::default(), &file());
+        let (config, errors) = parse_both(text, &Config::default());
         SettingsModel::new(
             &config,
             &LoadErrors {
@@ -773,7 +801,7 @@ interval = "1w"
         assert!(m.on(Field::CursorBlinking));
         assert!(!m.on(Field::UpdatesCheck));
         assert!(!m.on(Field::ThemeFollow));
-        assert!(m.locked().is_none());
+        assert!(m.locked(Section::Font).is_none());
     }
 
     #[test]
@@ -978,7 +1006,7 @@ interval = "1w"
                 theme: Vec::new(),
             },
         );
-        let locked = m.locked().expect("locked by the syntax error");
+        let locked = m.locked(Section::Font).expect("locked by the syntax error");
         assert_eq!(locked.kind, ConfigErrorKind::Syntax);
         assert_eq!(locked.line, Some(1));
         // The previous values stay shown.
@@ -992,7 +1020,7 @@ interval = "1w"
                 theme: Vec::new(),
             },
         );
-        assert!(m.locked().is_none());
+        assert!(m.locked(Section::Font).is_none());
         assert_eq!(m.text(Field::FontSize), "18");
     }
 
@@ -1005,7 +1033,37 @@ interval = "1w"
                 theme: Vec::new(),
             },
         );
-        assert!(m.locked().is_some());
+        assert!(m.locked(Section::Font).is_some());
+        assert!(m.locked(Section::KeyboardShortcuts).is_none());
+    }
+
+    #[test]
+    fn a_file_locks_only_its_own_sections() {
+        let keybindings_error = ConfigError::read(
+            PathBuf::from("/home/user/.config/graphene/keybindings.toml"),
+            "denied".into(),
+        );
+        let m = SettingsModel::new(
+            &Config::default(),
+            &LoadErrors {
+                config: vec![keybindings_error],
+                theme: Vec::new(),
+            },
+        );
+        assert!(m.locked(Section::KeyboardShortcuts).is_some());
+        assert!(m.locked(Section::Font).is_none());
+        assert!(m.locked(Section::Theme).is_none());
+
+        let m = SettingsModel::new(
+            &Config::default(),
+            &LoadErrors {
+                config: vec![ConfigError::read(file(), "denied".into())],
+                theme: Vec::new(),
+            },
+        );
+        assert!(m.locked(Section::KeyboardShortcuts).is_none());
+        assert!(m.locked(Section::Font).is_some());
+        assert!(m.locked(Section::Theme).is_some());
     }
 
     #[test]
@@ -1259,10 +1317,9 @@ interval = "1w"
     #[test]
     fn shortcuts_follow_a_written_configuration() {
         let mut m = model("");
-        let (config, errors) = Config::parse(
+        let (config, errors) = parse_both(
             "[keybindings]\n\"F7\" = \"detach_pane\"\n",
             &Config::default(),
-            &file(),
         );
         m.written(config, errors);
         assert_eq!(labels(&m, Action::DetachPane), ["F7"]);

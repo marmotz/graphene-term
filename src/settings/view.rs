@@ -87,7 +87,9 @@ impl View {
         let Some(action) = self.capturing else {
             return Vec::new();
         };
-        if model.locked().is_some() || (mods.is_empty() && *key == Key::Named(NamedKey::Escape)) {
+        if model.locked(SettingsSection::KeyboardShortcuts).is_some()
+            || (mods.is_empty() && *key == Key::Named(NamedKey::Escape))
+        {
             self.capturing = None;
             return Vec::new();
         }
@@ -135,10 +137,10 @@ impl View {
             });
         CentralPanel::default().show(ui, |ui| {
             ScrollArea::vertical().show(ui, |ui| {
-                file_problems(ui, lang, model);
+                file_problems(ui, lang, model, self.section);
                 ui.heading(label(Msg::Section(self.section)));
                 ui.separator();
-                ui.add_enabled_ui(model.locked().is_none(), |ui| {
+                ui.add_enabled_ui(model.locked(self.section).is_none(), |ui| {
                     self.section_body(ui, lang, model, &mut changes);
                 });
             });
@@ -556,12 +558,12 @@ impl Search {
     }
 }
 
-/// The problems of the whole file: why it is locked, a failed write, unknown keys and
+/// The problems of the files: why `section` is locked, a failed write, unknown keys and
 /// errors tied to no section.
-fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel) {
+fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: SettingsSection) {
     let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
     let mut shown = false;
-    if let Some(error) = model.locked() {
+    if let Some(error) = model.locked(section) {
         error_label(ui, &error.to_string());
         ui.label(error.file.display().to_string());
         ui.label(label(Msg::FixFileByHand));
@@ -722,9 +724,17 @@ mod tests {
     }
 
     #[test]
-    fn a_locked_file_cancels_the_capture() {
-        let model = model("[font\n");
-        assert!(model.locked().is_some());
+    fn a_locked_shortcuts_file_cancels_the_capture() {
+        let file = std::path::PathBuf::from("/tmp/keybindings.toml");
+        let (_, errors, _) = Config::parse_keybindings("[keybindings\n", &Config::default(), &file);
+        let model = SettingsModel::new(
+            &Config::default(),
+            &LoadErrors {
+                config: errors,
+                theme: Vec::new(),
+            },
+        );
+        assert!(model.locked(SettingsSection::KeyboardShortcuts).is_some());
         let mut view = View {
             capturing: Some(Action::DetachPane),
             ..View::default()
@@ -732,6 +742,19 @@ mod tests {
         let (key, physical) = letter("d", KeyCode::KeyD);
         assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT), vec![]);
         assert!(!view.capturing());
+    }
+
+    #[test]
+    fn a_locked_config_file_keeps_the_capture() {
+        let model = model("[font\n");
+        assert!(model.locked(SettingsSection::Font).is_some());
+        assert!(model.locked(SettingsSection::KeyboardShortcuts).is_none());
+        let mut view = View {
+            capturing: Some(Action::DetachPane),
+            ..View::default()
+        };
+        let (key, physical) = letter("d", KeyCode::KeyD);
+        assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT).len(), 1);
     }
 
     #[test]
