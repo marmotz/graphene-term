@@ -123,7 +123,7 @@ pub fn reload(previous: &Config) -> (Config, Vec<ConfigError>) {
     }
 }
 
-fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
+pub(crate) fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
     let (mut config, mut errors) = reload_config_file(dir, previous);
     let (keybindings, keybinding_errors) = reload_keybindings_file(dir, previous);
     config.keybindings = keybindings;
@@ -2008,7 +2008,11 @@ interval = "2d"
         assert!(!remaining.contains("Each string shortcut"), "{remaining}");
         let moved = read(&dir, KEYBINDINGS_FILE);
         assert!(moved.contains("# mine\nF7 = \"copy\"\n"), "{moved}");
-        assert_eq!(moved.matches("## Each string shortcut").count(), 1, "{moved}");
+        assert_eq!(
+            moved.matches("## Each string shortcut").count(),
+            1,
+            "{moved}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -2037,11 +2041,7 @@ interval = "2d"
     #[test]
     fn migration_resumes_after_a_crash_between_the_two_writes() {
         let dir = temp_dir("migrate-crash");
-        std::fs::write(
-            dir.join(CONFIG_FILE),
-            "[keybindings]\n\"F7\" = \"copy\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join(CONFIG_FILE), "[keybindings]\n\"F7\" = \"copy\"\n").unwrap();
         std::fs::write(
             dir.join(KEYBINDINGS_FILE),
             "[keybindings]\n\"F7\" = \"copy\"\n",

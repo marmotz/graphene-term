@@ -1111,11 +1111,7 @@ pub(crate) fn migrate_keybindings(
                     .prefix()
                     .and_then(toml_edit::RawString::as_str)
                     .unwrap_or_default();
-                entries.push((
-                    key.to_owned(),
-                    value.clone(),
-                    generated.strip(prefix),
-                ));
+                entries.push((key.to_owned(), value.clone(), generated.strip(prefix)));
             }
             generated.strip(document.trailing().as_str().unwrap_or_default())
         } else {
@@ -1330,15 +1326,17 @@ impl std::fmt::Display for ConfigEdit {
 }
 
 /// Applies `change` to `file`: the file is read again first so hand edits made meanwhile
-/// are kept (a missing file starts from [`default_file_text`]), then written next to it
-/// and renamed over it, which the watcher sees as one change.
+/// are kept (a missing file starts from `default_text`: [`default_file_text`] for
+/// `config.toml`, [`default_keybindings_text`] for `keybindings.toml`), then written next
+/// to it and renamed over it, which the watcher sees as one change.
 pub(crate) fn write(
     file: &Path,
+    default_text: fn() -> String,
     change: impl FnOnce(&mut ConfigEdit) -> Result<(), ConfigError>,
 ) -> Result<(), ConfigError> {
     let text = match fs::read_to_string(file) {
         Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => default_file_text(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => default_text(),
         Err(error) => {
             return Err(ConfigError::read(
                 file.to_path_buf(),
@@ -1547,7 +1545,10 @@ mod tests {
     #[test]
     fn write_starts_from_the_defaults_when_the_file_is_missing() {
         let (directory, path) = temporary_config(None);
-        write(&path, |config| config.set(&["font", "size"], 20.0)).unwrap();
+        write(&path, default_file_text, |config| {
+            config.set(&["font", "size"], 20.0)
+        })
+        .unwrap();
 
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.starts_with(&default_file_text()));
@@ -1559,13 +1560,19 @@ mod tests {
     #[test]
     fn write_reads_the_file_again_and_keeps_hand_edits() {
         let (directory, path) = temporary_config(Some("# Mine.\n[font]\nsize = 12.0\n"));
-        write(&path, |config| config.set(&["window", "padding"], 4)).unwrap();
+        write(&path, default_file_text, |config| {
+            config.set(&["window", "padding"], 4)
+        })
+        .unwrap();
         fs::write(
             &path,
             "# Mine.\n[font]\nsize = 13.0\n[window]\npadding = 4\n",
         )
         .unwrap();
-        write(&path, |config| config.set(&["cursor", "blinking"], true)).unwrap();
+        write(&path, default_file_text, |config| {
+            config.set(&["cursor", "blinking"], true)
+        })
+        .unwrap();
 
         let text = fs::read_to_string(&path).unwrap();
         assert_eq!(
@@ -1581,7 +1588,10 @@ mod tests {
     #[test]
     fn write_leaves_an_invalid_file_untouched() {
         let (directory, path) = temporary_config(Some("[font\n"));
-        let error = write(&path, |config| config.set(&["font", "size"], 20.0)).unwrap_err();
+        let error = write(&path, default_file_text, |config| {
+            config.set(&["font", "size"], 20.0)
+        })
+        .unwrap_err();
         assert_eq!(error.kind, ConfigErrorKind::Syntax);
         assert_eq!(fs::read_to_string(&path).unwrap(), "[font\n");
         remove_temporary_config(directory);
@@ -1590,7 +1600,10 @@ mod tests {
     #[test]
     fn write_keeps_the_file_when_the_change_fails() {
         let (directory, path) = temporary_config(Some("font = 3\n"));
-        let error = write(&path, |config| config.set(&["font", "size"], 20.0)).unwrap_err();
+        let error = write(&path, default_file_text, |config| {
+            config.set(&["font", "size"], 20.0)
+        })
+        .unwrap_err();
         assert_eq!(error.kind, ConfigErrorKind::InvalidValue);
         assert_eq!(fs::read_to_string(&path).unwrap(), "font = 3\n");
         remove_temporary_config(directory);

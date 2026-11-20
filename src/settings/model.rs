@@ -343,12 +343,14 @@ impl SettingsModel {
         &self.config
     }
 
-    /// The syntax or read error that keeps the file from being edited, if any.
-    pub fn locked(&self) -> Option<&ConfigError> {
-        self.errors
-            .config
-            .iter()
-            .find(|error| matches!(error.kind, ConfigErrorKind::Syntax | ConfigErrorKind::Read))
+    /// The syntax or read error that keeps `section` from being edited, if any: one of
+    /// `keybindings.toml` locks the keyboard shortcuts, one of `config.toml` the others.
+    pub fn locked(&self, section: Section) -> Option<&ConfigError> {
+        let shortcuts = section == Section::KeyboardShortcuts;
+        self.errors.config.iter().find(|error| {
+            matches!(error.kind, ConfigErrorKind::Syntax | ConfigErrorKind::Read)
+                && in_keybindings_file(error) == shortcuts
+        })
     }
 
     pub fn write_error(&self) -> Option<&str> {
@@ -650,6 +652,14 @@ impl SettingsModel {
     }
 }
 
+/// Whether `error` was found in `keybindings.toml`.
+fn in_keybindings_file(error: &ConfigError) -> bool {
+    error
+        .file
+        .file_name()
+        .is_some_and(|name| name == config::KEYBINDINGS_FILE)
+}
+
 /// Raw path of a `[keybindings]` entry.
 fn keybinding(keys: &str) -> Vec<String> {
     vec!["keybindings".to_owned(), keys.to_owned()]
@@ -791,7 +801,7 @@ interval = "1w"
         assert!(m.on(Field::CursorBlinking));
         assert!(!m.on(Field::UpdatesCheck));
         assert!(!m.on(Field::ThemeFollow));
-        assert!(m.locked().is_none());
+        assert!(m.locked(Section::Font).is_none());
     }
 
     #[test]
@@ -996,7 +1006,7 @@ interval = "1w"
                 theme: Vec::new(),
             },
         );
-        let locked = m.locked().expect("locked by the syntax error");
+        let locked = m.locked(Section::Font).expect("locked by the syntax error");
         assert_eq!(locked.kind, ConfigErrorKind::Syntax);
         assert_eq!(locked.line, Some(1));
         // The previous values stay shown.
@@ -1010,7 +1020,7 @@ interval = "1w"
                 theme: Vec::new(),
             },
         );
-        assert!(m.locked().is_none());
+        assert!(m.locked(Section::Font).is_none());
         assert_eq!(m.text(Field::FontSize), "18");
     }
 
@@ -1023,7 +1033,37 @@ interval = "1w"
                 theme: Vec::new(),
             },
         );
-        assert!(m.locked().is_some());
+        assert!(m.locked(Section::Font).is_some());
+        assert!(m.locked(Section::KeyboardShortcuts).is_none());
+    }
+
+    #[test]
+    fn a_file_locks_only_its_own_sections() {
+        let keybindings_error = ConfigError::read(
+            PathBuf::from("/home/user/.config/graphene/keybindings.toml"),
+            "denied".into(),
+        );
+        let m = SettingsModel::new(
+            &Config::default(),
+            &LoadErrors {
+                config: vec![keybindings_error],
+                theme: Vec::new(),
+            },
+        );
+        assert!(m.locked(Section::KeyboardShortcuts).is_some());
+        assert!(m.locked(Section::Font).is_none());
+        assert!(m.locked(Section::Theme).is_none());
+
+        let m = SettingsModel::new(
+            &Config::default(),
+            &LoadErrors {
+                config: vec![ConfigError::read(file(), "denied".into())],
+                theme: Vec::new(),
+            },
+        );
+        assert!(m.locked(Section::KeyboardShortcuts).is_none());
+        assert!(m.locked(Section::Font).is_some());
+        assert!(m.locked(Section::Theme).is_some());
     }
 
     #[test]

@@ -735,7 +735,11 @@ impl Session {
             return;
         };
         let key = theme_key(&self.theme, self.appearance);
-        if let Err(error) = config_edit::write(&file, |edit: &mut ConfigEdit| edit.set(key, name)) {
+        if let Err(error) = config_edit::write(
+            &file,
+            config_edit::default_file_text,
+            |edit: &mut ConfigEdit| edit.set(key, name),
+        ) {
             self.show_config_error(error);
         }
     }
@@ -2616,7 +2620,7 @@ impl App {
         let Some(gpu) = self.gpu.clone() else {
             return;
         };
-        let Some(file) = config::config_file() else {
+        let Some(dir) = config::config_dir() else {
             log::warn!("neither XDG_CONFIG_HOME nor HOME is set: no settings window");
             return;
         };
@@ -2628,7 +2632,7 @@ impl App {
             lang,
             &self.config,
             &self.load_errors,
-            file,
+            dir,
         ) {
             Ok(settings) => self.settings = Some(settings),
             Err(error) => log::error!("cannot open the settings window: {error:#}"),
