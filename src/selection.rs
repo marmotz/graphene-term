@@ -70,6 +70,41 @@ pub fn mouse_reserved(mode: TermMode, mods: ModifiersState) -> bool {
     mode.intersects(TermMode::MOUSE_MODE) && !mods.shift_key()
 }
 
+/// Whether a left press with `Ctrl` in the content of a pane is the broadcast click:
+/// anywhere but on a link, which opens as before. It is Graphene's even where the
+/// application captures the mouse.
+pub fn is_broadcast_press(mods: ModifiersState, on_link: bool) -> bool {
+    mods.control_key() && !on_link
+}
+
+/// What a pointer move does to a pending broadcast click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BroadcastMove {
+    /// Still a possible click: nothing happens yet.
+    Pending,
+    /// The click became a rectangular selection (outside the captured areas).
+    Select,
+    /// The pointer left the click while the application owns the area: nothing happens.
+    Ignore,
+}
+
+/// The pointer moved with a broadcast click pending; `past_threshold` tells whether it
+/// is farther from the press than a click allows, `captured` whether the press was in
+/// an area the application owns.
+pub fn broadcast_move(past_threshold: bool, captured: bool) -> BroadcastMove {
+    match (past_threshold, captured) {
+        (false, _) => BroadcastMove::Pending,
+        (true, false) => BroadcastMove::Select,
+        (true, true) => BroadcastMove::Ignore,
+    }
+}
+
+/// Whether the release of a pending broadcast click toggles the pane: the pointer did
+/// not leave the click.
+pub fn broadcast_release_toggles(past_threshold: bool) -> bool {
+    !past_threshold
+}
+
 /// Maximum number of lines scrolled per auto-scroll step.
 pub const AUTO_SCROLL_MAX_LINES: i32 = 10;
 
@@ -206,6 +241,30 @@ fn common_prefix<'a>(a: &'a str, b: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_press_off_a_link_is_the_broadcast_click() {
+        let ctrl = ModifiersState::CONTROL;
+        assert!(is_broadcast_press(ctrl, false));
+        // On a link, the link wins.
+        assert!(!is_broadcast_press(ctrl, true));
+        assert!(!is_broadcast_press(ModifiersState::empty(), false));
+        assert!(!is_broadcast_press(ModifiersState::SHIFT, false));
+    }
+
+    #[test]
+    fn a_broadcast_click_turns_into_a_selection_only_off_captured_areas() {
+        assert_eq!(broadcast_move(false, false), BroadcastMove::Pending);
+        assert_eq!(broadcast_move(false, true), BroadcastMove::Pending);
+        assert_eq!(broadcast_move(true, false), BroadcastMove::Select);
+        assert_eq!(broadcast_move(true, true), BroadcastMove::Ignore);
+    }
+
+    #[test]
+    fn a_broadcast_click_toggles_on_release_without_a_drag() {
+        assert!(broadcast_release_toggles(false));
+        assert!(!broadcast_release_toggles(true));
+    }
     use crate::config::SEMANTIC_ESCAPE_CHARS;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::index::{Column, Line, Side};

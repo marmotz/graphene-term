@@ -100,6 +100,10 @@ shortcut again stops it. Each pane handles the keys in its own state (prompt, ru
 program). Graphene shortcuts are never broadcast: they only act on the active pane.
 Broadcast continues while a pane is zoomed.
 
+`Ctrl`+click on a pane (or on its title bar) adds it to the broadcast set or removes it,
+without focusing it; on a link, `Ctrl`+click still opens the link. `Ctrl`+drag still
+makes a rectangular selection, except where the application captures the mouse.
+
 ## Command palette
 
 `Ctrl+Shift+P` opens the command palette: every action with its shortcut, then the open

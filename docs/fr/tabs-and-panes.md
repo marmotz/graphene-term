@@ -104,6 +104,11 @@ fois ; le même raccourci l'arrête. Chaque panneau traite les touches selon son
 état (invite, programme en cours). Les raccourcis de Graphene ne sont jamais diffusés :
 ils n'agissent que sur le panneau actif. La diffusion continue pendant un zoom.
 
+`Ctrl`+clic sur un panneau (ou sur sa barre de titre) l'ajoute à la diffusion ou l'en
+retire, sans lui donner le focus ; sur un lien, `Ctrl`+clic ouvre toujours le lien.
+`Ctrl`+glisser fait toujours une sélection rectangulaire, sauf là où l'application
+capture la souris.
+
 ## Palette de commandes
 
 `Ctrl+Shift+P` ouvre la palette de commandes : toutes les actions avec leur raccourci,

@@ -100,6 +100,17 @@ enum Drag {
         /// Where the pane would land if released now.
         target: Option<DropTarget>,
     },
+    /// A left press with `Ctrl` in the content of a pane, never reported to the
+    /// application: a click toggles the pane in the broadcast set; a drag past
+    /// [`pane_bar::PANE_DRAG_THRESHOLD`] outside the captured areas becomes a rectangular
+    /// selection, and does nothing inside them.
+    BroadcastClick {
+        pane: PaneId,
+        /// Where the content was pressed.
+        press: PhysicalPosition<f64>,
+        /// The press was in an area the application owns.
+        captured: bool,
+    },
 }
 
 /// Grid cell under the mouse: its pane, the grid shown there and the point in it.
@@ -1326,6 +1337,12 @@ impl Session {
         let Some(target) = layout.pane_at(x, y) else {
             return;
         };
+        if button == mouse::Button::Left
+            && self.modifiers.control_key()
+            && self.broadcast_press(target)
+        {
+            return;
+        }
         if self.workspace.active_pane_id() != Some(target) {
             self.focus_pane(target);
         }
@@ -1418,6 +1435,84 @@ impl Session {
         }
     }
 
+    /// A left press with `Ctrl` in the content of `target`: when it is the broadcast
+    /// click (see [`selection::is_broadcast_press`]), records it without focusing the
+    /// pane or reporting it to the application. `false` when the press goes on as usual.
+    fn broadcast_press(&mut self, target: PaneId) -> bool {
+        let (position, modifiers) = (self.mouse_position, self.modifiers);
+        let Some(pane) = self.workspace.pane_mut(target) else {
+            return false;
+        };
+        let (hit, _) = pane.pointer_hit(position);
+        // The margin, the chevrons and the gaps keep their own press.
+        let (on_link, plain) = match hit {
+            Hit::Cell {
+                source,
+                line,
+                column,
+                ..
+            } => {
+                let point = Point::new(line, alacritty_terminal::index::Column(column));
+                (pane.link_at(source, point).is_some(), true)
+            }
+            Hit::Blank => (false, true),
+            Hit::Margin { .. } | Hit::Chevron { .. } | Hit::Gap => (false, false),
+        };
+        if !plain || !selection::is_broadcast_press(modifiers, on_link) {
+            return false;
+        }
+        let captured = selection::mouse_reserved(pane.mode(), modifiers) && pane.reports_at(&hit);
+        self.drag = Some(Drag::BroadcastClick {
+            pane: target,
+            press: position,
+            captured,
+        });
+        true
+    }
+
+    /// The pointer moved with a broadcast click pending.
+    fn broadcast_click_moved(&mut self) {
+        let Some(Drag::BroadcastClick {
+            pane,
+            press,
+            captured,
+        }) = self.drag
+        else {
+            return;
+        };
+        let scale = self.window.scale_factor() as f32;
+        let past =
+            pane_bar::drag_started((press.x as f32, press.y as f32), self.mouse_pixel(), scale);
+        if selection::broadcast_move(past, captured) != selection::BroadcastMove::Select {
+            return;
+        }
+        // The press becomes the start of a rectangular selection, as it was before.
+        self.drag = None;
+        if self.workspace.active_pane_id() != Some(pane) {
+            self.focus_pane(pane);
+        }
+        let (modifiers, lang) = (self.modifiers, self.lang);
+        // The move that follows extends the selection to the pointer.
+        if let Some(target) = self.workspace.pane_mut(pane)
+            && target.left_press(press, modifiers, lang)
+        {
+            self.drag = Some(Drag::Selection {
+                pane,
+                auto_scroll_deadline: None,
+            });
+        }
+    }
+
+    /// The release of a broadcast click: toggles the pane unless the pointer left it.
+    fn broadcast_click_released(&mut self, pane: PaneId, press: PhysicalPosition<f64>) {
+        let scale = self.window.scale_factor() as f32;
+        let past =
+            pane_bar::drag_started((press.x as f32, press.y as f32), self.mouse_pixel(), scale);
+        if selection::broadcast_release_toggles(past) && self.workspace.toggle_broadcast(pane) {
+            self.window.request_redraw();
+        }
+    }
+
     /// A press of `button` on `hit` in the bar of `pane`: never reported to the
     /// application (see [`pane_bar::press_action`]).
     fn pane_bar_press(
@@ -1432,7 +1527,13 @@ impl Session {
         } else {
             0
         };
-        match pane_bar::press_action(button, hit, clicks) {
+        let ctrl = self.modifiers.control_key();
+        match pane_bar::press_action(button, hit, clicks, ctrl) {
+            Some(PaneBarAction::Broadcast) => {
+                if self.workspace.toggle_broadcast(pane) {
+                    self.window.request_redraw();
+                }
+            }
             Some(PaneBarAction::Close) => self.request_close(Target::Pane(pane), event_loop),
             Some(PaneBarAction::Menu) => self.open_pane_menu(pane, Hit::Blank),
             Some(PaneBarAction::Focus { zoom }) => {
@@ -1473,6 +1574,13 @@ impl Session {
     }
 
     fn release_gesture(&mut self, button: mouse::Button) {
+        if button == mouse::Button::Left
+            && let Some(Drag::BroadcastClick { pane, press, .. }) = self.drag
+        {
+            self.drag = None;
+            self.broadcast_click_released(pane, press);
+            return;
+        }
         if button == mouse::Button::Left && matches!(self.drag, Some(Drag::Pane { .. })) {
             self.drop_pane();
             return;
@@ -1534,6 +1642,12 @@ impl Session {
         if matches!(self.drag, Some(Drag::Tab { .. })) {
             self.window.request_redraw();
             return;
+        }
+        if matches!(self.drag, Some(Drag::BroadcastClick { .. })) {
+            self.broadcast_click_moved();
+            if !matches!(self.drag, Some(Drag::Selection { .. })) {
+                return;
+            }
         }
         if let Some(Drag::Divider { node_path, axis }) = &self.drag {
             let along = match axis {
@@ -2065,7 +2179,11 @@ impl Session {
         }
         let shown_tab = self.workspace.tab_of(id) == Some(self.workspace.active_index());
         match self.drag {
-            Some(Drag::Selection { pane, .. }) if pane == id => self.drag = None,
+            Some(Drag::Selection { pane, .. } | Drag::BroadcastClick { pane, .. })
+                if pane == id =>
+            {
+                self.drag = None
+            }
             Some(Drag::Divider { .. }) if shown_tab => self.drag = None,
             Some(Drag::Tab { .. }) => self.drag = None,
             _ => {}
