@@ -24,6 +24,12 @@ pub const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
 /// Name of the configuration file inside the config directory.
 pub const CONFIG_FILE: &str = "config.toml";
 
+/// The keyboard shortcuts file template, written on first launch.
+pub const DEFAULT_KEYBINDINGS: &str = include_str!("../keybindings.default.toml");
+
+/// Name of the keyboard shortcuts file inside the config directory.
+pub const KEYBINDINGS_FILE: &str = "keybindings.toml";
+
 /// Characters ending a word on double-click.
 ///
 /// Alacritty's default list without `:`, so that a URL (`https://...`) or `host:port`
@@ -95,8 +101,8 @@ fn default_state_base(home: OsString) -> PathBuf {
     base
 }
 
-/// Loads `config.toml` from the config directory. A missing file is created from
-/// [`DEFAULT_CONFIG`] (a write failure is only logged) and yields the default.
+/// Loads `config.toml` and `keybindings.toml` from the config directory. A missing file
+/// is created from its default (a write failure is only logged) and yields the default.
 pub fn load() -> (Config, Vec<ConfigError>) {
     match config_dir() {
         Some(dir) => load_from(&dir),
@@ -107,9 +113,9 @@ pub fn load() -> (Config, Vec<ConfigError>) {
     }
 }
 
-/// Reads `config.toml` again after it changed on disk: an invalid value keeps the one
-/// of `previous`, a syntax error keeps `previous` whole. A missing file yields the
-/// default and is not written back (an editor may be replacing it).
+/// Reads both files again after one changed on disk: an invalid value keeps the one of
+/// `previous`, a syntax error keeps the previous contents of that file. A missing file
+/// yields its default and is not written back (an editor may be replacing it).
 pub fn reload(previous: &Config) -> (Config, Vec<ConfigError>) {
     match config_dir() {
         Some(dir) => reload_from(&dir, previous),
@@ -118,6 +124,14 @@ pub fn reload(previous: &Config) -> (Config, Vec<ConfigError>) {
 }
 
 fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
+    let (mut config, mut errors) = reload_config_file(dir, previous);
+    let (keybindings, keybinding_errors) = reload_keybindings_file(dir, previous);
+    config.keybindings = keybindings;
+    errors.extend(keybinding_errors);
+    (config, errors)
+}
+
+fn reload_config_file(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
     let file = dir.join(CONFIG_FILE);
     match std::fs::read_to_string(&file) {
         Ok(text) => Config::parse(&text, previous, &file),
@@ -134,7 +148,36 @@ fn reload_from(dir: &Path, previous: &Config) -> (Config, Vec<ConfigError>) {
     }
 }
 
+fn reload_keybindings_file(
+    dir: &Path,
+    previous: &Config,
+) -> (BTreeMap<String, String>, Vec<ConfigError>) {
+    let file = dir.join(KEYBINDINGS_FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => {
+            let (keybindings, errors, _) = Config::parse_keybindings(&text, previous, &file);
+            (keybindings, errors)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (BTreeMap::new(), Vec::new()),
+        Err(error) => (
+            previous.keybindings.clone(),
+            vec![ConfigError::read(
+                file,
+                format!("cannot read the file: {error}"),
+            )],
+        ),
+    }
+}
+
 fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
+    let (mut config, mut errors) = load_config_file(dir);
+    let (keybindings, keybinding_errors) = load_keybindings_file(dir);
+    config.keybindings = keybindings;
+    errors.extend(keybinding_errors);
+    (config, errors)
+}
+
+fn load_config_file(dir: &Path) -> (Config, Vec<ConfigError>) {
     let file = dir.join(CONFIG_FILE);
     match std::fs::read_to_string(&file) {
         Ok(text) => {
@@ -171,6 +214,45 @@ fn load_from(dir: &Path) -> (Config, Vec<ConfigError>) {
     }
 }
 
+fn load_keybindings_file(dir: &Path) -> (BTreeMap<String, String>, Vec<ConfigError>) {
+    let file = dir.join(KEYBINDINGS_FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => {
+            let text = match crate::config_edit::complete_keybindings_defaults(&text) {
+                Ok(Some(updated)) => match crate::config_edit::write_atomic(&file, &updated) {
+                    Ok(()) => updated,
+                    Err(error) => {
+                        log::warn!("cannot update {}: {error}", file.display());
+                        text
+                    }
+                },
+                Ok(None) | Err(_) => text,
+            };
+            let (keybindings, errors, _) =
+                Config::parse_keybindings(&text, &Config::default(), &file);
+            (keybindings, errors)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(error) = std::fs::create_dir_all(dir) {
+                log::warn!("cannot create {}: {error}", dir.display());
+                return (BTreeMap::new(), Vec::new());
+            }
+            let defaults = crate::config_edit::default_keybindings_text();
+            if let Err(error) = crate::config_edit::write_atomic(&file, &defaults) {
+                log::warn!("cannot write {}: {error}", file.display());
+            }
+            (BTreeMap::new(), Vec::new())
+        }
+        Err(error) => (
+            BTreeMap::new(),
+            vec![ConfigError::read(
+                file,
+                format!("cannot read the file: {error}"),
+            )],
+        ),
+    }
+}
+
 /// An error found in a configuration file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigError {
@@ -197,6 +279,8 @@ pub enum ConfigErrorKind {
     InvalidValue,
     /// The file cannot be written.
     Write,
+    /// A section that now lives in another file.
+    Moved,
 }
 
 impl ConfigError {
@@ -549,8 +633,14 @@ impl Config {
                     &previous.language,
                     Checked::Valid,
                 ),
+                "keybindings" => reader.error(
+                    Some(key.span()),
+                    Some(key_path(&[name])),
+                    ConfigErrorKind::Moved,
+                    format!("`[keybindings]` moved to {KEYBINDINGS_FILE}"),
+                ),
                 "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
-                | "keybindings" | "updates" => {
+                | "updates" => {
                     let DeValue::Table(table) = value.get_ref() else {
                         reader.error(
                             Some(value.span()),
@@ -576,6 +666,72 @@ impl Config {
         // Keys are visited in alphabetical order: report errors in file order.
         reader.errors.sort_by_key(|error| error.line);
         (config, reader.errors, reader.unknown_keys)
+    }
+
+    /// Parses `keybindings.toml`: returns the `[keybindings]` entries, the errors and the
+    /// unknown keys (only the `keybindings` table is known at the root). An invalid binding
+    /// keeps the action of `previous`; a TOML syntax error keeps `previous.keybindings`.
+    pub(crate) fn parse_keybindings(
+        text: &str,
+        previous: &Config,
+        file: &Path,
+    ) -> (
+        BTreeMap<String, String>,
+        Vec<ConfigError>,
+        Vec<UnknownConfigKey>,
+    ) {
+        let mut reader = Reader {
+            text,
+            file,
+            errors: Vec::new(),
+            unknown_keys: Vec::new(),
+        };
+        let root = match DeTable::parse(text) {
+            Ok(root) => root.into_inner(),
+            Err(error) => {
+                reader.error(
+                    error.span(),
+                    None,
+                    ConfigErrorKind::Syntax,
+                    error.message().trim_end().to_owned(),
+                );
+                return (
+                    previous.keybindings.clone(),
+                    reader.errors,
+                    reader.unknown_keys,
+                );
+            }
+        };
+
+        let mut config = Config::default();
+        for (key, value) in root.iter() {
+            let name = key.get_ref().as_ref();
+            if name != "keybindings" {
+                reader.unknown_key(
+                    None,
+                    name,
+                    matches!(value.get_ref(), DeValue::Table(_)),
+                    Some(key.span()),
+                    format!("unknown key `{name}`"),
+                );
+                continue;
+            }
+            let DeValue::Table(table) = value.get_ref() else {
+                reader.error(
+                    Some(value.span()),
+                    Some(key_path(&[name])),
+                    ConfigErrorKind::InvalidValue,
+                    format!("`{name}` must be a table"),
+                );
+                continue;
+            };
+            for (sub_key, sub_value) in table.iter() {
+                reader.read_section_key(name, sub_key, sub_value, &mut config, previous);
+            }
+        }
+        // Keys are visited in alphabetical order: report errors in file order.
+        reader.errors.sort_by_key(|error| error.line);
+        (config.keybindings, reader.errors, reader.unknown_keys)
     }
 
     /// The part of the configuration handled by `alacritty_terminal`.
@@ -841,6 +997,20 @@ mod tests {
         Config::parse(text, &Config::default(), &file())
     }
 
+    fn keybindings_path() -> PathBuf {
+        PathBuf::from("/home/user/.config/graphene/keybindings.toml")
+    }
+
+    fn parse_keybindings(
+        text: &str,
+    ) -> (
+        BTreeMap<String, String>,
+        Vec<ConfigError>,
+        Vec<UnknownConfigKey>,
+    ) {
+        Config::parse_keybindings(text, &Config::default(), &keybindings_path())
+    }
+
     fn theme(light: Option<&str>, dark: Option<&str>) -> ThemeConfig {
         ThemeConfig {
             name: "gruvbox-dark".to_owned(),
@@ -1024,10 +1194,6 @@ name = "gruvbox-dark"
 light = "graphene-day"
 dark = "graphene-night"
 
-[keybindings]
-"Ctrl+Shift+C" = "copy"
-"Shift+PageUp" = "none"
-
 [updates]
 check = false
 interval = "2d"
@@ -1061,10 +1227,7 @@ interval = "2d"
                     light: Some("graphene-day".to_owned()),
                     dark: Some("graphene-night".to_owned()),
                 },
-                keybindings: BTreeMap::from([
-                    ("Ctrl+Shift+C".to_owned(), "copy".to_owned()),
-                    ("Shift+PageUp".to_owned(), "none".to_owned()),
-                ]),
+                keybindings: BTreeMap::new(),
                 updates: UpdatesConfig {
                     check: false,
                     interval: UpdateInterval::Days2,
@@ -1220,7 +1383,7 @@ interval = "2d"
 
     #[test]
     fn keybinding_error_carries_a_quoted_key_path() {
-        let (_, errors) = parse("[keybindings]\n\"Ctrl+Q\" = \"not_an_action\"\n");
+        let (_, errors, _) = parse_keybindings("[keybindings]\n\"Ctrl+Q\" = \"not_an_action\"\n");
         assert_eq!(
             keys(&errors),
             vec![(
@@ -1231,7 +1394,7 @@ interval = "2d"
         // The banner text keeps the unquoted path.
         assert_eq!(
             errors[0].to_string(),
-            "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"not_an_action\""
+            "keybindings.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"not_an_action\""
         );
     }
 
@@ -1341,40 +1504,91 @@ interval = "2d"
         assert_eq!(errors.len(), 2);
     }
 
-    #[test]
-    fn invalid_keybinding_keeps_the_previous_action() {
+    fn previous_with_shortcut() -> Config {
         let mut previous = Config::default();
         previous
             .keybindings
             .insert("Ctrl+Q".to_owned(), "copy".to_owned());
+        previous
+    }
+
+    #[test]
+    fn invalid_keybinding_keeps_the_previous_action() {
+        let previous = previous_with_shortcut();
         let text = "[keybindings]\n\"Ctrl+Q\" = 1\n\"Ctrl+W\" = true\n";
-        let (config, errors) = Config::parse(text, &previous, &file());
-        assert_eq!(config.keybindings, previous.keybindings);
+        let (keybindings, errors, _) =
+            Config::parse_keybindings(text, &previous, &keybindings_path());
+        assert_eq!(keybindings, previous.keybindings);
         assert_eq!(errors.len(), 2);
     }
 
     #[test]
     fn unknown_keybinding_keys_or_actions_are_reported() {
-        let mut previous = Config::default();
-        previous
-            .keybindings
-            .insert("Ctrl+Q".to_owned(), "copy".to_owned());
+        let previous = previous_with_shortcut();
         let text = "[keybindings]\n\"Ctrl+Q\" = \"not_an_action\"\n\"Ctrl+PgUp\" = \"copy\"\n\"Ctrl+Alt+T\" = \"new_tab\"\n";
-        let (config, errors) = Config::parse(text, &previous, &file());
+        let (keybindings, errors, unknown) =
+            Config::parse_keybindings(text, &previous, &keybindings_path());
         assert_eq!(
-            config.keybindings,
+            keybindings,
             BTreeMap::from([
                 ("Ctrl+Q".to_owned(), "copy".to_owned()),
                 ("Ctrl+Alt+T".to_owned(), "new_tab".to_owned()),
             ])
         );
+        assert!(unknown.is_empty());
         let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
         assert_eq!(
             messages,
             [
-                "config.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"not_an_action\"",
-                "config.toml:3: invalid value for `keybindings.Ctrl+PgUp`: unknown key \"PgUp\" in \"Ctrl+PgUp\"",
+                "keybindings.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"not_an_action\"",
+                "keybindings.toml:3: invalid value for `keybindings.Ctrl+PgUp`: unknown key \"PgUp\" in \"Ctrl+PgUp\"",
             ]
+        );
+    }
+
+    #[test]
+    fn keybindings_file_syntax_error_keeps_the_previous_shortcuts() {
+        let previous = previous_with_shortcut();
+        let (keybindings, errors, _) =
+            Config::parse_keybindings("[keybindings\n", &previous, &keybindings_path());
+        assert_eq!(keybindings, previous.keybindings);
+        assert_eq!(keys(&errors), vec![(None, ConfigErrorKind::Syntax)]);
+        assert_eq!(errors[0].file, keybindings_path());
+    }
+
+    #[test]
+    fn keybindings_file_only_knows_the_keybindings_table() {
+        let text = "language = \"fr\"\n[font]\nsize = 12\n[keybindings]\n\"F7\" = \"copy\"\n";
+        let (keybindings, errors, unknown) =
+            Config::parse_keybindings(text, &Config::default(), &keybindings_path());
+        assert_eq!(
+            keybindings,
+            BTreeMap::from([("F7".to_owned(), "copy".to_owned())])
+        );
+        let paths: Vec<_> = unknown.iter().map(|key| key.path.as_str()).collect();
+        assert_eq!(paths, ["font", "language"]);
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().all(|e| e.kind == ConfigErrorKind::UnknownKey));
+    }
+
+    #[test]
+    fn keybindings_section_of_config_file_is_moved_not_read() {
+        let (config, errors, unknown) = Config::parse_with_unknown_keys(
+            "[keybindings]\n\"F7\" = \"copy\"\n[font]\nsize = 12\n",
+            &Config::default(),
+            &file(),
+        );
+        assert!(config.keybindings.is_empty());
+        assert_eq!(config.font.size, 12.0);
+        assert!(unknown.is_empty(), "prune-config must keep the shortcuts");
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("keybindings"), ConfigErrorKind::Moved)]
+        );
+        assert_eq!(errors[0].line, Some(1));
+        assert_eq!(
+            errors[0].to_string(),
+            "config.toml:1: `[keybindings]` moved to keybindings.toml"
         );
     }
 
@@ -1408,14 +1622,22 @@ interval = "2d"
         assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
         let written = std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap();
         assert!(written.starts_with("## Graphene Term configuration.\n"));
-        assert_eq!(written.matches("# [keybindings]").count(), 1);
+        assert!(!written.contains("keybindings"));
+        let shortcuts = std::fs::read_to_string(nested.join(KEYBINDINGS_FILE)).unwrap();
+        assert!(shortcuts.starts_with("## Each string shortcut key"));
+        assert_eq!(shortcuts.matches("\n[keybindings]\n").count(), 1);
+        assert_eq!(shortcuts.matches("# [keybindings]").count(), 0);
         for (key, action) in keybindings::defaults() {
-            assert!(written.contains(&format!("# {key:?} = {:?}\n", action.id())));
+            assert!(shortcuts.contains(&format!("# {key:?} = {:?}\n", action.id())));
         }
         assert_eq!(load_from(&nested), (Config::default(), Vec::new()));
         assert_eq!(
             std::fs::read_to_string(nested.join(CONFIG_FILE)).unwrap(),
             written
+        );
+        assert_eq!(
+            std::fs::read_to_string(nested.join(KEYBINDINGS_FILE)).unwrap(),
+            shortcuts
         );
 
         std::fs::write(nested.join(CONFIG_FILE), "[font]\nsize = 9\n").unwrap();
@@ -1510,6 +1732,130 @@ interval = "2d"
         let (config, errors) = reload_from(&dir, &previous);
         assert_eq!(config, previous);
         assert_eq!(errors.len(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-config-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_reads_shortcuts_from_keybindings_file_and_completes_it() {
+        let dir = temp_dir("load-keybindings");
+        std::fs::write(dir.join(CONFIG_FILE), "[font]\nsize = 9\n").unwrap();
+        std::fs::write(
+            dir.join(KEYBINDINGS_FILE),
+            "# mine\n[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n",
+        )
+        .unwrap();
+
+        let (config, errors) = load_from(&dir);
+        assert_eq!(errors, Vec::new());
+        assert_eq!(config.font.size, 9.0);
+        assert_eq!(
+            config.keybindings,
+            BTreeMap::from([("Ctrl+Alt+T".to_owned(), "new_tab".to_owned())])
+        );
+        let text = std::fs::read_to_string(dir.join(KEYBINDINGS_FILE)).unwrap();
+        assert!(text.starts_with("# mine\n"), "{text}");
+        assert!(text.contains("\"Ctrl+Alt+T\" = \"new_tab\"\n"), "{text}");
+        assert!(text.contains("## Allowed actions:"), "{text}");
+        assert!(text.contains("# \"Ctrl+Shift+C\" = \"copy\""), "{text}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_reports_errors_of_both_files_config_first() {
+        let dir = temp_dir("load-both-errors");
+        std::fs::write(dir.join(CONFIG_FILE), "[font]\nsize = \"big\"\n").unwrap();
+        std::fs::write(
+            dir.join(KEYBINDINGS_FILE),
+            "[keybindings]\n\"F7\" = \"nope\"\n",
+        )
+        .unwrap();
+
+        let (_, errors) = load_from(&dir);
+        let files: Vec<_> = errors
+            .iter()
+            .map(|e| e.file.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files, [CONFIG_FILE, KEYBINDINGS_FILE]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_reports_a_keybindings_section_left_in_config_file() {
+        let dir = temp_dir("load-moved");
+        std::fs::write(dir.join(CONFIG_FILE), "[keybindings]\n\"F7\" = \"copy\"\n").unwrap();
+
+        let (config, errors) = load_from(&dir);
+        assert!(config.keybindings.is_empty());
+        assert_eq!(
+            keys(&errors),
+            vec![(Some("keybindings"), ConfigErrorKind::Moved)]
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_reads_both_files_and_keeps_shortcuts_on_a_syntax_error() {
+        let dir = temp_dir("reload-both");
+        let previous = previous_with_shortcut();
+        std::fs::write(dir.join(CONFIG_FILE), "[font]\nsize = 9\n").unwrap();
+        std::fs::write(
+            dir.join(KEYBINDINGS_FILE),
+            "[keybindings]\n\"F7\" = \"copy\"\n",
+        )
+        .unwrap();
+
+        let (config, errors) = reload_from(&dir, &previous);
+        assert_eq!(errors, Vec::new());
+        assert_eq!(config.font.size, 9.0);
+        assert_eq!(
+            config.keybindings,
+            BTreeMap::from([("F7".to_owned(), "copy".to_owned())])
+        );
+
+        std::fs::write(dir.join(KEYBINDINGS_FILE), "[keybindings\n").unwrap();
+        let (config, errors) = reload_from(&dir, &previous);
+        assert_eq!(config.font.size, 9.0);
+        assert_eq!(config.keybindings, previous.keybindings);
+        assert_eq!(errors.len(), 1);
+
+        // A missing file yields no shortcuts and is not written back.
+        std::fs::remove_file(dir.join(KEYBINDINGS_FILE)).unwrap();
+        let (config, errors) = reload_from(&dir, &previous);
+        assert!(config.keybindings.is_empty());
+        assert_eq!(errors, Vec::new());
+        assert!(!dir.join(KEYBINDINGS_FILE).exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reload_does_not_write_keybindings_file() {
+        let dir = temp_dir("reload-keybindings-read-only");
+        let original = "# keep me\n[keybindings]\n\"F7\" = \"copy\"\n";
+        std::fs::write(dir.join(KEYBINDINGS_FILE), original).unwrap();
+
+        let _ = reload_from(&dir, &Config::default());
+        assert_eq!(
+            std::fs::read_to_string(dir.join(KEYBINDINGS_FILE)).unwrap(),
+            original
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use toml_edit::DocumentMut;
 
-use crate::config::{ConfigError, ConfigErrorKind, DEFAULT_CONFIG, key_path};
+use crate::config::{ConfigError, ConfigErrorKind, DEFAULT_CONFIG, DEFAULT_KEYBINDINGS, key_path};
 
 #[derive(Debug, Clone)]
 struct OptionLine {
@@ -23,7 +23,22 @@ struct OptionLine {
 /// Completes supported options and their value documentation without changing configured
 /// values. `None` means the document is already complete. Invalid TOML is never rewritten.
 pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit::TomlError> {
-    let options = option_lines();
+    complete_with(text, option_lines(), &[])
+}
+
+/// [`complete_defaults`] for `keybindings.toml`: the documentation of the shortcuts and
+/// one commented line per default shortcut.
+pub(super) fn complete_keybindings_defaults(
+    text: &str,
+) -> Result<Option<String>, toml_edit::TomlError> {
+    complete_with(text, keybinding_option_lines(), &keybinding_documentation())
+}
+
+fn complete_with(
+    text: &str,
+    options: Vec<OptionLine>,
+    keybinding_documentation: &[String],
+) -> Result<Option<String>, toml_edit::TomlError> {
     let legacy = normalize_legacy_documentation(text);
     let source = legacy.as_deref().unwrap_or(text);
     let malformed = normalize_malformed_comments(source, &options);
@@ -46,7 +61,7 @@ pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit:
         )
         .next()
     {
-        let documentation = missing_keybinding_documentation(text, block);
+        let documentation = missing_keybinding_documentation(text, keybinding_documentation);
         if !documentation.is_empty() {
             insertions.push((
                 section_header_end(text, block),
@@ -55,7 +70,12 @@ pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit:
         }
     }
     insertions.extend(commented_documentation_insertions(text, &options, &newline));
-    insertions.extend(active_documentation_insertions(text, &options, &newline));
+    insertions.extend(active_documentation_insertions(
+        text,
+        &options,
+        keybinding_documentation,
+        &newline,
+    ));
 
     for option in &options {
         if active_item(&document, option).is_none()
@@ -104,7 +124,7 @@ pub(super) fn complete_defaults(text: &str) -> Result<Option<String>, toml_edit:
                 if section == "keybindings" {
                     append_documentation(
                         &mut appended_sections,
-                        &keybinding_documentation(),
+                        keybinding_documentation,
                         &newline,
                     );
                 }
@@ -254,6 +274,7 @@ fn commented_documentation_insertions(
 fn active_documentation_insertions(
     text: &str,
     options: &[OptionLine],
+    keybinding_documentation: &[String],
     newline: &str,
 ) -> Vec<(usize, String)> {
     let mut insertions = Vec::new();
@@ -271,7 +292,7 @@ fn active_documentation_insertions(
             let paths = active_paths(section.as_deref(), trimmed);
             if section.is_none() && paths.contains(&(None, "keybindings".to_owned())) {
                 let documentation =
-                    missing_option_documentation(text, offset, &keybinding_documentation());
+                    missing_option_documentation(text, offset, keybinding_documentation);
                 if !documentation.is_empty() {
                     insertions.push((offset, render_documentation(&documentation, newline)));
                 }
@@ -332,28 +353,23 @@ fn append_documentation(output: &mut String, documentation: &[String], newline: 
     }
 }
 
+/// The `##` documentation lines of [`DEFAULT_KEYBINDINGS`] (the usage example, which holds
+/// an `=`, is not repeated into existing files).
 fn keybinding_documentation() -> Vec<String> {
-    let mut in_keybindings = false;
-    let mut documentation = Vec::new();
-    for line in DEFAULT_CONFIG.lines() {
-        let Some(body) = comment_body(line) else {
-            continue;
-        };
-        if let Some(header) = table_header(body) {
-            in_keybindings = header == "keybindings";
-            continue;
-        }
-        if in_keybindings && line.trim_start().starts_with("##") && !body.contains('=') {
-            documentation.push(body.to_owned());
-        }
-    }
-    documentation
+    DEFAULT_KEYBINDINGS
+        .lines()
+        .filter(|line| line.trim_start().starts_with("##"))
+        .filter_map(comment_body)
+        .filter(|body| !body.contains('='))
+        .map(str::to_owned)
+        .collect()
 }
 
-fn missing_keybinding_documentation(text: &str, block: &SectionBlock) -> Vec<String> {
-    keybinding_documentation()
-        .into_iter()
-        .filter(|line| !text[block.start..block.end].contains(&format!("## {line}")))
+fn missing_keybinding_documentation(text: &str, documentation: &[String]) -> Vec<String> {
+    documentation
+        .iter()
+        .filter(|line| !text.contains(&format!("## {line}")))
+        .cloned()
         .collect()
 }
 
@@ -937,9 +953,6 @@ fn option_lines() -> Vec<OptionLine> {
             documentation.clear();
             continue;
         }
-        if section.as_deref() == Some("keybindings") {
-            continue;
-        }
         if let Some(keys) = commented_keys(section.as_deref(), body) {
             for key in keys {
                 options.push(OptionLine {
@@ -955,17 +968,19 @@ fn option_lines() -> Vec<OptionLine> {
             documentation.clear();
         }
     }
+    options
+}
 
-    for (key, action) in crate::keybindings::defaults() {
-        let line = format!("{key:?} = {:?}", action.id());
-        options.push(OptionLine {
+/// One commented line per default shortcut, in the `[keybindings]` table.
+fn keybinding_option_lines() -> Vec<OptionLine> {
+    crate::keybindings::defaults()
+        .map(|(key, action)| OptionLine {
             section: Some("keybindings".to_owned()),
             key: key.to_owned(),
-            line,
+            line: format!("{key:?} = {:?}", action.id()),
             documentation: Vec::new(),
-        });
-    }
-    options
+        })
+        .collect()
 }
 
 fn commented_options(text: &str) -> HashSet<(Option<String>, String)> {
@@ -1034,6 +1049,15 @@ pub(crate) fn default_file_text() -> String {
         .ok()
         .flatten()
         .unwrap_or_else(|| DEFAULT_CONFIG.to_owned())
+}
+
+/// The text of a new `keybindings.toml`: [`DEFAULT_KEYBINDINGS`] with every default
+/// shortcut as a commented line.
+pub(crate) fn default_keybindings_text() -> String {
+    complete_keybindings_defaults(DEFAULT_KEYBINDINGS)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| DEFAULT_KEYBINDINGS.to_owned())
 }
 
 /// A `config.toml` document edited key by key, keeping comments, whitespace and key
@@ -1318,11 +1342,14 @@ mod tests {
             .unwrap();
         let text = config.to_string();
         assert_eq!(text, "[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n");
+        let (keybindings, errors, _) = crate::config::Config::parse_keybindings(
+            &text,
+            &crate::config::Config::default(),
+            Path::new("keybindings.toml"),
+        );
+        assert_eq!(errors, Vec::new());
         assert_eq!(
-            parse_config(&text)
-                .keybindings
-                .get("Ctrl+Alt+T")
-                .map(String::as_str),
+            keybindings.get("Ctrl+Alt+T").map(String::as_str),
             Some("new_tab")
         );
     }
@@ -1424,22 +1451,20 @@ mod tests {
     }
 
     #[test]
-    fn completion_adds_all_documented_options_and_default_keybindings() {
+    fn completion_adds_all_documented_options() {
         let completed = complete_defaults("").unwrap().unwrap();
         for option in option_lines() {
-            if option.section.as_deref() != Some("keybindings") {
-                assert!(
-                    !option.documentation.is_empty(),
-                    "missing documentation for option: {:?}",
-                    option
-                );
-                assert_eq!(
-                    option.documentation.len(),
-                    1,
-                    "duplicate help lines for option: {:?}",
-                    option
-                );
-            }
+            assert!(
+                !option.documentation.is_empty(),
+                "missing documentation for option: {:?}",
+                option
+            );
+            assert_eq!(
+                option.documentation.len(),
+                1,
+                "duplicate help lines for option: {:?}",
+                option
+            );
             assert!(
                 completed.contains(&format!("# {}\n", option.line)),
                 "missing generated option: {:?}",
@@ -1453,14 +1478,53 @@ mod tests {
                 );
             }
         }
+        assert!(!completed.contains("keybindings"));
+        assert!(commented_options(&completed).contains(&(None, "language".to_owned())));
+        assert_eq!(complete_defaults(&completed).unwrap(), None);
+    }
+
+    #[test]
+    fn keybindings_completion_adds_documentation_and_default_shortcuts() {
+        let completed = complete_keybindings_defaults("").unwrap().unwrap();
         for documentation in keybinding_documentation() {
             assert!(completed.contains(&format!("## {documentation}\n")));
         }
+        assert_eq!(completed.matches("[keybindings]").count(), 1);
         for (key, action) in crate::keybindings::defaults() {
             assert!(completed.contains(&format!("# {key:?} = {:?}\n", action.id())));
         }
-        assert!(commented_options(&completed).contains(&(None, "language".to_owned())));
-        assert_eq!(complete_defaults(&completed).unwrap(), None);
+        assert_eq!(complete_keybindings_defaults(&completed).unwrap(), None);
+    }
+
+    #[test]
+    fn default_keybindings_text_is_complete_with_an_active_header() {
+        let text = default_keybindings_text();
+        assert_eq!(complete_keybindings_defaults(&text).unwrap(), None);
+        assert_eq!(text.matches("\n[keybindings]\n").count(), 1);
+        assert!(text.starts_with("## Each string shortcut key maps"));
+        assert!(text.contains("## Example: `\"Ctrl+Alt+T\" = \"new_tab\"` adds a shortcut.\n"));
+        let (keybindings, errors, unknown) = crate::config::Config::parse_keybindings(
+            &text,
+            &crate::config::Config::default(),
+            Path::new("keybindings.toml"),
+        );
+        assert!(keybindings.is_empty());
+        assert!(errors.is_empty());
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn keybindings_completion_keeps_user_shortcuts_and_adds_missing_documentation() {
+        let original =
+            "# mine\n[keybindings]\n\"Ctrl+Alt+T\" = \"new_tab\"\n\"Ctrl+Shift+C\" = \"none\"\n";
+        let updated = complete_keybindings_defaults(original).unwrap().unwrap();
+        assert!(updated.starts_with("# mine\n[keybindings]\n## Each string shortcut key maps"));
+        assert!(updated.contains("\"Ctrl+Alt+T\" = \"new_tab\"\n"));
+        // An active shortcut is not repeated as a commented default.
+        assert!(!updated.contains("# \"Ctrl+Shift+C\" = \"copy\""));
+        assert!(updated.contains("# \"Ctrl+Shift+V\" = \"paste\""));
+        assert_eq!(updated.matches("## Allowed actions:").count(), 1);
+        assert_eq!(complete_keybindings_defaults(&updated).unwrap(), None);
     }
 
     #[test]
@@ -1539,7 +1603,9 @@ mod tests {
 
     #[test]
     fn existing_keybinding_sections_get_one_shared_help_block() {
-        let updated = complete_defaults("# [keybindings]\n").unwrap().unwrap();
+        let updated = complete_keybindings_defaults("# [keybindings]\n")
+            .unwrap()
+            .unwrap();
 
         assert_eq!(updated.matches("# [keybindings]").count(), 1);
         assert!(updated.contains("## Each string shortcut key maps to one string action name."));
@@ -1651,14 +1717,6 @@ mod tests {
             "## Font family name. Empty: the system monospace font.\n",
             "## Type: string. Empty uses the system monospace font.\n",
             "# family = \"\"\n",
-            "# [keybindings]\n",
-            "## Type: string shortcut key mapped to a string action.\n",
-            "## \"Keys\" = \"action\". The action \"none\" disables a default shortcut, so the key goes\n",
-            "## to the shell. Keys: modifiers Ctrl, Shift, Alt, Super joined with \"+\", then a key\n",
-            "## name (PageUp, F5, Insert, Left...) or one character. Letters ignore case; Shift is\n",
-            "## ignored for other characters (\"Ctrl++\"). Alt+digit uses the digit row on any layout.\n",
-            "## Actions: copy, paste, scroll_page_up, scroll_page_down, scroll_to_top,\n",
-            "## command_palette. Example: \"Ctrl+Alt+T\" = \"new_tab\" adds a shortcut;\n",
             "## Type: user-specific plugin note.\n",
             "[plugin]\n",
             "value = 42\n",
@@ -1675,12 +1733,37 @@ mod tests {
         );
         assert_eq!(updated.matches("fc-list : family").count(), 1);
         assert!(!updated.contains("## Type: string."));
+        assert!(updated.contains("## Type: user-specific plugin note."));
+        assert!(updated.contains("language = \"fr\""));
+        assert!(updated.contains("# family = \"\""));
+    }
+
+    #[test]
+    fn legacy_keybinding_help_is_replaced_in_keybindings_file() {
+        let original = concat!(
+            "# [keybindings]\n",
+            "## Type: string shortcut key mapped to a string action.\n",
+            "## \"Keys\" = \"action\". The action \"none\" disables a default shortcut, so the key goes\n",
+            "## to the shell. Keys: modifiers Ctrl, Shift, Alt, Super joined with \"+\", then a key\n",
+            "## name (PageUp, F5, Insert, Left...) or one character. Letters ignore case; Shift is\n",
+            "## ignored for other characters (\"Ctrl++\"). Alt+digit uses the digit row on any layout.\n",
+            "## Actions: copy, paste, scroll_page_up, scroll_page_down, scroll_to_top,\n",
+            "## command_palette. Example: \"Ctrl+Alt+T\" = \"new_tab\" adds a shortcut;\n",
+            "## Type: user-specific plugin note.\n",
+            "\"F7\" = \"copy\"\n",
+        );
+
+        let updated =
+            complete_keybindings_defaults(&original.replace("# [keybindings]", "[keybindings]"))
+                .unwrap()
+                .unwrap();
+
+        assert!(!updated.contains("## Type: string shortcut"));
         assert!(!updated.contains("## Actions:"));
         assert!(!updated.contains("\"Keys\" = \"action\""));
         assert_eq!(updated.matches("## Allowed actions:").count(), 1);
         assert!(updated.contains("## Type: user-specific plugin note."));
-        assert!(updated.contains("language = \"fr\""));
-        assert!(updated.contains("# family = \"\""));
+        assert!(updated.contains("\"F7\" = \"copy\""));
     }
 
     #[test]
@@ -1798,7 +1881,7 @@ mod tests {
         let outcome = prune_file(&path, |_| panic!("default creation must not ask")).unwrap();
         assert_eq!(outcome, PruneOutcome::CreatedDefault);
         let contents = fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("# \"Ctrl+Shift+T\" = \"new_tab\""));
+        assert!(!contents.contains("keybindings"));
         assert!(contents.parse::<DocumentMut>().is_ok());
         remove_temporary_config(directory);
     }

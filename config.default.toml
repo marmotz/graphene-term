@@ -51,22 +51,6 @@
 ## Optional dark theme name (built-in or custom file).
 ## dark = "graphene-night"
 
-# [keybindings]
-## Each string shortcut key maps to one string action name. Keys use modifiers Ctrl, Shift, Alt, Super
-## joined with "+", then a key name (PageUp, F5, Insert, Left...) or one character.
-## Letters ignore case; Shift is ignored for other characters ("Ctrl++"). Alt+digit uses
-## the digit row on any layout. "none" disables a shortcut and sends its key to the shell.
-## Allowed actions: "none", "copy", "paste", "scroll_page_up", "scroll_page_down",
-## "scroll_to_top", "scroll_to_bottom", "font_size_increase", "font_size_decrease",
-## "font_size_reset", "previous_block", "next_block", "copy_command", "copy_output",
-## "toggle_fold", "toggle_fold_all", "split_right", "split_down", "close_pane",
-## "focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down",
-## "resize_pane_left", "resize_pane_right", "resize_pane_up", "resize_pane_down",
-## "next_pane", "previous_pane", "toggle_zoom", "equalise_panes", "detach_pane", "new_tab",
-## "close_tab", "next_tab", "previous_tab", "go_to_tab_1" through "go_to_tab_255",
-## "command_palette", "open_settings", "quit".
-## Example: `"Ctrl+Alt+T" = "new_tab"` adds a shortcut.
-
 # [updates]
 ## Check GitHub for a newer release and show a banner (true or false); false makes no network call.
 # check = true

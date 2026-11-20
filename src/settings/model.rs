@@ -675,14 +675,32 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::config::{ConfigError, ConfigErrorKind};
 
     fn file() -> PathBuf {
         PathBuf::from("/home/user/.config/graphene/config.toml")
     }
 
+    /// `text` read as `config.toml` and `keybindings.toml` at once: both files share the
+    /// same TOML here, each reading only its own part.
+    fn parse_both(text: &str, previous: &Config) -> (Config, Vec<ConfigError>) {
+        let (mut config, mut errors) = Config::parse(text, previous, &file());
+        errors.retain(|error| error.kind != ConfigErrorKind::Moved);
+        let (keybindings, keybinding_errors, _) =
+            Config::parse_keybindings(text, previous, &file());
+        config.keybindings = keybindings;
+        errors.extend(
+            keybinding_errors
+                .into_iter()
+                .filter(|error| error.kind != ConfigErrorKind::UnknownKey),
+        );
+        errors.sort_by_key(|error| error.line);
+        (config, errors)
+    }
+
     /// The model of `text` parsed over the defaults.
     fn model(text: &str) -> SettingsModel {
-        let (config, errors) = Config::parse(text, &Config::default(), &file());
+        let (config, errors) = parse_both(text, &Config::default());
         SettingsModel::new(
             &config,
             &LoadErrors {
@@ -1259,10 +1277,9 @@ interval = "1w"
     #[test]
     fn shortcuts_follow_a_written_configuration() {
         let mut m = model("");
-        let (config, errors) = Config::parse(
+        let (config, errors) = parse_both(
             "[keybindings]\n\"F7\" = \"detach_pane\"\n",
             &Config::default(),
-            &file(),
         );
         m.written(config, errors);
         assert_eq!(labels(&m, Action::DetachPane), ["F7"]);
