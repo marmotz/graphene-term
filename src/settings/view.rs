@@ -593,6 +593,7 @@ impl View {
             saved.is_some(),
             TextEdit::singleline(&mut text)
                 .font(TextStyle::Monospace)
+                .align(egui::Align2::CENTER_TOP)
                 .desired_width(width),
         );
         if response.changed() {
