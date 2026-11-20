@@ -3,17 +3,19 @@
 
 use std::collections::BTreeMap;
 
+use alacritty_terminal::vte::ansi::Rgb;
 use egui::{
     Align, Button, CentralPanel, Color32, ComboBox, FontId, Frame, Grid, Label, Layout, Margin,
-    Panel, Pos2, Rect, RichText, ScrollArea, Shape, Slider, TextEdit, TextStyle, Ui, UiBuilder,
-    Vec2,
+    Panel, Popup, Pos2, Rect, RichText, ScrollArea, Shape, Slider, TextEdit, TextStyle, Ui,
+    UiBuilder, Vec2,
 };
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
-use super::model::{self, Change, Input, InputError, SettingsModel, Widget};
+use super::model::{self, Change, Input, InputError, SettingsModel, ThemeOp, Widget};
 use crate::i18n::{self, Lang, Msg, SettingsField as Field, SettingsSection};
 use crate::input::Action;
 use crate::keybindings::Shortcut;
+use crate::theme::{ColorGroup, ColorKey, NameError};
 
 /// Width of the sections sidebar, in points.
 const SIDEBAR_WIDTH: f32 = 180.0;
@@ -45,6 +47,63 @@ pub struct View {
     conflict: Option<Conflict>,
     /// Shortcuts added in this window, oldest first, shown last in their row.
     added: Vec<Shortcut>,
+    /// The color picker open in the theme editor, until it closes and its color is
+    /// written.
+    picking: Option<Picking>,
+    /// The name of a copy or a rename of the edited theme, being typed.
+    naming: Option<Naming>,
+    /// Whether the deletion of the edited theme waits for its confirmation.
+    confirm_delete: bool,
+}
+
+/// What one frame asks to write or change.
+#[derive(Debug, Default, PartialEq)]
+pub struct Edits {
+    /// Changes to the configuration files.
+    pub changes: Vec<Change>,
+    /// Changes to the edited theme's file, each with the configuration changes it
+    /// makes ([`SettingsModel::theme_op`]).
+    pub theme_ops: Vec<(Vec<Change>, ThemeOp)>,
+    /// The theme to show in the theme editor instead of the edited one.
+    pub edit_theme: Option<String>,
+}
+
+impl Edits {
+    /// Whether there is nothing to write nor change.
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty() && self.theme_ops.is_empty() && self.edit_theme.is_none()
+    }
+
+    /// Checks `op` on the edited theme and adds it.
+    fn theme_op(&mut self, model: &SettingsModel, op: ThemeOp) -> Result<(), NameError> {
+        self.theme_ops.push(model.theme_op(op)?);
+        Ok(())
+    }
+}
+
+/// A color picker open in the theme editor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Picking {
+    key: ColorKey,
+    /// The color shown by the picker.
+    color: Rgb,
+    /// The color of the file when the picker opened.
+    saved: Option<Rgb>,
+}
+
+/// What a typed theme name is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NameAction {
+    Duplicate,
+    Rename,
+}
+
+/// A theme name being typed, and why the last one was refused.
+#[derive(Debug, Clone, PartialEq)]
+struct Naming {
+    action: NameAction,
+    text: String,
+    error: Option<NameError>,
 }
 
 /// A captured shortcut already bound to `other`.
@@ -68,10 +127,119 @@ impl View {
         self.capturing.is_some()
     }
 
-    /// Takes an `Escape` press egui leaves alone: dismisses a pending shortcut conflict
-    /// and returns `true`, or returns `false` when nothing is pending, so the window closes.
+    /// Takes an `Escape` press egui leaves alone: dismisses a pending shortcut conflict,
+    /// theme name or theme deletion and returns `true`, or returns `false` when nothing
+    /// is pending, so the window closes.
     pub fn escape(&mut self) -> bool {
         self.conflict.take().is_some()
+            || self.naming.take().is_some()
+            || std::mem::take(&mut self.confirm_delete)
+    }
+
+    /// Closes the open color picker; returns its color to write when it changed.
+    /// Called when the picker is no longer drawn (the window closes, another section or
+    /// theme is shown).
+    pub fn finish_picking(&mut self) -> Option<ThemeOp> {
+        let picking = self.picking.take()?;
+        (Some(picking.color) != picking.saved)
+            .then_some(ThemeOp::SetColor(picking.key, Some(picking.color)))
+    }
+
+    /// Takes one frame of the color picker of `key`, whose file color is `saved`, shown
+    /// with `color`, open or not. The color is written once, when the picker closes,
+    /// not while it is dragged.
+    fn picker_frame(
+        &mut self,
+        key: ColorKey,
+        saved: Option<Rgb>,
+        color: Rgb,
+        open: bool,
+    ) -> Option<ThemeOp> {
+        let current = self.picking.map(|picking| picking.key);
+        match (open, current) {
+            (true, Some(picked)) if picked == key => {
+                self.picking = Some(Picking { key, color, saved });
+                None
+            }
+            (true, _) => {
+                let done = self.finish_picking();
+                self.picking = Some(Picking { key, color, saved });
+                done
+            }
+            (false, Some(picked)) if picked == key => self.finish_picking(),
+            (false, _) => None,
+        }
+    }
+
+    /// The color shown for `key`: the picker's while it is open, else `saved`.
+    fn shown_color(&self, key: ColorKey, saved: Option<Rgb>) -> Option<Rgb> {
+        self.picking
+            .filter(|picking| picking.key == key)
+            .map(|picking| picking.color)
+            .or(saved)
+    }
+
+    /// Shows the name field of a copy or a rename; a built-in theme cannot be renamed.
+    fn start_naming(&mut self, model: &SettingsModel, action: NameAction) {
+        if action == NameAction::Rename && model.edited_is_built_in() {
+            return;
+        }
+        let edited = model.edited_theme();
+        let text = match action {
+            NameAction::Duplicate => format!("{edited}-copy"),
+            NameAction::Rename => edited.to_owned(),
+        };
+        self.confirm_delete = false;
+        self.naming = Some(Naming {
+            action,
+            text,
+            error: None,
+        });
+    }
+
+    /// Takes the typed name: a valid one gives its operation, a refused one stays shown
+    /// with its error.
+    fn confirm_name(&mut self, model: &SettingsModel, edits: &mut Edits) {
+        let Some(naming) = &mut self.naming else {
+            return;
+        };
+        let name = naming.text.trim().to_owned();
+        let op = match naming.action {
+            NameAction::Duplicate => ThemeOp::Duplicate(name),
+            NameAction::Rename => ThemeOp::Rename(name),
+        };
+        match edits.theme_op(model, op) {
+            Ok(()) => self.naming = None,
+            Err(error) => naming.error = Some(error),
+        }
+    }
+
+    /// Asks to confirm the deletion of the edited theme; a built-in theme cannot be
+    /// deleted.
+    fn request_delete(&mut self, model: &SettingsModel) {
+        if model.edited_is_built_in() {
+            return;
+        }
+        self.naming = None;
+        self.confirm_delete = true;
+    }
+
+    /// Deletes the edited theme once confirmed.
+    fn confirm_delete(&mut self, model: &SettingsModel, edits: &mut Edits) {
+        if std::mem::take(&mut self.confirm_delete) && !model.edited_is_built_in() {
+            // Deleting checks no name: it cannot be refused.
+            let _ = edits.theme_op(model, ThemeOp::Delete);
+        }
+    }
+
+    /// Shows `name` in the theme editor, writing the open picker's color first.
+    fn switch_theme(&mut self, model: &SettingsModel, name: String, edits: &mut Edits) {
+        if let Some(op) = self.finish_picking() {
+            let _ = edits.theme_op(model, op);
+        }
+        self.naming = None;
+        self.confirm_delete = false;
+        edits.edit_theme = Some(name);
     }
 
     /// Takes a key press while a shortcut is captured; returns the changes to write.
@@ -113,10 +281,10 @@ impl View {
         }
     }
 
-    /// Draws one frame; returns the changes to write.
-    pub fn show(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel) -> Vec<Change> {
+    /// Draws one frame; returns what to write.
+    pub fn show(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel) -> Edits {
         let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
-        let mut changes = Vec::new();
+        let mut edits = Edits::default();
         Panel::left("settings_sections")
             .resizable(false)
             .exact_size(SIDEBAR_WIDTH)
@@ -129,9 +297,14 @@ impl View {
                         .clicked()
                         && !selected
                     {
+                        if let Some(op) = self.finish_picking() {
+                            let _ = edits.theme_op(model, op);
+                        }
                         self.section = section;
                         self.capturing = None;
                         self.conflict = None;
+                        self.naming = None;
+                        self.confirm_delete = false;
                     }
                 }
             });
@@ -141,20 +314,15 @@ impl View {
                 ui.heading(label(Msg::Section(self.section)));
                 ui.separator();
                 ui.add_enabled_ui(model.locked(self.section).is_none(), |ui| {
-                    self.section_body(ui, lang, model, &mut changes);
+                    self.section_body(ui, lang, model, &mut edits);
                 });
             });
         });
-        changes
+        edits
     }
 
-    fn section_body(
-        &mut self,
-        ui: &mut Ui,
-        lang: Lang,
-        model: &SettingsModel,
-        changes: &mut Vec<Change>,
-    ) {
+    fn section_body(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel, edits: &mut Edits) {
+        let changes = &mut edits.changes;
         for message in model.section_errors(self.section) {
             error_label(ui, message);
         }
@@ -188,6 +356,144 @@ impl View {
                     ui.end_row();
                 }
             });
+        if self.section == SettingsSection::Theme {
+            self.theme_editor(ui, lang, model, edits);
+        }
+    }
+
+    /// The theme editor, below the theme fields: a theme selector independent of the
+    /// active theme, its actions, and its colors by group. A built-in theme can only be
+    /// duplicated.
+    fn theme_editor(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel, edits: &mut Edits) {
+        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let editable = !model.edited_is_built_in();
+        ui.add_space(16.0);
+        ui.heading(label(Msg::ThemeEditor));
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(label(Msg::EditedTheme));
+            if let Some(name) = theme_selector(ui, model) {
+                self.switch_theme(model, name, edits);
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button(label(Msg::Duplicate)).clicked() {
+                self.start_naming(model, NameAction::Duplicate);
+            }
+            if ui
+                .add_enabled(editable, Button::new(label(Msg::Rename)))
+                .clicked()
+            {
+                self.start_naming(model, NameAction::Rename);
+            }
+            if ui
+                .add_enabled(editable, Button::new(label(Msg::Delete)))
+                .clicked()
+            {
+                self.request_delete(model);
+            }
+        });
+        self.naming_row(ui, lang, model, edits);
+        if self.confirm_delete {
+            warn_label(
+                ui,
+                &label(Msg::ConfirmDeleteTheme(model.edited_theme().to_owned())),
+            );
+            ui.horizontal(|ui| {
+                if ui.button(label(Msg::Delete)).clicked() {
+                    self.confirm_delete(model, edits);
+                }
+                if ui.button(label(Msg::Cancel)).clicked() {
+                    self.confirm_delete = false;
+                }
+            });
+        }
+        if !editable {
+            ui.label(RichText::new(label(Msg::BuiltInTheme)).weak());
+        }
+        ui.add_enabled_ui(editable, |ui| {
+            for group in ColorGroup::ALL {
+                ui.add_space(8.0);
+                ui.strong(label(Msg::ThemeColorGroup(group)));
+                Grid::new(("theme_colors", group))
+                    .num_columns(2)
+                    .spacing([16.0, 6.0])
+                    .show(ui, |ui| {
+                        for key in group.keys() {
+                            ui.label(label(Msg::ThemeColor(key)));
+                            ui.push_id(key, |ui| {
+                                ui.horizontal(|ui| self.color_row(ui, lang, model, key, edits));
+                            });
+                            ui.end_row();
+                        }
+                    });
+            }
+        });
+    }
+
+    /// The name field of a copy or a rename, with its error; `Enter` confirms.
+    fn naming_row(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel, edits: &mut Edits) {
+        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let Some(naming) = &mut self.naming else {
+            return;
+        };
+        let (mut confirm, mut cancel) = (false, false);
+        ui.horizontal(|ui| {
+            ui.label(label(Msg::NewThemeName));
+            let response =
+                ui.add(TextEdit::singleline(&mut naming.text).desired_width(FIELD_WIDTH));
+            confirm =
+                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            confirm |= ui.button(label(Msg::Confirm)).clicked();
+            cancel = ui.button(label(Msg::Cancel)).clicked();
+        });
+        if let Some(error) = naming.error {
+            error_label(ui, &label(Msg::ThemeNameError(error)));
+        }
+        if cancel {
+            self.naming = None;
+        } else if confirm {
+            self.confirm_name(model, edits);
+        }
+    }
+
+    /// The color button of `key`, which opens a picker; for the selection foreground, the
+    /// "Keep the text color" checkbox that empties it.
+    fn color_row(
+        &mut self,
+        ui: &mut Ui,
+        lang: Lang,
+        model: &SettingsModel,
+        key: ColorKey,
+        edits: &mut Edits,
+    ) {
+        let palette = model.edited_palette();
+        let saved = key.get(palette);
+        let shown = self.shown_color(key, saved).unwrap_or(palette.foreground);
+        let mut srgb = [shown.r, shown.g, shown.b];
+        let popup = ui
+            .add_enabled_ui(saved.is_some(), |ui| {
+                // The id the button gives its popup: the next automatic id of its `Ui`.
+                let popup = ui.auto_id_with("popup");
+                egui::color_picker::color_edit_button_srgb(ui, &mut srgb);
+                popup
+            })
+            .inner;
+        let open = saved.is_some() && Popup::is_id_open(ui.ctx(), popup);
+        let [r, g, b] = srgb;
+        if let Some(op) = self.picker_frame(key, saved, Rgb { r, g, b }, open) {
+            let _ = edits.theme_op(model, op);
+        }
+        if key == ColorKey::SelectionForeground {
+            let mut keep = saved.is_none();
+            if ui
+                .checkbox(&mut keep, i18n::text(lang, &Msg::KeepTextColor))
+                .changed()
+            {
+                let color = (!keep).then_some(palette.foreground);
+                let _ = edits.theme_op(model, ThemeOp::SetColor(key, color));
+            }
+        }
     }
 
     fn field(
@@ -521,6 +827,23 @@ fn choice(ui: &mut Ui, lang: Lang, model: &SettingsModel, field: Field) -> Optio
     picked
 }
 
+/// A combo box of the themes; returns the one picked when it is not the edited theme.
+fn theme_selector(ui: &mut Ui, model: &SettingsModel) -> Option<String> {
+    let edited = model.edited_theme();
+    let mut picked = None;
+    ComboBox::from_id_salt("theme_editor_theme")
+        .width(FIELD_WIDTH)
+        .selected_text(edited)
+        .show_ui(ui, |ui| {
+            for name in model.theme_choices() {
+                if ui.selectable_label(name == edited, name).clicked() && name != edited {
+                    picked = Some(name.clone());
+                }
+            }
+        });
+    picked
+}
+
 /// Seconds without typing after which the next character starts a new search.
 const SEARCH_TIMEOUT: f64 = 1.0;
 
@@ -834,6 +1157,218 @@ mod tests {
         assert!(search.type_text("h", 1.0 + SEARCH_TIMEOUT + 0.1, &labels));
         assert_eq!(search.text, "h");
         assert_eq!(search.found, Some(1));
+    }
+
+    const RED: Rgb = Rgb { r: 255, g: 0, b: 0 };
+    const GREEN: Rgb = Rgb { r: 0, g: 255, b: 0 };
+    const BLUE: Rgb = Rgb { r: 0, g: 0, b: 255 };
+
+    #[test]
+    fn a_color_is_written_once_when_its_picker_closes() {
+        let mut view = View::default();
+        let key = ColorKey::NormalRed;
+        // Dragged while open: nothing written, the picker's color is shown.
+        assert_eq!(view.picker_frame(key, Some(RED), RED, true), None);
+        assert_eq!(view.picker_frame(key, Some(RED), GREEN, true), None);
+        assert_eq!(view.picker_frame(key, Some(RED), BLUE, true), None);
+        assert_eq!(view.shown_color(key, Some(RED)), Some(BLUE));
+        // Closed (a click outside or Escape): written once.
+        assert_eq!(
+            view.picker_frame(key, Some(RED), BLUE, false),
+            Some(ThemeOp::SetColor(key, Some(BLUE)))
+        );
+        assert_eq!(view.picker_frame(key, Some(RED), BLUE, false), None);
+        assert_eq!(view.shown_color(key, Some(RED)), Some(RED));
+    }
+
+    #[test]
+    fn a_picker_closed_on_the_saved_color_writes_nothing() {
+        let mut view = View::default();
+        let key = ColorKey::Background;
+        view.picker_frame(key, Some(RED), GREEN, true);
+        view.picker_frame(key, Some(RED), RED, true);
+        assert_eq!(view.picker_frame(key, Some(RED), RED, false), None);
+    }
+
+    #[test]
+    fn opening_another_picker_writes_the_first_one() {
+        let mut view = View::default();
+        view.picker_frame(ColorKey::Cursor, Some(RED), GREEN, true);
+        assert_eq!(
+            view.picker_frame(ColorKey::PaneBorder, Some(BLUE), BLUE, true),
+            Some(ThemeOp::SetColor(ColorKey::Cursor, Some(GREEN)))
+        );
+        // A row whose picker is closed leaves the open one alone.
+        assert_eq!(
+            view.picker_frame(ColorKey::Cursor, Some(RED), RED, false),
+            None
+        );
+        assert_eq!(
+            view.shown_color(ColorKey::PaneBorder, Some(BLUE)),
+            Some(BLUE)
+        );
+    }
+
+    #[test]
+    fn closing_the_window_writes_the_open_picker() {
+        let mut view = View::default();
+        view.picker_frame(ColorKey::BannerText, Some(RED), GREEN, true);
+        assert_eq!(
+            view.finish_picking(),
+            Some(ThemeOp::SetColor(ColorKey::BannerText, Some(GREEN)))
+        );
+        assert_eq!(view.finish_picking(), None);
+    }
+
+    fn theme_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("graphene-view-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("themes")).unwrap();
+        std::fs::write(
+            dir.join("themes/mine.toml"),
+            "[colors]\nforeground = \"#ffffff\"\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn model_in(dir: &std::path::Path, text: &str) -> SettingsModel {
+        let file = dir.join("config.toml");
+        let (config, errors) = Config::parse(text, &Config::default(), &file);
+        SettingsModel::new(
+            &config,
+            &LoadErrors {
+                config: errors,
+                theme: Vec::new(),
+            },
+            Some(dir.to_owned()),
+            Appearance::Dark,
+        )
+    }
+
+    fn theme_name(name: &str) -> Change {
+        Change::Set(
+            vec!["theme".into(), "name".into()],
+            Value::Text(name.into()),
+        )
+    }
+
+    #[test]
+    fn a_built_in_theme_can_only_be_duplicated() {
+        let model = model("");
+        assert!(model.edited_is_built_in());
+        let mut view = View::default();
+        view.start_naming(&model, NameAction::Rename);
+        assert_eq!(view.naming, None);
+        view.request_delete(&model);
+        assert!(!view.confirm_delete);
+        // Even forced, no deletion comes out.
+        view.confirm_delete = true;
+        let mut edits = Edits::default();
+        view.confirm_delete(&model, &mut edits);
+        assert_eq!(edits, Edits::default());
+        view.start_naming(&model, NameAction::Duplicate);
+        assert_eq!(
+            view.naming,
+            Some(Naming {
+                action: NameAction::Duplicate,
+                text: format!("{}-copy", model.edited_theme()),
+                error: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_refused_name_stays_shown_with_its_error() {
+        let model = model("");
+        let mut view = View::default();
+        view.start_naming(&model, NameAction::Duplicate);
+        let mut edits = Edits::default();
+        view.naming.as_mut().unwrap().text = model.edited_theme().to_owned();
+        view.confirm_name(&model, &mut edits);
+        assert_eq!(edits, Edits::default());
+        assert_eq!(view.naming.as_ref().unwrap().error, Some(NameError::Taken));
+        view.naming.as_mut().unwrap().text = "  new-theme ".into();
+        view.confirm_name(&model, &mut edits);
+        assert_eq!(view.naming, None);
+        assert_eq!(
+            edits.theme_ops,
+            vec![(
+                vec![theme_name("new-theme")],
+                ThemeOp::Duplicate("new-theme".into())
+            )]
+        );
+    }
+
+    #[test]
+    fn a_user_theme_can_be_renamed_and_deleted_after_confirmation() {
+        let dir = theme_dir("user");
+        let model = model_in(&dir, "[theme]\nname = \"mine\"\n");
+        assert!(!model.edited_is_built_in());
+        let mut view = View::default();
+        view.start_naming(&model, NameAction::Rename);
+        assert_eq!(view.naming.as_ref().unwrap().text, "mine");
+        view.naming.as_mut().unwrap().text = "ours".into();
+        let mut edits = Edits::default();
+        view.confirm_name(&model, &mut edits);
+        assert_eq!(
+            edits.theme_ops,
+            vec![(vec![theme_name("ours")], ThemeOp::Rename("ours".into()))]
+        );
+
+        let mut edits = Edits::default();
+        view.request_delete(&model);
+        assert!(view.confirm_delete);
+        // Escape dismisses the confirmation.
+        assert!(view.escape());
+        view.confirm_delete(&model, &mut edits);
+        assert_eq!(edits, Edits::default());
+        view.request_delete(&model);
+        view.confirm_delete(&model, &mut edits);
+        assert_eq!(
+            edits.theme_ops,
+            vec![(vec![theme_name("graphene-night")], ThemeOp::Delete)]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn switching_the_edited_theme_writes_the_open_picker_first() {
+        let model = model("");
+        let mut view = View::default();
+        view.picker_frame(ColorKey::Cursor, Some(RED), GREEN, true);
+        view.start_naming(&model, NameAction::Duplicate);
+        let mut edits = Edits::default();
+        view.switch_theme(&model, "gruvbox-dark".into(), &mut edits);
+        assert_eq!(
+            edits.theme_ops,
+            vec![(vec![], ThemeOp::SetColor(ColorKey::Cursor, Some(GREEN)))]
+        );
+        assert_eq!(edits.edit_theme.as_deref(), Some("gruvbox-dark"));
+        assert_eq!(view.naming, None);
+        assert_eq!(view.picking, None);
+    }
+
+    #[test]
+    fn the_theme_section_draws_the_editor_without_writing() {
+        let dir = theme_dir("draw");
+        for text in ["", "[theme]\nname = \"mine\"\n"] {
+            let model = model_in(&dir, text);
+            let mut view = View {
+                section: SettingsSection::Theme,
+                ..View::default()
+            };
+            let ctx = egui::Context::default();
+            for _ in 0..2 {
+                let mut edits = None;
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    edits = Some(view.show(ui, Lang::Fr, &model));
+                });
+                output.textures_delta.clear();
+                assert_eq!(edits, Some(Edits::default()));
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -94,7 +94,6 @@ pub enum Change {
 
 /// A change to a theme file, made on the theme being edited
 /// ([`SettingsModel::edited_theme`]).
-#[allow(dead_code)] // Built by the theme editor view, issue #163.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ThemeOp {
     /// Sets one color; `None` empties it (only `selection_foreground`).
@@ -376,32 +375,28 @@ impl SettingsModel {
     }
 
     /// The theme the configuration loads under the current appearance.
-    #[allow(dead_code)] // Used by the theme editor view and live preview, issues #163, #164.
+    #[allow(dead_code)] // Used by the live preview, issue #164.
     pub fn active_theme(&self) -> &str {
         self.config.theme.active(self.appearance)
     }
 
     /// The theme shown in the theme editor.
-    #[allow(dead_code)] // Used by the theme editor view, issue #163.
     pub fn edited_theme(&self) -> &str {
         &self.edited_theme
     }
 
     /// The colors of the edited theme.
-    #[allow(dead_code)] // Used by the theme editor view, issue #163.
     pub fn edited_palette(&self) -> &Palette {
         &self.edited_palette
     }
 
     /// Whether the edited theme is built in (no user file): it cannot be changed, only
     /// duplicated.
-    #[allow(dead_code)] // Used by the theme editor view, issue #163.
     pub fn edited_is_built_in(&self) -> bool {
         self.edited_is_built_in
     }
 
     /// Shows `name` in the theme editor, independently of the active theme.
-    #[allow(dead_code)] // Used by the theme editor view, issue #163.
     pub fn edit_theme(&mut self, name: &str) {
         name.clone_into(&mut self.edited_theme);
         self.reload_edited_theme();
@@ -428,7 +423,6 @@ impl SettingsModel {
     /// - deleting sets those keys back to `graphene-night`.
     ///
     /// The new name of a copy or a rename must be free ([`theme::valid_name`]).
-    #[allow(dead_code)] // Used by the theme editor view, issue #163.
     pub fn theme_op(&self, op: ThemeOp) -> Result<(Vec<Change>, ThemeOp), NameError> {
         let changes = match &op {
             ThemeOp::SetColor(..) => Vec::new(),
@@ -464,6 +458,11 @@ impl SettingsModel {
     /// Records a failed write.
     pub fn write_failed(&mut self, error: &ConfigError) {
         self.write_error = Some(error.to_string());
+    }
+
+    /// The user and built-in themes.
+    pub fn theme_choices(&self) -> &[String] {
+        &self.theme_choices
     }
 
     pub fn set_theme_choices(&mut self, choices: Vec<String>) {

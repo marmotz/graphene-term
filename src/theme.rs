@@ -240,6 +240,40 @@ impl ColorKey {
             *slot = color;
         }
     }
+
+    /// The group this key is shown in by the theme editor.
+    pub fn group(self) -> ColorGroup {
+        match self.path() {
+            ["colors", "normal", _] => ColorGroup::Normal,
+            ["colors", "bright", _] => ColorGroup::Bright,
+            ["colors", ..] => ColorGroup::Terminal,
+            _ => ColorGroup::Interface,
+        }
+    }
+}
+
+/// A group of color keys in the theme editor, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorGroup {
+    /// Text, background, cursor and selection.
+    Terminal,
+    /// The 8 normal ANSI colors.
+    Normal,
+    /// The 8 bright ANSI colors.
+    Bright,
+    /// Tabs, panes, command palette and banners.
+    Interface,
+}
+
+impl ColorGroup {
+    pub const ALL: [ColorGroup; 4] = [Self::Terminal, Self::Normal, Self::Bright, Self::Interface];
+
+    /// The keys of this group, in [`ColorKey::ALL`] order.
+    pub fn keys(self) -> impl Iterator<Item = ColorKey> {
+        ColorKey::ALL
+            .into_iter()
+            .filter(move |key| key.group() == self)
+    }
 }
 
 /// Why a name cannot be used for a new theme.
@@ -1033,6 +1067,22 @@ banner = "#000000"
             );
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn color_groups_split_every_key_once_in_file_order() {
+        let grouped: Vec<ColorKey> = ColorGroup::ALL
+            .into_iter()
+            .flat_map(ColorGroup::keys)
+            .collect();
+        assert_eq!(grouped, ColorKey::ALL);
+        let count = |group: ColorGroup| group.keys().count();
+        assert_eq!(count(ColorGroup::Terminal), 6);
+        assert_eq!(count(ColorGroup::Normal), 8);
+        assert_eq!(count(ColorGroup::Bright), 8);
+        assert_eq!(count(ColorGroup::Interface), 12);
+        assert_eq!(ColorKey::BrightRed.group(), ColorGroup::Bright);
+        assert_eq!(ColorKey::SelectionForeground.group(), ColorGroup::Terminal);
     }
 
     #[test]

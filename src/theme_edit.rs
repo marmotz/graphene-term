@@ -6,8 +6,6 @@
 //! These functions only touch theme files; the matching `config.toml` changes (a renamed
 //! or deleted theme that was selected) are computed by the settings model.
 
-#![allow(dead_code)] // Called by the theme editor view, issue #163.
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
