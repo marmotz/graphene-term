@@ -30,7 +30,9 @@ pub fn set_color(
 }
 
 /// Copies the theme `from` (user file, else built-in source) to a new user theme `to`.
-/// The copy keeps the source text, comments and licence header included, and gets every
+/// The copy keeps the source text and its comments, except the description header of a
+/// built-in theme ("Graphene night: the default dark theme."), which no longer describes
+/// it; a licence header is kept. The copy also gets every
 /// color key the source leaves out (or holds an invalid value for) set to its effective
 /// value, so it is complete. An existing `to` file is never overwritten.
 pub fn duplicate(config_dir: &Path, from: &str, to: &str) -> Result<(), ConfigError> {
@@ -96,8 +98,32 @@ fn source_text(config_dir: &Path, name: &str) -> Result<(String, PathBuf), Confi
         }
     }
     theme::built_in(name)
-        .map(|text| (text.to_owned(), PathBuf::from(format!("{name}.toml"))))
+        .map(|text| {
+            (
+                without_description(text).to_owned(),
+                PathBuf::from(format!("{name}.toml")),
+            )
+        })
         .ok_or_else(|| ConfigError::read(file, format!("unknown theme `{name}`")))
+}
+
+/// `text` without its leading comment block, unless that block holds a licence, which
+/// must stay with the colors it covers.
+fn without_description(text: &str) -> &str {
+    let header_len: usize = text
+        .split_inclusive('\n')
+        .take_while(|line| {
+            let line = line.trim();
+            line.is_empty() || line.starts_with('#')
+        })
+        .map(str::len)
+        .sum();
+    let (header, rest) = text.split_at(header_len);
+    if header.contains("Copyright") {
+        text
+    } else {
+        rest
+    }
 }
 
 /// Whether the document sets `key` to a value the theme parser accepts.
@@ -273,6 +299,32 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(copy, theme::load("solarized-dark", None).0);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn duplicate_of_a_graphene_built_in_drops_its_description() {
+        let dir = temp_dir("duplicate-graphene");
+
+        duplicate(&dir, "graphene-night", "my-night").unwrap();
+
+        let text = fs::read_to_string(theme::user_file(&dir, "my-night").unwrap()).unwrap();
+        assert!(text.starts_with("[colors]\n"), "{text}");
+        assert!(!text.contains("built-in theme"), "{text}");
+        let (copy, errors) = theme::load("my-night", Some(&dir));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(copy, theme::load("graphene-night", None).0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn only_a_leading_comment_block_without_licence_is_dropped() {
+        assert_eq!(
+            without_description("# About\n#\n\n[colors]\n# kept\nforeground = \"#000000\"\n"),
+            "[colors]\n# kept\nforeground = \"#000000\"\n"
+        );
+        let licensed = "# Theme\n# Copyright (c) 2011 Someone\n\n[colors]\n";
+        assert_eq!(without_description(licensed), licensed);
+        assert_eq!(without_description("[colors]\n"), "[colors]\n");
     }
 
     #[test]

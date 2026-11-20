@@ -97,7 +97,9 @@ file instead of starting from the default config text.
 - `duplicate(dir, from, to)`: start from the source text (the user file, or the built-in
   source), then `set` every `ColorKey` absent from the document to its effective value
   in `theme::load(from)`. Result: a complete file that keeps the source comments,
-  including the licence header of third-party built-ins. Written with
+  including the licence header of third-party built-ins. The description header of a
+  Graphene built-in ("Graphene night: the default dark theme.") is dropped, since it
+  no longer describes the copy. Written with
   `create_new`-style semantics so an existing file is never overwritten.
 - `rename(dir, from, to)`: `fs::rename` of the file (refused if `to` exists).
 - `delete(dir, name)`: `fs::remove_file`.
