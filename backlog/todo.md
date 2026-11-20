@@ -4,11 +4,11 @@
 
 ## Custom themes  ·  [overview](features/custom-themes/overview.md)
 
-_tâches créées — voir [technical.md](features/custom-themes/technical.md)_ — 0/6 tasks done
+_tâches créées — voir [technical.md](features/custom-themes/technical.md)_ — 1/6 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#160](https://github.com/marmotz/graphene-term/issues/160) | [Thèmes] Table des clés de couleur ColorKey et validation des noms | — |
+| [x]  | [#160](https://github.com/marmotz/graphene-term/issues/160) | [Thèmes] Table des clés de couleur ColorKey et validation des noms | — |
 | [ ]  | [#161](https://github.com/marmotz/graphene-term/issues/161) | [Thèmes] Opérations sur les fichiers de thème (theme_edit) | #160 |
 | [ ]  | [#162](https://github.com/marmotz/graphene-term/issues/162) | [Paramètres] Modèle de l'éditeur de thème | #160 |
 | [ ]  | [#163](https://github.com/marmotz/graphene-term/issues/163) | [Paramètres] Vue de l'éditeur de thème | #161, #162 |
