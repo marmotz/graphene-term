@@ -10,7 +10,8 @@ use std::mem;
 use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
+
+use super::pipeline::{InstanceBuffer, ScreenUniform, instanced_pipeline, uniform_entry};
 
 use super::atlas::Page;
 use super::glyphs::{Glyphs, Upload};
@@ -30,13 +31,6 @@ pub struct CellInstance {
     pub color: [f32; 4],
     /// 1 for a color glyph (color page), 0 for a mask.
     pub is_color: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Uniforms {
-    screen: [f32; 2],
-    _padding: [f32; 2],
 }
 
 /// How many times a frame is resolved again when the atlas was reset while resolving it
@@ -88,12 +82,11 @@ pub fn resolve_groups(
 
 pub struct CellRenderer {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
+    uniform_buffer: ScreenUniform,
     bind_group: wgpu::BindGroup,
     mask_atlas: wgpu::Texture,
     color_atlas: wgpu::Texture,
-    instance_buffer: wgpu::Buffer,
-    capacity: usize,
+    instance_buffer: InstanceBuffer<CellInstance>,
     /// Quads of the current frame, reused between frames.
     instances: Vec<CellInstance>,
     /// Quads of each group passed to [`Self::prepare`].
@@ -145,14 +138,7 @@ impl CellRenderer {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("cell.wgsl"))),
         });
 
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cell uniforms"),
-            contents: bytemuck::bytes_of(&Uniforms {
-                screen: [1.0, 1.0],
-                _padding: [0.0; 2],
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let uniform_buffer = ScreenUniform::new(device, "cell uniforms");
 
         let mask_atlas = create_atlas_texture(
             device,
@@ -172,20 +158,7 @@ impl CellRenderer {
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cell bind group layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                texture_entry(1),
-                texture_entry(2),
-            ],
+            entries: &[uniform_entry(0), texture_entry(1), texture_entry(2)],
         });
 
         let mask_view = mask_atlas.create_view(&wgpu::TextureViewDescriptor::default());
@@ -196,7 +169,7 @@ impl CellRenderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
+                    resource: uniform_buffer.binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -227,34 +200,14 @@ impl CellRenderer {
             ],
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cell pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(instance_layout)],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::default(),
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            cache: None,
-            multiview_mask: None,
-        });
+        let pipeline = instanced_pipeline(
+            device,
+            "cell pipeline",
+            &pipeline_layout,
+            &shader,
+            format,
+            instance_layout,
+        );
 
         Self {
             pipeline,
@@ -262,20 +215,10 @@ impl CellRenderer {
             bind_group,
             mask_atlas,
             color_atlas,
-            instance_buffer: Self::create_instance_buffer(device, INITIAL_CAPACITY),
-            capacity: INITIAL_CAPACITY,
+            instance_buffer: InstanceBuffer::new(device, "cell instances", INITIAL_CAPACITY),
             instances: Vec::new(),
             groups: Vec::new(),
         }
-    }
-
-    fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cell instances"),
-            size: (capacity * mem::size_of::<CellInstance>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
     }
 
     /// Resolves the glyph groups of the frame, uploads the newly rasterized glyphs to
@@ -289,31 +232,14 @@ impl CellRenderer {
         glyphs: &mut Glyphs,
         groups: &[&[GlyphInstance]],
     ) {
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&Uniforms {
-                screen: [screen.0 as f32, screen.1 as f32],
-                _padding: [0.0; 2],
-            }),
-        );
+        self.uniform_buffer.write(queue, screen);
 
         self.groups = resolve_groups(glyphs, groups, &mut self.instances);
         for upload in glyphs.take_uploads() {
             self.upload(queue, &upload);
         }
 
-        if self.instances.len() > self.capacity {
-            self.capacity = self.instances.len().next_power_of_two();
-            self.instance_buffer = Self::create_instance_buffer(device, self.capacity);
-        }
-        if !self.instances.is_empty() {
-            queue.write_buffer(
-                &self.instance_buffer,
-                0,
-                bytemuck::cast_slice(&self.instances),
-            );
-        }
+        self.instance_buffer.write(device, queue, &self.instances);
     }
 
     fn upload(&self, queue: &wgpu::Queue, upload: &Upload) {
@@ -353,7 +279,7 @@ impl CellRenderer {
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+        pass.set_vertex_buffer(0, self.instance_buffer.slice());
         pass.draw(0..4, range);
     }
 

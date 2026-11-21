@@ -1,0 +1,208 @@
+//! Values of the configuration options that are not plain numbers or strings.
+
+use super::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    /// Follows `LANG`.
+    #[default]
+    Auto,
+    En,
+    Fr,
+}
+
+impl Language {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, Language); 3] = [
+        ("auto", Language::Auto),
+        ("en", Language::En),
+        ("fr", Language::Fr),
+    ];
+}
+
+impl Language {
+    /// Language of the interface: the forced one, or `detected` (the locale's) for
+    /// `auto`.
+    pub fn resolve(self, detected: impl FnOnce() -> Lang) -> Lang {
+        match self {
+            Language::Auto => detected(),
+            Language::En => Lang::En,
+            Language::Fr => Lang::Fr,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Beam,
+    Underline,
+}
+
+impl CursorShape {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, CursorShape); 3] = [
+        ("block", CursorShape::Block),
+        ("beam", CursorShape::Beam),
+        ("underline", CursorShape::Underline),
+    ];
+}
+
+impl From<CursorShape> for TermCursorShape {
+    fn from(shape: CursorShape) -> Self {
+        match shape {
+            CursorShape::Block => Self::Block,
+            CursorShape::Beam => Self::Beam,
+            CursorShape::Underline => Self::Underline,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabPosition {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl TabPosition {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, TabPosition); 4] = [
+        ("top", TabPosition::Top),
+        ("bottom", TabPosition::Bottom),
+        ("left", TabPosition::Left),
+        ("right", TabPosition::Right),
+    ];
+}
+
+/// `window.startup_mode`: size and state of a new window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StartupMode {
+    /// The configured `width` and `height`.
+    #[default]
+    Default,
+    /// Maximized; the configured size is used when the user unmaximizes it.
+    Maximized,
+    /// The size and maximized state of the last window closed.
+    Remember,
+}
+
+impl StartupMode {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, StartupMode); 3] = [
+        ("default", StartupMode::Default),
+        ("maximized", StartupMode::Maximized),
+        ("remember", StartupMode::Remember),
+    ];
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontConfig {
+    /// `None` uses the system monospace font.
+    pub family: Option<String>,
+    pub size: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowConfig {
+    pub startup_mode: StartupMode,
+    /// Initial size, in logical pixels, when `startup_mode` is `Default`, or `Remember`
+    /// with nothing remembered yet.
+    pub width: u32,
+    pub height: u32,
+    /// Minimum padding around the grid, in logical pixels.
+    pub padding: f32,
+    /// Opacity of the default background, from 0.0 (transparent) to 1.0 (opaque).
+    pub background_opacity: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CursorConfig {
+    pub shape: CursorShape,
+    pub blinking: bool,
+}
+
+/// `updates.interval`: time between two update checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UpdateInterval {
+    /// 6 hours for a dev build, 24 hours for a stable one.
+    #[default]
+    Auto,
+    Hours6,
+    Hours12,
+    Hours24,
+    Days2,
+    Days3,
+    Week1,
+}
+
+impl UpdateInterval {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, UpdateInterval); 7] = [
+        ("auto", UpdateInterval::Auto),
+        ("6h", UpdateInterval::Hours6),
+        ("12h", UpdateInterval::Hours12),
+        ("24h", UpdateInterval::Hours24),
+        ("2d", UpdateInterval::Days2),
+        ("3d", UpdateInterval::Days3),
+        ("1w", UpdateInterval::Week1),
+    ];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::VALUES
+            .iter()
+            .find(|(name, _)| *name == value)
+            .map(|&(_, interval)| interval)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdatesConfig {
+    /// `false`: no network call at all.
+    pub check: bool,
+    pub interval: UpdateInterval,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThemeConfig {
+    pub name: String,
+    pub light: Option<String>,
+    pub dark: Option<String>,
+}
+
+impl ThemeConfig {
+    /// Whether the theme follows the system appearance: both `light` and `dark` are set.
+    pub fn follows_appearance(&self) -> bool {
+        self.light.is_some() && self.dark.is_some()
+    }
+
+    /// The theme to load: `light` or `dark` by `appearance` when both are set,
+    /// otherwise `name`.
+    pub fn active(&self, appearance: Appearance) -> &str {
+        match (&self.light, &self.dark, appearance) {
+            (Some(light), Some(_), Appearance::Light) => light,
+            (Some(_), Some(dark), Appearance::Dark) => dark,
+            _ => &self.name,
+        }
+    }
+
+    /// Key of the theme loaded for `appearance`: `theme.light` or `theme.dark` when
+    /// following the system appearance, otherwise `theme.name`.
+    pub fn active_key(&self, appearance: Appearance) -> &'static [&'static str] {
+        if self.follows_appearance() {
+            match appearance {
+                Appearance::Light => &["theme", "light"],
+                Appearance::Dark => &["theme", "dark"],
+            }
+        } else {
+            &["theme", "name"]
+        }
+    }
+}

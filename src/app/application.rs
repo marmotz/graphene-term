@@ -1,0 +1,865 @@
+//! The application: its windows, their creation from the configuration, and the routing of the event loop to them.
+
+use super::*;
+
+/// Window size asked on the command line, in cells of the first pane's grid. A
+/// dimension left unset keeps the size from the configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GridSize {
+    pub columns: Option<u16>,
+    pub lines: Option<u16>,
+}
+
+impl GridSize {
+    pub(super) fn is_set(self) -> bool {
+        self.columns.is_some() || self.lines.is_some()
+    }
+}
+
+/// Inner size of a window whose single pane shows `grid`, in physical pixels, for
+/// cells of `cell` and `padding` around them, `chrome_height` being the height above
+/// the grid (banner and pane bar). A dimension `grid` leaves unset keeps `current`.
+pub(super) fn window_size_for_grid(
+    grid: GridSize,
+    current: PhysicalSize<u32>,
+    cell: CellSize,
+    padding: f32,
+    chrome_height: f32,
+) -> PhysicalSize<u32> {
+    let (width, height) = GridLayout::rect_size(
+        grid.columns.unwrap_or(1).into(),
+        grid.lines.unwrap_or(1).into(),
+        cell,
+        padding,
+    );
+    PhysicalSize::new(
+        if grid.columns.is_some() {
+            width
+        } else {
+            current.width
+        },
+        if grid.lines.is_some() {
+            height + chrome_height.ceil() as u32
+        } else {
+            current.height
+        },
+    )
+}
+
+/// The earlier of two optional deadlines.
+/// Size and maximized state of a new window, from `window.startup_mode`. `remembered`
+/// is the last window closed, only read in `remember` mode.
+pub(super) fn initial_window(
+    config: &WindowConfig,
+    remembered: Option<WindowState>,
+) -> (LogicalSize<u32>, bool) {
+    let configured = LogicalSize::new(config.width, config.height);
+    match (config.startup_mode, remembered) {
+        (StartupMode::Default, _) | (StartupMode::Remember, None) => (configured, false),
+        (StartupMode::Maximized, _) => (configured, true),
+        (StartupMode::Remember, Some(state)) => {
+            (LogicalSize::new(state.width, state.height), state.maximized)
+        }
+    }
+}
+
+/// Font size of a session after a reload from `old` to `new`, `current` being the size
+/// shown (zoom included): the configured size when it changed, dropping the zoom in
+/// progress, else `current`.
+pub(super) fn reloaded_font_size(old: &FontConfig, new: &FontConfig, current: f32) -> f32 {
+    if new.size == old.size {
+        current
+    } else {
+        new.size
+    }
+}
+
+pub(super) fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+pub struct App {
+    pub(super) proxy: EventLoopProxy<UserEvent>,
+    pub(super) config: Config,
+    /// Palette of the configured theme.
+    pub(super) palette: Palette,
+    pub(super) session: Option<Session>,
+    /// GPU context created with the terminal window, on which other windows create
+    /// their surface.
+    pub(super) gpu: Option<Arc<Gpu>>,
+    /// The settings window, while open.
+    pub(super) settings: Option<SettingsWindow>,
+    pub(super) update_checker: Checker,
+    pub(super) error: Option<anyhow::Error>,
+    /// Banner reporting the errors of the configuration and theme files.
+    pub(super) config_banner: Option<Banner>,
+    /// Errors of the last load of the configuration and theme files, shown by the
+    /// settings window.
+    pub(super) load_errors: LoadErrors,
+    /// System appearance, which picks the `light` or `dark` theme.
+    pub(super) appearance: Appearance,
+    /// Whether the appearance thread runs: started once a configuration needs it.
+    pub(super) appearance_watched: bool,
+    /// Program given by `-e`, run by the first pane instead of the shell; taken when
+    /// that pane spawns.
+    pub(super) first_program: Option<Vec<String>>,
+    /// Size of the first window asked by `--columns` and `--lines`.
+    pub(super) grid: GridSize,
+}
+
+/// Whether the window is created transparent for a background `opacity`. Elsewhere
+/// always: winit only honours it at creation on X11, and the opacity can change by hot
+/// reload. On macOS only below 1.0, and updated on reload: a transparent window also
+/// clears the background of the title bar.
+pub(super) fn window_transparent(opacity: f32, macos: bool) -> bool {
+    !macos || opacity < 1.0
+}
+
+/// Creates the GPU context of `window` while `work` runs, which overlaps the slowest
+/// startup step with the others. On macOS in sequence: AppKit views, which the surface
+/// is created on, belong to the main thread.
+fn gpu_alongside<T>(
+    window: Arc<Window>,
+    display: winit::event_loop::OwnedDisplayHandle,
+    work: impl FnOnce() -> T,
+) -> (anyhow::Result<(Arc<Gpu>, wgpu::Surface<'static>)>, T) {
+    if cfg!(target_os = "macos") {
+        let value = work();
+        return (pollster::block_on(Gpu::new(window, display)), value);
+    }
+    std::thread::scope(|scope| {
+        let gpu = scope.spawn(|| pollster::block_on(Gpu::new(window, display)));
+        let value = work();
+        let gpu = gpu
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("GPU setup panicked")));
+        (gpu, value)
+    })
+}
+
+impl App {
+    pub(super) fn create_session(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+    ) -> anyhow::Result<Session> {
+        let remembered = match self.config.window.startup_mode {
+            StartupMode::Remember => window_state::path().and_then(|file| WindowState::load(&file)),
+            StartupMode::Default | StartupMode::Maximized => None,
+        };
+        let (initial_size, maximized) = initial_window(&self.config.window, remembered);
+        let maximized = maximized && !self.grid.is_set();
+        let attributes = Window::default_attributes()
+            .with_title(DEFAULT_TITLE)
+            .with_inner_size(initial_size)
+            .with_maximized(maximized)
+            // Shown once the renderer is ready: until then, it would stay
+            // empty, at its configured size before the window manager maximizes it.
+            .with_visible(false)
+            .with_transparent(window_transparent(
+                self.config.window.background_opacity,
+                cfg!(target_os = "macos"),
+            ));
+        let window = Arc::new(event_loop.create_window(attributes)?);
+        #[cfg(target_os = "linux")]
+        if maximized && let Err(error) = crate::x11_window::preset_maximized(&window) {
+            log::warn!("cannot open the window maximized: {error:#}");
+        }
+        perf::mark("window created");
+
+        // The GPU context is created while the glyphs load and the shell starts: the
+        // PTY reader thread then parses the shell output while the renderer is being
+        // created, so the first frame shows it complete.
+        let display = event_loop.owned_display_handle();
+        let (gpu, first_pane) = gpu_alongside(window.clone(), display.clone(), || {
+            self.spawn_first_pane(&window)
+        });
+        let (glyphs, workspace) = first_pane?;
+        let (gpu, surface) = gpu?;
+        let scale = window.scale_factor() as f32;
+        let renderer = Renderer::new(
+            gpu,
+            surface,
+            window.clone(),
+            display,
+            glyphs,
+            self.config.window.background_opacity,
+        )?;
+
+        window.set_visible(true);
+        perf::mark("window shown");
+        let maximize_hold = maximized.then(|| {
+            redraw::MaximizeHold::new(initial_size.to_physical(scale.into()), Instant::now())
+        });
+
+        let clipboard = arboard::Clipboard::new()
+            .map_err(|e| log::warn!("clipboard unavailable: {e}"))
+            .ok();
+
+        Ok(Session {
+            window,
+            proxy: self.proxy.clone(),
+            term_config: self.config.term_config(),
+            renderer,
+            workspace,
+            drag: None,
+            overlay: None,
+            palette: self.palette.clone(),
+            menu_theme: None,
+            theme: self.config.theme.clone(),
+            appearance: self.appearance,
+            clipboard,
+            focused: true,
+            cursor_blink: CursorBlink::new(Instant::now()),
+            modifiers: ModifiersState::empty(),
+            font_size: self.config.font.size,
+            padding: self.config.window.padding,
+            mouse_position: PhysicalPosition::default(),
+            hovered_cell: None,
+            hovered_link: None,
+            link_press: None,
+            pane_bar_clicks: ClickTracker::default(),
+            tooltip_hidden: false,
+            pointer: None,
+            hovered_button: None,
+            window_title: DEFAULT_TITLE.to_owned(),
+            config_banner: self.config_banner.clone(),
+            update: UpdateBanner::default(),
+            ignored_tag: None,
+            lang: self.config.language.resolve(Lang::detect),
+            tab_position: self.config.tab_position.into(),
+            keybindings: Keybindings::new(&self.config.keybindings),
+            first_frame: perf::FirstFrame::default(),
+            redraw_stats: perf::RedrawStats::default(),
+            redraw_at: None,
+            maximize_hold,
+            frames: FrameCache::default(),
+            restore_size: initial_size,
+            settings_requested: false,
+            sized_by_grid: self.grid.is_set(),
+        })
+    }
+
+    /// Loads the glyphs of the first window and spawns the shell of its first pane, in
+    /// a workspace holding that pane.
+    fn spawn_first_pane(&mut self, window: &Window) -> anyhow::Result<(Glyphs, Workspace<Pane>)> {
+        let scale = window.scale_factor() as f32;
+        let mut glyphs = Glyphs::new(
+            self.config.font.family.clone(),
+            self.config.font.size * scale,
+        );
+        glyphs.set_ui_scale(scale);
+        perf::mark("glyphs ready");
+
+        let mut size = window.inner_size();
+        // A single tab: no tab bar. A configuration error banner is already shown; the
+        // update banner only comes later, from the check thread.
+        let banner_height = match self.config_banner {
+            Some(_) => BannerLayout::height(glyphs.cell_size()),
+            None => 0.0,
+        };
+        let ui = UiMetrics {
+            line_height: glyphs.ui_line_height(UiFont::Chrome),
+            scale,
+        };
+        if self.grid.is_set() {
+            let target = window_size_for_grid(
+                self.grid,
+                size,
+                glyphs.cell_size(),
+                self.config.window.padding * scale,
+                banner_height + pane_bar::height(ui),
+            );
+            // Applied later, with a `Resized` event, when the platform cannot resize at
+            // once.
+            size = window.request_inner_size(target).unwrap_or(target);
+        }
+        let (_, content) = pane_bar::split(
+            banner::below_banner(Rect::from_size(size.width, size.height), banner_height),
+            ui,
+        );
+        let layout = GridLayout::new(
+            content,
+            glyphs.cell_size(),
+            self.config.window.padding * scale,
+        );
+        let mut workspace = Workspace::new();
+        let id = workspace.allocate_id();
+        let terminal = Terminal::spawn(
+            EventProxy::new(self.proxy.clone(), id),
+            layout.window_size(),
+            self.config.term_config(),
+            None,
+            self.first_program.take(),
+        )?;
+        workspace.new_tab(id, Pane::new(id, terminal, layout));
+        perf::mark("shell spawned");
+
+        Ok((glyphs, workspace))
+    }
+
+    /// Reads the configuration and its theme again after a change on disk, and applies
+    /// them to the open window.
+    pub(super) fn reload_config(&mut self) {
+        let (config, errors) = config::reload(&self.config);
+        let (config, palette, banner, load_errors) = with_theme(config, errors, self.appearance);
+        let old = std::mem::replace(&mut self.config, config);
+        self.watch_appearance();
+        self.palette = palette;
+        self.config_banner = banner.clone();
+        self.load_errors = load_errors;
+        if let Some(settings) = self.settings.as_mut() {
+            settings.apply(
+                &self.palette,
+                self.config.language.resolve(Lang::detect),
+                &self.config,
+                &self.load_errors,
+                self.appearance,
+            );
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.apply_config(&old, &self.config, &self.palette, banner);
+            if old.updates != self.config.updates {
+                self.update_checker.apply(&self.config.updates);
+            }
+        }
+    }
+
+    /// Starts the appearance thread when the configuration sets `light` and `dark` and it
+    /// does not run yet. The returned receiver gets the first appearance read, so the
+    /// first window can open with the right theme.
+    pub(super) fn watch_appearance(&mut self) -> Option<mpsc::Receiver<Appearance>> {
+        if self.appearance_watched || !self.config.theme.follows_appearance() {
+            return None;
+        }
+        self.appearance_watched = true;
+        let proxy = self.proxy.clone();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        appearance::spawn(move |appearance| {
+            // Only the first value is waited for; a full or closed channel is fine.
+            let _ = sender.try_send(appearance);
+            // The event loop may already be closed during shutdown.
+            let _ = proxy.send_event(UserEvent::Appearance(appearance));
+        });
+        Some(receiver)
+    }
+
+    /// A new system appearance: the theme is loaded again when it depends on it.
+    pub(super) fn set_appearance(&mut self, appearance: Appearance) {
+        if appearance == self.appearance {
+            return;
+        }
+        self.appearance = appearance;
+        if self.config.theme.follows_appearance() {
+            self.reload_config();
+        }
+    }
+
+    /// Opens the settings window, or brings it to the front when already open.
+    pub(super) fn open_settings(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(settings) = &self.settings {
+            return settings.focus();
+        }
+        let Some(gpu) = self.gpu.clone() else {
+            return;
+        };
+        let Some(dir) = config::config_dir() else {
+            log::warn!("neither XDG_CONFIG_HOME nor HOME is set: no settings window");
+            return;
+        };
+        let lang = self.config.language.resolve(Lang::detect);
+        match SettingsWindow::open(
+            event_loop,
+            gpu,
+            &self.palette,
+            lang,
+            &self.config,
+            &self.load_errors,
+            self.appearance,
+            dir,
+        ) {
+            Ok(settings) => self.settings = Some(settings),
+            Err(error) => log::error!("cannot open the settings window: {error:#}"),
+        }
+    }
+
+    /// Opens the settings window when the last event asked for it.
+    pub(super) fn open_requested_settings(&mut self, event_loop: &ActiveEventLoop) {
+        let requested = self
+            .session
+            .as_mut()
+            .is_some_and(|session| std::mem::take(&mut session.settings_requested));
+        if requested {
+            self.open_settings(event_loop);
+        }
+    }
+
+    pub(super) fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
+        self.error = Some(error);
+        event_loop.exit();
+    }
+}
+
+impl ApplicationHandler<UserEvent> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.is_some() {
+            return;
+        }
+        match self.create_session(event_loop) {
+            Ok(mut session) => {
+                session.update_pointer();
+                self.gpu = Some(session.renderer.gpu().clone());
+                self.session = Some(session);
+            }
+            Err(error) => return self.fail(event_loop, error),
+        }
+        self.update_checker.apply(&self.config.updates);
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(session) = &self.session
+            && !session.sized_by_grid
+        {
+            session.save_window_state();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        let deadline = self.session.as_mut().and_then(|session| {
+            let deadline = earliest(session.auto_scroll(now), session.animate(now));
+            let deadline = earliest(deadline, session.blink(now));
+            let deadline = earliest(deadline, session.fold_animate(now));
+            let deadline = earliest(deadline, session.pane_drag_tick(now));
+            let deadline = earliest(deadline, session.renderer.finish_presentation(now));
+            let deadline = earliest(deadline, session.deferred_redraw(now));
+            session.flush_panes();
+            deadline
+        });
+        let deadline = earliest(
+            deadline,
+            self.settings.as_mut().and_then(|settings| {
+                settings.wake(now);
+                settings.deadline()
+            }),
+        );
+        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::ConfigChanged => return self.reload_config(),
+            UserEvent::Appearance(appearance) => return self.set_appearance(appearance),
+            UserEvent::Terminal(..) | UserEvent::Update(_) => {}
+        }
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match event {
+            UserEvent::Terminal(pane, event) => {
+                session.handle_terminal_event(pane, event, event_loop)
+            }
+            UserEvent::Update(release) => {
+                session.update.set(release);
+                // The banner may show or hide: the panes make room for it.
+                session.relayout();
+            }
+            UserEvent::ConfigChanged | UserEvent::Appearance(_) => {}
+        }
+        session.flush_panes();
+        self.open_requested_settings(event_loop);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let session_window = self.session.as_ref().map(|session| session.window.id());
+        let settings_window = self.settings.as_ref().map(SettingsWindow::id);
+        match route(id, session_window, settings_window) {
+            Route::Session => {
+                self.session_window_event(event_loop, event);
+                self.open_requested_settings(event_loop);
+            }
+            Route::Settings => {
+                let Some(settings) = self.settings.as_mut() else {
+                    return;
+                };
+                let outcome = settings.window_event(event_loop, &event);
+                if let Some(palette) = settings.take_preview()
+                    && let Some(session) = self.session.as_mut()
+                {
+                    session.preview_palette(&palette);
+                }
+                if outcome == settings::Outcome::Close {
+                    self.settings = None;
+                }
+            }
+            Route::Unknown => {}
+        }
+    }
+}
+
+/// Window an event is delivered to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Route {
+    /// The terminal window.
+    Session,
+    /// The settings window.
+    Settings,
+    /// A window `App` does not know (already closed): the event is dropped.
+    Unknown,
+}
+
+/// Routes an event of window `id`; `session` is the terminal window and `settings` the
+/// settings window, when open.
+pub(super) fn route(id: WindowId, session: Option<WindowId>, settings: Option<WindowId>) -> Route {
+    if session == Some(id) {
+        Route::Session
+    } else if settings == Some(id) {
+        Route::Settings
+    } else {
+        Route::Unknown
+    }
+}
+
+pub(super) fn is_real_key_press(state: ElementState, is_synthetic: bool) -> bool {
+    state == ElementState::Pressed && !is_synthetic
+}
+
+impl App {
+    /// Handles an event of the terminal window.
+    pub(super) fn session_window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        event: WindowEvent,
+    ) {
+        let default_font_size = self.config.font.size;
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+
+        match event {
+            WindowEvent::CloseRequested => session.request_close(Target::Window, event_loop),
+            WindowEvent::Resized(size) => {
+                if !session.window.is_maximized() {
+                    session.restore_size = size.to_logical(session.window.scale_factor());
+                }
+                session.renderer.resize(size.width, size.height);
+                session.relayout();
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let font_size = session.font_size;
+                session.apply_font_size(font_size);
+            }
+            WindowEvent::Focused(focused) => {
+                session.focused = focused;
+                if !focused {
+                    session.cancel_pane_drag();
+                }
+                if let Some(pane) = session.workspace.active_pane()
+                    && let Some(bytes) = mouse::focus_report(focused, pane.mode())
+                {
+                    pane.terminal.write(bytes);
+                }
+                session.window.request_redraw();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                session.modifiers = modifiers.state();
+                // `Ctrl` makes a link active where the application captures the mouse.
+                if session.hovered_link.is_some() {
+                    session.update_pointer();
+                    session.window.request_redraw();
+                }
+            }
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } if is_real_key_press(event.state, is_synthetic) => {
+                session.key_press(&event, default_font_size, event_loop);
+            }
+            WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
+            WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
+            WindowEvent::CursorLeft { .. } => session.cursor_left(),
+            WindowEvent::MouseInput { state, button, .. } => {
+                session.mouse_input(state, button, default_font_size, event_loop);
+                if let Some(tag) = session.ignored_tag.take() {
+                    self.update_checker.ignore(&tag);
+                }
+            }
+            WindowEvent::RedrawRequested => session.redraw(),
+            _ => {}
+        }
+        session.flush_panes();
+    }
+}
+
+/// Loads the configuration file and its theme. Errors are logged and reported by the
+/// returned banner.
+pub(super) fn load_config() -> (Config, Palette, Option<Banner>, LoadErrors) {
+    let (config, errors) = config::load();
+    with_theme(config, errors, Appearance::default())
+}
+
+/// Loads the theme of `config`; `errors`, those of the configuration file, and the
+/// theme's are logged, reported by the returned banner and returned apart.
+pub(super) fn with_theme(
+    config: Config,
+    errors: Vec<ConfigError>,
+    appearance: Appearance,
+) -> (Config, Palette, Option<Banner>, LoadErrors) {
+    let name = config.theme.active(appearance);
+    let (palette, theme_errors) = theme::load(name, config::config_dir().as_deref());
+    let all: Vec<ConfigError> = errors.iter().chain(&theme_errors).cloned().collect();
+    for error in &all {
+        log::warn!("{error}");
+    }
+    let load_errors = LoadErrors {
+        config: errors,
+        theme: theme_errors,
+    };
+    (config, palette, Banner::config_errors(&all), load_errors)
+}
+
+pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    let update_proxy = event_loop.create_proxy();
+    let (config, palette, config_banner, load_errors) = load_config();
+    if let Some(dir) = config::config_dir() {
+        let proxy = event_loop.create_proxy();
+        watcher::spawn(dir, move || {
+            // The event loop may already be closed during shutdown.
+            let _ = proxy.send_event(UserEvent::ConfigChanged);
+        });
+    }
+    let mut app = App {
+        update_checker: Checker::new(move |release| {
+            // The event loop may already be closed during shutdown.
+            let _ = update_proxy.send_event(UserEvent::Update(release));
+        }),
+        proxy: event_loop.create_proxy(),
+        config,
+        palette,
+        session: None,
+        gpu: None,
+        settings: None,
+        error: None,
+        config_banner,
+        load_errors,
+        appearance: Appearance::default(),
+        appearance_watched: false,
+        first_program,
+        grid,
+    };
+    if let Some(first) = app.watch_appearance()
+        && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)
+    {
+        app.set_appearance(appearance);
+    }
+    event_loop.run_app(&mut app)?;
+    match app.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_size_gives_the_window_size_holding_that_grid() {
+        let cell = CellSize {
+            width: 9.0,
+            height: 19.0,
+        };
+        let current = PhysicalSize::new(1000, 700);
+        let grid = GridSize {
+            columns: Some(100),
+            lines: Some(30),
+        };
+        let size = window_size_for_grid(grid, current, cell, 8.0, 30.5);
+        let content = Rect {
+            x: 0.0,
+            y: 30.5,
+            width: size.width as f32,
+            height: size.height as f32 - 30.5,
+        };
+        let layout = GridLayout::new(content, cell, 8.0);
+        assert_eq!((layout.columns, layout.lines), (100, 30));
+    }
+
+    #[test]
+    fn grid_size_keeps_the_dimension_it_leaves_unset() {
+        let cell = CellSize {
+            width: 9.0,
+            height: 19.0,
+        };
+        let current = PhysicalSize::new(1000, 700);
+        let only_lines = GridSize {
+            columns: None,
+            lines: Some(30),
+        };
+        let size = window_size_for_grid(only_lines, current, cell, 8.0, 30.0);
+        assert_eq!(size.width, 1000);
+        assert_ne!(size.height, 700);
+        let only_columns = GridSize {
+            columns: Some(100),
+            lines: None,
+        };
+        let size = window_size_for_grid(only_columns, current, cell, 8.0, 30.0);
+        assert_ne!(size.width, 1000);
+        assert_eq!(size.height, 700);
+        assert!(!GridSize::default().is_set());
+    }
+
+    #[test]
+    fn macos_window_transparent_only_below_full_opacity() {
+        assert!(!window_transparent(1.0, true));
+        assert!(window_transparent(0.9, true));
+        assert!(window_transparent(1.0, false));
+        assert!(window_transparent(0.9, false));
+    }
+
+    #[test]
+    fn events_of_the_terminal_window_go_to_the_session() {
+        let terminal = WindowId::from(1);
+        assert_eq!(route(terminal, Some(terminal), None), Route::Session);
+        let settings = WindowId::from(2);
+        assert_eq!(
+            route(terminal, Some(terminal), Some(settings)),
+            Route::Session
+        );
+    }
+
+    #[test]
+    fn events_of_the_settings_window_go_to_it() {
+        let terminal = WindowId::from(1);
+        let settings = WindowId::from(2);
+        assert_eq!(
+            route(settings, Some(terminal), Some(settings)),
+            Route::Settings
+        );
+        // Still routed once the terminal window is gone, until the app exits.
+        assert_eq!(route(settings, None, Some(settings)), Route::Settings);
+    }
+
+    #[test]
+    fn events_of_an_unknown_window_are_dropped() {
+        let terminal = WindowId::from(1);
+        assert_eq!(
+            route(WindowId::from(2), Some(terminal), None),
+            Route::Unknown
+        );
+        assert_eq!(route(terminal, None, None), Route::Unknown);
+        // A closed settings window.
+        assert_eq!(
+            route(WindowId::from(3), Some(terminal), Some(WindowId::from(2))),
+            Route::Unknown
+        );
+    }
+
+    #[test]
+    fn synthetic_focus_key_presses_are_not_forwarded() {
+        assert!(is_real_key_press(ElementState::Pressed, false));
+        assert!(!is_real_key_press(ElementState::Pressed, true));
+        assert!(!is_real_key_press(ElementState::Released, false));
+        assert!(!is_real_key_press(ElementState::Released, true));
+    }
+
+    #[test]
+    fn earliest_keeps_the_sooner_deadline() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(5);
+        assert_eq!(earliest(Some(later), Some(now)), Some(now));
+        assert_eq!(earliest(None, Some(later)), Some(later));
+        assert_eq!(earliest(Some(now), None), Some(now));
+        assert_eq!(earliest(None, None), None);
+    }
+
+    fn font(family: Option<&str>, size: f32) -> FontConfig {
+        FontConfig {
+            family: family.map(str::to_owned),
+            size,
+        }
+    }
+
+    #[test]
+    fn reload_keeps_the_zoom_when_the_font_size_did_not_change() {
+        assert_eq!(
+            reloaded_font_size(&font(None, 14.0), &font(None, 14.0), 18.0),
+            18.0
+        );
+        // A new family alone keeps the zoom too.
+        assert_eq!(
+            reloaded_font_size(&font(None, 14.0), &font(Some("Fira Code"), 14.0), 18.0),
+            18.0
+        );
+    }
+
+    #[test]
+    fn reload_applies_a_changed_font_size_and_drops_the_zoom() {
+        assert_eq!(
+            reloaded_font_size(&font(None, 14.0), &font(None, 12.0), 18.0),
+            12.0
+        );
+    }
+
+    fn window_config(startup_mode: StartupMode) -> WindowConfig {
+        WindowConfig {
+            startup_mode,
+            width: 960,
+            height: 600,
+            padding: 8.0,
+            background_opacity: 1.0,
+        }
+    }
+
+    const REMEMBERED: WindowState = WindowState {
+        width: 1280,
+        height: 720,
+        maximized: true,
+    };
+
+    #[test]
+    fn default_mode_uses_the_configured_size() {
+        let config = window_config(StartupMode::Default);
+        let expected = (LogicalSize::new(960, 600), false);
+        assert_eq!(initial_window(&config, None), expected);
+        assert_eq!(initial_window(&config, Some(REMEMBERED)), expected);
+    }
+
+    #[test]
+    fn maximized_mode_keeps_the_configured_size_for_unmaximizing() {
+        let config = window_config(StartupMode::Maximized);
+        let expected = (LogicalSize::new(960, 600), true);
+        assert_eq!(initial_window(&config, None), expected);
+        assert_eq!(initial_window(&config, Some(REMEMBERED)), expected);
+    }
+
+    #[test]
+    fn remember_mode_restores_the_last_window() {
+        let config = window_config(StartupMode::Remember);
+        assert_eq!(
+            initial_window(&config, Some(REMEMBERED)),
+            (LogicalSize::new(1280, 720), true)
+        );
+        let unmaximized = WindowState {
+            maximized: false,
+            ..REMEMBERED
+        };
+        assert_eq!(
+            initial_window(&config, Some(unmaximized)),
+            (LogicalSize::new(1280, 720), false)
+        );
+    }
+
+    #[test]
+    fn remember_mode_without_state_is_the_default() {
+        let config = window_config(StartupMode::Remember);
+        assert_eq!(
+            initial_window(&config, None),
+            (LogicalSize::new(960, 600), false)
+        );
+    }
+}

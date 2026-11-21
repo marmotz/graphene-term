@@ -51,7 +51,7 @@ src/
                    calls lib::run
   build_version.rs version string from the crate version and GRAPHENE_CHANNEL, shared with build.rs
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
-  perf.rs          startup timing logs (`graphene::perf` target)
+  perf.rs          startup and redraw timing logs (`graphene::perf` target)
   app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay),
                    window event routing (terminal or settings window), key and paste fan-out to the broadcast targets
   settings/
@@ -73,6 +73,7 @@ src/
   config_edit.rs   text-preserving config.toml edits (toml_edit): completion of missing options,
                    --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
+  x11_window.rs    X11 maximized state written on the hidden window before it is mapped
   watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
   appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
@@ -101,6 +102,7 @@ src/
                    block and timeline scrolls, mouse point mapping (pure)
   shell_integration.rs  zsh / bash / fish integration: scripts written at startup, injection env
   frame.rs         snapshot of the visible grid with resolved colors and block marks
+  frame_cache.rs   frame of each shown pane, drawn again while its key is unchanged
   fold_animation.rs  fold chevron animations, per pane (pure, time passed in)
   cursor_blink.rs  blink phase of the text cursor (pure, time passed in)
   timeline_selection.rs  text selection across blocks, split into one Selection per grid
@@ -144,11 +146,15 @@ src/
     rect.wgsl      shader for rectangles
     images.rs      textured image quad pipeline, one texture per image frame
     image.wgsl     shader for images
+    pipeline.rs    shared pipeline building blocks; screen uniform and instance buffers that
+                   skip the upload of unchanged contents
+    offscreen.rs   offscreen target read back without waiting, pixel packing for X11
     x11_presenter.rs  X11 ARGB presentation when the GPU backend offers only opaque surfaces
 themes/            built-in themes, embedded with include_str!
 shell-integration/ zsh, bash and fish scripts (block signals, editor key bindings), embedded with include_str!
 benches/
-  render.rs        criterion benchmarks: parse, frame, glyphs_cold/warm, gpu_prepare
+  render.rs        criterion benchmarks: parse, frame, frame_panes, glyphs_cold/warm,
+                   gpu_prepare, present (direct, x11, x11_async, x11_pack)
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
@@ -385,6 +391,17 @@ Renderer::render(pane frames, interface rects)
   `width`/`height` (`default`, and `maximized` which also maximizes it), or the size and
   maximized state of `window.json` (`remember`; nothing remembered falls back to
   `default`). `window.json` is only read in `remember` mode.
+- The window is created hidden and shown once the renderer is ready, so it never shows
+  empty. `Gpu::new` runs on its own thread (`gpu_alongside`, in sequence on macOS) while
+  `spawn_first_pane` loads the glyphs and spawns the shell. winit asks for the maximized
+  state with a client message that X11 window managers ignore before mapping, so
+  `x11_window::preset_maximized` writes `_NET_WM_STATE` on the hidden window instead.
+  The window manager still sends the maximized size just after mapping: `MaximizeHold`
+  (`app/redraw.rs`) holds the first frame while the window keeps its creation size, for
+  150 ms at most.
+- On X11 the first working GPU backend is kept even when its surface is opaque
+  (`first_transparent` with `opaque_enough`): `x11_presenter` covers transparency, and
+  probing OpenGL as well costs tens of milliseconds.
 - `Session.restore_size` is the last inner size seen while the window was not maximized,
   in logical pixels: winit 0.30 has no getter for the restore size, and the inner size
   of a maximized window is the screen. `ApplicationHandler::exiting` saves it with
@@ -396,6 +413,17 @@ Renderer::render(pane frames, interface rects)
   ignored). Only the clear color carries `window.background_opacity`, premultiplied
   (`scene::premultiplied`): cells on the default background show it, every rect
   (explicit backgrounds, selection, cursor, banner, interface) stays opaque.
+- When no surface can be transparent (Vulkan on X11), `x11_presenter` draws into an
+  offscreen target read back and sent to the window with `PutImage`. An opaque window
+  (`background_opacity` 1.0) is presented by the GPU surface instead
+  (`Renderer::choose_x11_presentation`, also on a reload that changes the opacity): the
+  surface is dropped before going back to X11, which draws into the window itself. The
+  readback does not wait for the GPU: `render_x11` starts it, `about_to_wait` calls
+  `Renderer::finish_presentation` (polled every `READBACK_POLL`) and the next frame
+  finishes the previous one first. Pixels are packed as a byte shuffle (a copy from a
+  BGRA target to the usual ARGB visual) when every channel is 8 bits. These frames are
+  not paced by the monitor, so `Renderer::frame_due` puts a redraw off until one refresh
+  period after the last one (`Session::deferred_redraw`).
 
 ## Command blocks
 
@@ -540,7 +568,12 @@ Renderer::render(pane frames, interface rects)
     - glyph instances: one per drawn cell (spaces and wide-char spacers skipped),
       anchored at the cell origin, plus the fold summaries (one character per cell);
     - overlay rects and glyph instances at pixel positions (banner).
-3. `Session::redraw` captures one frame per pane shown by the active tab. When the tab
+3. `Session::redraw` captures one frame per pane shown by the active tab, through its
+   `FrameCache`: a pane's frame is captured again only when its `FrameKey` changed (the
+   pane's `Workspace::revision`, raised by every `pane_mut`/`panes_mut`, by `touch` for
+   changes behind a lock or a cell, and for a pane with a pending redraw; the view rows,
+   palette, focus, cursor blink phase, dimming, language, banner and hovered link), and
+   always while one of its fold chevrons animates. When the tab
    shows several panes, the inactive ones go through `Frame::dimmed(INACTIVE_PANE_DIM)`
    (every color mixed 30 % toward the background). `chrome::scene::build` gives the
    interface layer (`UiLayer`: rects, then text items): the title bar of every pane

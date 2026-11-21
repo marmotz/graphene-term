@@ -3,6 +3,7 @@
 
 mod app;
 mod appearance;
+mod atomic_file;
 mod banner;
 mod block_actions;
 #[cfg(test)]
@@ -14,6 +15,7 @@ mod config_edit;
 mod cursor_blink;
 mod fold_animation;
 mod frame;
+mod frame_cache;
 mod graphics;
 mod i18n;
 mod input;
@@ -43,6 +45,8 @@ mod view;
 mod watcher;
 mod window_state;
 mod workspace;
+#[cfg(target_os = "linux")]
+mod x11_window;
 
 pub use app::GridSize;
 
@@ -70,11 +74,12 @@ pub fn start_perf_clock() {
 #[doc(hidden)]
 pub mod bench {
     pub use crate::frame::Frame;
+    pub use crate::frame_cache::FrameCache;
     pub use crate::layout::{CellSize, GridLayout, Rect};
     pub use crate::palette::Palette;
     pub use crate::pty::process;
     pub use crate::renderer::scene;
-    pub use crate::renderer::{GlyphKey, Glyphs, Headless};
+    pub use crate::renderer::{GlyphKey, Glyphs, Headless, pack_argb32};
     pub use crate::signals::Scanner;
     pub use crate::timeline::Timeline;
     pub use crate::view::{rows as view_rows, scroll_block};
