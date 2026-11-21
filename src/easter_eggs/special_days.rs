@@ -63,6 +63,7 @@ pub enum Decoration {
 /// Decoration of a special day, `None` on an ordinary day.
 pub fn decoration(month: u32, day: u32) -> Option<Decoration> {
     match (month, day) {
+        (1, 1) => Some(Decoration::Prefix("🎉")),
         (2, 14) => Some(Decoration::Prefix("❤️")),
         (3, 14) => Some(Decoration::Prefix("π")),
         // English in every language: the pun does not translate.
@@ -88,6 +89,7 @@ mod tests {
 
     #[test]
     fn special_days_have_their_decoration() {
+        assert_eq!(decoration(1, 1), Some(Decoration::Prefix("🎉")));
         assert_eq!(decoration(2, 14), Some(Decoration::Prefix("❤️")));
         assert_eq!(decoration(3, 14), Some(Decoration::Prefix("π")));
         assert_eq!(
