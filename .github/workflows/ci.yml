@@ -8,6 +8,9 @@ concurrency:
   group: ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -62,6 +65,10 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-cargo-
+
+      # macOS-only cfg branches: warnings there are invisible to the Linux job.
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test
         run: cargo test --locked
