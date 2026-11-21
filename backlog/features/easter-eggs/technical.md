@@ -239,7 +239,7 @@ toucherait au parseur, à l'éditeur de thème et à sa documentation.
 - Rendu : nouvelle forme `Shape::Scanlines = 3`. Un rect couvrant chaque pane est ajouté à
   la fin de sa plage `over` (dessinée après les glyphes,
   [renderer/mod.rs:228](../../../src/renderer/mod.rs)). Dans `rect.wgsl`, la branche
-  `SHAPE_SCANLINES` rend du noir à alpha 0,18 sur une ligne de pixels physiques sur 3
+  `SHAPE_SCANLINES` rend du noir à alpha 0,5 sur une ligne de pixels physiques sur 3
   (`u32(in.position.y) % 3u == 0u`), et un alpha nul ailleurs. Il n'y a ni passe
   supplémentaire ni nouveau pipeline. La barre d'onglets et les overlays ne sont pas
   touchés.

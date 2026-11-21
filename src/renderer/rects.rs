@@ -49,8 +49,9 @@ pub enum Shape {
     Scanlines = 3,
 }
 
-/// Color of a dark row of [`Shape::Scanlines`]: black at 18 % opacity.
-pub const SCANLINE_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.18];
+/// Color of a dark row of [`Shape::Scanlines`]: black at 50 % opacity. Blended in linear
+/// space, a lower opacity barely shows on the green text.
+pub const SCANLINE_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
 
 impl RectInstance {
     /// A plain rectangle with square corners, drawn exactly as the rasterizer covers it.
@@ -406,8 +407,8 @@ mod tests {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
-        // 255 * (1 - 0.18), give or take the rounding.
-        let dark = 209;
+        // White dimmed by the scanlines' alpha, give or take the rounding.
+        let dark = (255.0 * (1.0 - SCANLINE_COLOR[3])).round() as u8;
         for y in 0..SIZE {
             let left = red(&pixels, 10, y);
             if y % 3 == 0 {
