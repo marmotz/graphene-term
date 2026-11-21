@@ -634,6 +634,37 @@ mod tests {
     }
 
     #[test]
+    fn unlocking_the_hidden_theme_writes_a_config_that_loads_it() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-settings-unlock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(config::CONFIG_FILE);
+        std::fs::write(&file, "[theme]\nname = \"gruvbox-dark\"\n").unwrap();
+        let (config, _) = Config::parse(
+            &std::fs::read_to_string(&file).unwrap(),
+            &Config::default(),
+            &file,
+        );
+        let model = SettingsModel::new(
+            &config,
+            &model::LoadErrors::default(),
+            None,
+            crate::appearance::Appearance::Dark,
+        );
+        write_changes(&dir, &model.unlock_hidden_theme()).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        let (config, errors) = Config::parse(&text, &Config::default(), &file);
+        assert_eq!(errors, vec![]);
+        assert_eq!(config.theme.name, crate::easter_eggs::HIDDEN_THEME);
+        assert_eq!(
+            config.theme.unlocked,
+            vec![crate::easter_eggs::HIDDEN_THEME]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn escape_alone_pressed_closes() {
         let escape = Key::Named(NamedKey::Escape);
         let none = ModifiersState::empty();

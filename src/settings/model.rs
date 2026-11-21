@@ -72,6 +72,8 @@ pub enum Value {
     Integer(i64),
     Float(f64),
     Text(String),
+    /// An array of strings.
+    List(Vec<String>),
 }
 
 impl From<Value> for toml_edit::Value {
@@ -81,6 +83,7 @@ impl From<Value> for toml_edit::Value {
             Value::Integer(value) => value.into(),
             Value::Float(value) => value.into(),
             Value::Text(value) => value.into(),
+            Value::List(items) => toml_edit::Value::Array(items.into_iter().collect()),
         }
     }
 }
@@ -493,6 +496,26 @@ impl SettingsModel {
         &self.config
     }
 
+    /// The changes unlocking the hidden theme and making it the active one: adds it to
+    /// `theme.unlocked` unless it already is there, and sets the key of the active theme
+    /// (`theme.name`, or `theme.light` / `theme.dark` when following the appearance).
+    pub fn unlock_hidden_theme(&self) -> Vec<Change> {
+        let hidden = crate::easter_eggs::HIDDEN_THEME;
+        let theme = &self.config.theme;
+        let mut changes = Vec::new();
+        if !theme.unlocked.iter().any(|name| name == hidden) {
+            let mut unlocked = theme.unlocked.clone();
+            unlocked.push(hidden.to_owned());
+            changes.push(Change::Set(
+                owned(&["theme", "unlocked"]),
+                Value::List(unlocked),
+            ));
+        }
+        let key = theme.active_key(self.appearance);
+        changes.push(Change::Set(owned(key), Value::Text(hidden.to_owned())));
+        changes
+    }
+
     /// The syntax or read error that keeps `section` from being edited, if any: one of
     /// `keybindings.toml` locks the keyboard shortcuts, one of `config.toml` the others.
     pub fn locked(&self, section: Section) -> Option<&ConfigError> {
@@ -551,7 +574,7 @@ impl SettingsModel {
             Value::Text(text) => text,
             Value::Integer(n) => n.to_string(),
             Value::Float(n) => (n as f32).to_string(),
-            Value::Bool(_) => String::new(),
+            Value::Bool(_) | Value::List(_) => String::new(),
         }
     }
 
@@ -565,7 +588,7 @@ impl SettingsModel {
         match self.value(field) {
             Value::Float(n) => n,
             Value::Integer(n) => n as f64,
-            Value::Bool(_) | Value::Text(_) => 0.0,
+            Value::Bool(_) | Value::Text(_) | Value::List(_) => 0.0,
         }
     }
 

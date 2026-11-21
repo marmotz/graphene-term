@@ -5,6 +5,7 @@ mod shortcuts;
 mod theme_editor;
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::Rgb;
 use egui::{
@@ -66,6 +67,8 @@ pub struct View {
     confirm_delete: bool,
     /// The `#rrggbb` code of a theme color being typed, until its field loses focus.
     hex: Option<HexInput>,
+    /// The recent clicks on the version label, oldest first.
+    version_clicks: Vec<Instant>,
 }
 
 /// What one frame asks to write or change.
@@ -201,7 +204,9 @@ impl View {
                 }
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                     ui.add_space(8.0);
-                    version_label(ui);
+                    if version_label(ui).clicked() {
+                        self.version_click(model, Instant::now(), &mut edits);
+                    }
                 });
             });
         CentralPanel::default().show(ui, |ui| {
@@ -215,6 +220,16 @@ impl View {
             });
         });
         edits
+    }
+
+    /// A click on the version label at `now`: the 7th within 2 seconds unlocks the
+    /// hidden theme, makes it the active one and starts the count again.
+    fn version_click(&mut self, model: &SettingsModel, now: Instant, edits: &mut Edits) {
+        self.version_clicks.push(now);
+        if crate::easter_eggs::rapid_clicks(&mut self.version_clicks, now) {
+            edits.changes.extend(model.unlock_hidden_theme());
+            self.version_clicks.clear();
+        }
     }
 
     fn section_body(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel, edits: &mut Edits) {
@@ -1031,6 +1046,83 @@ mod tests {
         });
         output.textures_delta.clear();
         assert_eq!(clicked, Some(false));
+    }
+
+    /// The edits of clicks on the version at `start + offset` milliseconds.
+    fn version_clicks(view: &mut View, model: &SettingsModel, offsets: &[u64]) -> Edits {
+        let start = Instant::now();
+        let mut edits = Edits::default();
+        for offset in offsets {
+            let now = start + std::time::Duration::from_millis(*offset);
+            view.version_click(model, now, &mut edits);
+        }
+        edits
+    }
+
+    fn set(path: &[&str], value: Value) -> Change {
+        Change::Set(path.iter().map(|s| (*s).to_owned()).collect(), value)
+    }
+
+    const HIDDEN: &str = crate::easter_eggs::HIDDEN_THEME;
+
+    #[test]
+    fn six_clicks_on_the_version_unlock_nothing() {
+        let model = model("");
+        let mut view = View::default();
+        let edits = version_clicks(&mut view, &model, &[0, 100, 200, 300, 400, 500]);
+        assert_eq!(edits, Edits::default());
+    }
+
+    #[test]
+    fn seven_spread_clicks_on_the_version_unlock_nothing() {
+        let model = model("");
+        let mut view = View::default();
+        let offsets = [0, 400, 800, 1200, 1600, 2000, 2400];
+        assert_eq!(
+            version_clicks(&mut view, &model, &offsets),
+            Edits::default()
+        );
+    }
+
+    #[test]
+    fn seven_quick_clicks_unlock_and_activate_the_hidden_theme() {
+        let model = model("[theme]\nname = \"gruvbox-dark\"\n");
+        let mut view = View::default();
+        let edits = version_clicks(&mut view, &model, &[0, 100, 200, 300, 400, 500, 600]);
+        assert_eq!(
+            edits.changes,
+            vec![
+                set(&["theme", "unlocked"], Value::List(vec![HIDDEN.into()])),
+                set(&["theme", "name"], Value::Text(HIDDEN.into())),
+            ]
+        );
+        assert!(view.version_clicks.is_empty());
+    }
+
+    #[test]
+    fn unlocking_replaces_the_current_appearance_theme_when_following_it() {
+        // The test model is under the dark appearance.
+        let model = model("[theme]\nlight = \"graphene-day\"\ndark = \"graphene-night\"\n");
+        let mut view = View::default();
+        let edits = version_clicks(&mut view, &model, &[0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            edits.changes,
+            vec![
+                set(&["theme", "unlocked"], Value::List(vec![HIDDEN.into()])),
+                set(&["theme", "dark"], Value::Text(HIDDEN.into())),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unlocked_hidden_theme_is_only_made_active_again() {
+        let model = model(&format!("[theme]\nunlocked = [\"{HIDDEN}\"]\n"));
+        let mut view = View::default();
+        let edits = version_clicks(&mut view, &model, &[0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            edits.changes,
+            vec![set(&["theme", "name"], Value::Text(HIDDEN.into()))]
+        );
     }
 
     #[test]
