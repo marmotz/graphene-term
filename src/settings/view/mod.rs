@@ -199,6 +199,10 @@ impl View {
                         self.hex = None;
                     }
                 }
+                ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+                    ui.add_space(8.0);
+                    version_label(ui);
+                });
             });
         CentralPanel::default().show(ui, |ui| {
             ScrollArea::vertical().show(ui, |ui| {
@@ -491,6 +495,21 @@ fn error_label(ui: &mut Ui, text: &str) {
 fn warn_label(ui: &mut Ui, text: &str) {
     let color = ui.visuals().warn_fg_color;
     ui.label(RichText::new(text).color(color));
+}
+
+/// The `Graphene <version>` text shown at the bottom of the sections sidebar.
+fn version_text() -> String {
+    format!("Graphene {}", crate::VERSION)
+}
+
+/// Draws the build version, faint and clickable without looking like it: no text
+/// selection, so the pointer keeps its arrow.
+fn version_label(ui: &mut Ui) -> egui::Response {
+    ui.add(
+        Label::new(RichText::new(version_text()).weak())
+            .selectable(false)
+            .sense(egui::Sense::click()),
+    )
 }
 
 #[cfg(test)]
@@ -1000,6 +1019,18 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_version_label_shows_the_build_version() {
+        assert_eq!(version_text(), format!("Graphene {}", crate::VERSION));
+        let ctx = egui::Context::default();
+        let mut clicked = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            clicked = Some(version_label(ui).clicked());
+        });
+        output.textures_delta.clear();
+        assert_eq!(clicked, Some(false));
     }
 
     #[test]
