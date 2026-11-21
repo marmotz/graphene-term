@@ -27,6 +27,7 @@ struct VertexOutput {
 
 const SHAPE_RECT: u32 = 0u;
 const SHAPE_CHEVRON: u32 = 1u;
+const SHAPE_SCANLINES: u32 = 3u;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32, instance: Instance) -> VertexOutput {
@@ -80,6 +81,14 @@ fn sd_chevron(p: vec2<f32>, size: vec2<f32>, half_stroke: f32, bend: f32) -> f32
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Scanlines: the instance's color on one row of physical pixels out of 3, nothing
+    // on the others.
+    if in.shape == SHAPE_SCANLINES {
+        if u32(in.position.y) % 3u == 0u {
+            return in.color;
+        }
+        return vec4<f32>(0.0);
+    }
     // A plain rect keeps the rasterizer's coverage: no antialiasing on its edges.
     if in.shape == SHAPE_RECT && in.radius <= 0.0 {
         return in.color;

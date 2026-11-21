@@ -53,8 +53,8 @@ use crate::config::{
 };
 use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
-use crate::easter_eggs::art::ArtLayout;
 use crate::easter_eggs::secrets::{self, Secret};
+use crate::easter_eggs::{self, art::ArtLayout};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;
@@ -167,6 +167,8 @@ enum Overlay {
 struct MenuTheme {
     name: String,
     saved: Palette,
+    /// Whether the panes had scanlines before the preview.
+    saved_scanlines: bool,
 }
 
 /// What the terminal colors do for the theme the context menu points at.

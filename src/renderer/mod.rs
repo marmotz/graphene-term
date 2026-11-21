@@ -78,6 +78,26 @@ struct Layers {
     background_opacity: f32,
     /// Alpha representation expected by the presentation backend.
     alpha_mode: SurfaceAlphaMode,
+    /// Whether scanlines cover each pane, over its text: the hidden CRT theme is shown.
+    scanlines: bool,
+}
+
+/// Appends `items` to `rects`, and then with `scanlines` a [`RectInstance::scanlines`]
+/// covering `rect`; returns the range they take.
+fn push_rects(
+    rects: &mut Vec<RectInstance>,
+    items: &[RectInstance],
+    scanlines: Option<Rect>,
+) -> Range<u32> {
+    let start = rects.len() as u32;
+    rects.extend_from_slice(items);
+    if let Some(rect) = scanlines {
+        rects.push(RectInstance::scanlines(
+            [rect.x, rect.y],
+            [rect.width, rect.height],
+        ));
+    }
+    start..rects.len() as u32
 }
 
 /// What [`Layers::prepare`] uploaded for one pane, as ranges of the rect buffer. Its
@@ -115,6 +135,7 @@ impl Layers {
             srgb: format.is_srgb(),
             background_opacity: 1.0,
             alpha_mode: SurfaceAlphaMode::Premultiplied,
+            scanlines: false,
         }
     }
 
@@ -133,20 +154,21 @@ impl Layers {
             .collect();
 
         let mut rects = Vec::new();
-        let mut push = |items: &[RectInstance]| {
-            let start = rects.len() as u32;
-            rects.extend_from_slice(items);
-            start..rects.len() as u32
-        };
+        let scanlines = self.scanlines;
         let prepared_panes = panes
             .iter()
             .zip(&scenes)
             .map(|(pane, scene)| PreparedPane {
                 scissor: scissor(pane.layout.rect, screen),
-                under: push(&scene.under),
-                over: push(&scene.over),
+                under: push_rects(&mut rects, &scene.under, None),
+                over: push_rects(
+                    &mut rects,
+                    &scene.over,
+                    scanlines.then_some(pane.layout.rect),
+                ),
             })
             .collect();
+        let mut push = |items: &[RectInstance]| push_rects(&mut rects, items, None);
         let ui_rects = push(&ui.rects);
         let banner_rects: Vec<_> = scenes
             .iter()
@@ -650,6 +672,17 @@ impl Renderer {
         self.layers.srgb
     }
 
+    /// Covers each pane with scanlines, over its text, or stops: on while the hidden CRT
+    /// theme is shown.
+    pub fn set_scanlines(&mut self, scanlines: bool) {
+        self.layers.scanlines = scanlines;
+    }
+
+    /// Whether the panes are covered with scanlines, see [`Self::set_scanlines`].
+    pub fn scanlines(&self) -> bool {
+        self.layers.scanlines
+    }
+
     pub fn set_font_size(&mut self, font_size: f32) {
         self.layers.glyphs.set_font_size(font_size);
     }
@@ -993,6 +1026,33 @@ mod tests {
     use alacritty_terminal::vte::ansi::Rgb;
 
     use super::*;
+
+    #[test]
+    fn scanlines_cover_the_pane_after_its_over_rects() {
+        let item = RectInstance::new([1.0, 2.0], [3.0, 4.0], [1.0; 4]);
+        let pane = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 300.0,
+            height: 200.0,
+        };
+        let mut rects = vec![item];
+        let range = push_rects(&mut rects, &[item, item], Some(pane));
+        assert_eq!(range, 1..4);
+        assert_eq!(rects[1..3], [item, item]);
+        assert_eq!(
+            rects[3],
+            RectInstance::scanlines([10.0, 20.0], [300.0, 200.0])
+        );
+    }
+
+    #[test]
+    fn no_scanlines_rect_is_added_without_the_hidden_theme() {
+        let item = RectInstance::new([1.0, 2.0], [3.0, 4.0], [1.0; 4]);
+        let mut rects = Vec::new();
+        assert_eq!(push_rects(&mut rects, &[item], None), 0..1);
+        assert_eq!(rects, [item]);
+    }
 
     #[test]
     fn frame_interval_is_the_monitor_refresh_period() {

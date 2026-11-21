@@ -308,15 +308,22 @@ impl Session {
             MenuThemeStep::Show(name) => {
                 let name = name.to_owned();
                 let (palette, _) = theme::load(&name, config::config_dir().as_deref());
-                let saved = self
-                    .menu_theme
-                    .take()
-                    .map_or_else(|| self.palette.clone(), |theme| theme.saved);
+                let (saved, saved_scanlines) = self.menu_theme.take().map_or_else(
+                    || (self.palette.clone(), self.renderer.scanlines()),
+                    |theme| (theme.saved, theme.saved_scanlines),
+                );
+                self.renderer
+                    .set_scanlines(easter_eggs::shows_scanlines(&name));
                 self.preview_palette(&palette);
-                self.menu_theme = Some(MenuTheme { name, saved });
+                self.menu_theme = Some(MenuTheme {
+                    name,
+                    saved,
+                    saved_scanlines,
+                });
             }
             MenuThemeStep::Restore => {
                 if let Some(theme) = self.menu_theme.take() {
+                    self.renderer.set_scanlines(theme.saved_scanlines);
                     self.preview_palette(&theme.saved);
                 }
             }

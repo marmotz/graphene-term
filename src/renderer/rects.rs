@@ -38,7 +38,13 @@ pub enum Shape {
     /// center, the bend spanning the box's height. The stroke is the instance's radius
     /// on each side of that line, inside the box.
     Chevron = 1,
+    /// Darkens one row of physical pixels out of 3 with the instance's color, leaves the
+    /// others untouched: the scanlines of the hidden CRT theme.
+    Scanlines = 3,
 }
+
+/// Color of a dark row of [`Shape::Scanlines`]: black at 18 % opacity.
+pub const SCANLINE_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.18];
 
 impl RectInstance {
     /// A plain rectangle with square corners, drawn exactly as the rasterizer covers it.
@@ -67,6 +73,11 @@ impl RectInstance {
             bend,
             ..self
         }
+    }
+
+    /// Scanlines over the box at `position` of `size`, see [`Shape::Scanlines`].
+    pub fn scanlines(position: [f32; 2], size: [f32; 2]) -> Self {
+        Self::new(position, size, SCANLINE_COLOR).with_shape(Shape::Scanlines)
     }
 
     /// The same box drawing `shape`.
@@ -328,6 +339,30 @@ mod tests {
         assert!(drop(&flat).abs() < 0.5, "flat {}", drop(&flat));
         assert!((lit_center(&flat, 32) - 32.0).abs() < 0.5);
         assert!((drop(&up) + 10.9).abs() < 1.0, "up {}", drop(&up));
+    }
+
+    #[test]
+    fn scanlines_darken_one_row_out_of_three() {
+        // Over a white background, scanlines on the left half only.
+        let background = RectInstance::new([0.0, 0.0], [SIZE as f32, SIZE as f32], WHITE);
+        let lines = RectInstance::scanlines([0.0, 0.0], [32.0, SIZE as f32]);
+        assert_eq!(lines.shape, Shape::Scanlines as u32);
+        let Some(pixels) = draw(&[background, lines]) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        // 255 * (1 - 0.18), give or take the rounding.
+        let dark = 209;
+        for y in 0..SIZE {
+            let left = red(&pixels, 10, y);
+            if y % 3 == 0 {
+                assert!(left.abs_diff(dark) <= 1, "row {y}: {left}");
+            } else {
+                assert_eq!(left, 255, "row {y}");
+            }
+            // Outside the scanlines rect, nothing changes.
+            assert_eq!(red(&pixels, 40, y), 255, "row {y} outside");
+        }
     }
 
     #[test]

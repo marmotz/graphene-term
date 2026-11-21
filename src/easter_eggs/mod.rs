@@ -9,6 +9,11 @@ pub mod secrets;
 /// The hidden theme, unlocked from the settings.
 pub const HIDDEN_THEME: &str = "phosphor-crt";
 
+/// Whether the theme `name` covers the panes with scanlines: only the hidden one.
+pub fn shows_scanlines(name: &str) -> bool {
+    name == HIDDEN_THEME
+}
+
 /// How many clicks on the version unlock the hidden theme.
 const UNLOCK_CLICKS: usize = 7;
 
@@ -25,6 +30,14 @@ pub fn rapid_clicks(clicks: &mut Vec<Instant>, now: Instant) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_hidden_theme_shows_scanlines() {
+        assert!(shows_scanlines(HIDDEN_THEME));
+        for (name, _) in crate::theme::BUILT_IN {
+            assert!(!shows_scanlines(name), "{name}");
+        }
+    }
 
     #[test]
     fn the_hidden_theme_is_a_hidden_built_in_theme() {

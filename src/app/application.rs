@@ -179,7 +179,7 @@ impl App {
         let (glyphs, workspace) = first_pane?;
         let (gpu, surface) = gpu?;
         let scale = window.scale_factor() as f32;
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             gpu,
             surface,
             window.clone(),
@@ -187,6 +187,9 @@ impl App {
             glyphs,
             self.config.window.background_opacity,
         )?;
+        renderer.set_scanlines(easter_eggs::shows_scanlines(
+            self.config.theme.active(self.appearance),
+        ));
 
         window.set_visible(true);
         perf::mark("window shown");
@@ -321,6 +324,9 @@ impl App {
         }
         if let Some(session) = self.session.as_mut() {
             session.apply_config(&old, &self.config, &self.palette, banner);
+            session.renderer.set_scanlines(easter_eggs::shows_scanlines(
+                self.config.theme.active(self.appearance),
+            ));
             if old.updates != self.config.updates {
                 self.update_checker.apply(&self.config.updates);
             }
