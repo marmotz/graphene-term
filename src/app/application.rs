@@ -242,6 +242,8 @@ impl App {
             restore_size: initial_size,
             settings_requested: false,
             sized_by_grid: self.grid.is_set(),
+            konami: KonamiDetector::default(),
+            honeycomb: None,
         })
     }
 
@@ -438,6 +440,7 @@ impl ApplicationHandler<UserEvent> for App {
             let deadline = earliest(session.auto_scroll(now), session.animate(now));
             let deadline = earliest(deadline, session.blink(now));
             let deadline = earliest(deadline, session.fold_animate(now));
+            let deadline = earliest(deadline, session.honeycomb_tick(now));
             let deadline = earliest(deadline, session.pane_drag_tick(now));
             let deadline = earliest(deadline, session.renderer.finish_presentation(now));
             let deadline = earliest(deadline, session.deferred_redraw(now));

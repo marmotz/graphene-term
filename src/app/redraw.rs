@@ -3,6 +3,7 @@
 use std::ops::RangeInclusive;
 
 use super::*;
+use crate::renderer::scene::gpu_color;
 use crate::view::ViewRow;
 
 /// What the frame of a pane is captured from, besides its terminal: the frame drawn
@@ -228,6 +229,11 @@ impl Session {
             &self.palette.ui,
             self.renderer.is_srgb(),
         );
+        if let Some(honeycomb) = &self.honeycomb {
+            let color = gpu_color(self.palette.cursor, self.renderer.is_srgb());
+            let scale = self.window.scale_factor() as f32;
+            ui.rects.extend(honeycomb.rects(now, scale, color));
+        }
         if let Some(highlight) = highlight {
             chrome::scene::drop_highlight(
                 highlight,

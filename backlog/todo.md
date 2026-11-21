@@ -18,7 +18,7 @@ _tâches créées — voir [technical.md](features/desktop-notifications/technic
 
 ## Easter eggs  ·  [overview](features/easter-eggs/overview.md)
 
-_tâches créées — voir [technical.md](features/easter-eggs/technical.md)_ — 6/8 tasks done
+_tâches créées — voir [technical.md](features/easter-eggs/technical.md)_ — 7/8 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -28,7 +28,7 @@ _tâches créées — voir [technical.md](features/easter-eggs/technical.md)_ �
 | [x]  | [#222](https://github.com/marmotz/graphene-term/issues/222) | [Easter eggs] Thème caché phosphor-crt et clé theme.unlocked | — |
 | [x]  | [#223](https://github.com/marmotz/graphene-term/issues/223) | [Easter eggs] Débloquer le thème caché par 7 clics sur la version | #219, #222 |
 | [x]  | [#224](https://github.com/marmotz/graphene-term/issues/224) | [Easter eggs] Effet scanlines du thème phosphor-crt | #222 |
-| [ ]  | [#225](https://github.com/marmotz/graphene-term/issues/225) | [Easter eggs] Konami code et animation en nid d'abeille | — |
+| [x]  | [#225](https://github.com/marmotz/graphene-term/issues/225) | [Easter eggs] Konami code et animation en nid d'abeille | — |
 | [ ]  | [#226](https://github.com/marmotz/graphene-term/issues/226) | [Easter eggs] Décorer le titre de la fenêtre les jours spéciaux | — |
 
 ## Ligatures de police  ·  [overview](features/font-ligatures/overview.md)

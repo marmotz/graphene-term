@@ -1,9 +1,11 @@
-//! Hidden features: secret command palette entries, the ASCII drawing they open, and
-//! the hidden theme.
+//! Hidden features: secret command palette entries, the ASCII drawing they open, the
+//! hidden theme, and the Konami code with its honeycomb.
 
 use std::time::{Duration, Instant};
 
 pub mod art;
+pub mod honeycomb;
+pub mod konami;
 pub mod secrets;
 
 /// The hidden theme, unlocked from the settings.

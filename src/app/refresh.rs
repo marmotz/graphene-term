@@ -126,6 +126,17 @@ impl Session {
         deadline
     }
 
+    /// Requests a redraw while the honeycomb is shown, and once more when it ends to
+    /// clear it. Returns when its next frame is due, `None` when it is not shown.
+    pub(super) fn honeycomb_tick(&mut self, now: Instant) -> Option<Instant> {
+        let deadline = self.honeycomb?.deadline(now);
+        if deadline.is_none() {
+            self.honeycomb = None;
+        }
+        self.window.request_redraw();
+        deadline
+    }
+
     /// Updates the blink phase of the active pane's cursor, and requests a redraw when
     /// it toggled. Returns when the next toggle is due, `None` while the cursor does not
     /// blink: its style does not ask for it, or the window does not have the focus.

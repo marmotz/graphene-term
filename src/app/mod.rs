@@ -54,7 +54,7 @@ use crate::config::{
 use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
 use crate::easter_eggs::secrets::{self, Secret};
-use crate::easter_eggs::{self, art::ArtLayout};
+use crate::easter_eggs::{self, art::ArtLayout, honeycomb::Honeycomb, konami::KonamiDetector};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;
@@ -267,6 +267,10 @@ struct Session {
     /// Whether the window was sized by `--columns` or `--lines`: its size is then not
     /// saved to `window.json`.
     sized_by_grid: bool,
+    /// Follows the keys typed at the prompt towards the Konami code.
+    konami: KonamiDetector,
+    /// The honeycomb shown over the active pane once the Konami code is typed.
+    honeycomb: Option<Honeycomb>,
 }
 
 impl Session {}
