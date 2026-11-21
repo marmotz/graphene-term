@@ -1,5 +1,5 @@
 //! Hidden features: secret command palette entries, the ASCII drawing they open, the
-//! hidden theme, and the Konami code with its honeycomb.
+//! hidden theme, the Konami code with its honeycomb, and the special days of the title.
 
 use std::time::{Duration, Instant};
 
@@ -7,6 +7,7 @@ pub mod art;
 pub mod honeycomb;
 pub mod konami;
 pub mod secrets;
+pub mod special_days;
 
 /// The hidden theme, unlocked from the settings.
 pub const HIDDEN_THEME: &str = "phosphor-crt";

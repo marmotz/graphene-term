@@ -92,7 +92,7 @@ impl Session {
             .map(|index| {
                 self.workspace
                     .tab_title(index)
-                    .unwrap_or_else(|| DEFAULT_TITLE.to_owned())
+                    .unwrap_or_else(|| special_days::titled(self.today.as_ref(), DEFAULT_TITLE))
             })
             .collect();
         Some(TabBarLayout::new(

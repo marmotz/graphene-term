@@ -151,8 +151,10 @@ impl App {
         };
         let (initial_size, maximized) = initial_window(&self.config.window, remembered);
         let maximized = maximized && !self.grid.is_set();
+        let today = special_days::today();
+        let title = special_days::titled(today.as_ref(), DEFAULT_TITLE);
         let attributes = Window::default_attributes()
-            .with_title(DEFAULT_TITLE)
+            .with_title(&title)
             .with_inner_size(initial_size)
             .with_maximized(maximized)
             // Shown once the renderer is ready: until then, it would stay
@@ -227,7 +229,7 @@ impl App {
             tooltip_hidden: false,
             pointer: None,
             hovered_button: None,
-            window_title: DEFAULT_TITLE.to_owned(),
+            window_title: title,
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),
             ignored_tag: None,
@@ -244,6 +246,8 @@ impl App {
             sized_by_grid: self.grid.is_set(),
             konami: KonamiDetector::default(),
             honeycomb: None,
+            today,
+            midnight: special_days::until_midnight().map(|left| Instant::now() + left),
         })
     }
 
@@ -441,6 +445,7 @@ impl ApplicationHandler<UserEvent> for App {
             let deadline = earliest(deadline, session.blink(now));
             let deadline = earliest(deadline, session.fold_animate(now));
             let deadline = earliest(deadline, session.honeycomb_tick(now));
+            let deadline = earliest(deadline, session.special_day_tick(now));
             let deadline = earliest(deadline, session.pane_drag_tick(now));
             let deadline = earliest(deadline, session.renderer.finish_presentation(now));
             let deadline = earliest(deadline, session.deferred_redraw(now));

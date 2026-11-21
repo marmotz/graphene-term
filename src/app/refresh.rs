@@ -126,6 +126,19 @@ impl Session {
         deadline
     }
 
+    /// At the next local midnight, computes the special day again and updates the window
+    /// title. Returns the next midnight, `None` if the local time is unknown.
+    pub(super) fn special_day_tick(&mut self, now: Instant) -> Option<Instant> {
+        let midnight = self.midnight?;
+        if now < midnight {
+            return Some(midnight);
+        }
+        self.today = special_days::today();
+        self.refresh_title();
+        self.midnight = special_days::until_midnight().map(|left| now + left);
+        self.midnight
+    }
+
     /// Requests a redraw while the honeycomb is shown, and once more when it ends to
     /// clear it. Returns when its next frame is due, `None` when it is not shown.
     pub(super) fn honeycomb_tick(&mut self, now: Instant) -> Option<Instant> {
@@ -195,6 +208,7 @@ impl Session {
             .workspace
             .tab_title(self.workspace.active_index())
             .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
+        let title = special_days::titled(self.today.as_ref(), &title);
         if title != self.window_title {
             self.window.set_title(&title);
             self.window_title = title;

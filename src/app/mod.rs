@@ -54,7 +54,13 @@ use crate::config::{
 use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
 use crate::easter_eggs::secrets::{self, Secret};
-use crate::easter_eggs::{self, art::ArtLayout, honeycomb::Honeycomb, konami::KonamiDetector};
+use crate::easter_eggs::{
+    self,
+    art::ArtLayout,
+    honeycomb::Honeycomb,
+    konami::KonamiDetector,
+    special_days::{self, Decoration},
+};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;
@@ -271,6 +277,12 @@ struct Session {
     konami: KonamiDetector,
     /// The honeycomb shown over the active pane once the Konami code is typed.
     honeycomb: Option<Honeycomb>,
+    /// Decoration of the window title for the special day today, `None` on an
+    /// ordinary day.
+    today: Option<Decoration>,
+    /// Next local midnight, when `today` is computed again; `None` if the local time is
+    /// unknown.
+    midnight: Option<Instant>,
 }
 
 impl Session {}
