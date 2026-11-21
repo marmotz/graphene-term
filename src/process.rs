@@ -8,7 +8,8 @@ use std::path::PathBuf;
 /// The terminal's foreground process group (`tpgid`) from the content of
 /// `/proc/<pid>/stat`. Fields are counted after the last `)`, because the command name
 /// before it may contain spaces and parentheses.
-pub fn parse_tpgid(stat: &str) -> Option<i32> {
+#[cfg(any(target_os = "linux", test))]
+fn parse_tpgid(stat: &str) -> Option<i32> {
     let (_, rest) = stat.rsplit_once(')')?;
     // After `comm`: state, ppid, pgrp, session, tty_nr, tpgid.
     rest.split_whitespace().nth(5)?.parse().ok()
@@ -16,7 +17,8 @@ pub fn parse_tpgid(stat: &str) -> Option<i32> {
 
 /// The foreground process group when it is not the shell itself: some program runs in
 /// the shell's terminal.
-pub fn foreground_group(shell_pid: u32, tpgid: i32) -> Option<u32> {
+#[cfg(any(target_os = "linux", test))]
+fn foreground_group(shell_pid: u32, tpgid: i32) -> Option<u32> {
     let group = u32::try_from(tpgid).ok().filter(|&group| group > 0)?;
     (group != shell_pid).then_some(group)
 }

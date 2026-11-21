@@ -8,31 +8,15 @@ use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::render::ConnectionExt as RenderConnectionExt;
 use x11rb::protocol::xproto::{ConnectionExt, CreateGCAux, ImageFormat, ImageOrder, VisualClass};
 
+use super::offscreen::{Channel, PixelLayout};
+
 pub struct X11Presenter {
     connection: x11rb::rust_connection::RustConnection,
     window: u32,
     gc: u32,
     depth: u8,
-    bits_per_pixel: u8,
-    scanline_pad: u8,
-    image_byte_order: ImageOrder,
-    red: Channel,
-    green: Channel,
-    blue: Channel,
-    alpha: Channel,
+    layout: PixelLayout,
     pixels: Vec<u8>,
-}
-
-#[derive(Clone, Copy)]
-struct Channel {
-    shift: u16,
-    mask: u16,
-}
-
-impl Channel {
-    fn pack(self, value: u8) -> u32 {
-        ((u32::from(value) * u32::from(self.mask) + 127) / 255) << self.shift
-    }
 }
 
 impl X11Presenter {
@@ -119,8 +103,33 @@ impl X11Presenter {
             "X11 ARGB visual uses unsupported {}-bit pixels",
             pixmap_format.bits_per_pixel
         );
-        let bits_per_pixel = pixmap_format.bits_per_pixel;
         let scanline_pad = pixmap_format.scanline_pad;
+        let big_endian = match connection.setup().image_byte_order {
+            ImageOrder::LSB_FIRST => false,
+            ImageOrder::MSB_FIRST => true,
+            _ => anyhow::bail!("unsupported X11 image byte order"),
+        };
+        let direct = picture_format.direct;
+        let layout = PixelLayout {
+            red: Channel {
+                shift: direct.red_shift,
+                mask: direct.red_mask,
+            },
+            green: Channel {
+                shift: direct.green_shift,
+                mask: direct.green_mask,
+            },
+            blue: Channel {
+                shift: direct.blue_shift,
+                mask: direct.blue_mask,
+            },
+            alpha: Channel {
+                shift: direct.alpha_shift,
+                mask: direct.alpha_mask,
+            },
+            big_endian,
+            scanline_pad,
+        };
 
         let gc = connection.generate_id()?;
         connection
@@ -132,29 +141,11 @@ impl X11Presenter {
         );
 
         Ok(Some(Self {
-            image_byte_order: connection.setup().image_byte_order,
             connection,
             window,
             gc,
             depth,
-            bits_per_pixel,
-            scanline_pad,
-            red: Channel {
-                shift: picture_format.direct.red_shift,
-                mask: picture_format.direct.red_mask,
-            },
-            green: Channel {
-                shift: picture_format.direct.green_shift,
-                mask: picture_format.direct.green_mask,
-            },
-            blue: Channel {
-                shift: picture_format.direct.blue_shift,
-                mask: picture_format.direct.blue_mask,
-            },
-            alpha: Channel {
-                shift: picture_format.direct.alpha_shift,
-                mask: picture_format.direct.alpha_mask,
-            },
+            layout,
             pixels: Vec::new(),
         }))
     }
@@ -168,56 +159,14 @@ impl X11Presenter {
         source_bytes_per_row: u32,
         format: wgpu::TextureFormat,
     ) -> anyhow::Result<()> {
-        let pixel_bytes = usize::from(self.bits_per_pixel / 8);
-        ensure!(pixel_bytes == 4, "X11 ARGB requires 4-byte pixels");
-        let unpadded_row_bytes = usize::try_from(width)? * pixel_bytes;
-        let row_bits = unpadded_row_bytes * 8;
-        let pad_bits = usize::from(self.scanline_pad);
-        let destination_bytes_per_row = row_bits.div_ceil(pad_bits) * pad_bits / 8;
-        self.pixels
-            .resize(destination_bytes_per_row * usize::try_from(height)?, 0);
-
-        let source_is_bgra = matches!(
+        let destination_bytes_per_row = self.layout.pack(
+            source,
+            width,
+            height,
+            source_bytes_per_row,
             format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        );
-        for y in 0..usize::try_from(height)? {
-            let source_row = &source[y * source_bytes_per_row as usize
-                ..y * source_bytes_per_row as usize + unpadded_row_bytes];
-            let destination_row = &mut self.pixels
-                [y * destination_bytes_per_row..(y + 1) * destination_bytes_per_row];
-            let (source_pixels, _) = source_row.as_chunks::<4>();
-            let (destination_pixels, _) = destination_row.as_chunks_mut::<4>();
-            for (source_pixel, destination_pixel) in
-                source_pixels.iter().zip(destination_pixels.iter_mut())
-            {
-                let (red, green, blue, alpha) = if source_is_bgra {
-                    (
-                        source_pixel[2],
-                        source_pixel[1],
-                        source_pixel[0],
-                        source_pixel[3],
-                    )
-                } else {
-                    (
-                        source_pixel[0],
-                        source_pixel[1],
-                        source_pixel[2],
-                        source_pixel[3],
-                    )
-                };
-                let pixel = self.red.pack(red)
-                    | self.green.pack(green)
-                    | self.blue.pack(blue)
-                    | self.alpha.pack(alpha);
-                let bytes = match self.image_byte_order {
-                    ImageOrder::LSB_FIRST => pixel.to_le_bytes(),
-                    ImageOrder::MSB_FIRST => pixel.to_be_bytes(),
-                    _ => anyhow::bail!("unsupported X11 image byte order"),
-                };
-                destination_pixel.copy_from_slice(&bytes);
-            }
-        }
+            &mut self.pixels,
+        )?;
 
         let rows_per_request = (self.connection.maximum_request_bytes().saturating_sub(64)
             / destination_bytes_per_row)
@@ -250,27 +199,20 @@ impl Drop for X11Presenter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn channel_pack_uses_the_visual_shift_and_mask() {
-        assert_eq!(
-            Channel {
-                shift: 16,
-                mask: 0xff
-            }
-            .pack(0x80),
-            0x800000
-        );
-        assert_eq!(
-            Channel {
-                shift: 24,
-                mask: 0xff
-            }
-            .pack(0xff),
-            0xff000000
-        );
-    }
+/// First 8-bit format `adapter` can render to and copy from, for the offscreen target.
+pub(super) fn offscreen_format(adapter: &wgpu::Adapter) -> Option<wgpu::TextureFormat> {
+    let required = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+    [
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ]
+    .into_iter()
+    .find(|format| {
+        adapter
+            .get_texture_format_features(*format)
+            .allowed_usages
+            .contains(required)
+    })
 }

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config;
+use crate::{atomic_file, config};
 
 /// Name of the file inside the state directory.
 pub const WINDOW_FILE: &str = "window.json";
@@ -30,17 +30,7 @@ impl WindowState {
     /// Reads `file`. A missing, unreadable, corrupt or zero-size file gives `None`; only
     /// the last three are logged.
     pub fn load(file: &Path) -> Option<WindowState> {
-        let text = match std::fs::read_to_string(file) {
-            Ok(text) => text,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
-            Err(error) => {
-                log::warn!("cannot read {}: {error}", file.display());
-                return None;
-            }
-        };
-        let state: WindowState = serde_json::from_str(&text)
-            .map_err(|error| log::warn!("ignoring corrupt {}: {error}", file.display()))
-            .ok()?;
+        let state: WindowState = atomic_file::read_json(file)?;
         if state.width == 0 || state.height == 0 {
             log::warn!("ignoring {}: zero window size", file.display());
             return None;
@@ -51,18 +41,7 @@ impl WindowState {
     /// Writes `file` through a temporary file renamed over it, so that two instances
     /// closing together never leave a partial file: the last one wins.
     pub fn save(&self, file: &Path) -> io::Result<()> {
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut temp = file.as_os_str().to_owned();
-        temp.push(format!(".{}.tmp", std::process::id()));
-        let temp = PathBuf::from(temp);
-        let text = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
-        let result = std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, file));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temp);
-        }
-        result
+        atomic_file::write_json(file, self)
     }
 }
 

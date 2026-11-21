@@ -113,9 +113,19 @@ impl Pane {
         self.redraw.set(true);
     }
 
+    /// Whether the pane changed what it shows since [`Self::take_redraw`] was last called.
+    pub fn redraw_pending(&self) -> bool {
+        self.redraw.get()
+    }
+
     /// Whether the pane needs a redraw since the last call.
     pub fn take_redraw(&self) -> bool {
         self.redraw.replace(false)
+    }
+
+    /// Whether the pane has text for the primary selection, for [`Self::take_primary`].
+    pub fn has_primary(&self) -> bool {
+        self.primary.is_some()
     }
 
     /// Text the pane wants in the primary selection, since the last call.

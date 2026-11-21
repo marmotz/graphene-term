@@ -73,12 +73,18 @@ the base theme `graphene-night`, so a partial theme still works. `theme.light` a
 `theme.dark` follow the system appearance (`src/appearance.rs`). To add a built-in
 theme, add its file to `themes/` and an entry to `theme::BUILT_IN`.
 
-### Startup timing
+### Startup and redraw timing
 
 `RUST_LOG=graphene::perf=debug` (`src/perf.rs`) logs the time of each startup step since
 the start of `main`: window created, glyphs ready, shell spawned, GPU instance and
-surface created, adapter ready, device ready, renderer ready, then the first PTY output
-and the first frame drawn after it.
+surface created, adapter ready, device ready, renderer ready, window shown, then the
+first PTY output and the first frame drawn after it. The GPU steps run on their own
+thread, alongside the glyphs and the shell (in sequence on macOS), so their marks
+interleave. The window is created hidden and shown once the renderer is ready; a
+window opened maximized also holds its first frame until it has its maximized size
+(150 ms at most). It then logs the mean and longest time of each
+series of 120 redraws (a redraw presented by the GPU surface includes its wait for the
+monitor refresh).
 
 ```bash
 RUST_LOG=graphene::perf=debug cargo run --release
@@ -122,9 +128,12 @@ into the history):
 | `frame`       | `Frame::capture` + `scene::build`                                    |
 | `glyphs_cold` | glyph cache lookup of every drawn cell, cache emptied first (rasterization included) |
 | `glyphs_warm` | the same lookups with the cache already filled                       |
+| `frame_panes` | the frames of four shown panes when one changed, through the `FrameCache` |
 | `gpu_prepare` | upload, draw and submit on a headless device: `idle` (same frame), `changed` (blank frame then the fixture) |
+| `present`     | a 1920x1080 frame: `direct` (drawn and waited for, the GPU surface), `x11` (read back and packed, the X11 presentation), `x11_async` (the part of `x11` that keeps the event loop busy), `x11_pack/rgba` and `x11_pack/bgra` (packing alone) |
 
-`gpu_prepare` is skipped with a message when no GPU adapter is available. Run one group
+`gpu_prepare` and `present` are skipped with a message when no GPU adapter is
+available. Run one group
 with `cargo bench -- gpu_prepare`; compare two versions with
 `cargo bench -- --save-baseline before`, then `cargo bench -- --baseline before`.
 Re-recording the fixtures is described in `benches/fixtures/README.md`.

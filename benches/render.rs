@@ -8,9 +8,18 @@
 //!   already filled;
 //! - `gpu_prepare`: scene upload, draw and submit on a headless GPU device, either with
 //!   an unchanged frame (`idle`) or alternating with a blank frame (`changed`, two
-//!   frames per iteration). Skipped when no GPU adapter is available.
+//!   frames per iteration). Skipped when no GPU adapter is available;
+//! - `frame_panes`: the frames of four shown panes when only one changed since the
+//!   last redraw, as the window redraws them (the others come from its frame cache);
+//! - `present`: a full HD frame drawn and waited for (`direct`, the GPU surface) or
+//!   read back and packed as an X11 ARGB image (`x11`, the X11 presentation of a
+//!   transparent window), `x11_async` the part of `x11` that keeps the event loop busy
+//!   when the readback does not wait for the GPU, and `x11_pack/*` the CPU part of
+//!   `x11` from an RGBA or a BGRA
+//!   target. Skipped when no GPU adapter is available.
 
 use std::hint::black_box;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::term::test::TermSize;
@@ -18,8 +27,8 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use graphene::bench::{
-    CellSize, Frame, GlyphKey, Glyphs, GridLayout, Headless, Palette, Rect, Scanner, Timeline,
-    process, scene, scroll_block, view_rows,
+    CellSize, Frame, FrameCache, GlyphKey, Glyphs, GridLayout, Headless, Palette, Rect, Scanner,
+    Timeline, pack_argb32, process, scene, scroll_block, view_rows,
 };
 
 /// Terminal size of the recordings.
@@ -280,5 +289,116 @@ fn gpu_prepare(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, parse, frame, glyphs, gpu_prepare);
+/// Fixtures shown side by side in the `frame_panes` benchmark.
+const PANES: [&str; 4] = ["btop", "cat", "vim", "history"];
+
+fn frame_panes(c: &mut Criterion) {
+    let palette = Palette::default();
+    let sessions: Vec<_> = PANES
+        .iter()
+        .map(|name| session_for(FIXTURES.iter().find(|f| f.name == *name).unwrap()))
+        .collect();
+    let mut group = c.benchmark_group("frame_panes");
+    let mut cache = FrameCache::default();
+    let mut revisions = [0u64; PANES.len()];
+    let mut next = 0;
+    group.bench_function("one_changed", |b| {
+        b.iter(|| {
+            // One pane changed since the last redraw, in turn.
+            revisions[next] += 1;
+            next = (next + 1) % PANES.len();
+            for (id, session) in sessions.iter().enumerate() {
+                let rows = view_rows(&session.timeline, &session.term, LINES);
+                let key = (revisions[id], rows.clone());
+                cache.update(id, Some(key), || {
+                    Frame::capture(
+                        &session.term,
+                        &session.timeline,
+                        &rows,
+                        &palette,
+                        true,
+                        true,
+                        None,
+                    )
+                });
+            }
+            (0..PANES.len()).filter_map(|id| cache.get(id)).count()
+        })
+    });
+    group.finish();
+}
+
+/// Window size of the `present` benchmark.
+const PRESENT_SIZE: (u32, u32) = (1920, 1080);
+
+fn present(c: &mut Criterion) {
+    let (width, height) = PRESENT_SIZE;
+    let Some(mut renderer) = Headless::new(width, height, Glyphs::new(None, FONT_SIZE)) else {
+        eprintln!("present: no GPU adapter available, skipped");
+        return;
+    };
+    let layout = layout(renderer.cell_size());
+    let palette = Palette::default();
+    let cat = FIXTURES.iter().find(|f| f.name == "cat").unwrap();
+    let frame = capture(&session_for(cat), &palette);
+
+    let mut group = c.benchmark_group("present");
+    group.bench_function("direct", |b| {
+        b.iter(|| renderer.present_direct(black_box(&frame), &layout).unwrap())
+    });
+    group.bench_function("x11", |b| {
+        b.iter(|| {
+            renderer
+                .present_x11(black_box(&frame), &layout)
+                .unwrap()
+                .len()
+        })
+    });
+    // The time a redraw keeps the event loop busy with the non-blocking readback:
+    // drawing and starting the read, then packing once the GPU is done; the GPU work
+    // in between leaves the loop free.
+    group.bench_function("x11_async", |b| {
+        b.iter_custom(|iters| {
+            let mut busy = Duration::ZERO;
+            for _ in 0..iters {
+                let start = Instant::now();
+                renderer.start_x11(black_box(&frame), &layout).unwrap();
+                busy += start.elapsed();
+                renderer.wait_gpu().unwrap();
+                let start = Instant::now();
+                assert!(renderer.finish_x11(false).unwrap());
+                busy += start.elapsed();
+            }
+            busy
+        })
+    });
+    // The CPU part of `x11`: the pixels packed for the X server.
+    let source = vec![0x80u8; (width * height * 4) as usize];
+    let mut packed = Vec::new();
+    for (name, bgra) in [("x11_pack/rgba", false), ("x11_pack/bgra", true)] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                pack_argb32(
+                    black_box(&source),
+                    PRESENT_SIZE,
+                    width * 4,
+                    bgra,
+                    &mut packed,
+                )
+                .unwrap()
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    parse,
+    frame,
+    frame_panes,
+    glyphs,
+    gpu_prepare,
+    present
+);
 criterion_main!(benches);

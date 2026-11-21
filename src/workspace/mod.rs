@@ -150,6 +150,10 @@ pub struct Workspace<P> {
     /// Index of the shown tab in `tabs`.
     active: usize,
     panes: HashMap<PaneId, P>,
+    /// Revision of each pane changed at least once: see [`Workspace::revision`].
+    revisions: HashMap<PaneId, u64>,
+    /// Last revision handed out.
+    last_revision: u64,
     /// Next pane id to hand out.
     next_id: u64,
 }
@@ -160,6 +164,8 @@ impl<P> Default for Workspace<P> {
             tabs: Vec::new(),
             active: 0,
             panes: HashMap::new(),
+            revisions: HashMap::new(),
+            last_revision: 0,
             next_id: 0,
         }
     }
@@ -210,13 +216,39 @@ impl<P> Workspace<P> {
         self.panes.get(&id)
     }
 
+    /// The pane `id`, to change it: its revision changes.
     pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut P> {
+        if self.panes.contains_key(&id) {
+            self.touch(id);
+        }
         self.panes.get_mut(&id)
     }
 
     /// Every pane, in no particular order.
+    pub fn panes(&self) -> impl Iterator<Item = (PaneId, &P)> {
+        self.panes.iter().map(|(id, pane)| (*id, pane))
+    }
+
+    /// Every pane, in no particular order, to change them: their revisions change.
     pub fn panes_mut(&mut self) -> impl Iterator<Item = (PaneId, &mut P)> {
+        let ids: Vec<_> = self.panes.keys().copied().collect();
+        for id in ids {
+            self.touch(id);
+        }
         self.panes.iter_mut().map(|(id, pane)| (*id, pane))
+    }
+
+    /// Changes the revision of the pane `id`: what it shows changed in a way the
+    /// workspace cannot see (behind a lock or a cell).
+    pub fn touch(&mut self, id: PaneId) {
+        self.last_revision += 1;
+        self.revisions.insert(id, self.last_revision);
+    }
+
+    /// Revision of the pane `id`: it changes whenever the pane may have changed, so a
+    /// frame captured at a revision is still the pane's while the revision is the same.
+    pub fn revision(&self, id: PaneId) -> u64 {
+        self.revisions.get(&id).copied().unwrap_or(0)
     }
 
     /// Index of the tab holding the pane `id`.
@@ -253,6 +285,7 @@ impl<P> Workspace<P> {
             return Ok(());
         };
         self.panes.remove(&id);
+        self.revisions.remove(&id);
         let tab = &mut self.tabs[index];
         tab.broadcast.remove(&id);
         if tab.is_single() {
@@ -750,6 +783,39 @@ fn display_dir(dir: &Path, home: Option<&Path>) -> String {
 mod tests {
     use super::*;
     use crate::layout::CellSize;
+
+    #[test]
+    fn mutable_access_changes_the_pane_revision() {
+        let mut workspace = Workspace::new();
+        let first = workspace.allocate_id();
+        workspace.new_tab(first, ());
+        let second = workspace.allocate_id();
+        workspace.new_tab(second, ());
+        let (a, b) = (workspace.revision(first), workspace.revision(second));
+
+        workspace.pane(first);
+        workspace.panes().count();
+        assert_eq!(
+            (workspace.revision(first), workspace.revision(second)),
+            (a, b)
+        );
+
+        workspace.pane_mut(first);
+        let a2 = workspace.revision(first);
+        assert_ne!(a2, a);
+        assert_eq!(workspace.revision(second), b);
+
+        workspace.touch(second);
+        let b2 = workspace.revision(second);
+        assert_ne!(b2, b);
+
+        workspace.panes_mut().count();
+        assert_ne!(workspace.revision(first), a2);
+        assert_ne!(workspace.revision(second), b2);
+        // Unknown panes are not given a revision.
+        workspace.pane_mut(PaneId(99));
+        assert_eq!(workspace.revision(PaneId(99)), 0);
+    }
 
     #[derive(Debug, Default)]
     struct Fake {

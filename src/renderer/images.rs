@@ -9,7 +9,8 @@ use std::ops::Range;
 use std::sync::{Arc, Weak};
 
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
+
+use super::pipeline::{InstanceBuffer, ScreenUniform, instanced_pipeline, uniform_entry};
 
 use super::scene::ImageQuad;
 use crate::graphics::Pixels;
@@ -20,13 +21,6 @@ struct ImageInstance {
     position: [f32; 2],
     size: [f32; 2],
     uv: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Uniforms {
-    screen: [f32; 2],
-    _padding: [f32; 2],
 }
 
 /// The texture of one image frame.
@@ -44,15 +38,14 @@ struct Batch {
 
 pub struct ImageRenderer {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
+    uniform_buffer: ScreenUniform,
     uniform_bind_group: wgpu::BindGroup,
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// Texture format of the frames: sRGB when the target is, so the sampled colors
     /// are linear like the rest of the scene.
     format: wgpu::TextureFormat,
-    instance_buffer: wgpu::Buffer,
-    capacity: usize,
+    instance_buffer: InstanceBuffer<ImageInstance>,
     textures: HashMap<u64, Texture>,
     /// Batches of each group uploaded by [`Self::prepare`].
     groups: Vec<Vec<Batch>>,
@@ -67,33 +60,17 @@ impl ImageRenderer {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("image.wgsl"))),
         });
 
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("image uniforms"),
-            contents: bytemuck::bytes_of(&Uniforms {
-                screen: [1.0, 1.0],
-                _padding: [0.0; 2],
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let uniform_buffer = ScreenUniform::new(device, "image uniforms");
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("image uniform layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+            entries: &[uniform_entry(0)],
         });
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("image uniforms"),
             layout: &uniform_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+                resource: uniform_buffer.binding(),
             }],
         });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -138,34 +115,14 @@ impl ImageRenderer {
                 2 => Float32x4
             ],
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("image pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(instance_layout)],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::default(),
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            cache: None,
-            multiview_mask: None,
-        });
+        let pipeline = instanced_pipeline(
+            device,
+            "image pipeline",
+            &pipeline_layout,
+            &shader,
+            format,
+            instance_layout,
+        );
 
         Self {
             pipeline,
@@ -178,20 +135,10 @@ impl ImageRenderer {
             } else {
                 wgpu::TextureFormat::Rgba8Unorm
             },
-            instance_buffer: Self::create_instance_buffer(device, INITIAL_CAPACITY),
-            capacity: INITIAL_CAPACITY,
+            instance_buffer: InstanceBuffer::new(device, "image instances", INITIAL_CAPACITY),
             textures: HashMap::new(),
             groups: Vec::new(),
         }
-    }
-
-    fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("image instances"),
-            size: (capacity * mem::size_of::<ImageInstance>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
     }
 
     /// Uploads the quads of each group (one per pane) and the textures they need, and
@@ -210,14 +157,7 @@ impl ImageRenderer {
         if total == 0 {
             return;
         }
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&Uniforms {
-                screen: [screen.0 as f32, screen.1 as f32],
-                _padding: [0.0; 2],
-            }),
-        );
+        self.uniform_buffer.write(queue, screen);
 
         let mut instances = Vec::with_capacity(total);
         for group in groups {
@@ -241,11 +181,7 @@ impl ImageRenderer {
             }
             self.groups.push(batches);
         }
-        if instances.len() > self.capacity {
-            self.capacity = instances.len().next_power_of_two();
-            self.instance_buffer = Self::create_instance_buffer(device, self.capacity);
-        }
-        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        self.instance_buffer.write(device, queue, &instances);
     }
 
     /// Creates the texture of `pixels` unless it exists.
@@ -343,7 +279,7 @@ impl ImageRenderer {
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+        pass.set_vertex_buffer(0, self.instance_buffer.slice());
         for batch in batches {
             let Some(bind_group) = self
                 .textures

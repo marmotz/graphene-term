@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use alacritty_terminal::vte::ansi::Rgb;
 
+use crate::atomic_file;
 use crate::config::{ConfigError, ConfigErrorKind};
 use crate::config_edit::{self, ConfigEdit};
 use crate::theme::{self, ColorKey};
@@ -53,7 +54,7 @@ pub fn duplicate(config_dir: &Path, from: &str, to: &str) -> Result<(), ConfigEr
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| config_edit::write_error(&target, &error))?;
     }
-    config_edit::write_atomic(&target, &edit.to_string())
+    atomic_file::write_atomic(&target, &edit.to_string())
         .map_err(|error| config_edit::write_error(&target, &error))
 }
 

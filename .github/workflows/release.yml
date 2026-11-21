@@ -8,12 +8,14 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_DEB_VERSION: 3.8.0
   CARGO_GENERATE_RPM_VERSION: 0.21.1
+  APPIMAGETOOL_VERSION: 1.9.1
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
   GRAPHENE_CHANNEL: stable
 
 jobs:
@@ -81,6 +83,8 @@ jobs:
 
       - name: Install packaging tools
         if: steps.tools-cache.outputs.cache-hit != 'true'
+        # Outside the repository: its rust-toolchain.toml does not apply to tools.
+        working-directory: ${{ runner.temp }}
         run: |
           cargo install --locked "cargo-deb@${CARGO_DEB_VERSION}" \
             "cargo-generate-rpm@${CARGO_GENERATE_RPM_VERSION}"
@@ -88,7 +92,8 @@ jobs:
       - name: Install appimagetool
         run: |
           curl -sSfL -o "$RUNNER_TEMP/appimagetool" \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+          echo "${APPIMAGETOOL_SHA256}  $RUNNER_TEMP/appimagetool" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
           echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
@@ -155,6 +160,8 @@ jobs:
   publish:
     needs: [guard, linux, macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
