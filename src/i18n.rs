@@ -301,6 +301,10 @@ pub enum Msg {
     ThemeNameError(NameError),
     /// Hint shown in the command palette's empty search field.
     PalettePlaceholder,
+    // Secret command palette entries.
+    SecretAnswer,
+    SecretAuthor,
+    SecretGraphene,
     // Command palette entries for open tabs and panes (1-based numbers).
     TabEntry {
         tab: usize,
@@ -326,6 +330,10 @@ pub enum Msg {
     /// Summary of a folded block: its hidden output rows.
     LinesHidden(usize),
 }
+
+/// Every language, for tests that must cover each of them.
+#[cfg(test)]
+pub const LANGS: [Lang; 2] = [Lang::En, Lang::Fr];
 
 /// Text of `msg` in `lang`.
 pub fn text(lang: Lang, msg: &Msg) -> Cow<'static, str> {
@@ -474,6 +482,9 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
         Msg::PalettePlaceholder => "Type a command, a tab or a pane",
+        Msg::SecretAnswer => "The Answer to the Ultimate Question",
+        Msg::SecretAuthor => "marmotz on GitHub",
+        Msg::SecretGraphene => "Graphene",
         Msg::TabEntry { tab, title } => return format!("Tab {tab}: {title}").into(),
         Msg::PaneEntry { tab, pane, title } => {
             return format!("Tab {tab} > pane {pane}: {title}").into();
@@ -644,6 +655,9 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
         Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
+        Msg::SecretAnswer => "La grande question sur la vie, l'univers et le reste",
+        Msg::SecretAuthor => "marmotz sur GitHub",
+        Msg::SecretGraphene => "Graphene",
         Msg::TabEntry { tab, title } => return format!("Onglet {tab} : {title}").into(),
         Msg::PaneEntry { tab, pane, title } => {
             return format!("Onglet {tab} > panneau {pane} : {title}").into();
@@ -759,7 +773,6 @@ fn french_color(key: ColorKey) -> &'static str {
 mod tests {
     use super::*;
 
-    const LANGS: [Lang; 2] = [Lang::En, Lang::Fr];
     const DIRECTIONS: [Direction; 4] = [
         Direction::Left,
         Direction::Right,
@@ -859,9 +872,12 @@ mod tests {
             Msg::ThemeColorsHint => 83,
             Msg::InvalidHexColor => 84,
             Msg::OpenThemesFolder => 85,
+            Msg::SecretAnswer => 87,
+            Msg::SecretAuthor => 88,
+            Msg::SecretGraphene => 89,
         }
     }
-    const VARIANT_COUNT: usize = 87;
+    const VARIANT_COUNT: usize = 90;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -907,6 +923,9 @@ mod tests {
             Msg::OpenSettings,
             Msg::Quit,
             Msg::PalettePlaceholder,
+            Msg::SecretAnswer,
+            Msg::SecretAuthor,
+            Msg::SecretGraphene,
             Msg::TabEntry {
                 tab: 2,
                 title: "~/dev".into(),
@@ -988,7 +1007,9 @@ mod tests {
 
     #[test]
     fn texts_differ_between_languages() {
-        for msg in all_messages() {
+        // Names that are the same in every language.
+        let same = [Msg::SecretGraphene];
+        for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {
             assert_ne!(text(Lang::En, &msg), text(Lang::Fr, &msg), "{msg:?}");
         }
     }

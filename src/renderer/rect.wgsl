@@ -27,6 +27,8 @@ struct VertexOutput {
 
 const SHAPE_RECT: u32 = 0u;
 const SHAPE_CHEVRON: u32 = 1u;
+const SHAPE_HEXAGON: u32 = 2u;
+const SHAPE_SCANLINES: u32 = 3u;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32, instance: Instance) -> VertexOutput {
@@ -78,8 +80,34 @@ fn sd_chevron(p: vec2<f32>, size: vec2<f32>, half_stroke: f32, bend: f32) -> f32
     return min(sd_segment(p, left, mid), sd_segment(p, mid, right)) - half_stroke;
 }
 
+// Signed distance to a regular hexagon of inradius `inradius` centered on the origin,
+// its flat sides vertical (a vertex up and one down): negative inside.
+fn sd_hexagon(p: vec2<f32>, inradius: f32) -> f32 {
+    let k = vec3<f32>(-0.866025404, 0.5, 0.577350269);
+    var q = abs(p.yx);
+    q = q - 2.0 * min(dot(k.xy, q), 0.0) * k.xy;
+    q = q - vec2<f32>(clamp(q.x, -k.z * inradius, k.z * inradius), inradius);
+    return length(q) * sign(q.y);
+}
+
+// Signed distance to the outline of the hexagon held by a box of size `size`, a
+// stroke of half width `half_stroke` inside it.
+fn sd_hexagon_outline(p: vec2<f32>, size: vec2<f32>, half_stroke: f32) -> f32 {
+    let inradius = size.x * 0.5;
+    let middle = max(inradius - half_stroke, 0.0);
+    return abs(sd_hexagon(p - size * 0.5, middle)) - half_stroke;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Scanlines: the instance's color on one row of physical pixels out of 3, nothing
+    // on the others.
+    if in.shape == SHAPE_SCANLINES {
+        if u32(in.position.y) % 3u == 0u {
+            return in.color;
+        }
+        return vec4<f32>(0.0);
+    }
     // A plain rect keeps the rasterizer's coverage: no antialiasing on its edges.
     if in.shape == SHAPE_RECT && in.radius <= 0.0 {
         return in.color;
@@ -88,6 +116,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var d: f32;
     if in.shape == SHAPE_CHEVRON {
         d = sd_chevron(in.local, size, in.radius, in.bend);
+    } else if in.shape == SHAPE_HEXAGON {
+        d = sd_hexagon_outline(in.local, size, in.radius);
     } else {
         let half = size * 0.5;
         d = sd_rounded_box(in.local - half, half, in.radius);

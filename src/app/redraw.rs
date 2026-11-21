@@ -3,6 +3,7 @@
 use std::ops::RangeInclusive;
 
 use super::*;
+use crate::renderer::scene::gpu_color;
 use crate::view::ViewRow;
 
 /// What the frame of a pane is captured from, besides its terminal: the frame drawn
@@ -91,11 +92,13 @@ impl Session {
         let dialog = self.dialog_layout();
         let palette = self.palette_layout();
         let menu = self.menu_layout();
+        let art = self.art_layout();
         let tooltip = self.tooltip_layout();
-        let overlay = match (&dialog, &palette, &menu) {
-            (Some(dialog), _, _) => Some(chrome::scene::Overlay::Dialog(dialog)),
-            (_, Some(palette), _) => Some(chrome::scene::Overlay::Palette(palette)),
-            (_, _, Some(menu)) => Some(chrome::scene::Overlay::Menu(menu)),
+        let overlay = match (&dialog, &palette, &menu, &art) {
+            (Some(dialog), _, _, _) => Some(chrome::scene::Overlay::Dialog(dialog)),
+            (_, Some(palette), _, _) => Some(chrome::scene::Overlay::Palette(palette)),
+            (_, _, Some(menu), _) => Some(chrome::scene::Overlay::Menu(menu)),
+            (_, _, _, Some(art)) => Some(chrome::scene::Overlay::Art(art)),
             _ => None,
         };
         let mut banner = self.shown_banner().map(|shown| FrameBanner {
@@ -226,6 +229,11 @@ impl Session {
             &self.palette.ui,
             self.renderer.is_srgb(),
         );
+        if let Some(honeycomb) = &self.honeycomb {
+            let color = gpu_color(self.palette.cursor, self.renderer.is_srgb());
+            let scale = self.window.scale_factor() as f32;
+            ui.rects.extend(honeycomb.rects(now, scale, color));
+        }
         if let Some(highlight) = highlight {
             chrome::scene::drop_highlight(
                 highlight,

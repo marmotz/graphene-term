@@ -173,7 +173,7 @@ impl SettingsWindow {
         self.model.refresh(config, errors, appearance);
         self.view.reset_inputs();
         self.model
-            .set_theme_choices(theme::available(Some(&self.dir)));
+            .set_theme_choices(theme::available(Some(&self.dir), &config.theme.unlocked));
         recolor(self.egui.egui_ctx(), palette);
         if lang != self.lang {
             self.lang = lang;
@@ -286,8 +286,9 @@ impl SettingsWindow {
             let (next, result) = write_edits(&self.dir, &edited, &edits.changes, &edits.theme_ops);
             let (config, errors) = config::reload_from(&self.dir, self.model.config());
             self.model.written(config, errors);
-            self.model
-                .set_theme_choices(theme::available(Some(&self.dir)));
+            let unlocked = &self.model.config().theme.unlocked;
+            let choices = theme::available(Some(&self.dir), unlocked);
+            self.model.set_theme_choices(choices);
             if let Some(name) = next {
                 self.model.edit_theme(&name);
             }
@@ -629,6 +630,37 @@ mod tests {
         assert_eq!(errors, vec![]);
         assert_eq!(config.font.size, 16.0);
         assert_eq!(config.theme.name, "gruvbox-dark");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unlocking_the_hidden_theme_writes_a_config_that_loads_it() {
+        let dir =
+            std::env::temp_dir().join(format!("graphene-settings-unlock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(config::CONFIG_FILE);
+        std::fs::write(&file, "[theme]\nname = \"gruvbox-dark\"\n").unwrap();
+        let (config, _) = Config::parse(
+            &std::fs::read_to_string(&file).unwrap(),
+            &Config::default(),
+            &file,
+        );
+        let model = SettingsModel::new(
+            &config,
+            &model::LoadErrors::default(),
+            None,
+            crate::appearance::Appearance::Dark,
+        );
+        write_changes(&dir, &model.unlock_hidden_theme()).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        let (config, errors) = Config::parse(&text, &Config::default(), &file);
+        assert_eq!(errors, vec![]);
+        assert_eq!(config.theme.name, crate::easter_eggs::HIDDEN_THEME);
+        assert_eq!(
+            config.theme.unlocked,
+            vec![crate::easter_eggs::HIDDEN_THEME]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

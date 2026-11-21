@@ -20,6 +20,7 @@ use alacritty_terminal::term::Term;
 use super::tab_bar::UiMetrics;
 use crate::block_actions::{self, Direction as BlockDirection, Part};
 use crate::config::{MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::easter_eggs::secrets::{self, Secret};
 use crate::i18n::{self, Lang, Msg};
 use crate::input::Action;
 use crate::keybindings::Keybindings;
@@ -63,6 +64,8 @@ pub enum Command {
     Tab(usize),
     /// Shows the tab of this pane and focuses it.
     Pane(PaneId),
+    /// A hidden entry, shown only when the query is its keyword.
+    Secret(Secret),
 }
 
 /// A line of the palette.
@@ -266,10 +269,13 @@ pub fn entries<P: TitleSource>(
     entries
 }
 
+/// [`Match::entry`] of the secret entry, which is not in the palette's entries.
+const SECRET_ENTRY: usize = usize::MAX;
+
 /// An entry matching the query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
-    /// Index of the entry in the palette's entries.
+    /// Index of the entry in the palette's entries, or [`SECRET_ENTRY`].
     pub entry: usize,
     /// Characters of the label matching the query, by char index, ascending.
     pub indices: Vec<usize>,
@@ -287,7 +293,10 @@ pub enum Outcome {
 /// The open palette: its query, the entries matching it, the selected one and the
 /// first shown row.
 pub struct CommandPalette {
+    lang: Lang,
     entries: Vec<Entry>,
+    /// The secret entry revealed by the query, listed first.
+    secret: Option<Entry>,
     /// Ids of the recently run actions, most recent first.
     recent: Vec<String>,
     query: String,
@@ -300,11 +309,13 @@ pub struct CommandPalette {
 }
 
 impl CommandPalette {
-    /// A palette over `entries`, the actions of `recent` (ids, most recent first)
-    /// listed first while the query is empty.
-    pub fn new(entries: Vec<Entry>, recent: Vec<String>) -> Self {
+    /// A palette in `lang` over `entries`, the actions of `recent` (ids, most recent
+    /// first) listed first while the query is empty.
+    pub fn new(lang: Lang, entries: Vec<Entry>, recent: Vec<String>) -> Self {
         let mut palette = Self {
+            lang,
             entries,
+            secret: None,
             recent,
             query: String::new(),
             matches: Vec::new(),
@@ -326,7 +337,10 @@ impl CommandPalette {
     }
 
     pub fn entry(&self, found: &Match) -> &Entry {
-        &self.entries[found.entry]
+        match (found.entry, &self.secret) {
+            (SECRET_ENTRY, Some(secret)) => secret,
+            (index, _) => &self.entries[index],
+        }
     }
 
     pub fn recent(&self) -> &[String] {
@@ -375,7 +389,7 @@ impl CommandPalette {
     /// Runs the match `index`; `None` when there is no such match.
     pub fn choose(&self, index: usize) -> Option<Outcome> {
         let found = self.matches.get(index)?;
-        Some(Outcome::Run(self.entries[found.entry].command))
+        Some(Outcome::Run(self.entry(found).command))
     }
 
     /// Scrolls the rows by `rows`, keeping the selection on a shown row.
@@ -412,7 +426,8 @@ impl CommandPalette {
         self.recent.iter().position(|recent| *recent == id)
     }
 
-    /// Matches the query against every entry and selects the best one.
+    /// Matches the query against every entry and selects the best one. The secret
+    /// whose keyword is the query, if any, comes first, unhighlighted.
     fn refilter(&mut self) {
         let pattern = Pattern::new(
             &self.query,
@@ -445,7 +460,19 @@ impl CommandPalette {
             scored.push(((Reverse(score), rank, index), found));
         }
         scored.sort_by_key(|(key, _)| *key);
-        self.matches = scored.into_iter().map(|(_, found)| found).collect();
+        self.secret = secrets::find(&self.query).map(|secret| Entry {
+            command: Command::Secret(secret),
+            label: i18n::text(self.lang, &secret.label()).into_owned(),
+            shortcut: None,
+        });
+        let secret = self.secret.as_ref().map(|_| Match {
+            entry: SECRET_ENTRY,
+            indices: Vec::new(),
+        });
+        self.matches = secret
+            .into_iter()
+            .chain(scored.into_iter().map(|(_, found)| found))
+            .collect();
         self.selected = 0;
         self.scroll = 0;
     }
@@ -778,6 +805,7 @@ mod tests {
     #[test]
     fn fuzzy_query_keeps_the_matching_entries_best_first() {
         let mut palette = CommandPalette::new(
+            Lang::En,
             vec![
                 entry("Scroll to top", Action::ScrollToTop),
                 entry("Paste", Action::Paste),
@@ -794,8 +822,11 @@ mod tests {
 
     #[test]
     fn match_indices_are_char_indices() {
-        let mut palette =
-            CommandPalette::new(vec![entry("Égaliser à droite", Action::Copy)], Vec::new());
+        let mut palette = CommandPalette::new(
+            Lang::En,
+            vec![entry("Égaliser à droite", Action::Copy)],
+            Vec::new(),
+        );
         typed(&mut palette, "ad");
         let found = &palette.matches()[0];
         let chars: Vec<char> = palette.entry(found).label.chars().collect();
@@ -810,10 +841,10 @@ mod tests {
             entry("copy output", Action::CopyOutput),
             entry("Copy", Action::Copy),
         ];
-        let mut palette = CommandPalette::new(entries.clone(), Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, entries.clone(), Vec::new());
         typed(&mut palette, "copy");
         assert_eq!(palette.matches().len(), 2);
-        let mut palette = CommandPalette::new(entries, Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, entries, Vec::new());
         typed(&mut palette, "Copy");
         assert_eq!(labels(&palette), ["Copy"]);
     }
@@ -821,6 +852,7 @@ mod tests {
     #[test]
     fn recent_actions_come_first_on_an_empty_query() {
         let palette = CommandPalette::new(
+            Lang::En,
             vec![
                 entry("New tab", Action::NewTab),
                 entry("Split right", Action::SplitRight),
@@ -845,10 +877,10 @@ mod tests {
             entry("Next tab", Action::NextTab),
             entry("Next pane", Action::NextPane),
         ];
-        let mut palette = CommandPalette::new(entries.clone(), Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, entries.clone(), Vec::new());
         typed(&mut palette, "next");
         assert_eq!(labels(&palette), ["Next tab", "Next pane"]);
-        let mut palette = CommandPalette::new(entries, vec!["next_pane".to_owned()]);
+        let mut palette = CommandPalette::new(Lang::En, entries, vec!["next_pane".to_owned()]);
         typed(&mut palette, "next");
         assert_eq!(labels(&palette), ["Next pane", "Next tab"]);
     }
@@ -856,6 +888,7 @@ mod tests {
     #[test]
     fn keys_edit_the_query_move_and_run() {
         let mut palette = CommandPalette::new(
+            Lang::En,
             vec![
                 entry("New tab", Action::NewTab),
                 entry("Next tab", Action::NextTab),
@@ -901,7 +934,7 @@ mod tests {
             .into_iter()
             .map(|action| entry(&action.id(), action))
             .collect();
-        let mut palette = CommandPalette::new(entries, Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, entries, Vec::new());
         for _ in 0..VISIBLE_ROWS {
             named(&mut palette, NamedKey::ArrowDown);
         }
@@ -910,7 +943,7 @@ mod tests {
         named(&mut palette, NamedKey::ArrowUp);
         assert_eq!(palette.scroll(), 1);
         // Up from the first wraps to the last, at the bottom of the shown rows.
-        let mut palette = CommandPalette::new(palette.entries.clone(), Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, palette.entries.clone(), Vec::new());
         named(&mut palette, NamedKey::ArrowUp);
         let last = Action::ALL.len() - 1;
         assert_eq!(
@@ -994,7 +1027,7 @@ mod tests {
             ]
         );
         // Pane entries are found by their program.
-        let mut palette = CommandPalette::new(entries, Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, entries, Vec::new());
         typed(&mut palette, "htop");
         assert_eq!(palette.choose(0), Some(Outcome::Run(Command::Pane(second))));
     }
@@ -1321,7 +1354,7 @@ mod tests {
 
     #[test]
     fn layout_is_capped_in_width_and_placed_at_the_top() {
-        let palette = CommandPalette::new(vec![entry("Copy", Action::Copy)], Vec::new());
+        let palette = CommandPalette::new(Lang::En, vec![entry("Copy", Action::Copy)], Vec::new());
         let wide = PaletteLayout::new(
             &palette,
             Lang::En,
@@ -1351,7 +1384,7 @@ mod tests {
             .into_iter()
             .map(|action| entry(&action.id(), action))
             .collect();
-        let mut palette = CommandPalette::new(entries, Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, entries, Vec::new());
         palette.scroll_by(2);
         let layout = PaletteLayout::new(
             &palette,
@@ -1382,6 +1415,7 @@ mod tests {
     #[test]
     fn layout_splits_labels_into_highlighted_runs_and_places_shortcuts() {
         let mut palette = CommandPalette::new(
+            Lang::En,
             vec![Entry {
                 shortcut: Some("Ctrl+Shift+E".to_owned()),
                 ..entry("Split right", Action::SplitRight)
@@ -1424,7 +1458,7 @@ mod tests {
             .into_iter()
             .map(|action| entry(&action.id(), action))
             .collect();
-        let mut palette = CommandPalette::new(entries, Vec::new());
+        let mut palette = CommandPalette::new(Lang::En, entries, Vec::new());
         let lay = |palette: &CommandPalette, scale: f32| {
             PaletteLayout::new(
                 palette,
@@ -1472,7 +1506,8 @@ mod tests {
 
     #[test]
     fn marker_is_absent_without_a_match() {
-        let mut palette = CommandPalette::new(vec![entry("Copy", Action::Copy)], Vec::new());
+        let mut palette =
+            CommandPalette::new(Lang::En, vec![entry("Copy", Action::Copy)], Vec::new());
         typed(&mut palette, "zzz");
         let layout = PaletteLayout::new(
             &palette,
@@ -1483,5 +1518,76 @@ mod tests {
         );
         assert!(layout.rows.is_empty());
         assert_eq!(layout.marker, None);
+    }
+
+    #[test]
+    fn a_secret_keyword_puts_its_entry_first_and_selected() {
+        let mut palette = CommandPalette::new(
+            Lang::Fr,
+            vec![
+                entry("Copy", Action::Copy),
+                entry("Quit Graphene", Action::Quit),
+            ],
+            Vec::new(),
+        );
+        typed(&mut palette, "Graphene");
+        assert_eq!(labels(&palette), ["Graphene", "Quit Graphene"]);
+        assert_eq!(palette.matches()[0].indices, Vec::<usize>::new());
+        assert_eq!(palette.selected(), 0);
+        assert_eq!(
+            named(&mut palette, NamedKey::Enter),
+            Some(Outcome::Run(Command::Secret(Secret::Graphene)))
+        );
+
+        let mut palette = CommandPalette::new(Lang::Fr, Vec::new(), Vec::new());
+        typed(&mut palette, " 42 ");
+        assert_eq!(
+            labels(&palette),
+            ["La grande question sur la vie, l'univers et le reste"]
+        );
+        assert_eq!(
+            palette.choose(0),
+            Some(Outcome::Run(Command::Secret(Secret::Answer)))
+        );
+    }
+
+    #[test]
+    fn secret_entries_are_hidden_from_other_queries() {
+        let mut palette = CommandPalette::new(
+            Lang::En,
+            vec![entry("Quit Graphene", Action::Quit)],
+            Vec::new(),
+        );
+        assert_eq!(labels(&palette), ["Quit Graphene"]);
+        typed(&mut palette, "graph");
+        assert_eq!(labels(&palette), ["Quit Graphene"]);
+        typed(&mut palette, "ene");
+        assert_eq!(labels(&palette), ["Graphene", "Quit Graphene"]);
+        named(&mut palette, NamedKey::Backspace);
+        assert_eq!(labels(&palette), ["Quit Graphene"]);
+
+        let mut palette = CommandPalette::new(Lang::En, Vec::new(), Vec::new());
+        typed(&mut palette, "4");
+        assert!(palette.matches().is_empty());
+        assert_eq!(palette.choose(0), None);
+        typed(&mut palette, "2");
+        assert_eq!(labels(&palette), ["The Answer to the Ultimate Question"]);
+    }
+
+    #[test]
+    fn a_secret_entry_is_never_a_recent_action() {
+        let mut palette = CommandPalette::new(
+            Lang::En,
+            vec![entry("Copy", Action::Copy)],
+            vec!["copy".to_owned()],
+        );
+        typed(&mut palette, "marmotz");
+        let found = &palette.matches()[0];
+        assert_eq!(
+            palette.entry(found).command,
+            Command::Secret(Secret::Author)
+        );
+        assert_eq!(palette.recent_rank(palette.entry(found)), None);
+        assert_eq!(palette.recent(), ["copy"]);
     }
 }

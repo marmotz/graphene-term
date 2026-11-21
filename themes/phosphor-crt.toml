@@ -1,0 +1,45 @@
+# Phosphor CRT: green phosphor on a dark tube.
+#
+# Graphene Term hidden theme.
+
+[colors]
+foreground = "#4dff7a"
+background = "#0a120c"
+cursor = "#7dff9b"
+cursor_text = "#0a120c"
+selection_background = "#1d5a2c"
+selection_foreground = ""
+
+[colors.normal]
+black = "#142019"
+red = "#c8ffc0"
+green = "#33dd55"
+yellow = "#9cf04a"
+blue = "#2a9d4a"
+magenta = "#5cc27a"
+cyan = "#48e08a"
+white = "#a8e8b4"
+
+[colors.bright]
+black = "#3a6a46"
+red = "#eaffe4"
+green = "#5cff7f"
+yellow = "#c4ff70"
+blue = "#3fc060"
+magenta = "#7ee09a"
+cyan = "#6cffaa"
+white = "#d8ffe0"
+
+[ui]
+tab_bar_background = "#070d09"
+tab_active_background = "#12201a"
+tab_active_text = "#4dff7a"
+tab_inactive_text = "#2f8a48"
+pane_border = "#24432e"
+pane_broadcast = "#c4ff70"
+palette_background = "#0f1a13"
+palette_text = "#4dff7a"
+palette_match = "#c8ffc0"
+palette_selection_background = "#1f3a27"
+banner_background = "#2a4a1a"
+banner_text = "#d8ffe0"

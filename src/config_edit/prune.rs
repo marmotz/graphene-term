@@ -617,4 +617,19 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
         remove_temporary_config(directory);
     }
+
+    #[test]
+    fn theme_unlocked_is_a_known_key() {
+        let original = "[theme]\nunlocked = [\"phosphor-crt\"]\n";
+        let (directory, path) = temporary_config(Some(original));
+        assert_eq!(
+            prune_one(&path, PruneKind::Config, |keys| panic!(
+                "theme.unlocked must not be pruned: {keys:?}"
+            ))
+            .unwrap(),
+            PruneOutcome::NothingToPrune
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        remove_temporary_config(directory);
+    }
 }

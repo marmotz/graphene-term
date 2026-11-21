@@ -98,6 +98,7 @@ impl Default for Config {
                 name: "graphene-night".to_owned(),
                 light: None,
                 dark: None,
+                unlocked: Vec::new(),
             },
             keybindings: BTreeMap::new(),
             updates: UpdatesConfig {
@@ -318,6 +319,7 @@ mod tests {
             name: "gruvbox-dark".to_owned(),
             light: light.map(str::to_owned),
             dark: dark.map(str::to_owned),
+            unlocked: Vec::new(),
         }
     }
 
@@ -405,6 +407,18 @@ mod tests {
     }
 
     #[test]
+    fn theme_unlocked_keeps_hidden_themes_and_drops_unknown_names_silently() {
+        let (config, errors) = parse("[theme]\nunlocked = [\"phosphor-crt\", \"nonexistent\"]\n");
+        assert_eq!(errors, Vec::new());
+        assert_eq!(config.theme.unlocked, ["phosphor-crt"]);
+    }
+
+    #[test]
+    fn theme_unlocked_is_not_documented_in_the_default_file() {
+        assert!(!DEFAULT_CONFIG.contains("unlocked"));
+    }
+
+    #[test]
     fn every_key_is_read() {
         let text = r#"
 language = "fr"
@@ -470,6 +484,7 @@ interval = "2d"
                     name: "gruvbox-dark".to_owned(),
                     light: Some("graphene-day".to_owned()),
                     dark: Some("graphene-night".to_owned()),
+                    unlocked: Vec::new(),
                 },
                 keybindings: BTreeMap::new(),
                 updates: UpdatesConfig {

@@ -165,6 +165,10 @@ impl Reader<'_> {
             ("theme", "name") => self.set(value, key_segments, path, &mut config.theme.name, &previous.theme.name, non_empty),
             ("theme", "light") => self.set(value, key_segments, path, &mut config.theme.light, &previous.theme.light, |name: String| non_empty(name).map(Some)),
             ("theme", "dark") => self.set(value, key_segments, path, &mut config.theme.dark, &previous.theme.dark, |name: String| non_empty(name).map(Some)),
+            // Unknown names are dropped without an error, to reveal nothing.
+            ("theme", "unlocked") => self.set(value, key_segments, path, &mut config.theme.unlocked, &previous.theme.unlocked, |names: Vec<String>| {
+                Checked::Valid(names.into_iter().filter(|name| crate::theme::is_hidden(name)).collect())
+            }),
             ("updates", "check") => self.set(value, key_segments, path, &mut config.updates.check, &previous.updates.check, Checked::Valid),
             ("updates", "interval") => self.set(value, key_segments, path, &mut config.updates.interval, &previous.updates.interval, |interval: String| {
                 match UpdateInterval::parse(&interval) {

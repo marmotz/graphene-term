@@ -55,7 +55,9 @@ impl Session {
             self.lang,
             &self.keybindings,
         );
-        self.overlay = Some(Overlay::Palette(CommandPalette::new(entries, recent)));
+        self.overlay = Some(Overlay::Palette(CommandPalette::new(
+            self.lang, entries, recent,
+        )));
         self.window.request_redraw();
         self.update_pointer();
     }
@@ -91,6 +93,37 @@ impl Session {
             metrics,
             |text| renderer.ui_text_width(UiFont::Palette, text),
         ))
+    }
+
+    /// The open ASCII drawing laid out in the window.
+    pub(super) fn art_layout(&mut self) -> Option<ArtLayout> {
+        if !matches!(self.overlay, Some(Overlay::Art)) {
+            return None;
+        }
+        let size = self.window.inner_size();
+        let metrics = self.ui_metrics(UiFont::Mono);
+        let renderer = &mut self.renderer;
+        Some(ArtLayout::new(
+            Rect::from_size(size.width, size.height),
+            metrics,
+            |text| renderer.ui_text_width(UiFont::Mono, text),
+        ))
+    }
+
+    /// Opens the ASCII drawing over the window.
+    pub(super) fn open_art(&mut self) {
+        self.overlay = Some(Overlay::Art);
+        self.window.request_redraw();
+        self.update_pointer();
+    }
+
+    /// Closes the ASCII drawing.
+    pub(super) fn close_art(&mut self) {
+        if matches!(self.overlay, Some(Overlay::Art)) {
+            self.overlay = None;
+            self.window.request_redraw();
+            self.update_pointer();
+        }
     }
 
     /// How many themes a menu shows before "More...": as many as the window height holds.
@@ -130,7 +163,7 @@ impl Session {
         });
         let items = {
             let tab = self.workspace.tabs().get(tab_index);
-            let themes = theme::available(config::config_dir().as_deref());
+            let themes = theme::available(config::config_dir().as_deref(), &self.theme.unlocked);
             let active_theme = self.theme.active(self.appearance).to_owned();
             let theme_rows = self.theme_rows();
             let context = MenuContext {
@@ -160,7 +193,7 @@ impl Session {
         let Some(tab) = self.workspace.tabs().get(index) else {
             return;
         };
-        let themes = theme::available(config::config_dir().as_deref());
+        let themes = theme::available(config::config_dir().as_deref(), &self.theme.unlocked);
         let active_theme = self.theme.active(self.appearance).to_owned();
         let context = MenuContext {
             copyable: false,
@@ -275,15 +308,22 @@ impl Session {
             MenuThemeStep::Show(name) => {
                 let name = name.to_owned();
                 let (palette, _) = theme::load(&name, config::config_dir().as_deref());
-                let saved = self
-                    .menu_theme
-                    .take()
-                    .map_or_else(|| self.palette.clone(), |theme| theme.saved);
+                let (saved, saved_scanlines) = self.menu_theme.take().map_or_else(
+                    || (self.palette.clone(), self.renderer.scanlines()),
+                    |theme| (theme.saved, theme.saved_scanlines),
+                );
+                self.renderer
+                    .set_scanlines(easter_eggs::shows_scanlines(&name));
                 self.preview_palette(&palette);
-                self.menu_theme = Some(MenuTheme { name, saved });
+                self.menu_theme = Some(MenuTheme {
+                    name,
+                    saved,
+                    saved_scanlines,
+                });
             }
             MenuThemeStep::Restore => {
                 if let Some(theme) = self.menu_theme.take() {
+                    self.renderer.set_scanlines(theme.saved_scanlines);
                     self.preview_palette(&theme.saved);
                 }
             }
@@ -324,18 +364,25 @@ impl Session {
             }
             Command::Tab(index) => self.change_tab(|workspace| workspace.select(index)),
             Command::Pane(id) => self.focus_pane(id),
+            Command::Secret(Secret::Answer) => opener::open(secrets::answer_url(self.lang)),
+            Command::Secret(Secret::Author) => opener::open(secrets::AUTHOR_URL),
+            Command::Secret(Secret::Graphene) => self.open_art(),
         }
     }
 
     /// Handles a press while an overlay is open: a button of the dialog answers it, a
-    /// row of the palette runs it and a press outside the palette closes it; anything
-    /// else is ignored.
+    /// row of the palette runs it and a press outside the palette closes it, any press
+    /// closes the ASCII drawing; anything else is ignored.
     pub(super) fn overlay_press(
         &mut self,
         button: mouse::Button,
         default_font_size: f32,
         event_loop: &ActiveEventLoop,
     ) {
+        if matches!(self.overlay, Some(Overlay::Art)) {
+            self.close_art();
+            return;
+        }
         let (x, y) = self.mouse_pixel();
         if matches!(self.overlay, Some(Overlay::Menu(_))) {
             let hit = self

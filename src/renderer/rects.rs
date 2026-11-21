@@ -1,5 +1,6 @@
 //! Instanced rendering of solid shapes (cell backgrounds, cursor, underlines, cards,
-//! chevrons): rectangles, optionally with rounded corners, and chevron strokes, antialiased by a signed distance in the fragment shader.
+//! chevrons, hexagons): rectangles, optionally with rounded corners, chevron strokes and
+//! hexagon outlines, antialiased by a signed distance in the fragment shader.
 
 use std::borrow::Cow;
 use std::mem;
@@ -38,7 +39,19 @@ pub enum Shape {
     /// center, the bend spanning the box's height. The stroke is the instance's radius
     /// on each side of that line, inside the box.
     Chevron = 1,
+    /// The outline of a regular hexagon with a vertex at the middle of the box's top
+    /// and bottom edges, its flat sides on the box's left and right edges: a box
+    /// `sqrt(3)` sides wide and 2 sides high holds it exactly. The stroke is twice the
+    /// instance's radius, inside the box.
+    Hexagon = 2,
+    /// Darkens one row of physical pixels out of 3 with the instance's color, leaves the
+    /// others untouched: the scanlines of the hidden CRT theme.
+    Scanlines = 3,
 }
+
+/// Color of a dark row of [`Shape::Scanlines`]: black at 50 % opacity. Blended in linear
+/// space, a lower opacity barely shows on the green text.
+pub const SCANLINE_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
 
 impl RectInstance {
     /// A plain rectangle with square corners, drawn exactly as the rasterizer covers it.
@@ -67,6 +80,19 @@ impl RectInstance {
             bend,
             ..self
         }
+    }
+
+    /// The same box drawing the outline of a [`Shape::Hexagon`], `stroke` pixels wide.
+    pub fn hexagon(self, stroke: f32) -> Self {
+        Self {
+            radius: stroke / 2.0,
+            ..self.with_shape(Shape::Hexagon)
+        }
+    }
+
+    /// Scanlines over the box at `position` of `size`, see [`Shape::Scanlines`].
+    pub fn scanlines(position: [f32; 2], size: [f32; 2]) -> Self {
+        Self::new(position, size, SCANLINE_COLOR).with_shape(Shape::Scanlines)
     }
 
     /// The same box drawing `shape`.
@@ -273,6 +299,47 @@ mod tests {
             (1.5, Shape::Chevron as u32, -0.5)
         );
         assert_eq!(chevron.position, rect.position);
+        let hexagon = rect.hexagon(2.0);
+        assert_eq!(
+            (hexagon.radius, hexagon.shape),
+            (1.0, Shape::Hexagon as u32)
+        );
+    }
+
+    #[test]
+    fn hexagon_covers_its_center_but_not_the_corners_of_its_box() {
+        // A pointy-top hexagon of side 24 in a 41.57 x 48 box at (11, 8): a stroke as
+        // wide as its inradius fills it.
+        let side = 24.0_f32;
+        let size = [3.0_f32.sqrt() * side, 2.0 * side];
+        let position = [11.0, 8.0];
+        let inradius = size[0] / 2.0;
+        let filled = RectInstance::new(position, size, WHITE).hexagon(inradius);
+        let Some(pixels) = draw(&[filled]) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let (cx, cy) = (32, 32);
+        assert_eq!(red(&pixels, cx, cy), 255, "center");
+        // The corners of the box are outside the hexagon.
+        for (x, y) in [(12, 9), (51, 9), (12, 55), (51, 55)] {
+            assert_eq!(red(&pixels, x, y), 0, "corner ({x}, {y})");
+        }
+        // Its vertices touch the middle of the top and bottom edges, its flat sides
+        // the left and right ones.
+        for (x, y) in [(cx, 11), (cx, 52), (12, cy), (51, cy)] {
+            assert_eq!(red(&pixels, x, y), 255, "edge ({x}, {y})");
+        }
+
+        // A thin outline leaves the center empty and lights its sides.
+        let outline = RectInstance::new(position, size, WHITE).hexagon(3.0);
+        let pixels = draw(&[outline]).unwrap();
+        assert_eq!(red(&pixels, cx, cy), 0, "center of the outline");
+        assert!(red(&pixels, 12, cy) > 127, "left side");
+        assert!(red(&pixels, 51, cy) > 127, "right side");
+        for (x, y) in [(12, 9), (51, 9), (12, 55), (51, 55)] {
+            assert_eq!(red(&pixels, x, y), 0, "corner ({x}, {y})");
+        }
     }
 
     #[test]
@@ -328,6 +395,30 @@ mod tests {
         assert!(drop(&flat).abs() < 0.5, "flat {}", drop(&flat));
         assert!((lit_center(&flat, 32) - 32.0).abs() < 0.5);
         assert!((drop(&up) + 10.9).abs() < 1.0, "up {}", drop(&up));
+    }
+
+    #[test]
+    fn scanlines_darken_one_row_out_of_three() {
+        // Over a white background, scanlines on the left half only.
+        let background = RectInstance::new([0.0, 0.0], [SIZE as f32, SIZE as f32], WHITE);
+        let lines = RectInstance::scanlines([0.0, 0.0], [32.0, SIZE as f32]);
+        assert_eq!(lines.shape, Shape::Scanlines as u32);
+        let Some(pixels) = draw(&[background, lines]) else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        // White dimmed by the scanlines' alpha, give or take the rounding.
+        let dark = (255.0 * (1.0 - SCANLINE_COLOR[3])).round() as u8;
+        for y in 0..SIZE {
+            let left = red(&pixels, 10, y);
+            if y % 3 == 0 {
+                assert!(left.abs_diff(dark) <= 1, "row {y}: {left}");
+            } else {
+                assert_eq!(left, 255, "row {y}");
+            }
+            // Outside the scanlines rect, nothing changes.
+            assert_eq!(red(&pixels, 40, y), 255, "row {y} outside");
+        }
     }
 
     #[test]

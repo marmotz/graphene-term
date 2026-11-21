@@ -53,6 +53,14 @@ use crate::config::{
 };
 use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
+use crate::easter_eggs::secrets::{self, Secret};
+use crate::easter_eggs::{
+    self,
+    art::ArtLayout,
+    honeycomb::Honeycomb,
+    konami::KonamiDetector,
+    special_days::{self, Decoration},
+};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;
@@ -155,6 +163,8 @@ enum Overlay {
     Palette(CommandPalette),
     /// A context menu.
     Menu(ContextMenu),
+    /// The ASCII drawing of graphene.
+    Art,
 }
 
 /// A theme of the context menu previewed in the terminal, and the colors to restore
@@ -163,6 +173,8 @@ enum Overlay {
 struct MenuTheme {
     name: String,
     saved: Palette,
+    /// Whether the panes had scanlines before the preview.
+    saved_scanlines: bool,
 }
 
 /// What the terminal colors do for the theme the context menu points at.
@@ -261,6 +273,16 @@ struct Session {
     /// Whether the window was sized by `--columns` or `--lines`: its size is then not
     /// saved to `window.json`.
     sized_by_grid: bool,
+    /// Follows the keys typed at the prompt towards the Konami code.
+    konami: KonamiDetector,
+    /// The honeycomb shown over the active pane once the Konami code is typed.
+    honeycomb: Option<Honeycomb>,
+    /// Decoration of the window title for the special day today, `None` on an
+    /// ordinary day.
+    today: Option<Decoration>,
+    /// Next local midnight, when `today` is computed again; `None` if the local time is
+    /// unknown.
+    midnight: Option<Instant>,
 }
 
 impl Session {}
@@ -294,6 +316,7 @@ mod tests {
             name: "base".to_owned(),
             light: Some("day".to_owned()),
             dark: Some("night".to_owned()),
+            unlocked: Vec::new(),
         };
         assert_eq!(theme.active_key(Appearance::Light), &["theme", "light"]);
         assert_eq!(theme.active_key(Appearance::Dark), &["theme", "dark"]);
@@ -306,16 +329,19 @@ mod tests {
                 name: "base".to_owned(),
                 light: None,
                 dark: None,
+                unlocked: Vec::new(),
             },
             ThemeConfig {
                 name: "base".to_owned(),
                 light: Some("day".to_owned()),
                 dark: None,
+                unlocked: Vec::new(),
             },
             ThemeConfig {
                 name: "base".to_owned(),
                 light: None,
                 dark: Some("night".to_owned()),
+                unlocked: Vec::new(),
             },
         ] {
             for appearance in [Appearance::Light, Appearance::Dark] {

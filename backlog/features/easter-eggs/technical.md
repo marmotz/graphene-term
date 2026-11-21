@@ -239,7 +239,7 @@ toucherait au parseur, à l'éditeur de thème et à sa documentation.
 - Rendu : nouvelle forme `Shape::Scanlines = 3`. Un rect couvrant chaque pane est ajouté à
   la fin de sa plage `over` (dessinée après les glyphes,
   [renderer/mod.rs:228](../../../src/renderer/mod.rs)). Dans `rect.wgsl`, la branche
-  `SHAPE_SCANLINES` rend du noir à alpha 0,18 sur une ligne de pixels physiques sur 3
+  `SHAPE_SCANLINES` rend du noir à alpha 0,5 sur une ligne de pixels physiques sur 3
   (`u32(in.position.y) % 3u == 0u`), et un alpha nul ailleurs. Il n'y a ni passe
   supplémentaire ni nouveau pipeline. La barre d'onglets et les overlays ne sont pas
   touchés.
@@ -269,10 +269,11 @@ pub enum Decoration {
 pub fn decoration(month: u32, day: u32) -> Option<Decoration>
 ```
 
-`decoration` est pure et testée pour les 5 dates et un jour ordinaire :
+`decoration` est pure et testée pour les 6 dates et un jour ordinaire :
 
 | Date | Décoration |
 | ---- | ---------- |
+| 01/01 | préfixe `🎉` |
 | 14/02 | préfixe `❤️` |
 | 14/03 | préfixe `π` |
 | 04/05 | suffixe `May the fourth...`, en anglais dans toutes les langues (le jeu de mots ne se traduit pas) |
@@ -331,7 +332,7 @@ recalculé, `refresh_title` est appelé et l'échéance avancée au minuit suiva
   `--prune-config` garde la clé.
 - `rapid_clicks` : 6 clics ne débloquent rien, 7 en moins de 2 s débloquent, 7 clics
   trop étalés ne débloquent rien.
-- `special_days.rs` : `decoration` pour les 5 dates et un jour ordinaire, `titled` avec
+- `special_days.rs` : `decoration` pour les 6 dates et un jour ordinaire, `titled` avec
   préfixe, avec suffixe et sans décoration.
 - Rendu (tests GPU existants de [rects.rs](../../../src/renderer/rects.rs), fonction
   `draw` ligne 184) : un hexagone couvre son centre et pas ses coins, les scanlines

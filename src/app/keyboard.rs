@@ -133,6 +133,15 @@ impl Session {
                 }
                 return;
             }
+            Some(Overlay::Art) => {
+                if matches!(
+                    event.logical_key,
+                    Key::Named(NamedKey::Escape | NamedKey::Enter)
+                ) {
+                    self.close_art();
+                }
+                return;
+            }
             None => {}
         }
         // While a pane is dragged, `Escape` cancels the drag and no other key acts, so
@@ -144,6 +153,7 @@ impl Session {
             return;
         }
         let modifiers = self.modifiers;
+        self.watch_konami(&event.logical_key, modifiers);
         let action = self
             .keybindings
             .action(&event.logical_key, event.physical_key, modifiers);
@@ -169,6 +179,42 @@ impl Session {
                 self.run_action(action, default_font_size, event_loop);
                 return;
             }
+        }
+    }
+
+    /// Feeds the Konami detector with a key typed at the prompt of the active pane,
+    /// and starts the honeycomb over that pane when the code is complete. Any other
+    /// key (with `Ctrl`, `Alt` or `Super`, or outside the prompt) starts the code over.
+    /// The key itself is handled as usual.
+    fn watch_konami(&mut self, key: &Key, modifiers: ModifiersState) {
+        let plain = !(modifiers.control_key() || modifiers.alt_key() || modifiers.super_key());
+        let at_prompt = plain
+            && self
+                .workspace
+                .active_pane()
+                .is_some_and(|pane| pane.rich_mode(modifiers));
+        if !at_prompt {
+            self.konami.reset();
+            return;
+        }
+        if self.konami.feed(key) {
+            self.start_honeycomb(Instant::now());
+        }
+    }
+
+    /// Shows the honeycomb over the active pane from `now`, from the start when it is
+    /// already shown.
+    pub(super) fn start_honeycomb(&mut self, now: Instant) {
+        let active = self.workspace.active_pane_id();
+        let area = self
+            .shown_layout()
+            .panes
+            .into_iter()
+            .find(|&(id, _)| Some(id) == active)
+            .map(|(_, rect)| rect);
+        if let Some(area) = area {
+            self.honeycomb = Some(Honeycomb::new(now, area));
+            self.window.request_redraw();
         }
     }
 

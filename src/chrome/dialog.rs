@@ -13,7 +13,7 @@ use crate::terminal::PaneId;
 use crate::workspace::Workspace;
 
 /// Space between the box edges and its content, in logical pixels.
-const PADDING: f32 = 16.0;
+pub(crate) const PADDING: f32 = 16.0;
 /// Space between the lines of the box, in logical pixels.
 const GAP: f32 = 8.0;
 /// Space around a button label, in logical pixels.
@@ -23,7 +23,7 @@ const BUTTON_VERTICAL_PADDING: f32 = 6.0;
 /// Narrowest box, in logical pixels.
 const MIN_WIDTH: f32 = 320.0;
 /// Space kept between the box and the window edges, in logical pixels.
-const MARGIN: f32 = 16.0;
+pub(crate) const MARGIN: f32 = 16.0;
 
 /// What a close request closes.
 #[derive(Debug, Clone, PartialEq, Eq)]

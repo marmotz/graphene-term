@@ -37,6 +37,9 @@ pub enum UiFont {
     Chrome,
     /// Command palette, at [`PALETTE_FONT_SIZE`].
     Palette,
+    /// Fixed-width text drawn over the window (ASCII art), at [`PALETTE_FONT_SIZE`] in
+    /// the grid's font family.
+    Mono,
 }
 
 impl UiFont {
@@ -44,7 +47,7 @@ impl UiFont {
     pub fn size(self) -> f32 {
         match self {
             Self::Chrome => UI_FONT_SIZE,
-            Self::Palette => PALETTE_FONT_SIZE,
+            Self::Palette | Self::Mono => PALETTE_FONT_SIZE,
         }
     }
 }
@@ -125,6 +128,15 @@ fn family(name: &Option<String>) -> Family<'_> {
     match name {
         Some(name) => Family::Name(name),
         None => Family::Monospace,
+    }
+}
+
+/// Family the interface font `font` is shaped with: sans-serif, or the grid family
+/// `grid` for [`UiFont::Mono`].
+fn ui_family(font: UiFont, grid: &Option<String>) -> Family<'_> {
+    match font {
+        UiFont::Chrome | UiFont::Palette => Family::SansSerif,
+        UiFont::Mono => family(grid),
     }
 }
 
@@ -261,7 +273,7 @@ impl Glyphs {
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_text(
             text,
-            &Attrs::new().family(Family::SansSerif),
+            &Attrs::new().family(ui_family(font, &self.family)),
             Shaping::Advanced,
             None,
         );
@@ -326,7 +338,7 @@ impl Glyphs {
 
     fn rasterize(&mut self, key: GlyphKey) -> Option<Glyph> {
         let (family, metrics) = match key.ui {
-            Some(font) => (Family::SansSerif, self.ui_metrics(font)),
+            Some(font) => (ui_family(font, &self.family), self.ui_metrics(font)),
             None => (family(&self.family), self.metrics),
         };
         let mut attrs = Attrs::new().family(family);
@@ -606,6 +618,18 @@ mod tests {
             glyphs.shape_ui(UiFont::Palette, "abc").width
                 > glyphs.shape_ui(UiFont::Chrome, "abc").width
         );
+    }
+
+    #[test]
+    fn mono_font_has_the_palette_size_and_a_fixed_advance() {
+        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        assert_eq!(glyphs.ui_font_size(UiFont::Mono), PALETTE_FONT_SIZE);
+        let narrow = glyphs.shape_ui(UiFont::Mono, "iiii").width;
+        let wide = glyphs.shape_ui(UiFont::Mono, "MMMM").width;
+        assert!((narrow - wide).abs() < 0.5, "{narrow} != {wide}");
+        let mono = glyphs.get(GlyphKey::ui(UiFont::Mono, 'M')).unwrap();
+        let palette = glyphs.get(GlyphKey::ui(UiFont::Palette, 'M')).unwrap();
+        assert_ne!(mono.region, palette.region);
     }
 
     #[test]

@@ -52,6 +52,13 @@ pub const BUILT_IN: &[(&str, &str)] = &[
     ),
 ];
 
+/// Hidden themes, by name: loadable like built-in themes, but only listed by
+/// [`available`] once unlocked (`theme.unlocked`).
+pub const HIDDEN: &[(&str, &str)] = &[(
+    crate::easter_eggs::HIDDEN_THEME,
+    include_str!("../themes/phosphor-crt.toml"),
+)];
+
 /// Reference (`&` or `&mut`) to the required color a [`ColorKey`] stores in a
 /// [`Palette`]; `None` for the optional selection foreground.
 macro_rules! color_slot {
@@ -303,13 +310,13 @@ fn is_plain(name: &str) -> bool {
 }
 
 /// Checks a name for a new theme (duplicate or rename): non-empty, no path separator,
-/// no leading `.`, and not already used by a user or built-in theme.
+/// no leading `.`, and not already used by a user, built-in or hidden theme.
 pub fn valid_name(name: &str, config_dir: Option<&Path>) -> Result<(), NameError> {
     if name.is_empty() {
         Err(NameError::Empty)
     } else if !is_plain(name) {
         Err(NameError::Invalid)
-    } else if available(config_dir).iter().any(|theme| theme == name) {
+    } else if is_hidden(name) || available(config_dir, &[]).iter().any(|theme| theme == name) {
         Err(NameError::Taken)
     } else {
         Ok(())
@@ -333,19 +340,21 @@ pub fn default_palette() -> &'static Palette {
     })
 }
 
-/// Source of a built-in theme.
+/// Source of a built-in or hidden theme.
 pub fn built_in(name: &str) -> Option<&'static str> {
     BUILT_IN
         .iter()
+        .chain(HIDDEN)
         .find(|(built_in, _)| *built_in == name)
         .map(|(_, text)| *text)
 }
 
-/// Lists user themes (`themes/*.toml`) before built-in themes, without duplicates.
+/// Lists user themes (`themes/*.toml`) before built-in themes, then the hidden themes
+/// named in `unlocked`, without duplicates.
 ///
 /// If `config_dir` is absent or its themes directory cannot be read, only built-in
-/// themes are returned.
-pub fn available(config_dir: Option<&Path>) -> Vec<String> {
+/// (and unlocked hidden) themes are returned.
+pub fn available(config_dir: Option<&Path>, unlocked: &[String]) -> Vec<String> {
     let mut themes: Vec<String> = config_dir
         .and_then(|dir| std::fs::read_dir(dir.join(THEMES_DIR)).ok())
         .into_iter()
@@ -357,12 +366,20 @@ pub fn available(config_dir: Option<&Path>) -> Vec<String> {
         .collect();
     themes.sort();
     themes.dedup();
-    for (name, _) in BUILT_IN {
+    let unlocked = HIDDEN
+        .iter()
+        .filter(|(name, _)| unlocked.iter().any(|unlocked| unlocked == name));
+    for (name, _) in BUILT_IN.iter().chain(unlocked) {
         if !themes.iter().any(|theme| theme == name) {
             themes.push((*name).to_owned());
         }
     }
     themes
+}
+
+/// Whether `name` is a hidden theme.
+pub fn is_hidden(name: &str) -> bool {
+    HIDDEN.iter().any(|(hidden, _)| *hidden == name)
 }
 
 /// Resolves a theme name: `<config_dir>/themes/<name>.toml` first, then the built-in
@@ -677,7 +694,7 @@ mod tests {
 
     #[test]
     fn every_built_in_theme_keeps_the_palette_readable() {
-        for (name, text) in BUILT_IN {
+        for (name, text) in BUILT_IN.iter().chain(HIDDEN) {
             let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
             let ui = palette.ui;
             let selection = contrast(ui.palette_background, ui.palette_selection_background);
@@ -701,7 +718,7 @@ mod tests {
     #[test]
     fn every_built_in_theme_keeps_the_pane_bars_readable() {
         use crate::chrome::scene::pane_bar_colors;
-        for (name, text) in BUILT_IN {
+        for (name, text) in BUILT_IN.iter().chain(HIDDEN) {
             let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
             for active in [true, false] {
                 for broadcast in [true, false] {
@@ -718,7 +735,7 @@ mod tests {
 
     #[test]
     fn every_built_in_theme_defines_a_distinct_broadcast_color() {
-        for (name, text) in BUILT_IN {
+        for (name, text) in BUILT_IN.iter().chain(HIDDEN) {
             assert!(text.contains("\npane_broadcast = \"#"), "theme {name}");
             let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
             assert_ne!(
@@ -730,7 +747,7 @@ mod tests {
 
     #[test]
     fn every_built_in_theme_parses_without_error() {
-        for (name, text) in BUILT_IN {
+        for (name, text) in BUILT_IN.iter().chain(HIDDEN) {
             let (_, errors) = parse(text, &Palette::blank(), Path::new(name));
             assert_eq!(errors, Vec::new(), "theme {name}");
         }
@@ -752,7 +769,7 @@ mod tests {
             p.ui = UiColors::uniform(white);
             p
         };
-        for (name, text) in BUILT_IN {
+        for (name, text) in BUILT_IN.iter().chain(HIDDEN) {
             let (on_blank, _) = parse(text, &Palette::blank(), Path::new(name));
             let (on_white, _) = parse(text, &white, Path::new(name));
             assert_eq!(on_blank, on_white, "theme {name}");
@@ -942,7 +959,7 @@ banner = "#000000"
         std::fs::write(themes_dir.join("zebra.toml"), "").unwrap();
         std::fs::write(themes_dir.join("amber.toml"), "").unwrap();
 
-        let available = available(Some(&dir));
+        let available = available(Some(&dir), &[]);
         assert_eq!(&available[..2], ["amber", "zebra"]);
         assert_eq!(
             &available[2..],
@@ -956,7 +973,7 @@ banner = "#000000"
         let dir = temp_dir("available-collision");
         std::fs::write(dir.join(THEMES_DIR).join("gruvbox-dark.toml"), "").unwrap();
 
-        let available = available(Some(&dir));
+        let available = available(Some(&dir), &[]);
         assert_eq!(
             available
                 .iter()
@@ -977,7 +994,7 @@ banner = "#000000"
         std::fs::create_dir(themes_dir.join("folder.toml")).unwrap();
         std::fs::write(themes_dir.join("mine.toml"), "").unwrap();
 
-        let available = available(Some(&dir));
+        let available = available(Some(&dir), &[]);
         assert_eq!(available[0], "mine");
         assert!(
             !available
@@ -990,7 +1007,7 @@ banner = "#000000"
     #[test]
     fn available_without_a_config_directory_returns_built_ins() {
         assert_eq!(
-            available(None),
+            available(None, &[]),
             BUILT_IN
                 .iter()
                 .map(|(name, _)| (*name).to_owned())
@@ -1006,12 +1023,37 @@ banner = "#000000"
         ));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(
-            available(Some(&dir)),
+            available(Some(&dir), &[]),
             BUILT_IN
                 .iter()
                 .map(|(name, _)| (*name).to_owned())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn available_lists_a_hidden_theme_only_once_unlocked() {
+        assert!(
+            !available(None, &[])
+                .iter()
+                .any(|name| name == "phosphor-crt")
+        );
+        let unlocked = ["phosphor-crt".to_owned(), "nonexistent".to_owned()];
+        let themes = available(None, &unlocked);
+        assert_eq!(themes.last().map(String::as_str), Some("phosphor-crt"));
+        assert!(!themes.iter().any(|name| name == "nonexistent"));
+    }
+
+    #[test]
+    fn a_hidden_theme_loads_whether_unlocked_or_not() {
+        let (palette, errors) = load("phosphor-crt", None);
+        assert_eq!(errors, Vec::new());
+        assert_eq!(palette.background, rgb(0x0a120c));
+    }
+
+    #[test]
+    fn a_hidden_theme_name_is_taken() {
+        assert_eq!(valid_name("phosphor-crt", None), Err(NameError::Taken));
     }
 
     #[test]

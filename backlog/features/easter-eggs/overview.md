@@ -1,6 +1,6 @@
 # Easter eggs
 
-**Statut** : tâches créées — voir [technical.md](technical.md)
+**Statut** : terminé — voir [technical.md](technical.md)
 
 ## Contexte
 
@@ -36,6 +36,7 @@ performances ni sur la sortie des programmes).
   config).
 - **Dates spéciales** : certains jours, le titre de la fenêtre est décoré toute la
   journée, en général par un symbole en tête.
+  - 1er janvier : des confettis.
   - 14 février : un cœur.
   - 14 mars : le symbole π.
   - 4 mai : le texte « May the fourth... » ajouté à la fin du titre, à la place d'un
