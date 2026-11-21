@@ -95,6 +95,37 @@ impl Session {
         ))
     }
 
+    /// The open ASCII drawing laid out in the window.
+    pub(super) fn art_layout(&mut self) -> Option<ArtLayout> {
+        if !matches!(self.overlay, Some(Overlay::Art)) {
+            return None;
+        }
+        let size = self.window.inner_size();
+        let metrics = self.ui_metrics(UiFont::Mono);
+        let renderer = &mut self.renderer;
+        Some(ArtLayout::new(
+            Rect::from_size(size.width, size.height),
+            metrics,
+            |text| renderer.ui_text_width(UiFont::Mono, text),
+        ))
+    }
+
+    /// Opens the ASCII drawing over the window.
+    pub(super) fn open_art(&mut self) {
+        self.overlay = Some(Overlay::Art);
+        self.window.request_redraw();
+        self.update_pointer();
+    }
+
+    /// Closes the ASCII drawing.
+    pub(super) fn close_art(&mut self) {
+        if matches!(self.overlay, Some(Overlay::Art)) {
+            self.overlay = None;
+            self.window.request_redraw();
+            self.update_pointer();
+        }
+    }
+
     /// How many themes a menu shows before "More...": as many as the window height holds.
     pub(super) fn theme_rows(&self) -> usize {
         let height = self.window.inner_size().height as f32;
@@ -328,20 +359,23 @@ impl Session {
             Command::Pane(id) => self.focus_pane(id),
             Command::Secret(Secret::Answer) => opener::open(secrets::answer_url(self.lang)),
             Command::Secret(Secret::Author) => opener::open(secrets::AUTHOR_URL),
-            // The ASCII drawing window is not there yet.
-            Command::Secret(Secret::Graphene) => {}
+            Command::Secret(Secret::Graphene) => self.open_art(),
         }
     }
 
     /// Handles a press while an overlay is open: a button of the dialog answers it, a
-    /// row of the palette runs it and a press outside the palette closes it; anything
-    /// else is ignored.
+    /// row of the palette runs it and a press outside the palette closes it, any press
+    /// closes the ASCII drawing; anything else is ignored.
     pub(super) fn overlay_press(
         &mut self,
         button: mouse::Button,
         default_font_size: f32,
         event_loop: &ActiveEventLoop,
     ) {
+        if matches!(self.overlay, Some(Overlay::Art)) {
+            self.close_art();
+            return;
+        }
         let (x, y) = self.mouse_pixel();
         if matches!(self.overlay, Some(Overlay::Menu(_))) {
             let hit = self

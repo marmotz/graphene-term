@@ -133,6 +133,15 @@ impl Session {
                 }
                 return;
             }
+            Some(Overlay::Art) => {
+                if matches!(
+                    event.logical_key,
+                    Key::Named(NamedKey::Escape | NamedKey::Enter)
+                ) {
+                    self.close_art();
+                }
+                return;
+            }
             None => {}
         }
         // While a pane is dragged, `Escape` cancels the drag and no other key acts, so

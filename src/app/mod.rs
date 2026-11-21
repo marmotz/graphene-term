@@ -53,6 +53,7 @@ use crate::config::{
 };
 use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
+use crate::easter_eggs::art::ArtLayout;
 use crate::easter_eggs::secrets::{self, Secret};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
@@ -156,6 +157,8 @@ enum Overlay {
     Palette(CommandPalette),
     /// A context menu.
     Menu(ContextMenu),
+    /// The ASCII drawing of graphene.
+    Art,
 }
 
 /// A theme of the context menu previewed in the terminal, and the colors to restore

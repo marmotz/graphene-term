@@ -91,11 +91,13 @@ impl Session {
         let dialog = self.dialog_layout();
         let palette = self.palette_layout();
         let menu = self.menu_layout();
+        let art = self.art_layout();
         let tooltip = self.tooltip_layout();
-        let overlay = match (&dialog, &palette, &menu) {
-            (Some(dialog), _, _) => Some(chrome::scene::Overlay::Dialog(dialog)),
-            (_, Some(palette), _) => Some(chrome::scene::Overlay::Palette(palette)),
-            (_, _, Some(menu)) => Some(chrome::scene::Overlay::Menu(menu)),
+        let overlay = match (&dialog, &palette, &menu, &art) {
+            (Some(dialog), _, _, _) => Some(chrome::scene::Overlay::Dialog(dialog)),
+            (_, Some(palette), _, _) => Some(chrome::scene::Overlay::Palette(palette)),
+            (_, _, Some(menu), _) => Some(chrome::scene::Overlay::Menu(menu)),
+            (_, _, _, Some(art)) => Some(chrome::scene::Overlay::Art(art)),
             _ => None,
         };
         let mut banner = self.shown_banner().map(|shown| FrameBanner {

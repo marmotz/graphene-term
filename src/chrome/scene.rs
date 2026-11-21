@@ -10,6 +10,7 @@ use super::dialog::DialogLayout;
 use super::pane_bar::PaneBarLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
+use crate::easter_eggs::art::ArtLayout;
 use crate::layout::Rect;
 use crate::palette::UiColors;
 use crate::renderer::scene::gpu_color;
@@ -59,6 +60,7 @@ pub enum Overlay<'a> {
     Palette(&'a PaletteLayout),
     #[allow(dead_code)] // Instantiated when menu opening is wired in issue #103.
     Menu(&'a MenuLayout),
+    Art(&'a ArtLayout),
 }
 
 /// The interface over the panes of `layout`: the pane chrome (see [`panes`]), then the
@@ -81,6 +83,7 @@ pub fn build(
         Some(Overlay::Dialog(layout)) => dialog(layout, colors, srgb_target, &mut ui),
         Some(Overlay::Palette(layout)) => palette(layout, colors, srgb_target, &mut ui),
         Some(Overlay::Menu(layout)) => menu(layout, colors, srgb_target, &mut ui),
+        Some(Overlay::Art(layout)) => art(layout, colors, srgb_target, &mut ui),
         None => {}
     }
     ui
@@ -348,6 +351,26 @@ fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
             font: UiFont::Chrome,
         });
     }
+}
+
+/// The ASCII drawing, in the overlay: its box and border, then each line in the
+/// fixed-width interface font.
+fn art(art: &ArtLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    ui.overlay_rects
+        .push(rect(art.rect, color(colors.palette_background)));
+    ui.overlay_rects
+        .extend(border(art.rect, DIALOG_BORDER, color(colors.pane_border)));
+    let text = color(colors.palette_text);
+    ui.overlay_texts
+        .extend(art.lines.iter().map(|line| UiTextItem {
+            text: line.text.to_owned(),
+            x: art.text_x,
+            y: line.y,
+            color: text,
+            max_width: art.text_width,
+            font: UiFont::Mono,
+        }));
 }
 
 /// The translucent accent rectangle `area` showing where a dragged pane would land:
@@ -1012,6 +1035,46 @@ mod tests {
 
     const DIALOG_BACKGROUND: Rgb = Rgb { r: 50, g: 0, b: 0 };
     const DIALOG_TEXT: Rgb = Rgb { r: 60, g: 0, b: 0 };
+
+    #[test]
+    fn art_is_drawn_in_the_overlay_with_the_mono_font() {
+        use crate::easter_eggs::art::GRAPHENE_ART;
+        let colors = UiColors {
+            palette_background: DIALOG_BACKGROUND,
+            palette_text: DIALOG_TEXT,
+            ..tab_colors()
+        };
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let art = ArtLayout::new(area(0.0, 0.0, 1000.0, 600.0), metrics, |t| {
+            t.chars().count() as f32 * 8.0
+        });
+        let ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            &[],
+            None,
+            Some(Overlay::Art(&art)),
+            &colors,
+            false,
+        );
+        let background = gpu_color(DIALOG_BACKGROUND, false);
+        assert_eq!(
+            drawn(&ui.overlay_rects[..1]),
+            vec![(
+                [art.rect.x, art.rect.y],
+                [art.rect.width, art.rect.height],
+                background
+            )]
+        );
+        let texts: Vec<&str> = ui.overlay_texts.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, GRAPHENE_ART);
+        assert!(ui.overlay_texts.iter().all(|t| t.font == UiFont::Mono
+            && t.color == gpu_color(DIALOG_TEXT, false)
+            && t.x == art.text_x));
+    }
 
     #[test]
     fn dialog_is_drawn_in_the_overlay() {
