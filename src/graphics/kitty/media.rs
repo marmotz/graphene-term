@@ -151,7 +151,7 @@ pub(super) fn read_shared_memory_mapping(
     let page_size = page_size as usize;
     let map_offset = offset / page_size * page_size;
     let prefix = offset - map_offset;
-    let map_length = prefix.checked_add(count).ok_or_else(|| Error::too_big())?;
+    let map_length = prefix.checked_add(count).ok_or_else(Error::too_big)?;
     // SAFETY: the descriptor is open, the offset is page-aligned, and `map_length`
     // stays within the shared-memory object as checked above.
     let mapping = unsafe {
