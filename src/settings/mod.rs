@@ -173,7 +173,7 @@ impl SettingsWindow {
         self.model.refresh(config, errors, appearance);
         self.view.reset_inputs();
         self.model
-            .set_theme_choices(theme::available(Some(&self.dir)));
+            .set_theme_choices(theme::available(Some(&self.dir), &config.theme.unlocked));
         recolor(self.egui.egui_ctx(), palette);
         if lang != self.lang {
             self.lang = lang;
@@ -286,8 +286,9 @@ impl SettingsWindow {
             let (next, result) = write_edits(&self.dir, &edited, &edits.changes, &edits.theme_ops);
             let (config, errors) = config::reload_from(&self.dir, self.model.config());
             self.model.written(config, errors);
-            self.model
-                .set_theme_choices(theme::available(Some(&self.dir)));
+            let unlocked = &self.model.config().theme.unlocked;
+            let choices = theme::available(Some(&self.dir), unlocked);
+            self.model.set_theme_choices(choices);
             if let Some(name) = next {
                 self.model.edit_theme(&name);
             }

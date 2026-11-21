@@ -341,7 +341,7 @@ impl SettingsModel {
             config: config.clone(),
             errors: errors.clone(),
             write_error: None,
-            theme_choices: theme::available(dir.as_deref()),
+            theme_choices: theme::available(dir.as_deref(), &config.theme.unlocked),
             font_families: Vec::new(),
             keybindings: Keybindings::new(&config.keybindings),
             dir,
@@ -422,7 +422,7 @@ impl SettingsModel {
     /// gives way to the active theme.
     fn reload_edited_theme(&mut self) {
         let dir = self.dir.as_deref();
-        if !theme::available(dir).contains(&self.edited_theme) {
+        if !theme::available(dir, &self.config.theme.unlocked).contains(&self.edited_theme) {
             self.edited_theme = self.config.theme.active(self.appearance).to_owned();
         }
         self.edited_palette = theme::load(&self.edited_theme, dir).0;

@@ -175,6 +175,8 @@ pub struct ThemeConfig {
     pub name: String,
     pub light: Option<String>,
     pub dark: Option<String>,
+    /// Hidden themes unlocked by the user, listed with the others once unlocked.
+    pub unlocked: Vec<String>,
 }
 
 impl ThemeConfig {

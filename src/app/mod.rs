@@ -298,6 +298,7 @@ mod tests {
             name: "base".to_owned(),
             light: Some("day".to_owned()),
             dark: Some("night".to_owned()),
+            unlocked: Vec::new(),
         };
         assert_eq!(theme.active_key(Appearance::Light), &["theme", "light"]);
         assert_eq!(theme.active_key(Appearance::Dark), &["theme", "dark"]);
@@ -310,16 +311,19 @@ mod tests {
                 name: "base".to_owned(),
                 light: None,
                 dark: None,
+                unlocked: Vec::new(),
             },
             ThemeConfig {
                 name: "base".to_owned(),
                 light: Some("day".to_owned()),
                 dark: None,
+                unlocked: Vec::new(),
             },
             ThemeConfig {
                 name: "base".to_owned(),
                 light: None,
                 dark: Some("night".to_owned()),
+                unlocked: Vec::new(),
             },
         ] {
             for appearance in [Appearance::Light, Appearance::Dark] {

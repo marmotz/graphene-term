@@ -163,7 +163,7 @@ impl Session {
         });
         let items = {
             let tab = self.workspace.tabs().get(tab_index);
-            let themes = theme::available(config::config_dir().as_deref());
+            let themes = theme::available(config::config_dir().as_deref(), &self.theme.unlocked);
             let active_theme = self.theme.active(self.appearance).to_owned();
             let theme_rows = self.theme_rows();
             let context = MenuContext {
@@ -193,7 +193,7 @@ impl Session {
         let Some(tab) = self.workspace.tabs().get(index) else {
             return;
         };
-        let themes = theme::available(config::config_dir().as_deref());
+        let themes = theme::available(config::config_dir().as_deref(), &self.theme.unlocked);
         let active_theme = self.theme.active(self.appearance).to_owned();
         let context = MenuContext {
             copyable: false,
