@@ -53,6 +53,7 @@ use crate::config::{
 };
 use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
+use crate::easter_eggs::secrets::{self, Secret};
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;

@@ -13,6 +13,7 @@ mod clipboard;
 mod config;
 mod config_edit;
 mod cursor_blink;
+mod easter_eggs;
 mod fold_animation;
 mod frame;
 mod frame_cache;

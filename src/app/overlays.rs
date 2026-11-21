@@ -55,7 +55,9 @@ impl Session {
             self.lang,
             &self.keybindings,
         );
-        self.overlay = Some(Overlay::Palette(CommandPalette::new(entries, recent)));
+        self.overlay = Some(Overlay::Palette(CommandPalette::new(
+            self.lang, entries, recent,
+        )));
         self.window.request_redraw();
         self.update_pointer();
     }
@@ -324,6 +326,10 @@ impl Session {
             }
             Command::Tab(index) => self.change_tab(|workspace| workspace.select(index)),
             Command::Pane(id) => self.focus_pane(id),
+            Command::Secret(Secret::Answer) => opener::open(secrets::answer_url(self.lang)),
+            Command::Secret(Secret::Author) => opener::open(secrets::AUTHOR_URL),
+            // The ASCII drawing window is not there yet.
+            Command::Secret(Secret::Graphene) => {}
         }
     }
 

@@ -18,12 +18,12 @@ _tâches créées — voir [technical.md](features/desktop-notifications/technic
 
 ## Easter eggs  ·  [overview](features/easter-eggs/overview.md)
 
-_tâches créées — voir [technical.md](features/easter-eggs/technical.md)_ — 1/8 tasks done
+_tâches créées — voir [technical.md](features/easter-eggs/technical.md)_ — 2/8 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#219](https://github.com/marmotz/graphene-term/issues/219) | [Easter eggs] Afficher la version de Graphene dans les réglages | — |
-| [ ]  | [#220](https://github.com/marmotz/graphene-term/issues/220) | [Easter eggs] Entrées cachées 42 et marmotz dans la palette de commandes | — |
+| [x]  | [#220](https://github.com/marmotz/graphene-term/issues/220) | [Easter eggs] Entrées cachées 42 et marmotz dans la palette de commandes | — |
 | [ ]  | [#221](https://github.com/marmotz/graphene-term/issues/221) | [Easter eggs] Fenêtre du dessin ASCII du graphène et police UI à chasse fixe | #220 |
 | [ ]  | [#222](https://github.com/marmotz/graphene-term/issues/222) | [Easter eggs] Thème caché phosphor-crt et clé theme.unlocked | — |
 | [ ]  | [#223](https://github.com/marmotz/graphene-term/issues/223) | [Easter eggs] Débloquer le thème caché par 7 clics sur la version | #219, #222 |
