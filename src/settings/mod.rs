@@ -131,6 +131,7 @@ impl SettingsWindow {
         ctx.all_styles_mut(|style| style.text_styles = fonts::text_styles());
         let mut model = SettingsModel::new(config, errors, Some(dir.clone()), appearance);
         model.set_font_families(model::monospace_families(fonts));
+        model.set_wayland(is_wayland(event_loop));
 
         let mut settings = Self {
             window,
@@ -577,6 +578,20 @@ fn write_file(
         }
         Ok(())
     })
+}
+
+/// Whether the process runs under Wayland, where the quick terminal is unavailable.
+fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        event_loop.is_wayland()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = event_loop;
+        false
+    }
 }
 
 #[cfg(test)]

@@ -103,12 +103,13 @@ pub enum SettingsSection {
     Theme,
     KeyboardShortcuts,
     Notifications,
+    QuickTerminal,
     Updates,
 }
 
 impl SettingsSection {
     /// Every section, in sidebar order.
-    pub const ALL: [SettingsSection; 11] = [
+    pub const ALL: [SettingsSection; 12] = [
         SettingsSection::Language,
         SettingsSection::Font,
         SettingsSection::Window,
@@ -119,6 +120,7 @@ impl SettingsSection {
         SettingsSection::Theme,
         SettingsSection::KeyboardShortcuts,
         SettingsSection::Notifications,
+        SettingsSection::QuickTerminal,
         SettingsSection::Updates,
     ];
 }
@@ -154,11 +156,17 @@ pub enum SettingsField {
     NotificationsCommandFinished,
     NotificationsCommandThreshold,
     NotificationsBell,
+    QuickTerminalHotkey,
+    QuickTerminalEdge,
+    QuickTerminalSize,
+    QuickTerminalScreen,
+    QuickTerminalAnimation,
+    QuickTerminalHideOnFocusLoss,
 }
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 26] = [
+    pub const ALL: [SettingsField; 32] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -185,6 +193,12 @@ impl SettingsField {
         SettingsField::NotificationsCommandFinished,
         SettingsField::NotificationsCommandThreshold,
         SettingsField::NotificationsBell,
+        SettingsField::QuickTerminalHotkey,
+        SettingsField::QuickTerminalEdge,
+        SettingsField::QuickTerminalSize,
+        SettingsField::QuickTerminalScreen,
+        SettingsField::QuickTerminalAnimation,
+        SettingsField::QuickTerminalHideOnFocusLoss,
     ];
 }
 
@@ -258,6 +272,8 @@ pub enum Msg {
     AtLine(usize),
     /// Note shown when the file cannot be parsed and the settings are disabled.
     FixFileByHand,
+    /// Why the quick terminal section is disabled under Wayland.
+    QuickTerminalUnavailableOnWayland,
     /// Prefix of an error writing the file.
     CannotSave,
     /// A number field holds text that is not a number.
@@ -440,6 +456,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::Theme => "Theme",
             SettingsSection::KeyboardShortcuts => "Keyboard shortcuts",
             SettingsSection::Notifications => "Notifications",
+            SettingsSection::QuickTerminal => "Quick terminal",
             SettingsSection::Updates => "Updates",
         },
         Msg::Field(field) => match field {
@@ -469,6 +486,12 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::NotificationsCommandFinished => "Notify when a long command finishes",
             SettingsField::NotificationsCommandThreshold => "Long command threshold (seconds)",
             SettingsField::NotificationsBell => "Notify on terminal bell",
+            SettingsField::QuickTerminalHotkey => "Global shortcut",
+            SettingsField::QuickTerminalEdge => "Screen edge",
+            SettingsField::QuickTerminalSize => "Size (% of the screen)",
+            SettingsField::QuickTerminalScreen => "Screen",
+            SettingsField::QuickTerminalAnimation => "Slide duration (ms)",
+            SettingsField::QuickTerminalHideOnFocusLoss => "Hide when the focus is lost",
         },
         Msg::SystemMonospace => "System monospace",
         Msg::UnknownKeys => "Unknown keys",
@@ -476,6 +499,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::FixFileByHand => {
             "The file cannot be read: fix it by hand. The settings stay disabled until then."
         }
+        Msg::QuickTerminalUnavailableOnWayland => "The quick terminal is not available on Wayland",
         Msg::CannotSave => "Cannot save the change",
         Msg::NotANumber => "Enter a number",
         Msg::NotAWholeNumber => "Enter a whole number",
@@ -629,6 +653,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::Theme => "Thème",
             SettingsSection::KeyboardShortcuts => "Raccourcis clavier",
             SettingsSection::Notifications => "Notifications",
+            SettingsSection::QuickTerminal => "Quick terminal",
             SettingsSection::Updates => "Mises à jour",
         },
         Msg::Field(field) => match field {
@@ -660,12 +685,21 @@ fn french(msg: &Msg) -> Cow<'static, str> {
                 "Seuil d'une commande longue (secondes)"
             }
             SettingsField::NotificationsBell => "Signaler la sonnerie du terminal",
+            SettingsField::QuickTerminalHotkey => "Raccourci global",
+            SettingsField::QuickTerminalEdge => "Bord de l'écran",
+            SettingsField::QuickTerminalSize => "Taille (% de l'écran)",
+            SettingsField::QuickTerminalScreen => "Écran",
+            SettingsField::QuickTerminalAnimation => "Durée du glissement (ms)",
+            SettingsField::QuickTerminalHideOnFocusLoss => "Masquer à la perte du focus",
         },
         Msg::SystemMonospace => "Monospace du système",
         Msg::UnknownKeys => "Clés inconnues",
         Msg::AtLine(line) => return format!("ligne {line}").into(),
         Msg::FixFileByHand => {
             "Le fichier est illisible : corrigez-le à la main. Les paramètres restent désactivés d'ici là."
+        }
+        Msg::QuickTerminalUnavailableOnWayland => {
+            "Le quick terminal n'est pas disponible sous Wayland"
         }
         Msg::CannotSave => "Impossible d'enregistrer la modification",
         Msg::NotANumber => "Saisissez un nombre",
@@ -951,9 +985,10 @@ mod tests {
             Msg::CommandFailed(_) => 95,
             Msg::Bell => 96,
             Msg::ShowPane => 97,
+            Msg::QuickTerminalUnavailableOnWayland => 98,
         }
     }
-    const VARIANT_COUNT: usize = 98;
+    const VARIANT_COUNT: usize = 99;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1024,6 +1059,7 @@ mod tests {
             Msg::UnknownKeys,
             Msg::AtLine(12),
             Msg::FixFileByHand,
+            Msg::QuickTerminalUnavailableOnWayland,
             Msg::CannotSave,
             Msg::NotANumber,
             Msg::NotAWholeNumber,
@@ -1095,6 +1131,7 @@ mod tests {
         let same = [
             Msg::SecretGraphene,
             Msg::Section(SettingsSection::Notifications),
+            Msg::Section(SettingsSection::QuickTerminal),
             Msg::Field(SettingsField::FontLigatures),
         ];
         for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {

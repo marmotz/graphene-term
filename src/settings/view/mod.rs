@@ -234,7 +234,9 @@ impl View {
                 file_problems(ui, lang, model, self.section);
                 ui.heading(label(Msg::Section(self.section)));
                 ui.separator();
-                ui.add_enabled_ui(model.locked(self.section).is_none(), |ui| {
+                let enabled = model.locked(self.section).is_none()
+                    && model.unavailable(self.section).is_none();
+                ui.add_enabled_ui(enabled, |ui| {
                     self.section_body(ui, lang, model, &mut edits);
                 });
             });
@@ -518,6 +520,10 @@ fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: Settin
         error_label(ui, &error.to_string());
         ui.label(error.file.display().to_string());
         ui.label(label(Msg::FixFileByHand));
+        shown = true;
+    }
+    if let Some(reason) = model.unavailable(section) {
+        warn_label(ui, &label(reason));
         shown = true;
     }
     if let Some(error) = model.write_error() {

@@ -10,7 +10,8 @@ use cosmic_text::fontdb;
 use crate::appearance::Appearance;
 use crate::config::{
     self, Config, ConfigError, ConfigErrorKind, CursorShape, Language, MAX_FONT_SIZE,
-    MAX_SCROLLBACK_LINES, MIN_FONT_SIZE, StartupMode, TabPosition, UpdateInterval,
+    MAX_QUICK_TERMINAL_ANIMATION_MS, MAX_QUICK_TERMINAL_SIZE, MAX_SCROLLBACK_LINES, MIN_FONT_SIZE,
+    MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, StartupMode, TabPosition, UpdateInterval,
 };
 use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
 use crate::input::Action;
@@ -130,7 +131,7 @@ impl InputError {
 }
 
 /// Section of the file holding the keys of each settings section.
-const SECTION_KEYS: [(&str, Section); 11] = [
+const SECTION_KEYS: [(&str, Section); 12] = [
     ("language", Section::Language),
     ("font", Section::Font),
     ("window", Section::Window),
@@ -141,6 +142,7 @@ const SECTION_KEYS: [(&str, Section); 11] = [
     ("theme", Section::Theme),
     ("keybindings", Section::KeyboardShortcuts),
     ("notifications", Section::Notifications),
+    ("quick_terminal", Section::QuickTerminal),
     ("updates", Section::Updates),
 ];
 
@@ -179,6 +181,14 @@ pub fn section_fields(section: Section) -> &'static [Field] {
             Field::NotificationsCommandThreshold,
             Field::NotificationsBell,
         ],
+        Section::QuickTerminal => &[
+            Field::QuickTerminalHotkey,
+            Field::QuickTerminalEdge,
+            Field::QuickTerminalSize,
+            Field::QuickTerminalScreen,
+            Field::QuickTerminalAnimation,
+            Field::QuickTerminalHideOnFocusLoss,
+        ],
         Section::Updates => &[Field::UpdatesCheck, Field::UpdatesInterval],
     }
 }
@@ -212,6 +222,12 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::NotificationsCommandFinished => &["notifications", "command_finished"],
         Field::NotificationsCommandThreshold => &["notifications", "command_threshold"],
         Field::NotificationsBell => &["notifications", "bell"],
+        Field::QuickTerminalHotkey => &["quick_terminal", "hotkey"],
+        Field::QuickTerminalEdge => &["quick_terminal", "edge"],
+        Field::QuickTerminalSize => &["quick_terminal", "size"],
+        Field::QuickTerminalScreen => &["quick_terminal", "screen"],
+        Field::QuickTerminalAnimation => &["quick_terminal", "animation_ms"],
+        Field::QuickTerminalHideOnFocusLoss => &["quick_terminal", "hide_on_focus_loss"],
     })
 }
 
@@ -235,7 +251,8 @@ pub fn widget(field: Field) -> Widget {
         | Field::ThemeName
         | Field::ThemeLight
         | Field::ThemeDark
-        | Field::UpdatesInterval => Widget::Choice,
+        | Field::UpdatesInterval
+        | Field::QuickTerminalEdge => Widget::Choice,
         Field::FontSize => Widget::Number(NumberRange {
             min: f64::from(MIN_FONT_SIZE),
             max: Some(f64::from(MAX_FONT_SIZE)),
@@ -262,6 +279,16 @@ pub fn widget(field: Field) -> Widget {
             max: Some(f64::from(u32::MAX)),
             integer: true,
         }),
+        Field::QuickTerminalSize => Widget::Number(NumberRange {
+            min: f64::from(MIN_QUICK_TERMINAL_SIZE),
+            max: Some(f64::from(MAX_QUICK_TERMINAL_SIZE)),
+            integer: true,
+        }),
+        Field::QuickTerminalAnimation => Widget::Number(NumberRange {
+            min: 0.0,
+            max: Some(f64::from(MAX_QUICK_TERMINAL_ANIMATION_MS)),
+            integer: true,
+        }),
         Field::FontLigatures
         | Field::CursorBlinking
         | Field::UpdatesCheck
@@ -269,8 +296,12 @@ pub fn widget(field: Field) -> Widget {
         | Field::ThemeFollow
         | Field::NotificationsProgram
         | Field::NotificationsCommandFinished
-        | Field::NotificationsBell => Widget::Toggle,
-        Field::WordSeparators | Field::FontFeatures => Widget::Text,
+        | Field::NotificationsBell
+        | Field::QuickTerminalHideOnFocusLoss => Widget::Toggle,
+        Field::WordSeparators
+        | Field::FontFeatures
+        | Field::QuickTerminalHotkey
+        | Field::QuickTerminalScreen => Widget::Text,
     }
 }
 
@@ -359,6 +390,8 @@ pub struct SettingsModel {
     edited_palette: Palette,
     /// Whether `edited_theme` has no user file, and so cannot be changed.
     edited_is_built_in: bool,
+    /// Whether the process runs under Wayland, where the quick terminal is unavailable.
+    wayland: bool,
 }
 
 impl SettingsModel {
@@ -384,6 +417,7 @@ impl SettingsModel {
             edited_theme,
             edited_palette: theme::default_palette().clone(),
             edited_is_built_in: true,
+            wayland: false,
         };
         model.reload_edited_theme();
         model
@@ -558,6 +592,18 @@ impl SettingsModel {
         })
     }
 
+    /// Records whether the process runs under Wayland.
+    pub fn set_wayland(&mut self, wayland: bool) {
+        self.wayland = wayland;
+    }
+
+    /// Why `section` is not available on this platform, if it is not: the quick
+    /// terminal under Wayland. The section is shown disabled with this message.
+    pub fn unavailable(&self, section: Section) -> Option<Msg> {
+        (self.wayland && section == Section::QuickTerminal)
+            .then_some(Msg::QuickTerminalUnavailableOnWayland)
+    }
+
     pub fn write_error(&self) -> Option<&str> {
         self.write_error.as_deref()
     }
@@ -606,6 +652,16 @@ impl SettingsModel {
                 Value::Integer(i64::try_from(c.notifications.command_threshold).unwrap_or(i64::MAX))
             }
             Field::NotificationsBell => Value::Bool(c.notifications.bell),
+            Field::QuickTerminalHotkey => text(&c.quick_terminal.hotkey),
+            Field::QuickTerminalEdge => {
+                text(name_of(&QuickTerminalEdge::VALUES, c.quick_terminal.edge))
+            }
+            Field::QuickTerminalSize => Value::Integer(i64::from(c.quick_terminal.size)),
+            Field::QuickTerminalScreen => text(&c.quick_terminal.screen.to_string()),
+            Field::QuickTerminalAnimation => {
+                Value::Integer(i64::from(c.quick_terminal.animation_ms))
+            }
+            Field::QuickTerminalHideOnFocusLoss => Value::Bool(c.quick_terminal.hide_on_focus_loss),
         }
     }
 
@@ -660,6 +716,7 @@ impl SettingsModel {
             Field::TabPosition => names(&TabPosition::VALUES),
             Field::ThemeName | Field::ThemeLight | Field::ThemeDark => named(&self.theme_choices),
             Field::UpdatesInterval => names(&UpdateInterval::VALUES),
+            Field::QuickTerminalEdge => names(&QuickTerminalEdge::VALUES),
             _ => return Vec::new(),
         };
         let current = self.text(field);
@@ -1165,6 +1222,94 @@ bell = true
                 Field::NotificationsBell,
             ]
         );
+    }
+
+    #[test]
+    fn quick_terminal_fields_show_and_write_their_key() {
+        let m = model(
+            "[quick_terminal]\nhotkey = \"Ctrl+F12\"\nedge = \"left\"\nsize = 60\nscreen = \"HDMI-1\"\nanimation_ms = 0\nhide_on_focus_loss = false\n",
+        );
+        assert_eq!(m.text(Field::QuickTerminalHotkey), "Ctrl+F12");
+        assert_eq!(m.text(Field::QuickTerminalEdge), "left");
+        assert_eq!(m.text(Field::QuickTerminalSize), "60");
+        assert_eq!(m.text(Field::QuickTerminalScreen), "HDMI-1");
+        assert_eq!(m.text(Field::QuickTerminalAnimation), "0");
+        assert!(!m.on(Field::QuickTerminalHideOnFocusLoss));
+        let values: Vec<_> = m
+            .choices(Field::QuickTerminalEdge)
+            .into_iter()
+            .map(|choice| choice.value)
+            .collect();
+        assert_eq!(values, ["top", "bottom", "left", "right"]);
+
+        let m = model("");
+        assert_eq!(m.text(Field::QuickTerminalScreen), "active");
+        assert_eq!(
+            m.edit(Field::QuickTerminalHotkey, Input::Text("Ctrl+`".into())),
+            Ok(set(&["quick_terminal", "hotkey"], text("Ctrl+`")))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalEdge, Input::Choice("bottom".into())),
+            Ok(set(&["quick_terminal", "edge"], text("bottom")))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalScreen, Input::Text("primary".into())),
+            Ok(set(&["quick_terminal", "screen"], text("primary")))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalHideOnFocusLoss, Input::Toggle(false)),
+            Ok(set(
+                &["quick_terminal", "hide_on_focus_loss"],
+                Value::Bool(false)
+            ))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalSize, Input::Text("100".into())),
+            Ok(set(&["quick_terminal", "size"], Value::Integer(100)))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalSize, Input::Text("9".into())),
+            Err(InputError::AtLeast("10".into()))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalSize, Input::Text("101".into())),
+            Err(InputError::AtMost("100".into()))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalAnimation, Input::Text("0".into())),
+            Ok(set(&["quick_terminal", "animation_ms"], Value::Integer(0)))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalAnimation, Input::Text("1001".into())),
+            Err(InputError::AtMost("1000".into()))
+        );
+    }
+
+    #[test]
+    fn invalid_quick_terminal_hotkey_is_shown_under_its_field() {
+        let m = model("[quick_terminal]\nhotkey = \"Hyper+X\"\n");
+        assert_eq!(m.field_errors(Field::QuickTerminalHotkey).len(), 1);
+        assert!(m.section_errors(Section::QuickTerminal).is_empty());
+    }
+
+    #[test]
+    fn quick_terminal_section_is_unavailable_only_under_wayland() {
+        let mut m = model("");
+        for section in Section::ALL {
+            assert_eq!(m.unavailable(section), None, "{section:?}");
+        }
+        m.set_wayland(true);
+        assert_eq!(
+            m.unavailable(Section::QuickTerminal),
+            Some(Msg::QuickTerminalUnavailableOnWayland)
+        );
+        for section in Section::ALL
+            .into_iter()
+            .filter(|&s| s != Section::QuickTerminal)
+        {
+            assert_eq!(m.unavailable(section), None, "{section:?}");
+        }
+        assert!(m.locked(Section::QuickTerminal).is_none());
     }
 
     #[test]

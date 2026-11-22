@@ -99,11 +99,11 @@ _terminé — voir [technical.md](features/osc-progress-indicator/technical.md)_
 
 ## Quick terminal (mode Quake)  ·  [overview](features/quick-terminal/overview.md)
 
-_tâches créées — voir [technical.md](features/quick-terminal/technical.md)_ — 0/5 tasks done
+_tâches créées — voir [technical.md](features/quick-terminal/technical.md)_ — 1/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#229](https://github.com/marmotz/graphene-term/issues/229) | feat(quick-terminal): quick_terminal configuration and settings section | — |
+| [x]  | [#229](https://github.com/marmotz/graphene-term/issues/229) | feat(quick-terminal): quick_terminal configuration and settings section | — |
 | [ ]  | [#230](https://github.com/marmotz/graphene-term/issues/230) | feat(quick-terminal): quick process, toggle command and window placement | #229 |
 | [ ]  | [#231](https://github.com/marmotz/graphene-term/issues/231) | feat(quick-terminal): slide animation, hide on focus loss and reset on close | #230 |
 | [ ]  | [#232](https://github.com/marmotz/graphene-term/issues/232) | feat(quick-terminal): native global hotkey and hidden startup | #229, #230 |
