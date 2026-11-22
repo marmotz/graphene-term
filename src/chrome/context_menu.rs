@@ -22,6 +22,8 @@ const SEPARATOR_HEIGHT: f32 = 9.0;
 pub enum Command {
     Action(Action),
     CloseTab(usize),
+    /// Opens the box renaming the tab of this index.
+    RenameTab(usize),
     BlockCopy(BlockId, Part),
     BlockFold(BlockId),
     Theme(String),
@@ -239,6 +241,13 @@ pub fn tab_menu(
             keybindings.label(Action::CloseTab),
             !context.only_tab,
             Command::CloseTab(index),
+            lang,
+        ),
+        entry(
+            Msg::RenameTab,
+            keybindings.label(Action::RenameTab),
+            true,
+            Command::RenameTab(index),
             lang,
         ),
     ];
@@ -941,6 +950,15 @@ mod tests {
             Item::Entry {
                 enabled: false,
                 command: Command::CloseTab(4),
+                ..
+            }
+        ));
+        assert!(matches!(
+            entry_at(&items, "Rename the tab"),
+            Item::Entry {
+                enabled: true,
+                shortcut: None,
+                command: Command::RenameTab(4),
                 ..
             }
         ));

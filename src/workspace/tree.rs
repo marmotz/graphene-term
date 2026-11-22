@@ -21,7 +21,7 @@ pub const DIVIDER_HIT_MARGIN: f32 = 3.0;
 const EPSILON: f32 = 0.01;
 
 /// Axis a split divides its rectangle along.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Axis {
     /// Children side by side, separated by a vertical divider.
     Horizontal,

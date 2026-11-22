@@ -46,7 +46,19 @@ pub(super) fn window_size_for_grid(
     )
 }
 
-/// The earlier of two optional deadlines.
+/// Size and maximized state of the window of a launch: the ones of the window it
+/// reopens (`restored`) whatever the startup mode, else [`initial_window`].
+pub(super) fn launch_window(
+    config: &WindowConfig,
+    remembered: Option<WindowState>,
+    restored: Option<WindowState>,
+) -> (LogicalSize<u32>, bool) {
+    match restored {
+        Some(state) => (LogicalSize::new(state.width, state.height), state.maximized),
+        None => initial_window(config, remembered),
+    }
+}
+
 /// Size and maximized state of a new window, from `window.startup_mode`. `remembered`
 /// is the last window closed, only read in `remember` mode.
 pub(super) fn initial_window(
@@ -89,6 +101,7 @@ pub(super) fn font_changed(old: &FontConfig, new: &FontConfig) -> bool {
     new.family != old.family || new.ligatures != old.ligatures || new.features != old.features
 }
 
+/// The earlier of two optional deadlines.
 pub(super) fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -134,6 +147,11 @@ pub struct App {
     /// Whether the session supports the quick terminal (not Wayland), known once the
     /// event loop resumed.
     pub(super) quick_supported: bool,
+    /// Saves the window to the session while it runs, when this launch takes part in it
+    /// (see [`crate::session::participates`]).
+    pub(super) session_saver: Option<SessionSaver>,
+    /// The saved window this launch reopens, taken when the window is created.
+    pub(super) restored: Option<WindowSnapshot>,
 }
 
 /// Whether the window is created transparent for a background `opacity`. Elsewhere
@@ -175,7 +193,12 @@ impl App {
             StartupMode::Remember => window_state::path().and_then(|file| WindowState::load(&file)),
             StartupMode::Default | StartupMode::Maximized => None,
         };
-        let (mut initial_size, maximized) = initial_window(&self.config.window, remembered);
+        let restored = self.restored.take();
+        let (mut initial_size, maximized) = launch_window(
+            &self.config.window,
+            remembered,
+            restored.as_ref().map(|snapshot| snapshot.window),
+        );
         let quick = matches!(self.mode, WindowMode::Quick(_));
         let maximized = maximized && !self.grid.is_set() && !quick;
         let today = special_days::today();
@@ -191,6 +214,18 @@ impl App {
                 self.config.window.background_opacity,
                 cfg!(target_os = "macos"),
             ));
+        if let Some((x, y)) = restored.as_ref().and_then(|snapshot| {
+            let monitors: Vec<String> = event_loop
+                .available_monitors()
+                .filter_map(|monitor| monitor.name())
+                .collect();
+            crate::session::restored_position(
+                snapshot.placement.as_ref(),
+                monitors.iter().map(String::as_str),
+            )
+        }) {
+            attributes = attributes.with_position(PhysicalPosition::new(x, y));
+        }
         if quick {
             // Created at its place, hidden until a command shows it: the shell is
             // already running when it first appears.
@@ -230,7 +265,7 @@ impl App {
         // created, so the first frame shows it complete.
         let display = event_loop.owned_display_handle();
         let (gpu, first_pane) = gpu_alongside(window.clone(), display.clone(), || {
-            self.spawn_first_pane(&window)
+            self.spawn_workspace(&window, restored.as_ref())
         });
         let (glyphs, workspace) = first_pane?;
         let (gpu, surface) = gpu?;
@@ -261,7 +296,7 @@ impl App {
             .ok();
         let lang = self.config.language.resolve(Lang::detect);
 
-        Ok(Session {
+        let mut session = Session {
             window,
             proxy: self.proxy.clone(),
             term_config: self.config.term_config(),
@@ -284,6 +319,7 @@ impl App {
             hovered_link: None,
             link_press: None,
             pane_bar_clicks: ClickTracker::default(),
+            tab_bar_clicks: ClickTracker::default(),
             tooltip_hidden: false,
             pointer: None,
             hovered_button: None,
@@ -316,12 +352,22 @@ impl App {
             taskbar,
             quick,
             quick_closed: false,
-        })
+        };
+        if restored.is_some() {
+            // The restored panes were all given the size of a single pane.
+            session.relayout();
+        }
+        Ok(session)
     }
 
-    /// Loads the glyphs of the first window and spawns the shell of its first pane, in
-    /// a workspace holding that pane.
-    fn spawn_first_pane(&mut self, window: &Window) -> anyhow::Result<(Glyphs, Workspace<Pane>)> {
+    /// Loads the glyphs of the first window and spawns the shells of its workspace: the
+    /// tabs of `restored` when given and at least one of their shells starts, else a
+    /// single pane.
+    fn spawn_workspace(
+        &mut self,
+        window: &Window,
+        restored: Option<&WindowSnapshot>,
+    ) -> anyhow::Result<(Glyphs, Workspace<Pane>)> {
         let scale = window.scale_factor() as f32;
         let mut glyphs = Glyphs::new(
             &font_options(&self.config.font),
@@ -362,20 +408,50 @@ impl App {
             glyphs.cell_size(),
             self.config.window.padding * scale,
         );
-        let mut workspace = Workspace::new();
-        let id = workspace.allocate_id();
-        let terminal = Terminal::spawn(
-            EventProxy::new(self.proxy.clone(), id),
-            layout.window_size(),
-            self.config.term_config(),
-            None,
-            self.first_program.take(),
-        )?;
-        workspace.new_tab(id, Pane::new(id, terminal, layout));
+        let mut workspace = match restored {
+            Some(snapshot) => self.restore_workspace(snapshot, layout),
+            None => Workspace::new(),
+        };
+        if workspace.tabs().is_empty() {
+            let id = workspace.allocate_id();
+            let terminal = Terminal::spawn(
+                EventProxy::new(self.proxy.clone(), id),
+                layout.window_size(),
+                self.config.term_config(),
+                None,
+                self.first_program.take(),
+            )?;
+            workspace.new_tab(id, Pane::new(id, terminal, layout));
+        }
         workspace.set_progress_shown(self.config.window.progress);
         perf::mark("shell spawned");
 
         Ok((glyphs, workspace))
+    }
+
+    /// The tabs of `snapshot`, each shell started in its saved directory (or its nearest
+    /// parent still there) with `layout`, resized once the window lays them out. A shell
+    /// that fails is logged and left out.
+    fn restore_workspace(&self, snapshot: &WindowSnapshot, layout: GridLayout) -> Workspace<Pane> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let workspace = Workspace::restore(&snapshot.tabs, snapshot.active_tab, |id, cwd| {
+            let cwd = cwd.and_then(|cwd| crate::session::nearest_existing_dir(&cwd, home.clone()));
+            match Terminal::spawn(
+                EventProxy::new(self.proxy.clone(), id),
+                layout.window_size(),
+                self.config.term_config(),
+                cwd,
+                None,
+            ) {
+                Ok(terminal) => Some(Pane::new(id, terminal, layout)),
+                Err(error) => {
+                    log::error!("cannot start a shell of the restored session: {error:#}");
+                    None
+                }
+            }
+        });
+        perf::mark("session restored");
+        workspace
     }
 
     /// Reads the configuration and its theme again after a change on disk, and applies
@@ -533,6 +609,12 @@ impl ApplicationHandler<UserEvent> for App {
         {
             session.save_window_state();
         }
+        if let Some(session) = &self.session
+            && let Some(saver) = self.session_saver.as_mut()
+        {
+            let closed_at = crate::session::unix_seconds(std::time::SystemTime::now());
+            saver.finish(&session.window_snapshot(Some(closed_at)));
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -552,6 +634,13 @@ impl ApplicationHandler<UserEvent> for App {
             deadline
         });
         let deadline = earliest(deadline, self.quick_tick(event_loop, now));
+        let deadline = earliest(
+            deadline,
+            self.session
+                .as_ref()
+                .zip(self.session_saver.as_mut())
+                .map(|(session, saver)| saver.tick(now, || session.window_snapshot(None))),
+        );
         let deadline = earliest(
             deadline,
             self.settings.as_mut().and_then(|settings| {
@@ -755,9 +844,33 @@ pub(super) fn with_theme(
     (config, palette, Banner::config_errors(&all), load_errors)
 }
 
-pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
+pub fn run(
+    first_program: Option<Vec<String>>,
+    grid: GridSize,
+    no_restore: bool,
+    restore_session: Option<PathBuf>,
+) -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
-    run_app(event_loop, WindowMode::Normal, first_program, grid).map(|_| ())
+    run_app(
+        event_loop,
+        WindowMode::Normal,
+        first_program,
+        grid,
+        Restore {
+            no_restore,
+            handed_over: restore_session,
+        },
+    )
+    .map(|_| ())
+}
+
+/// How a launch takes part in the session restoration.
+#[derive(Debug, Default)]
+struct Restore {
+    /// `--no-restore`: out of the session.
+    no_restore: bool,
+    /// `--restore-session <file>`: the saved window this launch reopens.
+    handed_over: Option<PathBuf>,
 }
 
 /// Runs the quick terminal process: see [`crate::run_quick`].
@@ -775,7 +888,13 @@ pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
     }
     let event_loop = builder.build()?;
     let mode = WindowMode::Quick(QuickState::new(hidden));
-    let code = run_app(event_loop, mode, None, GridSize::default());
+    let code = run_app(
+        event_loop,
+        mode,
+        None,
+        GridSize::default(),
+        Restore::default(),
+    );
     drop(lock);
     code
 }
@@ -795,14 +914,29 @@ impl App {
 }
 
 /// Runs `event_loop` with the application in `mode`, and returns the exit code.
+/// `restore` tells how the window takes part in the session.
 fn run_app(
     event_loop: EventLoop<UserEvent>,
     mode: WindowMode,
     first_program: Option<Vec<String>>,
     grid: GridSize,
+    restore: Restore,
 ) -> anyhow::Result<i32> {
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner, load_errors) = load_config();
+    let session_saver = crate::session::participates(
+        config.window.restore_session,
+        mode == WindowMode::Normal,
+        first_program.is_some(),
+        grid.is_set(),
+        restore.no_restore,
+    )
+    .then(|| start_session(restore.handed_over.as_deref()))
+    .flatten();
+    let (session_saver, restored) = match session_saver {
+        Some((saver, restored)) => (Some(saver), restored),
+        None => (None, None),
+    };
     if let Some(dir) = config::config_dir() {
         let proxy = event_loop.create_proxy();
         watcher::spawn(dir, move || {
@@ -833,6 +967,8 @@ fn run_app(
         hotkey: None,
         hotkey_error: None,
         quick_supported: false,
+        session_saver,
+        restored,
     };
     if let Some(first) = app.watch_appearance()
         && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)
@@ -844,6 +980,64 @@ fn run_app(
         Some(error) => Err(error),
         None => Ok(app.exit_code),
     }
+}
+
+/// A saver for a new instance in the session folder, with the saved window it reopens:
+/// `handed_over` when given (see [`crate::session::adopt`]), else the one it picks,
+/// starting a process for each other window to reopen (see [`crate::session::start`]).
+/// `None`, logged, when the folder cannot be found or the instance cannot be claimed.
+fn start_session(
+    handed_over: Option<&std::path::Path>,
+) -> Option<(SessionSaver, Option<WindowSnapshot>)> {
+    let Some(dir) = crate::session::sessions_dir() else {
+        log::warn!("neither XDG_STATE_HOME nor HOME is set: the session is not saved");
+        return None;
+    };
+    let started = match handed_over {
+        Some(file) => crate::session::adopt(&dir, file),
+        None => crate::session::start(&dir, WindowKind::Normal, spawn_restored_window),
+    };
+    match started {
+        Ok((instance, restored)) => Some((SessionSaver::new(instance, Instant::now()), restored)),
+        Err(error) => {
+            log::warn!("cannot save the session in {}: {error}", dir.display());
+            None
+        }
+    }
+}
+
+/// Starts `graphene --restore-session <file>`, the window that reopens `file`, in a
+/// session of its own and without waiting for it. A thread reaps it when it exits.
+fn spawn_restored_window(file: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .arg("--restore-session")
+        .arg(file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: `setsid` is async-signal-safe, as `pre_exec` requires.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn()?;
+    // The window runs already: a thread that cannot start only leaves it unreaped.
+    if let Err(error) = std::thread::Builder::new()
+        .name("restored-window".to_owned())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+    {
+        log::warn!("cannot wait for a restored window: {error}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1030,6 +1224,7 @@ mod tests {
             padding: 8.0,
             background_opacity: 1.0,
             progress: true,
+            restore_session: false,
         }
     }
 
@@ -1070,6 +1265,31 @@ mod tests {
             initial_window(&config, Some(unmaximized)),
             (LogicalSize::new(1280, 720), false)
         );
+    }
+
+    #[test]
+    fn a_reopened_window_keeps_its_size_whatever_the_startup_mode() {
+        let restored = WindowState {
+            width: 800,
+            height: 500,
+            maximized: false,
+        };
+        for mode in [
+            StartupMode::Default,
+            StartupMode::Maximized,
+            StartupMode::Remember,
+        ] {
+            let config = window_config(mode);
+            assert_eq!(
+                launch_window(&config, Some(REMEMBERED), Some(restored)),
+                (LogicalSize::new(800, 500), false),
+                "{mode:?}"
+            );
+            assert_eq!(
+                launch_window(&config, Some(REMEMBERED), None),
+                initial_window(&config, Some(REMEMBERED))
+            );
+        }
     }
 
     #[test]

@@ -9,6 +9,7 @@ use super::command_palette::PaletteLayout;
 use super::context_menu::{MenuLayout, MenuRow};
 use super::dialog::DialogLayout;
 use super::pane_bar::PaneBarLayout;
+use super::rename_tab::RenameTabLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
 use crate::easter_eggs::art::ArtLayout;
@@ -61,6 +62,7 @@ const MENU_HOVER_HIGHLIGHT: f32 = 0.45;
 pub enum Overlay<'a> {
     Dialog(&'a DialogLayout),
     Palette(&'a PaletteLayout),
+    RenameTab(&'a RenameTabLayout),
     #[allow(dead_code)] // Instantiated when menu opening is wired in issue #103.
     Menu(&'a MenuLayout),
     Art(&'a ArtLayout),
@@ -85,6 +87,7 @@ pub fn build(
     match overlay {
         Some(Overlay::Dialog(layout)) => dialog(layout, colors, srgb_target, &mut ui),
         Some(Overlay::Palette(layout)) => palette(layout, colors, srgb_target, &mut ui),
+        Some(Overlay::RenameTab(layout)) => rename_tab(layout, colors, srgb_target, &mut ui),
         Some(Overlay::Menu(layout)) => menu(layout, colors, srgb_target, &mut ui),
         Some(Overlay::Art(layout)) => art(layout, colors, srgb_target, &mut ui),
         None => {}
@@ -312,6 +315,44 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
             });
         }
     }
+}
+
+/// The tab rename box, in the overlay, drawn like the palette's search field: its box
+/// and border, its heading, the field, the highlight of a selected text, the text
+/// cursor and the text.
+fn rename_tab(rename: &RenameTabLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    let text = color(colors.palette_text);
+    ui.overlay_rects
+        .push(rect(rename.rect, color(colors.palette_background)));
+    ui.overlay_rects.extend(border(
+        rename.rect,
+        DIALOG_BORDER,
+        color(colors.pane_border),
+    ));
+    ui.overlay_rects
+        .push(rect(rename.input, color(colors.tab_bar_background)));
+    if let Some(selection) = rename.selection {
+        ui.overlay_rects
+            .push(rect(selection, color(colors.palette_selection_background)));
+    }
+    ui.overlay_rects.push(rect(rename.caret, text));
+    ui.overlay_texts.push(UiTextItem {
+        text: rename.heading.clone(),
+        x: rename.heading_x,
+        y: rename.heading_y,
+        color: color(colors.tab_inactive_text),
+        max_width: rename.text_width,
+        font: UiFont::Palette,
+    });
+    ui.overlay_texts.push(UiTextItem {
+        text: rename.input_text.clone(),
+        x: rename.text_x,
+        y: rename.input_text_y,
+        color: text,
+        max_width: rename.text_width,
+        font: UiFont::Palette,
+    });
 }
 
 /// The dialog, in the overlay: its box and border, its title and message, then its
@@ -1405,6 +1446,56 @@ mod tests {
                 ("Close", color(DIALOG_BACKGROUND)),
             ]
         );
+    }
+
+    #[test]
+    fn rename_box_is_drawn_in_the_overlay() {
+        use crate::chrome::rename_tab::{RenameTab, RenameTabLayout};
+        use crate::i18n::Lang;
+        const SELECTION: Rgb = Rgb { r: 70, g: 0, b: 0 };
+        let colors = UiColors {
+            palette_background: DIALOG_BACKGROUND,
+            palette_text: DIALOG_TEXT,
+            palette_selection_background: SELECTION,
+            ..tab_colors()
+        };
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let draw = |rename: &RenameTab| {
+            let layout = RenameTabLayout::new(
+                rename,
+                Lang::En,
+                area(0.0, 0.0, 1000.0, 600.0),
+                metrics,
+                |t| t.chars().count() as f32 * 8.0,
+            );
+            build(
+                &two_columns(),
+                Some(PaneId(1)),
+                &[],
+                None,
+                Some(Overlay::RenameTab(&layout)),
+                &colors,
+                false,
+            )
+        };
+        let color = |c| gpu_color(c, false);
+        let mut rename = RenameTab::new(PaneId(1), "~/dev");
+        let ui = draw(&rename);
+        // Box, its 4 border sides, the field, the selection and the text cursor.
+        assert_eq!(ui.overlay_rects.len(), 8);
+        assert_eq!(ui.overlay_rects[0].color, color(DIALOG_BACKGROUND));
+        assert_eq!(ui.overlay_rects[5].color, color(BAR));
+        assert_eq!(ui.overlay_rects[6].color, color(SELECTION));
+        assert_eq!(ui.overlay_rects[7].color, color(DIALOG_TEXT));
+        let texts: Vec<&str> = ui.overlay_texts.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["Rename the tab", "~/dev"]);
+        assert!(ui.overlay_texts.iter().all(|t| t.font == UiFont::Palette));
+        // Once edited, the selection is gone.
+        rename.key(&winit::keyboard::Key::Character("x".into()), Some("x"));
+        assert_eq!(draw(&rename).overlay_rects.len(), 7);
     }
 
     #[test]

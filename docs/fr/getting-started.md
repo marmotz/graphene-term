@@ -48,6 +48,7 @@ déplacer le curseur, et sélectionner du texte avec `Shift+Flèche` comme dans 
 | `graphene`                         | Ouvre une fenêtre avec votre shell                                   |
 | `graphene -e <programme> [args...]` | Ouvre une fenêtre dont le premier panneau lance `<programme>` au lieu du shell |
 | `graphene --columns <n> --lines <n>` | Ouvre la fenêtre à la taille d'une grille de `<n>` colonnes et `<n>` lignes |
+| `graphene --no-restore`            | Ouvre une fenêtre neuve sans restaurer la session sauvegardée, et la garde hors de la session (voir `window.restore_session` dans [Configuration](configuration.md#window)) |
 | `graphene --version`               | Affiche la version et quitte                                         |
 | `graphene --prune-config [--yes]`  | Retire du fichier de configuration les paramètres que cette version ne connaît pas (voir [Configuration](configuration.md#retirer-les-paramètres-inconnus)) |
 

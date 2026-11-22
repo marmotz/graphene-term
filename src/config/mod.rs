@@ -97,6 +97,7 @@ impl Default for Config {
                 padding: 8.0,
                 background_opacity: 1.0,
                 progress: true,
+                restore_session: false,
             },
             scrollback_lines: 10_000,
             cursor: CursorConfig {
@@ -461,6 +462,7 @@ height = 800
 padding = 4
 background_opacity = 0.8
 progress = false
+restore_session = true
 
 [scrollback]
 lines = 5000
@@ -521,6 +523,7 @@ hide_on_focus_loss = false
                     padding: 4.0,
                     background_opacity: 0.8,
                     progress: false,
+                    restore_session: true,
                 },
                 scrollback_lines: 5000,
                 cursor: CursorConfig {
@@ -810,6 +813,27 @@ hide_on_focus_loss = false
         let (config, errors) = parse("[window]\nprogress = false\n");
         assert!(errors.is_empty());
         assert!(!config.window.progress);
+    }
+
+    #[test]
+    fn window_restore_session_defaults_to_false() {
+        let (config, errors) = parse("");
+        assert!(errors.is_empty());
+        assert!(!config.window.restore_session);
+        let (config, errors) = parse("[window]\nrestore_session = true\n");
+        assert!(errors.is_empty());
+        assert!(config.window.restore_session);
+    }
+
+    #[test]
+    fn invalid_window_restore_session_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.window.restore_session = true;
+        let (config, errors) =
+            Config::parse("[window]\nrestore_session = \"yes\"\n", &previous, &file());
+        assert!(config.window.restore_session);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].key.as_deref(), Some("window.restore_session"));
     }
 
     #[test]

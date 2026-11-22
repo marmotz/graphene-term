@@ -160,6 +160,7 @@ Rules:
 | `equalise_panes`                         | Give all panes of the tab the same size (no default shortcut) |
 | `detach_pane`                            | Move the pane to a new tab (no default shortcut)  |
 | `new_tab`, `close_tab`                   | Open / close a tab                                |
+| `rename_tab`                             | Rename the tab (no default shortcut)              |
 | `next_tab`, `previous_tab`               | Cycle through the tabs                            |
 | `go_to_tab_1` ... `go_to_tab_255`        | Go to a tab by its number                         |
 | `command_palette`                        | Open the command palette                          |

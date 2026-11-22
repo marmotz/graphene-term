@@ -63,7 +63,7 @@ src/
     fonts.rs       the palette's sans-serif font and sizes for egui
     visuals.rs     egui Visuals from the active theme's colors (pure)
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
-  process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
+  process.rs       /proc lookups (proc_pidinfo on macOS): foreground process group, program name, current directory
   workspace/
     mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, per-tab broadcast set, title fallback, pane moves (pure)
     drop.rs        drop targets of a dragged pane: edge or center of a pane, tab, new tab, highlight (pure)
@@ -73,6 +73,9 @@ src/
   config_edit.rs   text-preserving config.toml edits (toml_edit): completion of missing options,
                    --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
+  session.rs       saved session (window.restore_session): WindowSnapshot format, per-instance
+                   sessions/<pid>-<start ns>.json and its flock .lock, SessionSaver (periodic save, heartbeat),
+                   start (pick and adopt the snapshot to reopen, GRACE)
   x11_window.rs    X11 _NET_WM_STATE (maximized, quick terminal) written on the hidden window before
                    it is mapped, cursor position (QueryPointer), keyboard focus of the quick
                    terminal dock window (SetInputFocus)
@@ -146,8 +149,10 @@ src/
     context_menu.rs  pane and tab context menus: entries, submenus, keys, layout (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
     pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing, press routing (pure)
+    rename_tab.rs  tab rename box: keys, layout centered like the palette (pure)
     scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
+    text_field.rs  single-line text editing shared by the palette and the rename box (pure)
     tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
@@ -209,7 +214,7 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   pointer (a press in an inactive pane focuses it first). A press goes to the first of:
   the overlay, the banner, the tab bar, a divider, a pane title bar, a pane.
 - New panes (split, new tab) start their shell in the active pane's directory
-  (`Terminal::current_dir`, from `/proc/<pid>/cwd`), else `$HOME`.
+  (`Terminal::current_dir`, from `/proc/<pid>/cwd` on Linux, `proc_pidinfo` on macOS), else `$HOME`.
 - `graphene -e <program> [args]` stores the program in `App.first_program`; the first
   pane takes it (`Option::take`) and `Terminal::spawn` starts it instead of the shell,
   without shell integration (`terminal::launch`). Every later pane starts the shell.
@@ -220,7 +225,7 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   (`chrome::context_menu::pane_menu`): the block entries when the press hit a block
   (copy command, copy output, fold or unfold), then copy, paste, splits, close, zoom,
   new and close tab, settings, the theme submenu and quit. A right press on a tab
-  opens the tab menu (`tab_menu`), whose close entry keeps the clicked index.
+  opens the tab menu (`tab_menu`), whose close and rename entries keep the clicked index.
 - The menu is the session overlay (`Overlay::Menu`): it takes the keys and presses
   while open (a press outside closes it), the wheel scrolls an open submenu, and entries
   the context disables (`MenuContext`: last pane, only tab...) cannot be chosen. A
@@ -247,6 +252,20 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   `$XDG_STATE_HOME/graphene/palette-recent` (default `~/.local/state/graphene/`), one id
   per line, at most 50; the file is read each time the palette opens, and a missing or
   unreadable file means no recent actions. Tab and pane entries are not stored.
+
+## Tab rename
+
+- `Tab.custom_title` (`Workspace::rename_tab`, trimmed, empty gives `None`) wins over
+  the active pane's title in `Workspace::tab_title`, so the tab bar, the palette and
+  the window title (`Session::refresh_title`) show it; the pane bars keep
+  `pane_title`. It moves with its tab, a pane moved into the tab keeps it, and a tab
+  made by detaching a pane has none.
+- `Action::RenameTab` (palette, no default key, on the active tab), the tab menu entry
+  (`Command::RenameTab(index)`) and a double click on a tab (`tab_bar::opens_rename`
+  over `Session.tab_bar_clicks`, the drag is not started) open
+  `chrome::rename_tab::RenameTab` as the session overlay, prefilled with the shown
+  title, all selected. It knows the tab by its active pane, so a tab closing meanwhile
+  does not shift it. `Enter` renames, `Escape` or a press outside the box cancels.
 
 ## Settings window
 
@@ -415,7 +434,7 @@ Renderer::render(pane frames, interface rects)
   `default`). `window.json` is only read in `remember` mode.
 - The window is created hidden and shown once the renderer is ready, so it never shows
   empty. `Gpu::new` runs on its own thread (`gpu_alongside`, in sequence on macOS) while
-  `spawn_first_pane` loads the glyphs and spawns the shell. winit asks for the maximized
+  `spawn_workspace` loads the glyphs and spawns the shells. winit asks for the maximized
   state with a client message that X11 window managers ignore before mapping, so
   `x11_window::preset_states` writes `_NET_WM_STATE` on the hidden window instead.
   The window manager still sends the maximized size just after mapping: `MaximizeHold`
@@ -429,6 +448,38 @@ Renderer::render(pane frames, interface rects)
   of a maximized window is the screen. `ApplicationHandler::exiting` saves it with
   `window.is_maximized()` to `window.json` whatever the mode, so every exit path (window
   closed, last shell exited) is covered. The position is not saved.
+- With `window.restore_session` (read at launch), `run_app` claims an `Instance` in
+  `<state_dir>/sessions/`: a `flock(LOCK_EX | LOCK_NB)` on `<pid>-<start ns>.lock` held
+  for the life of the process, so an instance is alive while its lock cannot be taken
+  (`session::is_alive`). `about_to_wait` hands `Session::window_snapshot` to
+  `SessionSaver::tick`: checked every `SESSION_SAVE_INTERVAL` (2 s; `cd` sends no event),
+  rewritten only when its JSON changed, else its modification date is touched every
+  `HEARTBEAT` (10 s) to date a crash. `exiting` writes the final snapshot with
+  `closed_at`; a window whose last shell exited saves no tab. The quick terminal and
+  launches with `-e`, `--columns`/`--lines` or `--no-restore` take no part
+  (`session::participates`): no file, no lock.
+- Restoration (`session::start`, from `run_app`): under the blocking
+  `sessions/.restore.lock`, an alive instance of the same `WindowKind` (read from its
+  JSON, `Normal` when missing or unreadable) means a fresh window. Else the dead
+  snapshots of that kind are dated by `closed_at`, else their modification date (a
+  crash), and `select` keeps those ended within `GRACE` (15 s) of the latest: the
+  latest is renamed to the new instance's file and handed to `App.restored`, older ones
+  are removed, `pending-*` files are skipped. Each other kept one is renamed to a free
+  `pending-<n>.json` (`park`) and reopened by `graphene --restore-session <file>`
+  (`spawn_restored_window`: own session, null stdio, a thread reaps it); a file whose
+  process cannot start is removed. That child skips the live-instance test and `GRACE`
+  (`session::adopt`): under the same lock it claims its instance and renames the file
+  to it, a missing, unreadable or non-`pending-*` file meaning a fresh window. The
+  global lock is released once the instance is claimed and the windows handed over, so
+  the next launch sees it alive.
+  `create_session` then takes the saved size whatever `startup_mode` (`launch_window`),
+  the saved position only when its screen is in `available_monitors()`
+  (`session::restored_position`), and `spawn_workspace` rebuilds the tabs with
+  `Workspace::restore` inside the `gpu_alongside` closure, each shell in
+  `session::nearest_existing_dir` of its saved directory. A shell that fails is left
+  out, and an empty tab with it; no pane at all (a snapshot with no tab included) falls
+  back to the fresh single pane. The restored panes are laid out once the session is
+  built (`Session::relayout`).
 - The window is always created transparent (`with_transparent(true)`: winit only
   honours it at creation on X11). `Renderer::new` picks the `PreMultiplied` surface
   alpha mode, else `Inherit`, else the first one with a warning (the opacity is then
