@@ -94,14 +94,16 @@ impl Session {
         self.sync_menu_theme();
         let dialog = self.dialog_layout();
         let palette = self.palette_layout();
+        let rename = self.rename_tab_layout();
         let menu = self.menu_layout();
         let art = self.art_layout();
         let tooltip = self.tooltip_layout();
-        let overlay = match (&dialog, &palette, &menu, &art) {
-            (Some(dialog), _, _, _) => Some(chrome::scene::Overlay::Dialog(dialog)),
-            (_, Some(palette), _, _) => Some(chrome::scene::Overlay::Palette(palette)),
-            (_, _, Some(menu), _) => Some(chrome::scene::Overlay::Menu(menu)),
-            (_, _, _, Some(art)) => Some(chrome::scene::Overlay::Art(art)),
+        let overlay = match (&dialog, &palette, &rename, &menu, &art) {
+            (Some(dialog), ..) => Some(chrome::scene::Overlay::Dialog(dialog)),
+            (_, Some(palette), ..) => Some(chrome::scene::Overlay::Palette(palette)),
+            (_, _, Some(rename), ..) => Some(chrome::scene::Overlay::RenameTab(rename)),
+            (_, _, _, Some(menu), _) => Some(chrome::scene::Overlay::Menu(menu)),
+            (.., Some(art)) => Some(chrome::scene::Overlay::Art(art)),
             _ => None,
         };
         let mut banner = self.shown_banner().map(|shown| FrameBanner {

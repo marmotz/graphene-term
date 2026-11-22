@@ -25,11 +25,18 @@ them.
 | Go to tab 1 to 9                       | `Alt+1` ... `Alt+9`                              |
 | Show a tab                             | Click it                                         |
 | Reorder the tabs                       | Drag a tab along the bar                         |
-| Tab menu (new tab, close, settings, themes) | Right click on a tab                        |
+| Rename the tab                         | Double click on the tab, **Rename the tab** in its menu or in the command palette |
+| Tab menu (new tab, close, rename, settings, themes) | Right click on a tab                |
 
 The tab bar appears once there are two tabs. Its edge is set by `position` in the
 `[tabs]` section of the [configuration](configuration.md#tabs): `"top"` (default),
 `"bottom"`, `"left"` or `"right"`. On the left or right, the tabs are stacked.
+
+A tab shows the title of its focused pane. Renaming it opens a box holding that title,
+all selected: type the new one and press `Enter`, or `Escape` to leave it unchanged.
+The name stays with the tab when it is moved, and the window title follows it. An
+empty name goes back to the automatic title. The pane title bars keep their own
+titles, and a pane moved to a new tab starts with the automatic title.
 
 ## Panes
 

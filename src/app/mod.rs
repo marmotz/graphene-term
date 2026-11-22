@@ -49,6 +49,7 @@ use crate::chrome::context_menu::{
 };
 use crate::chrome::dialog::{self, Answer, ConfirmClose, DialogHit, DialogLayout, Target};
 use crate::chrome::pane_bar::{self, PaneBarAction, PaneBarHit, PaneBarLayout};
+use crate::chrome::rename_tab::{RenameOutcome, RenameTab, RenameTabLayout};
 use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
@@ -172,6 +173,8 @@ enum Overlay {
     Confirm(ConfirmClose),
     /// The command palette.
     Palette(CommandPalette),
+    /// The box renaming a tab.
+    RenameTab(RenameTab),
     /// A context menu.
     Menu(ContextMenu),
     /// The ASCII drawing of graphene.
@@ -245,6 +248,8 @@ struct Session {
     link_press: Option<LinkPress>,
     /// Clicks on the pane bars, per pane: a double click on a title toggles the zoom.
     pane_bar_clicks: ClickTracker<PaneId>,
+    /// Clicks on the tabs, per index: a double click on a tab opens its rename box.
+    tab_bar_clicks: ClickTracker<usize>,
     /// Whether the link tooltip stays hidden: set by the wheel, cleared when the mouse
     /// moves.
     tooltip_hidden: bool,

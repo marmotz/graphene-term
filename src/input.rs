@@ -43,6 +43,8 @@ pub enum Action {
     EqualisePanes,
     /// Moves the active pane into a new tab; no default key.
     DetachPane,
+    /// Opens a box renaming the active tab; no default key.
+    RenameTab,
     /// Opens a tab after the last one.
     NewTab,
     CloseTab,
@@ -60,9 +62,10 @@ pub enum Action {
 impl Action {
     /// Every action the command palette lists, in its default order. The tabs are
     /// listed by the palette itself, so `GoToTab` is left out, and so is the palette.
-    pub const ALL: [Action; 38] = [
+    pub const ALL: [Action; 39] = [
         Action::NewTab,
         Action::CloseTab,
+        Action::RenameTab,
         Action::ClosePane,
         Action::SplitRight,
         Action::SplitDown,
@@ -138,6 +141,7 @@ impl Action {
             Action::ToggleBroadcastAll => "toggle_broadcast_all",
             Action::EqualisePanes => "equalise_panes",
             Action::DetachPane => "detach_pane",
+            Action::RenameTab => "rename_tab",
             Action::NewTab => "new_tab",
             Action::CloseTab => "close_tab",
             Action::NextTab => "next_tab",
@@ -195,6 +199,7 @@ impl Action {
             Action::ToggleBroadcastAll => Msg::ToggleBroadcastAll,
             Action::EqualisePanes => Msg::EqualisePanes,
             Action::DetachPane => Msg::DetachPane,
+            Action::RenameTab => Msg::RenameTab,
             Action::NewTab => Msg::NewTab,
             Action::CloseTab => Msg::CloseTab,
             Action::NextTab => Msg::NextTab,

@@ -90,6 +90,9 @@ pub struct Tab {
     /// Panes of this tab that typed input is sent to together; empty when broadcast
     /// is off. Only ever holds panes of this tab.
     pub broadcast: BTreeSet<PaneId>,
+    /// Title given by the user, shown instead of the automatic one; `None` for the
+    /// automatic title.
+    pub custom_title: Option<String>,
 }
 
 impl Tab {
@@ -99,6 +102,7 @@ impl Tab {
             active: pane,
             zoomed: false,
             broadcast: BTreeSet::new(),
+            custom_title: None,
         }
     }
 
@@ -373,6 +377,17 @@ impl<P> Workspace<P> {
         }
     }
 
+    /// Gives tab `index` the title `title`, trimmed; an empty one goes back to the
+    /// automatic title. `false` when the index is out of range.
+    pub fn rename_tab(&mut self, index: usize, title: &str) -> bool {
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return false;
+        };
+        let title = title.trim();
+        tab.custom_title = (!title.is_empty()).then(|| title.to_owned());
+        true
+    }
+
     /// Moves tab `from` to index `to`; the shown tab stays shown. `false` when either
     /// index is out of range.
     pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
@@ -422,11 +437,13 @@ impl<P> Workspace<P> {
             return false;
         };
         let broadcast = std::mem::take(&mut self.tabs[index].broadcast);
+        let custom_title = self.tabs[index].custom_title.take();
         self.tabs[index] = Tab {
             tree,
             active: id,
             zoomed: false,
             broadcast,
+            custom_title,
         };
         if source != index {
             if self.tabs[source].is_single() {
@@ -774,9 +791,14 @@ impl<P: ProgressSource> Workspace<P> {
 }
 
 impl<P: TitleSource> Workspace<P> {
-    /// Title of tab `index`, from its active pane (see [`title_for`]).
+    /// Title of tab `index`: the one given by the user, else the one of its active
+    /// pane (see [`title_for`]).
     pub fn tab_title(&self, index: usize) -> Option<String> {
-        self.pane_title(self.tabs.get(index)?.active)
+        let tab = self.tabs.get(index)?;
+        match &tab.custom_title {
+            Some(title) => Some(title.clone()),
+            None => self.pane_title(tab.active),
+        }
     }
 
     /// Title of the pane `id` (see [`title_for`]).
@@ -1526,6 +1548,52 @@ mod tests {
         ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
         assert_eq!(ws.tab_title(0).as_deref(), Some("htop"));
         assert_eq!(ws.tab_title(5), None);
+    }
+
+    #[test]
+    fn a_custom_title_wins_over_the_pane_title() {
+        let mut ws = workspace(&[2]);
+        let active = ws.active_pane_id().unwrap();
+        ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
+        assert!(ws.rename_tab(0, "  build  "));
+        assert_eq!(ws.tabs()[0].custom_title.as_deref(), Some("build"));
+        assert_eq!(ws.tab_title(0).as_deref(), Some("build"));
+        // The pane keeps its own title.
+        assert_eq!(ws.pane_title(active).as_deref(), Some("htop"));
+        assert!(!ws.rename_tab(3, "x"));
+    }
+
+    #[test]
+    fn an_empty_title_goes_back_to_the_automatic_one() {
+        let mut ws = workspace(&[1]);
+        let active = ws.active_pane_id().unwrap();
+        ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
+        ws.rename_tab(0, "build");
+        assert!(ws.rename_tab(0, "   "));
+        assert_eq!(ws.tabs()[0].custom_title, None);
+        assert_eq!(ws.tab_title(0).as_deref(), Some("htop"));
+    }
+
+    #[test]
+    fn a_custom_title_follows_its_tab() {
+        let mut ws = workspace(&[2, 1, 1]);
+        ws.rename_tab(0, "build");
+        assert!(ws.move_tab(0, 2));
+        assert_eq!(ws.tabs()[2].custom_title.as_deref(), Some("build"));
+        assert_eq!(ws.tabs()[0].custom_title, None);
+        // A pane detached from it opens a tab with the automatic title.
+        let panes = ws.tabs()[2].tree.leaves();
+        assert!(ws.detach(panes[1]));
+        assert_eq!(ws.tabs()[2].custom_title.as_deref(), Some("build"));
+        assert_eq!(ws.tabs()[3].custom_title, None);
+        // A pane moved into it keeps the target tab's title.
+        let moved = ws.tabs()[0].tree.leaves()[0];
+        assert!(ws.move_pane(moved, panes[0], Direction::Right, geometry()));
+        assert!(
+            ws.tabs()
+                .iter()
+                .any(|tab| tab.custom_title.as_deref() == Some("build") && tab.tree.contains(moved))
+        );
     }
 
     fn progress(value: u8) -> Progress {

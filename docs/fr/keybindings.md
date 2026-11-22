@@ -174,6 +174,7 @@ Règles :
 | `equalise_panes`                         | Donner la même taille à tous les panneaux de l'onglet (pas de raccourci par défaut) |
 | `detach_pane`                            | Déplacer le panneau dans un nouvel onglet (pas de raccourci par défaut) |
 | `new_tab`, `close_tab`                   | Ouvrir / fermer un onglet                         |
+| `rename_tab`                             | Renommer l'onglet (pas de raccourci par défaut)   |
 | `next_tab`, `previous_tab`               | Parcourir les onglets                             |
 | `go_to_tab_1` ... `go_to_tab_255`        | Aller à un onglet par son numéro                  |
 | `command_palette`                        | Ouvrir la palette de commandes                    |

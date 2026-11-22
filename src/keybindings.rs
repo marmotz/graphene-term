@@ -591,7 +591,10 @@ mod tests {
         for action in actions {
             let Some(label) = bindings.label(action) else {
                 assert!(
-                    matches!(action, Action::EqualisePanes | Action::DetachPane),
+                    matches!(
+                        action,
+                        Action::EqualisePanes | Action::DetachPane | Action::RenameTab
+                    ),
                     "{action:?} has no label"
                 );
                 continue;

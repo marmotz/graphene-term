@@ -146,8 +146,10 @@ src/
     context_menu.rs  pane and tab context menus: entries, submenus, keys, layout (pure)
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
     pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing, press routing (pure)
+    rename_tab.rs  tab rename box: keys, layout centered like the palette (pure)
     scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
+    text_field.rs  single-line text editing shared by the palette and the rename box (pure)
     tooltip.rs     link tooltip layout: box near the mouse, inside the window, URI truncated (pure)
   update/
     mod.rs         GitHub release check, release selection, notice and scheduling decisions
@@ -220,7 +222,7 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   (`chrome::context_menu::pane_menu`): the block entries when the press hit a block
   (copy command, copy output, fold or unfold), then copy, paste, splits, close, zoom,
   new and close tab, settings, the theme submenu and quit. A right press on a tab
-  opens the tab menu (`tab_menu`), whose close entry keeps the clicked index.
+  opens the tab menu (`tab_menu`), whose close and rename entries keep the clicked index.
 - The menu is the session overlay (`Overlay::Menu`): it takes the keys and presses
   while open (a press outside closes it), the wheel scrolls an open submenu, and entries
   the context disables (`MenuContext`: last pane, only tab...) cannot be chosen. A
@@ -247,6 +249,20 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   `$XDG_STATE_HOME/graphene/palette-recent` (default `~/.local/state/graphene/`), one id
   per line, at most 50; the file is read each time the palette opens, and a missing or
   unreadable file means no recent actions. Tab and pane entries are not stored.
+
+## Tab rename
+
+- `Tab.custom_title` (`Workspace::rename_tab`, trimmed, empty gives `None`) wins over
+  the active pane's title in `Workspace::tab_title`, so the tab bar, the palette and
+  the window title (`Session::refresh_title`) show it; the pane bars keep
+  `pane_title`. It moves with its tab, a pane moved into the tab keeps it, and a tab
+  made by detaching a pane has none.
+- `Action::RenameTab` (palette, no default key, on the active tab), the tab menu entry
+  (`Command::RenameTab(index)`) and a double click on a tab (`tab_bar::opens_rename`
+  over `Session.tab_bar_clicks`, the drag is not started) open
+  `chrome::rename_tab::RenameTab` as the session overlay, prefilled with the shown
+  title, all selected. It knows the tab by its active pane, so a tab closing meanwhile
+  does not shift it. `Enter` renames, `Escape` or a press outside the box cancels.
 
 ## Settings window
 

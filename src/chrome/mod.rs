@@ -6,8 +6,10 @@ pub mod command_palette;
 pub mod context_menu;
 pub mod dialog;
 pub mod pane_bar;
+pub mod rename_tab;
 pub mod scene;
 pub mod tab_bar;
+pub mod text_field;
 pub mod tooltip;
 
 use crate::layout::Rect;
