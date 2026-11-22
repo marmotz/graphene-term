@@ -395,9 +395,35 @@ fn column(ui: &mut Ui, x: f32, width: f32, layout: Layout, add: impl FnOnce(&mut
     child.min_rect().bottom()
 }
 
-/// Text of a shortcut's removal button.
-fn chip_text(shortcut: Shortcut) -> String {
-    format!("{} \u{00d7}", shortcut.label())
+/// Removal mark shown at the right edge of a shortcut chip.
+const CHIP_REMOVE: &str = "\u{00d7}";
+
+/// A shortcut's removal button: the removal mark sits at the right edge and the
+/// shortcut is centered in the space left of it.
+fn chip(shortcut: &str) -> Button<'static> {
+    Button::new((
+        egui::Atom::grow(),
+        shortcut.to_owned(),
+        egui::Atom::grow(),
+        CHIP_REMOVE,
+    ))
+}
+
+/// Smallest width of the `chip` of `shortcut`: its two texts, the gaps egui keeps
+/// between its four atoms, and the button padding.
+fn chip_width(ui: &Ui, shortcut: &str) -> f32 {
+    let font = TextStyle::Button.resolve(ui.style());
+    let width = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let spacing = ui.spacing();
+    width(shortcut)
+        + width(CHIP_REMOVE)
+        + 3.0 * spacing.icon_spacing
+        + 2.0 * spacing.button_padding.x
 }
 
 /// A combo box of the field's choices; returns the picked value when it changed.
@@ -1360,6 +1386,67 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_chip_centers_its_shortcut_left_of_a_right_aligned_removal_mark() {
+        let shortcut = Shortcut::parse("Ctrl+Shift+T").unwrap();
+        let ctx = egui::Context::default();
+        let mut rect = Rect::NOTHING;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            rect = ui
+                .add(chip(&shortcut.label()).min_size(Vec2::new(300.0, 0.0)))
+                .rect;
+        });
+        output.textures_delta.clear();
+        let texts: Vec<(String, Rect)> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                _ => None,
+            })
+            .collect();
+        let find = |wanted: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == wanted)
+                .map(|(_, rect)| *rect)
+                .unwrap_or_else(|| panic!("no {wanted:?} text in {texts:?}"))
+        };
+        let label = find(&shortcut.label());
+        let mark = find(CHIP_REMOVE);
+        let spacing = ctx.global_style().spacing.clone();
+        let padding = spacing.button_padding.x;
+        assert!((rect.right() - padding - mark.right()).abs() <= 1.0);
+        let left_gap = label.left() - (rect.left() + padding);
+        // The space before the mark ends at the atom gap egui keeps next to it.
+        let right_gap = mark.left() - spacing.icon_spacing - label.right();
+        assert!(left_gap > 10.0, "{left_gap}");
+        assert!(
+            (left_gap - right_gap).abs() <= 2.0,
+            "{left_gap} vs {right_gap}"
+        );
+    }
+
+    #[test]
+    fn a_chip_is_exactly_as_wide_as_its_measured_width() {
+        let ctx = egui::Context::default();
+        let mut widths = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for text in ["Ctrl+T", "Ctrl+Shift+Alt+PageDown"] {
+                let drawn = ui.add(chip(text)).rect.width();
+                widths.push((drawn, chip_width(ui, text)));
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(widths.len(), 2);
+        for (drawn, measured) in widths {
+            assert!((drawn - measured).abs() <= 0.5, "{drawn} vs {measured}");
+        }
     }
 
     #[test]
