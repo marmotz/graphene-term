@@ -190,12 +190,18 @@ fn select<T>(mut candidates: Vec<(T, SystemTime)>) -> (Vec<T>, Vec<T>) {
 ///
 /// - none while an instance of the same kind runs: the window opens fresh;
 /// - else the latest of the snapshots of `kind` ended within [`GRACE`] of each other,
-///   renamed to the file of this instance. The older ones are removed, the other kept
-///   ones stay on disk. Unreadable files are removed.
+///   renamed to the file of this instance. The older ones are removed. Each other kept
+///   one is renamed `pending-<n>.json` and handed to `reopen`, which starts the process
+///   that reopens it (see [`adopt`]); a file `reopen` fails on is removed. Unreadable
+///   files are removed.
 ///
-/// Holds [`RESTORE_LOCK`] meanwhile, until the instance is claimed: a launch that
-/// follows sees it alive.
-pub fn start(dir: &Path, kind: WindowKind) -> io::Result<(Instance, Option<WindowSnapshot>)> {
+/// Holds [`RESTORE_LOCK`] meanwhile, until the instance is claimed and the other
+/// windows are handed over: a launch that follows sees it alive.
+pub fn start(
+    dir: &Path,
+    kind: WindowKind,
+    mut reopen: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<(Instance, Option<WindowSnapshot>)> {
     fs::create_dir_all(dir)?;
     let _restoring = lock(&dir.join(RESTORE_LOCK))?;
     let mut live = Vec::new();
@@ -242,7 +248,8 @@ pub fn start(dir: &Path, kind: WindowKind) -> io::Result<(Instance, Option<Windo
         remove(file);
     }
     let instance = Instance::claim(dir)?;
-    let restored = match kept.into_iter().next() {
+    let mut kept = kept.into_iter();
+    let restored = match kept.next() {
         Some((file, snapshot)) => match fs::rename(&file, instance.file()) {
             Ok(()) => Some(snapshot),
             Err(error) => {
@@ -252,7 +259,71 @@ pub fn start(dir: &Path, kind: WindowKind) -> io::Result<(Instance, Option<Windo
         },
         None => None,
     };
+    for file in park(dir, kept.map(|(file, _)| file)) {
+        if let Err(error) = reopen(&file) {
+            log::warn!("cannot reopen {}: {error}", file.display());
+            remove(&file);
+        }
+    }
     Ok((instance, restored))
+}
+
+/// Renames each of `files` to a free `pending-<n>.json` of `dir`, for another process
+/// to reopen, and returns the new names. A file that cannot be renamed is left alone.
+/// Called under [`RESTORE_LOCK`], so that no other launch takes a name meanwhile.
+fn park(dir: &Path, files: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut parked = Vec::new();
+    let mut next = 0_usize;
+    for file in files {
+        let pending = loop {
+            let pending = dir.join(format!("{PENDING_PREFIX}{next}.json"));
+            next += 1;
+            if !pending.exists() {
+                break pending;
+            }
+        };
+        match fs::rename(&file, &pending) {
+            Ok(()) => parked.push(pending),
+            Err(error) => log::warn!("cannot keep {} to reopen: {error}", file.display()),
+        }
+    }
+    parked
+}
+
+/// Takes the place of this process in the session folder `dir` and reopens `file`, a
+/// window handed over by [`start`] (`--restore-session`): renamed to the file of this
+/// instance, without looking for live instances nor sorting snapshots. `None`, a fresh
+/// window, when `file` is missing, unreadable or not a `pending-<n>.json` of `dir`.
+///
+/// Holds [`RESTORE_LOCK`] meanwhile, as [`start`] does.
+pub fn adopt(dir: &Path, file: &Path) -> io::Result<(Instance, Option<WindowSnapshot>)> {
+    fs::create_dir_all(dir)?;
+    let _restoring = lock(&dir.join(RESTORE_LOCK))?;
+    let instance = Instance::claim(dir)?;
+    if !is_pending(dir, file) {
+        log::warn!("{} is not a window to reopen", file.display());
+        return Ok((instance, None));
+    }
+    let restored = match fs::rename(file, instance.file()) {
+        Ok(()) => WindowSnapshot::load(instance.file()),
+        Err(error) => {
+            log::warn!("cannot reopen {}: {error}", file.display());
+            None
+        }
+    };
+    Ok((instance, restored))
+}
+
+/// Whether `file` is a `pending-<n>.json` of `dir`: [`adopt`] never takes another file.
+fn is_pending(dir: &Path, file: &Path) -> bool {
+    file.parent() == Some(dir)
+        && file
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        && file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(PENDING_PREFIX))
 }
 
 /// Opens `path` and waits for an exclusive `flock` on it, held as long as the file is
@@ -719,6 +790,11 @@ mod tests {
         unix_seconds(SystemTime::now())
     }
 
+    /// `reopen` of a launch that has no other window to hand over.
+    fn no_reopen(file: &Path) -> io::Result<()> {
+        panic!("no window to hand over, got {}", file.display())
+    }
+
     #[test]
     fn start_reopens_the_last_window_and_drops_the_ones_closed_long_before() {
         let dir = TempDir::new("start");
@@ -732,18 +808,96 @@ mod tests {
         // The lock of an instance that died.
         fs::write(dir.0.join("1-1.lock"), "").unwrap();
 
-        let (instance, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        let mut handed = Vec::new();
+        let (instance, restored) = start(&dir.0, WindowKind::Normal, |file| {
+            handed.push(file.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
         let restored = restored.expect("a window to reopen");
         assert_eq!(restored.active_tab, 3);
         // Adopted: the file now belongs to this instance.
         assert!(!last.exists());
         assert_eq!(WindowSnapshot::load(instance.file()), Some(restored));
-        // Kept for another window, the others removed.
-        assert!(close.exists());
+        // Kept for another window, handed over under a pending name; the others removed.
+        let pending = dir.0.join("pending-0.json");
+        assert_eq!(handed, std::slice::from_ref(&pending));
+        assert!(!close.exists());
+        assert_eq!(WindowSnapshot::load(&pending).unwrap().active_tab, 4);
         assert!(!early.exists());
         assert!(!dir.0.join("4-4.json").exists());
         assert!(!dir.0.join("1-1.lock").exists());
         assert!(dir.0.join(RESTORE_LOCK).exists());
+    }
+
+    #[test]
+    fn kept_windows_go_to_free_pending_names_and_a_failed_hand_over_removes_them() {
+        let dir = TempDir::new("park");
+        fs::create_dir_all(&dir.0).unwrap();
+        let now = now_seconds();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        saved(&dir.0, "1-1", WindowKind::Normal, Some(now), old);
+        saved(&dir.0, "2-22", WindowKind::Normal, Some(now - 1), old);
+        saved(&dir.0, "3-333", WindowKind::Normal, Some(now - 2), old);
+        // Left by a launch whose window has not started yet: neither picked nor reused.
+        fs::write(dir.0.join("pending-0.json"), "waiting").unwrap();
+
+        let mut handed = Vec::new();
+        let (_instance, restored) = start(&dir.0, WindowKind::Normal, |file| {
+            handed.push(file.to_path_buf());
+            if handed.len() == 2 {
+                return Err(io::Error::other("cannot start"));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(restored.unwrap().active_tab, 3);
+        let first = dir.0.join("pending-1.json");
+        let second = dir.0.join("pending-2.json");
+        assert_eq!(handed, [first.clone(), second.clone()]);
+        assert!(first.exists());
+        assert!(!second.exists());
+        assert_eq!(
+            fs::read_to_string(dir.0.join("pending-0.json")).unwrap(),
+            "waiting"
+        );
+    }
+
+    #[test]
+    fn a_handed_over_window_is_adopted_without_any_selection() {
+        let dir = TempDir::new("adopt");
+        fs::create_dir_all(&dir.0).unwrap();
+        // A live normal window and an old end would both stop `start`.
+        let _live = Instance::claim(&dir.0).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        saved(&dir.0, "pending-3", WindowKind::Normal, Some(0), old);
+        let pending = dir.0.join("pending-3.json");
+
+        let (instance, restored) = adopt(&dir.0, &pending).unwrap();
+        let restored = restored.expect("the window handed over");
+        assert_eq!(restored.active_tab, "pending-3".len());
+        assert!(!pending.exists());
+        assert_eq!(WindowSnapshot::load(instance.file()), Some(restored));
+    }
+
+    #[test]
+    fn adopting_a_missing_or_foreign_file_opens_a_fresh_window() {
+        let dir = TempDir::new("adopt-missing");
+        fs::create_dir_all(&dir.0).unwrap();
+        let (instance, restored) = adopt(&dir.0, &dir.0.join("pending-0.json")).unwrap();
+        assert_eq!(restored, None);
+        assert!(!instance.file().exists());
+
+        fs::write(dir.0.join("pending-1.json"), "{ corrupt").unwrap();
+        let (instance, restored) = adopt(&dir.0, &dir.0.join("pending-1.json")).unwrap();
+        assert_eq!(restored, None);
+        assert!(!instance.file().exists());
+
+        // Only a pending file of the folder: never another file of the user.
+        let foreign = saved(&dir.0, "1-1", WindowKind::Normal, None, SystemTime::now());
+        let (_instance, restored) = adopt(&dir.0, &foreign).unwrap();
+        assert_eq!(restored, None);
+        assert!(foreign.exists());
     }
 
     #[test]
@@ -760,7 +914,7 @@ mod tests {
         );
         saved(&dir.0, "2-22", WindowKind::Normal, None, SystemTime::now());
 
-        let (_instance, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        let (_instance, restored) = start(&dir.0, WindowKind::Normal, no_reopen).unwrap();
         assert_eq!(restored.unwrap().active_tab, 4);
         assert!(!closed.exists());
     }
@@ -784,12 +938,12 @@ mod tests {
             SystemTime::now(),
         );
 
-        let (_instance, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        let (_instance, restored) = start(&dir.0, WindowKind::Normal, no_reopen).unwrap();
         // The quick terminal, closed later, neither wins nor drops the normal window.
         assert_eq!(restored.unwrap().active_tab, 4);
         assert!(quick.exists());
 
-        let (_instance, restored) = start(&dir.0, WindowKind::Quick).unwrap();
+        let (_instance, restored) = start(&dir.0, WindowKind::Quick, no_reopen).unwrap();
         assert_eq!(restored.unwrap().kind, WindowKind::Quick);
     }
 
@@ -811,12 +965,12 @@ mod tests {
         running.kind = WindowKind::Quick;
         atomic_file::write_json(quick.file(), &running).unwrap();
         // Restored, then put back for the next launches.
-        let (first, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        let (first, restored) = start(&dir.0, WindowKind::Normal, no_reopen).unwrap();
         assert!(restored.is_some());
         fs::rename(first.file(), &file).unwrap();
 
         // A live normal window does, and leaves the snapshot alone.
-        let (second, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        let (second, restored) = start(&dir.0, WindowKind::Normal, no_reopen).unwrap();
         assert_eq!(restored, None);
         assert!(file.exists());
         assert!(!second.file().exists());
@@ -824,7 +978,7 @@ mod tests {
         // A live instance without a file yet counts as a normal window.
         drop((first, second));
         let _starting = Instance::claim(&dir.0).unwrap();
-        let (_third, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        let (_third, restored) = start(&dir.0, WindowKind::Normal, no_reopen).unwrap();
         assert_eq!(restored, None);
         assert!(file.exists());
         drop(quick);

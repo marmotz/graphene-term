@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use graphene::GridSize;
 
 fn main() -> anyhow::Result<()> {
@@ -39,11 +41,12 @@ fn main() -> anyhow::Result<()> {
             program,
             grid,
             no_restore,
+            restore_session,
         } => {
             graphene::start_perf_clock();
             env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
                 .init();
-            graphene::run(program, grid, no_restore)
+            graphene::run(program, grid, no_restore, restore_session)
         }
     }
 }
@@ -63,11 +66,14 @@ enum Command {
     },
     /// Opens the window; its first pane runs `program` instead of the shell when given,
     /// and the window is sized to `grid` when it sets a dimension. With `no_restore`
-    /// (`--no-restore`), the window stays out of the saved session.
+    /// (`--no-restore`), the window stays out of the saved session. `restore_session`
+    /// (`--restore-session <file>`, internal) is a saved window handed over by the
+    /// launch that restored the session, reopened by this one.
     Run {
         program: Option<Vec<String>>,
         grid: GridSize,
         no_restore: bool,
+        restore_session: Option<PathBuf>,
     },
 }
 
@@ -104,8 +110,20 @@ fn command(args: &[String]) -> Result<Command, &'static str> {
                 lines: count(options, "--lines")?,
             },
             no_restore: options.iter().any(|arg| arg == "--no-restore"),
+            restore_session: value(options, "--restore-session")?.map(PathBuf::from),
         }
     })
+}
+
+/// Value of the option `name`, given as the next argument.
+fn value<'a>(options: &'a [String], name: &str) -> Result<Option<&'a str>, &'static str> {
+    let Some(index) = options.iter().position(|arg| arg == name) else {
+        return Ok(None);
+    };
+    match options.get(index + 1) {
+        Some(value) if !value.starts_with('-') => Ok(Some(value)),
+        _ => Err("--restore-session requires a file"),
+    }
 }
 
 /// Value of the option `name`, a count of cells given as the next argument.
@@ -163,7 +181,8 @@ mod tests {
             Ok(Command::Run {
                 program: None,
                 grid: GridSize::default(),
-                no_restore: false
+                no_restore: false,
+                restore_session: None
             })
         );
     }
@@ -175,7 +194,8 @@ mod tests {
             Ok(Command::Run {
                 program: None,
                 grid: GridSize::default(),
-                no_restore: false
+                no_restore: false,
+                restore_session: None
             })
         );
     }
@@ -187,7 +207,8 @@ mod tests {
             Ok(Command::Run {
                 program: Some(args(&["cat", "file.txt"])),
                 grid: GridSize::default(),
-                no_restore: false
+                no_restore: false,
+                restore_session: None
             })
         );
     }
@@ -204,7 +225,8 @@ mod tests {
             Ok(Command::Run {
                 program: Some(args(&["vim", "--version", "--prune-config"])),
                 grid: GridSize::default(),
-                no_restore: false
+                no_restore: false,
+                restore_session: None
             })
         );
     }
@@ -231,7 +253,8 @@ mod tests {
                     columns: Some(120),
                     lines: Some(36)
                 },
-                no_restore: false
+                no_restore: false,
+                restore_session: None
             })
         );
         assert_eq!(
@@ -242,7 +265,8 @@ mod tests {
                     columns: None,
                     lines: Some(40)
                 },
-                no_restore: false
+                no_restore: false,
+                restore_session: None
             })
         );
     }
@@ -254,7 +278,8 @@ mod tests {
             Ok(Command::Run {
                 program: None,
                 grid: GridSize::default(),
-                no_restore: true
+                no_restore: true,
+                restore_session: None
             })
         );
         // After `-e`, it belongs to the program.
@@ -263,7 +288,36 @@ mod tests {
             Ok(Command::Run {
                 program: Some(args(&["tool", "--no-restore"])),
                 grid: GridSize::default(),
-                no_restore: false
+                no_restore: false,
+                restore_session: None
+            })
+        );
+    }
+
+    #[test]
+    fn restore_session_reopens_a_handed_over_window() {
+        assert_eq!(
+            command(&args(&[
+                "--restore-session",
+                "/state/sessions/pending-0.json"
+            ])),
+            Ok(Command::Run {
+                program: None,
+                grid: GridSize::default(),
+                no_restore: false,
+                restore_session: Some(PathBuf::from("/state/sessions/pending-0.json"))
+            })
+        );
+        assert!(command(&args(&["--restore-session"])).is_err());
+        assert!(command(&args(&["--restore-session", "--no-restore"])).is_err());
+        // After `-e`, it belongs to the program.
+        assert_eq!(
+            command(&args(&["-e", "tool", "--restore-session", "x"])),
+            Ok(Command::Run {
+                program: Some(args(&["tool", "--restore-session", "x"])),
+                grid: GridSize::default(),
+                no_restore: false,
+                restore_session: None
             })
         );
     }
@@ -289,7 +343,8 @@ mod tests {
             Ok(Command::Run {
                 program: Some(args(&["less", "--lines", "5"])),
                 grid: GridSize::default(),
-                no_restore: false
+                no_restore: false,
+                restore_session: None
             })
         );
     }

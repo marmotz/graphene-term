@@ -848,6 +848,7 @@ pub fn run(
     first_program: Option<Vec<String>>,
     grid: GridSize,
     no_restore: bool,
+    restore_session: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     run_app(
@@ -855,9 +856,21 @@ pub fn run(
         WindowMode::Normal,
         first_program,
         grid,
-        no_restore,
+        Restore {
+            no_restore,
+            handed_over: restore_session,
+        },
     )
     .map(|_| ())
+}
+
+/// How a launch takes part in the session restoration.
+#[derive(Debug, Default)]
+struct Restore {
+    /// `--no-restore`: out of the session.
+    no_restore: bool,
+    /// `--restore-session <file>`: the saved window this launch reopens.
+    handed_over: Option<PathBuf>,
 }
 
 /// Runs the quick terminal process: see [`crate::run_quick`].
@@ -875,7 +888,13 @@ pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
     }
     let event_loop = builder.build()?;
     let mode = WindowMode::Quick(QuickState::new(hidden));
-    let code = run_app(event_loop, mode, None, GridSize::default(), false);
+    let code = run_app(
+        event_loop,
+        mode,
+        None,
+        GridSize::default(),
+        Restore::default(),
+    );
     drop(lock);
     code
 }
@@ -895,13 +914,13 @@ impl App {
 }
 
 /// Runs `event_loop` with the application in `mode`, and returns the exit code.
-/// `no_restore` keeps the window out of the session.
+/// `restore` tells how the window takes part in the session.
 fn run_app(
     event_loop: EventLoop<UserEvent>,
     mode: WindowMode,
     first_program: Option<Vec<String>>,
     grid: GridSize,
-    no_restore: bool,
+    restore: Restore,
 ) -> anyhow::Result<i32> {
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner, load_errors) = load_config();
@@ -910,9 +929,9 @@ fn run_app(
         mode == WindowMode::Normal,
         first_program.is_some(),
         grid.is_set(),
-        no_restore,
+        restore.no_restore,
     )
-    .then(start_session)
+    .then(|| start_session(restore.handed_over.as_deref()))
     .flatten();
     let (session_saver, restored) = match session_saver {
         Some((saver, restored)) => (Some(saver), restored),
@@ -963,21 +982,62 @@ fn run_app(
     }
 }
 
-/// A saver for a new instance in the session folder, with the saved window it reopens
-/// (see [`crate::session::start`]); `None`, logged, when the folder cannot be found or
-/// the instance cannot be claimed.
-fn start_session() -> Option<(SessionSaver, Option<WindowSnapshot>)> {
+/// A saver for a new instance in the session folder, with the saved window it reopens:
+/// `handed_over` when given (see [`crate::session::adopt`]), else the one it picks,
+/// starting a process for each other window to reopen (see [`crate::session::start`]).
+/// `None`, logged, when the folder cannot be found or the instance cannot be claimed.
+fn start_session(
+    handed_over: Option<&std::path::Path>,
+) -> Option<(SessionSaver, Option<WindowSnapshot>)> {
     let Some(dir) = crate::session::sessions_dir() else {
         log::warn!("neither XDG_STATE_HOME nor HOME is set: the session is not saved");
         return None;
     };
-    match crate::session::start(&dir, WindowKind::Normal) {
+    let started = match handed_over {
+        Some(file) => crate::session::adopt(&dir, file),
+        None => crate::session::start(&dir, WindowKind::Normal, spawn_restored_window),
+    };
+    match started {
         Ok((instance, restored)) => Some((SessionSaver::new(instance, Instant::now()), restored)),
         Err(error) => {
             log::warn!("cannot save the session in {}: {error}", dir.display());
             None
         }
     }
+}
+
+/// Starts `graphene --restore-session <file>`, the window that reopens `file`, in a
+/// session of its own and without waiting for it. A thread reaps it when it exits.
+fn spawn_restored_window(file: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .arg("--restore-session")
+        .arg(file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: `setsid` is async-signal-safe, as `pre_exec` requires.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn()?;
+    // The window runs already: a thread that cannot start only leaves it unreaped.
+    if let Err(error) = std::thread::Builder::new()
+        .name("restored-window".to_owned())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+    {
+        log::warn!("cannot wait for a restored window: {error}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

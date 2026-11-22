@@ -464,8 +464,14 @@ Renderer::render(pane frames, interface rects)
   snapshots of that kind are dated by `closed_at`, else their modification date (a
   crash), and `select` keeps those ended within `GRACE` (15 s) of the latest: the
   latest is renamed to the new instance's file and handed to `App.restored`, older ones
-  are removed, other kept ones stay on disk, `pending-*` files are skipped. The global
-  lock is released once the instance is claimed, so the next launch sees it alive.
+  are removed, `pending-*` files are skipped. Each other kept one is renamed to a free
+  `pending-<n>.json` (`park`) and reopened by `graphene --restore-session <file>`
+  (`spawn_restored_window`: own session, null stdio, a thread reaps it); a file whose
+  process cannot start is removed. That child skips the live-instance test and `GRACE`
+  (`session::adopt`): under the same lock it claims its instance and renames the file
+  to it, a missing, unreadable or non-`pending-*` file meaning a fresh window. The
+  global lock is released once the instance is claimed and the windows handed over, so
+  the next launch sees it alive.
   `create_session` then takes the saved size whatever `startup_mode` (`launch_window`),
   the saved position only when its screen is in `available_monitors()`
   (`session::restored_position`), and `spawn_workspace` rebuilds the tabs with

@@ -125,7 +125,7 @@ _tâches créées — voir [technical.md](features/scrollback-search/technical.m
 
 ## Restauration de session  ·  [overview](features/session-restore/overview.md)
 
-_tâches créées — voir [technical.md](features/session-restore/technical.md)_ — 4/5 tasks done
+_terminé — voir [technical.md](features/session-restore/technical.md)_ — 5/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -133,7 +133,7 @@ _tâches créées — voir [technical.md](features/session-restore/technical.md)
 | [x]  | [#199](https://github.com/marmotz/graphene-term/issues/199) | feat(session-restore): rename a tab | — |
 | [x]  | [#204](https://github.com/marmotz/graphene-term/issues/204) | feat(session-restore): save the session continuously | #199 |
 | [x]  | [#214](https://github.com/marmotz/graphene-term/issues/214) | feat(session-restore): restore the last window at launch | #204 |
-| [ ]  | [#217](https://github.com/marmotz/graphene-term/issues/217) | feat(session-restore): restore every saved window | #214 |
+| [x]  | [#217](https://github.com/marmotz/graphene-term/issues/217) | feat(session-restore): restore every saved window | #214 |
 
 ## Recherche dans les réglages des raccourcis  ·  [overview](features/shortcuts-settings-search/overview.md)
 
