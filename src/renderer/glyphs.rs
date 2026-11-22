@@ -725,24 +725,36 @@ mod tests {
 
     #[test]
     fn bold_and_italic_are_distinct_entries() {
+        // Whether the font has bold and italic faces depends on the system fonts: a
+        // style without its face falls back to the same raster glyph, which then shares
+        // one atlas region. Regions must differ exactly when the raster glyphs differ.
         let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
-        let regular = glyphs.get(key('a')).unwrap();
-        let bold = glyphs
-            .get(GlyphKey {
+        let keys = [
+            key('a'),
+            GlyphKey {
                 bold: true,
                 ..key('a')
-            })
-            .unwrap();
-        let italic = glyphs
-            .get(GlyphKey {
+            },
+            GlyphKey {
                 italic: true,
                 ..key('a')
+            },
+        ];
+        let entries: Vec<_> = keys
+            .iter()
+            .map(|&k| {
+                let region = glyphs.get(k).unwrap().region;
+                (glyphs.shaped(k).unwrap().raster, region)
             })
-            .unwrap();
-        assert_ne!(regular.region, bold.region);
-        assert_ne!(regular.region, italic.region);
-        assert_ne!(bold.region, italic.region);
-        assert_eq!(glyphs.take_uploads().len(), 3);
+            .collect();
+        assert_eq!(glyphs.chars.len(), 3);
+        for (i, a) in entries.iter().enumerate() {
+            for b in &entries[i + 1..] {
+                assert_eq!(a.0 == b.0, a.1 == b.1);
+            }
+        }
+        let distinct: std::collections::HashSet<_> = entries.iter().map(|entry| entry.0).collect();
+        assert_eq!(glyphs.take_uploads().len(), distinct.len());
     }
 
     #[test]
