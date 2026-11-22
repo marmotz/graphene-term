@@ -46,8 +46,7 @@ onglets sont empilés.
 | Donner la même taille à tous les panneaux | **Égaliser les panneaux** dans la palette de commandes |
 | Déplacer le panneau dans un nouvel onglet | **Déplacer le panneau dans un nouvel onglet** dans la palette de commandes, ou faites-le glisser (voir plus bas) |
 
-- Sous Linux, un nouveau panneau démarre dans le dossier courant du panneau actif ; sous
-  macOS, dans votre dossier personnel.
+- Un nouveau panneau démarre dans le dossier courant du panneau actif.
 - Un panneau a besoin d'au moins 10 colonnes et 3 lignes : une division qui le rendrait
   plus petit ne fait rien.
 - Les panneaux qui n'ont pas le focus sont légèrement assombris.

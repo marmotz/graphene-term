@@ -1,5 +1,6 @@
-//! What a pane's shell is doing, read from `/proc` on Linux: its current directory and
-//! the program in the foreground of its terminal.
+//! What a pane's shell is doing: its current directory (from `/proc` on Linux,
+//! `proc_pidinfo` on macOS) and the program in the foreground of its terminal (Linux
+//! only).
 
 #[cfg(target_os = "linux")]
 use std::fs;
@@ -55,17 +56,60 @@ pub fn program_name(pid: u32) -> Option<String> {
     }
 }
 
-/// The shell's current directory, `None` when `/proc` cannot be read.
+/// The shell's current directory, `None` when it cannot be read.
 pub fn current_dir(shell_pid: u32) -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         fs::read_link(format!("/proc/{shell_pid}/cwd")).ok()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_current_dir(shell_pid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = shell_pid;
         None
     }
+}
+
+/// The current directory of `pid` from `proc_pidinfo(PROC_PIDVNODEPATHINFO)`, `None`
+/// when the call fails or the path is empty.
+#[cfg(target_os = "macos")]
+fn macos_current_dir(pid: u32) -> Option<PathBuf> {
+    use std::ffi::CStr;
+    use std::mem::{MaybeUninit, size_of};
+    use std::os::unix::ffi::OsStrExt;
+
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let size = size_of::<libc::proc_vnodepathinfo>();
+    let mut info = MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
+    // SAFETY: `info` is a writable buffer of exactly `size` bytes, and the kernel writes
+    // at most that many.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            libc::c_int::try_from(size).ok()?,
+        )
+    };
+    if usize::try_from(written).ok()? != size {
+        return None;
+    }
+    // SAFETY: the buffer was zeroed and then filled by the kernel.
+    let info = unsafe { info.assume_init() };
+    // `vip_path` is a `[[c_char; 32]; 32]` standing for a `[c_char; MAXPATHLEN]`.
+    let bytes: Vec<u8> = info
+        .pvi_cdir
+        .vip_path
+        .iter()
+        .flatten()
+        .map(|&c| c as u8)
+        .collect();
+    let path = CStr::from_bytes_until_nul(&bytes).ok()?.to_bytes();
+    (!path.is_empty()).then(|| PathBuf::from(std::ffi::OsStr::from_bytes(path)))
 }
 
 #[cfg(test)]
@@ -114,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn own_process_has_a_current_dir() {
         let pid = std::process::id();
         assert_eq!(current_dir(pid), std::env::current_dir().ok());

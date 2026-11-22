@@ -63,7 +63,7 @@ src/
     fonts.rs       the palette's sans-serif font and sizes for egui
     visuals.rs     egui Visuals from the active theme's colors (pure)
   pane.rs          Pane: one shell and its view state (layout, scroll, selection, blocks)
-  process.rs       /proc lookups: foreground process group, program name, current directory (pure parsing)
+  process.rs       /proc lookups (proc_pidinfo on macOS): foreground process group, program name, current directory
   workspace/
     mod.rs         Workspace: tabs, panes by PaneId, active tab and pane, zoom, per-tab broadcast set, title fallback, pane moves (pure)
     drop.rs        drop targets of a dragged pane: edge or center of a pane, tab, new tab, highlight (pure)
@@ -209,7 +209,7 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   pointer (a press in an inactive pane focuses it first). A press goes to the first of:
   the overlay, the banner, the tab bar, a divider, a pane title bar, a pane.
 - New panes (split, new tab) start their shell in the active pane's directory
-  (`Terminal::current_dir`, from `/proc/<pid>/cwd`), else `$HOME`.
+  (`Terminal::current_dir`, from `/proc/<pid>/cwd` on Linux, `proc_pidinfo` on macOS), else `$HOME`.
 - `graphene -e <program> [args]` stores the program in `App.first_program`; the first
   pane takes it (`Option::take`) and `Terminal::spawn` starts it instead of the shell,
   without shell integration (`terminal::launch`). Every later pane starts the shell.

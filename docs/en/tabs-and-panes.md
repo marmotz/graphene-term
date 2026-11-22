@@ -44,8 +44,7 @@ The tab bar appears once there are two tabs. Its edge is set by `position` in th
 | Give all panes the same size           | **Equalise panes** in the command palette        |
 | Move the pane to a new tab             | **Move pane to a new tab** in the command palette, or drag it (see below) |
 
-- On Linux, a new pane starts in the current directory of the focused pane; on macOS,
-  in your home directory.
+- A new pane starts in the current directory of the focused pane.
 - A pane needs at least 10 columns and 3 rows: a split that would make it smaller does
   nothing.
 - The panes that do not have the focus are slightly dimmed.
