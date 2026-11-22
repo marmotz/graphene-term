@@ -26,12 +26,20 @@ Tous les raccourcis ci-dessous sont ceux par défaut ; voir
 | Aller à l'onglet 1 à 9                 | `Alt+1` ... `Alt+9`                              |
 | Afficher un onglet                     | Cliquez dessus                                   |
 | Réordonner les onglets                 | Faites glisser un onglet le long de la barre     |
-| Menu de l'onglet (nouvel onglet, fermer, paramètres, thèmes) | Clic droit sur un onglet   |
+| Renommer l'onglet                      | Double-clic sur l'onglet, **Renommer l'onglet** dans son menu ou dans la palette de commandes |
+| Menu de l'onglet (nouvel onglet, fermer, renommer, paramètres, thèmes) | Clic droit sur un onglet |
 
 La barre d'onglets apparaît dès qu'il y a deux onglets. Son bord est défini par
 `position` dans la section `[tabs]` de la [configuration](configuration.md#tabs) :
 `"top"` (par défaut), `"bottom"`, `"left"` ou `"right"`. À gauche ou à droite, les
 onglets sont empilés.
+
+Un onglet affiche le titre de son panneau actif. Le renommer ouvre une boîte qui
+contient ce titre, entièrement sélectionné : tapez le nouveau puis `Entrée`, ou
+`Échap` pour le laisser tel quel. Le nom suit l'onglet quand on le déplace, et le titre
+de la fenêtre le reprend. Un nom vide revient au titre automatique. Les barres de
+titre des panneaux gardent leur propre titre, et un panneau déplacé dans un nouvel
+onglet commence avec le titre automatique.
 
 ## Panneaux
 
@@ -46,8 +54,7 @@ onglets sont empilés.
 | Donner la même taille à tous les panneaux | **Égaliser les panneaux** dans la palette de commandes |
 | Déplacer le panneau dans un nouvel onglet | **Déplacer le panneau dans un nouvel onglet** dans la palette de commandes, ou faites-le glisser (voir plus bas) |
 
-- Sous Linux, un nouveau panneau démarre dans le dossier courant du panneau actif ; sous
-  macOS, dans votre dossier personnel.
+- Un nouveau panneau démarre dans le dossier courant du panneau actif.
 - Un panneau a besoin d'au moins 10 colonnes et 3 lignes : une division qui le rendrait
   plus petit ne fait rien.
 - Les panneaux qui n'ont pas le focus sont légèrement assombris.

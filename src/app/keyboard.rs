@@ -88,6 +88,7 @@ impl Session {
                     self.update_pointer();
                 }
             }
+            Action::RenameTab => self.open_rename_tab(self.workspace.active_index()),
             Action::Copy => self.copy(),
             Action::Paste => self.paste(),
             Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
@@ -121,6 +122,13 @@ impl Session {
             Some(Overlay::Palette(palette)) => {
                 match palette.key(&event.logical_key, event.text.as_deref()) {
                     Some(outcome) => self.palette_outcome(outcome, default_font_size, event_loop),
+                    None => self.window.request_redraw(),
+                }
+                return;
+            }
+            Some(Overlay::RenameTab(rename)) => {
+                match rename.key(&event.logical_key, event.text.as_deref()) {
+                    Some(outcome) => self.rename_tab_outcome(outcome),
                     None => self.window.request_redraw(),
                 }
                 return;
@@ -290,6 +298,7 @@ pub(super) fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::ToggleBroadcastAll
         | Action::EqualisePanes
         | Action::DetachPane
+        | Action::RenameTab
         | Action::NewTab
         | Action::CloseTab
         | Action::NextTab

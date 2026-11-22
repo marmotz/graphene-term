@@ -109,13 +109,47 @@ impl Session {
         let Some(file) = window_state::path() else {
             return;
         };
-        let state = WindowState {
+        let state = self.window_state();
+        if let Err(error) = state.save(&file) {
+            log::warn!("cannot write {}: {error}", file.display());
+        }
+    }
+
+    /// Size and maximized state of the window; the size is the last one seen while not
+    /// maximized.
+    fn window_state(&self) -> WindowState {
+        WindowState {
             width: self.restore_size.width,
             height: self.restore_size.height,
             maximized: self.window.is_maximized(),
-        };
-        if let Err(error) = state.save(&file) {
-            log::warn!("cannot write {}: {error}", file.display());
+        }
+    }
+
+    /// What the session saves of this window, `closed_at` being the Unix seconds of a
+    /// clean exit. The placement is `None` where the platform does not give the
+    /// position (Wayland).
+    pub(super) fn window_snapshot(&self, closed_at: Option<u64>) -> WindowSnapshot {
+        let (tabs, active_tab) = self.workspace.snapshot();
+        let placement = self.window.outer_position().ok().map(|position| Placement {
+            x: position.x,
+            y: position.y,
+            monitor: self
+                .window
+                .current_monitor()
+                .and_then(|monitor| monitor.name()),
+        });
+        WindowSnapshot {
+            version: SESSION_VERSION,
+            kind: if self.quick {
+                WindowKind::Quick
+            } else {
+                WindowKind::Normal
+            },
+            window: self.window_state(),
+            placement,
+            tabs,
+            active_tab,
+            closed_at,
         }
     }
 

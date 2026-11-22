@@ -37,6 +37,7 @@ mod pty;
 mod quick_terminal;
 mod renderer;
 mod selection;
+mod session;
 mod settings;
 mod shell_integration;
 mod signals;
@@ -61,9 +62,16 @@ pub const VERSION: &str = env!("GRAPHENE_VERSION");
 
 /// Opens the window and runs the event loop until its last pane exits. The first pane
 /// runs `program` (the program then its arguments) instead of the shell when given;
-/// the window is sized to show `grid` when it sets a dimension.
-pub fn run(program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
-    app::run(program, grid)
+/// the window is sized to show `grid` when it sets a dimension. `no_restore` keeps the
+/// window out of the saved session (`--no-restore`). `restore_session` is a saved
+/// window handed over by the launch that restored the session (`--restore-session`).
+pub fn run(
+    program: Option<Vec<String>>,
+    grid: GridSize,
+    no_restore: bool,
+    restore_session: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    app::run(program, grid, no_restore, restore_session)
 }
 
 /// Runs the resident quick terminal process (`graphene --quick`), hidden at startup

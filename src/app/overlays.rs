@@ -95,6 +95,51 @@ impl Session {
         ))
     }
 
+    /// Opens the box renaming the tab `index`, prefilled with its shown title.
+    pub(super) fn open_rename_tab(&mut self, index: usize) {
+        let Some(tab) = self.workspace.tabs().get(index) else {
+            return;
+        };
+        let pane = tab.active;
+        let title = self.workspace.tab_title(index).unwrap_or_default();
+        self.overlay = Some(Overlay::RenameTab(RenameTab::new(pane, &title)));
+        self.window.request_redraw();
+        self.update_pointer();
+    }
+
+    /// The open rename box laid out in the window.
+    pub(super) fn rename_tab_layout(&mut self) -> Option<RenameTabLayout> {
+        let Some(Overlay::RenameTab(rename)) = &self.overlay else {
+            return None;
+        };
+        let size = self.window.inner_size();
+        let metrics = self.ui_metrics(UiFont::Palette);
+        let renderer = &mut self.renderer;
+        Some(RenameTabLayout::new(
+            rename,
+            self.lang,
+            Rect::from_size(size.width, size.height),
+            metrics,
+            |text| renderer.ui_text_width(UiFont::Palette, text),
+        ))
+    }
+
+    /// Closes the rename box, then gives the tab the title asked for, if any.
+    pub(super) fn rename_tab_outcome(&mut self, outcome: RenameOutcome) {
+        if !matches!(self.overlay, Some(Overlay::RenameTab(_))) {
+            return;
+        }
+        self.overlay = None;
+        self.window.request_redraw();
+        self.update_pointer();
+        if let RenameOutcome::Rename { pane, title } = outcome
+            && let Some(index) = self.workspace.tab_of(pane)
+            && self.workspace.rename_tab(index, &title)
+        {
+            self.refresh_title();
+        }
+    }
+
     /// The open ASCII drawing laid out in the window.
     pub(super) fn art_layout(&mut self) -> Option<ArtLayout> {
         if !matches!(self.overlay, Some(Overlay::Art)) {
@@ -249,6 +294,7 @@ impl Session {
                     self.request_close(target, event_loop);
                 }
             }
+            MenuCommand::RenameTab(index) => self.open_rename_tab(index),
             MenuCommand::BlockCopy(id, part) => {
                 let text = self
                     .workspace
@@ -371,8 +417,8 @@ impl Session {
     }
 
     /// Handles a press while an overlay is open: a button of the dialog answers it, a
-    /// row of the palette runs it and a press outside the palette closes it, any press
-    /// closes the ASCII drawing; anything else is ignored.
+    /// row of the palette runs it and a press outside the palette or the rename box
+    /// closes it, any press closes the ASCII drawing; anything else is ignored.
     pub(super) fn overlay_press(
         &mut self,
         button: mouse::Button,
@@ -384,6 +430,15 @@ impl Session {
             return;
         }
         let (x, y) = self.mouse_pixel();
+        if matches!(self.overlay, Some(Overlay::RenameTab(_))) {
+            if self
+                .rename_tab_layout()
+                .is_some_and(|layout| !layout.contains(x, y))
+            {
+                self.rename_tab_outcome(RenameOutcome::Cancel);
+            }
+            return;
+        }
         if matches!(self.overlay, Some(Overlay::Menu(_))) {
             let hit = self
                 .menu_layout()
@@ -423,8 +478,9 @@ impl Session {
         }
     }
 
-    /// Handles a press on the tab bar: a tab is shown and grabbed, its close button or a
-    /// middle click closes it, the `+` button opens a tab.
+    /// Handles a press on the tab bar: a tab is shown and grabbed, a double click on it
+    /// opens its rename box instead of grabbing it, its close button or a middle click
+    /// closes it, the `+` button opens a tab.
     pub(super) fn tab_bar_press(
         &mut self,
         button: mouse::Button,
@@ -435,6 +491,11 @@ impl Session {
         match (button, hit) {
             (mouse::Button::Left, TabBarHit::Tab(index)) => {
                 self.change_tab(|workspace| workspace.select(index));
+                if tab_bar::opens_rename(self.tab_bar_clicks.click(index, Instant::now())) {
+                    self.drag = None;
+                    self.open_rename_tab(index);
+                    return;
+                }
                 let (x, y) = self.mouse_pixel();
                 let tab = bar.tabs[index].rect;
                 self.drag = Some(Drag::Tab {

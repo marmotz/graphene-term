@@ -18,6 +18,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Term;
 
 use super::tab_bar::UiMetrics;
+use super::text_field::TextField;
 use crate::block_actions::{self, Direction as BlockDirection, Part};
 use crate::config::{MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::easter_eggs::secrets::{self, Secret};
@@ -39,17 +40,17 @@ pub const MAX_RECENT: usize = 50;
 pub const VISIBLE_ROWS: usize = 12;
 
 /// Widest box, in logical pixels.
-const MAX_WIDTH: f32 = 600.0;
+pub(super) const MAX_WIDTH: f32 = 600.0;
 /// Space kept between the box and the window edges, in logical pixels.
-const MARGIN: f32 = 16.0;
+pub(super) const MARGIN: f32 = 16.0;
 /// Top of the box, as a fraction of the window height.
-const TOP: f32 = 0.15;
+pub(super) const TOP: f32 = 0.15;
 /// Space between the box edges and its content, in logical pixels.
-const PADDING: f32 = 8.0;
+pub(super) const PADDING: f32 = 8.0;
 /// Space above and below the text of a row, in logical pixels.
-const ROW_PADDING: f32 = 4.0;
+pub(super) const ROW_PADDING: f32 = 4.0;
 /// Space left and right of the text of a row, in logical pixels.
-const TEXT_PADDING: f32 = 12.0;
+pub(super) const TEXT_PADDING: f32 = 12.0;
 /// Space between an entry label and its shortcut, in logical pixels.
 const SHORTCUT_GAP: f32 = 16.0;
 /// Width of the accent bar on the left edge of the selected row, in logical pixels: the
@@ -172,6 +173,7 @@ pub fn available<P>(
         | Action::OpenSettings
         | Action::CommandPalette
         | Action::Quit => true,
+        Action::RenameTab => workspace.active_tab().is_some(),
         Action::GoToTab(number) => usize::from(number) <= workspace.tabs().len(),
         Action::SplitRight => workspace.can_split(Axis::Horizontal, geometry),
         Action::SplitDown => workspace.can_split(Axis::Vertical, geometry),
@@ -299,7 +301,7 @@ pub struct CommandPalette {
     secret: Option<Entry>,
     /// Ids of the recently run actions, most recent first.
     recent: Vec<String>,
-    query: String,
+    query: TextField,
     matches: Vec<Match>,
     /// Index of the selected match.
     selected: usize,
@@ -317,7 +319,7 @@ impl CommandPalette {
             entries,
             secret: None,
             recent,
-            query: String::new(),
+            query: TextField::default(),
             matches: Vec::new(),
             selected: 0,
             scroll: 0,
@@ -328,7 +330,7 @@ impl CommandPalette {
     }
 
     pub fn query(&self) -> &str {
-        &self.query
+        self.query.text()
     }
 
     /// The entries matching the query, best first.
@@ -357,28 +359,17 @@ impl CommandPalette {
         self.scroll
     }
 
-    /// Handles a key: `text` (the characters it types) edits the query, `Backspace`
-    /// erases, `Up` / `Down` move the selection, `Enter` runs the selected entry and
-    /// `Escape` closes. `None` while the palette stays open.
+    /// Handles a key: `Up` / `Down` move the selection, `Enter` runs the selected entry,
+    /// `Escape` closes, and the other keys edit the query (see [`TextField::key`]).
+    /// `None` while the palette stays open.
     pub fn key(&mut self, key: &Key, text: Option<&str>) -> Option<Outcome> {
         match key {
             Key::Named(NamedKey::Escape) => return Some(Outcome::Close),
             Key::Named(NamedKey::Enter) => return self.choose(self.selected),
             Key::Named(NamedKey::ArrowUp) => self.move_selection(-1),
             Key::Named(NamedKey::ArrowDown) => self.move_selection(1),
-            Key::Named(NamedKey::Backspace) => {
-                if self.query.pop().is_some() {
-                    self.refilter();
-                }
-            }
             _ => {
-                let typed: String = text
-                    .unwrap_or_default()
-                    .chars()
-                    .filter(|c| !c.is_control())
-                    .collect();
-                if !typed.is_empty() {
-                    self.query.push_str(&typed);
+                if self.query.key(key, text) {
                     self.refilter();
                 }
             }
@@ -430,7 +421,7 @@ impl CommandPalette {
     /// whose keyword is the query, if any, comes first, unhighlighted.
     fn refilter(&mut self) {
         let pattern = Pattern::new(
-            &self.query,
+            self.query.text(),
             CaseMatching::Smart,
             Normalization::Smart,
             AtomKind::Fuzzy,
@@ -460,7 +451,7 @@ impl CommandPalette {
             scored.push(((Reverse(score), rank, index), found));
         }
         scored.sort_by_key(|(key, _)| *key);
-        self.secret = secrets::find(&self.query).map(|secret| Entry {
+        self.secret = secrets::find(self.query.text()).map(|secret| Entry {
             command: Command::Secret(secret),
             label: i18n::text(self.lang, &secret.label()).into_owned(),
             shortcut: None,
@@ -1073,6 +1064,7 @@ mod tests {
             [
                 Action::NewTab,
                 Action::CloseTab,
+                Action::RenameTab,
                 Action::ClosePane,
                 Action::SplitRight,
                 Action::SplitDown,
@@ -1082,6 +1074,22 @@ mod tests {
                 Action::Quit,
             ]
         );
+    }
+
+    #[test]
+    fn rename_tab_needs_a_tab() {
+        assert!(available(
+            Action::RenameTab,
+            &single_pane(),
+            geometry(),
+            &context()
+        ));
+        assert!(!available(
+            Action::RenameTab,
+            &Workspace::<Fake>::new(),
+            geometry(),
+            &context()
+        ));
     }
 
     #[test]

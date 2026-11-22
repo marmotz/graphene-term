@@ -44,6 +44,7 @@ text with `Shift+Arrow` like in an editor: see [Input editor](input-editor.md).
 | `graphene`                         | Opens a window running your shell                                    |
 | `graphene -e <program> [args...]`  | Opens a window whose first pane runs `<program>` instead of the shell |
 | `graphene --columns <n> --lines <n>` | Opens the window sized to show a grid of `<n>` columns and `<n>` lines |
+| `graphene --no-restore`            | Opens a new window without restoring the saved session, and keeps it out of the session (see `window.restore_session` in [Configuration](configuration.md#window)) |
 | `graphene --version`               | Prints the version and exits                                         |
 | `graphene --prune-config [--yes]`  | Removes the settings this version does not know from the configuration file (see [Configuration](configuration.md#removing-unknown-settings)) |
 

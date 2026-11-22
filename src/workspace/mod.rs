@@ -13,6 +13,7 @@ use crate::config::TabPosition;
 use crate::i18n::Direction;
 use crate::layout::Rect;
 use crate::progress::Progress;
+use crate::session::{NodeSnapshot, TabSnapshot};
 use crate::terminal::PaneId;
 use tree::{Axis, Branch, Geometry, Layout, Node};
 
@@ -90,6 +91,9 @@ pub struct Tab {
     /// Panes of this tab that typed input is sent to together; empty when broadcast
     /// is off. Only ever holds panes of this tab.
     pub broadcast: BTreeSet<PaneId>,
+    /// Title given by the user, shown instead of the automatic one; `None` for the
+    /// automatic title.
+    pub custom_title: Option<String>,
 }
 
 impl Tab {
@@ -99,6 +103,7 @@ impl Tab {
             active: pane,
             zoomed: false,
             broadcast: BTreeSet::new(),
+            custom_title: None,
         }
     }
 
@@ -293,6 +298,83 @@ impl<P> Workspace<P> {
             .unwrap_or_default()
     }
 
+    /// Rebuilds the saved `tabs`, showing the one of index `active_tab`: each split tree
+    /// with its axes and ratios, the custom titles, the active panes and the zoom.
+    /// `spawn` creates the pane of an id starting in a directory; a pane it cannot
+    /// create is left out (its sibling takes its place), and a tab left without any
+    /// pane too. An active pane left out gives the focus to the first pane of its tab,
+    /// without zoom. The workspace has no tab when no pane could be created.
+    pub fn restore(
+        tabs: &[TabSnapshot],
+        active_tab: usize,
+        mut spawn: impl FnMut(PaneId, Option<PathBuf>) -> Option<P>,
+    ) -> Self {
+        let mut workspace = Self::new();
+        let mut shown = None;
+        for (index, saved) in tabs.iter().enumerate() {
+            // Ids of the panes created, by rank among the saved leaves.
+            let mut ranks = Vec::new();
+            let Some(tree) = workspace.restore_node(&saved.tree, &mut spawn, &mut ranks) else {
+                continue;
+            };
+            let active = ranks.get(saved.active).copied().flatten();
+            let (active, zoomed) = match active {
+                Some(id) => (id, saved.zoomed),
+                None => (tree.leaves()[0], false),
+            };
+            if index == active_tab {
+                shown = Some(workspace.tabs.len());
+            }
+            workspace.tabs.push(Tab {
+                tree,
+                active,
+                zoomed,
+                broadcast: BTreeSet::new(),
+                custom_title: saved.title.clone(),
+            });
+        }
+        workspace.active = shown.unwrap_or(0);
+        workspace
+    }
+
+    /// The tree of `saved`, its panes created by `spawn`; `None` when none could be.
+    /// Pushes to `ranks` the id of each saved leaf, in depth-first order, `None` for
+    /// a pane not created.
+    fn restore_node(
+        &mut self,
+        saved: &NodeSnapshot,
+        spawn: &mut impl FnMut(PaneId, Option<PathBuf>) -> Option<P>,
+        ranks: &mut Vec<Option<PaneId>>,
+    ) -> Option<Node> {
+        match saved {
+            NodeSnapshot::Pane { cwd } => {
+                let id = self.allocate_id();
+                let pane = spawn(id, cwd.clone());
+                ranks.push(pane.is_some().then_some(id));
+                self.panes.insert(id, pane?);
+                Some(Node::Leaf(id))
+            }
+            NodeSnapshot::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let first = self.restore_node(first, spawn, ranks);
+                let second = self.restore_node(second, spawn, ranks);
+                match (first, second) {
+                    (Some(first), Some(second)) => Some(Node::Split {
+                        axis: *axis,
+                        ratio: *ratio,
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    }),
+                    (one, other) => one.or(other),
+                }
+            }
+        }
+    }
+
     /// Opens a tab holding the pane `pane`, with the id `id` from
     /// [`Workspace::allocate_id`], after the last one, and shows it.
     pub fn new_tab(&mut self, id: PaneId, pane: P) {
@@ -373,6 +455,17 @@ impl<P> Workspace<P> {
         }
     }
 
+    /// Gives tab `index` the title `title`, trimmed; an empty one goes back to the
+    /// automatic title. `false` when the index is out of range.
+    pub fn rename_tab(&mut self, index: usize, title: &str) -> bool {
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return false;
+        };
+        let title = title.trim();
+        tab.custom_title = (!title.is_empty()).then(|| title.to_owned());
+        true
+    }
+
     /// Moves tab `from` to index `to`; the shown tab stays shown. `false` when either
     /// index is out of range.
     pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
@@ -422,11 +515,13 @@ impl<P> Workspace<P> {
             return false;
         };
         let broadcast = std::mem::take(&mut self.tabs[index].broadcast);
+        let custom_title = self.tabs[index].custom_title.take();
         self.tabs[index] = Tab {
             tree,
             active: id,
             zoomed: false,
             broadcast,
+            custom_title,
         };
         if source != index {
             if self.tabs[source].is_single() {
@@ -774,9 +869,55 @@ impl<P: ProgressSource> Workspace<P> {
 }
 
 impl<P: TitleSource> Workspace<P> {
-    /// Title of tab `index`, from its active pane (see [`title_for`]).
+    /// Title of tab `index`: the one given by the user, else the one of its active
+    /// pane (see [`title_for`]).
     pub fn tab_title(&self, index: usize) -> Option<String> {
-        self.pane_title(self.tabs.get(index)?.active)
+        let tab = self.tabs.get(index)?;
+        match &tab.custom_title {
+            Some(title) => Some(title.clone()),
+            None => self.pane_title(tab.active),
+        }
+    }
+
+    /// What the session saves of the tabs: each split tree with its ratios and the
+    /// current directory of each pane, the custom title, the active pane by its rank
+    /// among the leaves, the zoom; and the index of the shown tab.
+    pub fn snapshot(&self) -> (Vec<TabSnapshot>, usize) {
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|tab| TabSnapshot {
+                title: tab.custom_title.clone(),
+                tree: self.node_snapshot(&tab.tree),
+                active: tab
+                    .tree
+                    .leaves()
+                    .iter()
+                    .position(|&id| id == tab.active)
+                    .unwrap_or(0),
+                zoomed: tab.zoomed,
+            })
+            .collect();
+        (tabs, self.active)
+    }
+
+    fn node_snapshot(&self, node: &Node) -> NodeSnapshot {
+        match node {
+            Node::Leaf(id) => NodeSnapshot::Pane {
+                cwd: self.pane(*id).and_then(TitleSource::current_dir),
+            },
+            Node::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => NodeSnapshot::Split {
+                axis: *axis,
+                ratio: *ratio,
+                first: Box::new(self.node_snapshot(first)),
+                second: Box::new(self.node_snapshot(second)),
+            },
+        }
     }
 
     /// Title of the pane `id` (see [`title_for`]).
@@ -1526,6 +1667,198 @@ mod tests {
         ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
         assert_eq!(ws.tab_title(0).as_deref(), Some("htop"));
         assert_eq!(ws.tab_title(5), None);
+    }
+
+    #[test]
+    fn snapshot_keeps_trees_titles_focus_and_directories() {
+        let mut ws = workspace(&[3, 1]);
+        let first = ws.tabs()[0].tree.leaves();
+        for (index, id) in first.iter().enumerate() {
+            ws.pane_mut(*id).unwrap().cwd = Some(PathBuf::from(format!("/p{index}")));
+        }
+        assert!(ws.focus(first[1]));
+        assert!(ws.toggle_zoom());
+        assert!(ws.rename_tab(0, "build"));
+        ws.select(1);
+
+        let (tabs, active_tab) = ws.snapshot();
+        assert_eq!(active_tab, 1);
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[0].title.as_deref(), Some("build"));
+        assert_eq!((tabs[0].active, tabs[0].zoomed), (1, true));
+        let pane = |dir: &str| NodeSnapshot::Pane {
+            cwd: Some(PathBuf::from(dir)),
+        };
+        let Node::Split {
+            ratio: outer,
+            second: inner,
+            ..
+        } = &ws.tabs()[0].tree
+        else {
+            panic!("split tab");
+        };
+        let Node::Split { ratio: inner, .. } = **inner else {
+            panic!("nested split");
+        };
+        assert_eq!(
+            tabs[0].tree,
+            NodeSnapshot::Split {
+                axis: Axis::Horizontal,
+                ratio: *outer,
+                first: Box::new(pane("/p0")),
+                second: Box::new(NodeSnapshot::Split {
+                    axis: Axis::Horizontal,
+                    ratio: inner,
+                    first: Box::new(pane("/p1")),
+                    second: Box::new(pane("/p2")),
+                }),
+            }
+        );
+        assert_eq!(
+            tabs[1],
+            TabSnapshot {
+                title: None,
+                tree: NodeSnapshot::Pane { cwd: None },
+                active: 0,
+                zoomed: false,
+            }
+        );
+    }
+
+    /// A workspace restored from `tabs`, its fake panes starting in the saved directory,
+    /// except the ones of the leaves of rank (in creation order) listed in `failing`.
+    fn restore_fakes(
+        tabs: &[TabSnapshot],
+        active_tab: usize,
+        failing: &[usize],
+    ) -> Workspace<Fake> {
+        let mut rank = 0;
+        Workspace::restore(tabs, active_tab, |_, cwd| {
+            rank += 1;
+            (!failing.contains(&(rank - 1))).then(|| Fake {
+                cwd,
+                ..Fake::default()
+            })
+        })
+    }
+
+    #[test]
+    fn restore_rebuilds_what_snapshot_saved() {
+        let mut ws = workspace(&[3, 2, 1]);
+        for (index, (_, pane)) in ws.panes_mut().enumerate() {
+            pane.cwd = Some(PathBuf::from(format!("/p{index}")));
+        }
+        let leaves = ws.tabs()[0].tree.leaves();
+        assert!(ws.focus(leaves[2]));
+        assert!(ws.toggle_zoom());
+        assert!(ws.rename_tab(0, "build"));
+        assert!(ws.set_divider(&[], 500.0, geometry()));
+        ws.select(1);
+        let (tabs, active_tab) = ws.snapshot();
+
+        let restored = restore_fakes(&tabs, active_tab, &[]);
+        assert_eq!(restored.snapshot(), (tabs, 1));
+        assert_eq!(restored.tabs().len(), 3);
+        let tab = &restored.tabs()[0];
+        assert_eq!(tab.custom_title.as_deref(), Some("build"));
+        assert!(tab.zoomed);
+        assert_eq!(tab.active, tab.tree.leaves()[2]);
+        assert_eq!(restored.panes().count(), 6);
+    }
+
+    #[test]
+    fn a_pane_that_fails_to_start_leaves_its_place_to_its_sibling() {
+        let mut ws = workspace(&[3]);
+        let leaves = ws.tabs()[0].tree.leaves();
+        assert!(ws.focus(leaves[2]));
+        assert!(ws.toggle_zoom());
+        let (tabs, _) = ws.snapshot();
+
+        let restored = restore_fakes(&tabs, 0, &[1]);
+        let tab = &restored.tabs()[0];
+        assert_eq!(tab.tree.leaves().len(), 2);
+        assert_eq!(tab.active, tab.tree.leaves()[1]);
+        assert!(tab.zoomed);
+
+        // The active pane fails: the focus goes to the first pane, without zoom.
+        let restored = restore_fakes(&tabs, 0, &[2]);
+        let tab = &restored.tabs()[0];
+        assert_eq!(tab.active, tab.tree.leaves()[0]);
+        assert!(!tab.zoomed);
+    }
+
+    #[test]
+    fn a_tab_without_any_pane_is_left_out() {
+        let ws = workspace(&[1, 2, 1]);
+        let (tabs, _) = ws.snapshot();
+
+        // The shown tab is left out: the first one is shown.
+        let restored = restore_fakes(&tabs, 1, &[1, 2]);
+        assert_eq!(restored.tabs().len(), 2);
+        assert_eq!(restored.active_index(), 0);
+
+        // Its index moves when a tab before it is left out.
+        let restored = restore_fakes(&tabs, 2, &[0]);
+        assert_eq!(restored.tabs().len(), 2);
+        assert_eq!(restored.active_index(), 1);
+
+        let restored = restore_fakes(&tabs, 0, &[0, 1, 2, 3]);
+        assert!(restored.tabs().is_empty());
+        assert_eq!(restored.panes().count(), 0);
+        // A rank out of bounds is the first tab.
+        assert_eq!(restore_fakes(&tabs, 9, &[]).active_index(), 0);
+    }
+
+    #[test]
+    fn snapshot_of_an_empty_workspace_has_no_tab() {
+        let ws: Workspace<Fake> = Workspace::new();
+        assert_eq!(ws.snapshot(), (Vec::new(), 0));
+    }
+
+    #[test]
+    fn a_custom_title_wins_over_the_pane_title() {
+        let mut ws = workspace(&[2]);
+        let active = ws.active_pane_id().unwrap();
+        ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
+        assert!(ws.rename_tab(0, "  build  "));
+        assert_eq!(ws.tabs()[0].custom_title.as_deref(), Some("build"));
+        assert_eq!(ws.tab_title(0).as_deref(), Some("build"));
+        // The pane keeps its own title.
+        assert_eq!(ws.pane_title(active).as_deref(), Some("htop"));
+        assert!(!ws.rename_tab(3, "x"));
+    }
+
+    #[test]
+    fn an_empty_title_goes_back_to_the_automatic_one() {
+        let mut ws = workspace(&[1]);
+        let active = ws.active_pane_id().unwrap();
+        ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
+        ws.rename_tab(0, "build");
+        assert!(ws.rename_tab(0, "   "));
+        assert_eq!(ws.tabs()[0].custom_title, None);
+        assert_eq!(ws.tab_title(0).as_deref(), Some("htop"));
+    }
+
+    #[test]
+    fn a_custom_title_follows_its_tab() {
+        let mut ws = workspace(&[2, 1, 1]);
+        ws.rename_tab(0, "build");
+        assert!(ws.move_tab(0, 2));
+        assert_eq!(ws.tabs()[2].custom_title.as_deref(), Some("build"));
+        assert_eq!(ws.tabs()[0].custom_title, None);
+        // A pane detached from it opens a tab with the automatic title.
+        let panes = ws.tabs()[2].tree.leaves();
+        assert!(ws.detach(panes[1]));
+        assert_eq!(ws.tabs()[2].custom_title.as_deref(), Some("build"));
+        assert_eq!(ws.tabs()[3].custom_title, None);
+        // A pane moved into it keeps the target tab's title.
+        let moved = ws.tabs()[0].tree.leaves()[0];
+        assert!(ws.move_pane(moved, panes[0], Direction::Right, geometry()));
+        assert!(
+            ws.tabs()
+                .iter()
+                .any(|tab| tab.custom_title.as_deref() == Some("build") && tab.tree.contains(moved))
+        );
     }
 
     fn progress(value: u8) -> Progress {

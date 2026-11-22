@@ -404,8 +404,10 @@ confirmation names is the `tpgid` field of `/proc/<shell pid>/stat` (the termina
 foreground process group) then `/proc/<tpgid>/comm`. This works with every shell,
 needs no shell integration (OSC 7 is not sent by every shell) and no libc call on the
 PTY descriptor. Lookups happen on close requests, new panes and title refreshes, never
-per frame. Linux only: on macOS the lookups return nothing, so new panes start in
-`$HOME` and closing never asks for confirmation.
+per frame. On macOS the current directory comes from
+`proc_pidinfo(PROC_PIDVNODEPATHINFO)` (`pvi_cdir`), which needs no shell integration
+either; the foreground program lookup returns nothing there, so closing never asks for
+confirmation.
 
 ### Own translation table
 

@@ -140,6 +140,7 @@ pub enum SettingsField {
     Padding,
     BackgroundOpacity,
     WindowProgress,
+    RestoreSession,
     ScrollbackLines,
     CursorShape,
     CursorBlinking,
@@ -166,7 +167,7 @@ pub enum SettingsField {
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 32] = [
+    pub const ALL: [SettingsField; 33] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -178,6 +179,7 @@ impl SettingsField {
         SettingsField::Padding,
         SettingsField::BackgroundOpacity,
         SettingsField::WindowProgress,
+        SettingsField::RestoreSession,
         SettingsField::ScrollbackLines,
         SettingsField::CursorShape,
         SettingsField::CursorBlinking,
@@ -257,6 +259,8 @@ pub enum Msg {
     CommandPalette,
     EqualisePanes,
     DetachPane,
+    /// The rename action, the tab menu entry and the heading of the rename box.
+    RenameTab,
     /// The settings action, and the settings window's title.
     OpenSettings,
     Quit,
@@ -477,6 +481,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::Padding => "Padding",
             SettingsField::BackgroundOpacity => "Background opacity",
             SettingsField::WindowProgress => "Show program progress",
+            SettingsField::RestoreSession => "Restore the session at launch",
             SettingsField::ScrollbackLines => "Lines kept",
             SettingsField::CursorShape => "Shape",
             SettingsField::CursorBlinking => "Blinking",
@@ -560,6 +565,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         },
         Msg::EqualisePanes => "Equalise panes",
         Msg::DetachPane => "Move pane to a new tab",
+        Msg::RenameTab => "Rename the tab",
         Msg::PalettePlaceholder => "Type a command, a tab or a pane",
         Msg::SecretAnswer => "The Answer to the Ultimate Question",
         Msg::SecretAuthor => "marmotz on GitHub",
@@ -677,6 +683,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsField::Padding => "Marge intérieure",
             SettingsField::BackgroundOpacity => "Opacité du fond",
             SettingsField::WindowProgress => "Afficher la progression des programmes",
+            SettingsField::RestoreSession => "Restaurer la session au lancement",
             SettingsField::ScrollbackLines => "Lignes conservées",
             SettingsField::CursorShape => "Forme",
             SettingsField::CursorBlinking => "Clignotement",
@@ -764,6 +771,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         },
         Msg::EqualisePanes => "Égaliser les panneaux",
         Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
+        Msg::RenameTab => "Renommer l'onglet",
         Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
         Msg::SecretAnswer => "La grande question sur la vie, l'univers et le reste",
         Msg::SecretAuthor => "marmotz sur GitHub",
@@ -938,6 +946,7 @@ mod tests {
             Msg::CommandPalette => 27,
             Msg::EqualisePanes => 28,
             Msg::DetachPane => 29,
+            Msg::RenameTab => 100,
             Msg::TabEntry { .. } => 30,
             Msg::PalettePlaceholder => 40,
             Msg::PaneEntry { .. } => 31,
@@ -999,11 +1008,11 @@ mod tests {
             Msg::Bell => 96,
             Msg::ShowPane => 97,
             Msg::QuickTerminalUnavailableOnWayland => 98,
-            Msg::ActiveScreen => 100,
-            Msg::PrimaryScreen => 101,
+            Msg::ActiveScreen => 101,
+            Msg::PrimaryScreen => 102,
         }
     }
-    const VARIANT_COUNT: usize = 102;
+    const VARIANT_COUNT: usize = 103;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1046,6 +1055,7 @@ mod tests {
             Msg::CommandPalette,
             Msg::EqualisePanes,
             Msg::DetachPane,
+            Msg::RenameTab,
             Msg::OpenSettings,
             Msg::Quit,
             Msg::PalettePlaceholder,

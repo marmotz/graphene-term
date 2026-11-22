@@ -164,6 +164,7 @@ pub fn section_fields(section: Section) -> &'static [Field] {
             Field::Padding,
             Field::BackgroundOpacity,
             Field::WindowProgress,
+            Field::RestoreSession,
         ],
         Section::Scrollback => &[Field::ScrollbackLines],
         Section::Cursor => &[Field::CursorShape, Field::CursorBlinking],
@@ -209,6 +210,7 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::Padding => &["window", "padding"],
         Field::BackgroundOpacity => &["window", "background_opacity"],
         Field::WindowProgress => &["window", "progress"],
+        Field::RestoreSession => &["window", "restore_session"],
         Field::ScrollbackLines => &["scrollback", "lines"],
         Field::CursorShape => &["cursor", "shape"],
         Field::CursorBlinking => &["cursor", "blinking"],
@@ -296,6 +298,7 @@ pub fn widget(field: Field) -> Widget {
         | Field::CursorBlinking
         | Field::UpdatesCheck
         | Field::WindowProgress
+        | Field::RestoreSession
         | Field::ThemeFollow
         | Field::NotificationsProgram
         | Field::NotificationsCommandFinished
@@ -655,6 +658,7 @@ impl SettingsModel {
             Field::Padding => Value::Float(f64::from(c.window.padding)),
             Field::BackgroundOpacity => Value::Float(f64::from(c.window.background_opacity)),
             Field::WindowProgress => Value::Bool(c.window.progress),
+            Field::RestoreSession => Value::Bool(c.window.restore_session),
             Field::ScrollbackLines => Value::Integer(c.scrollback_lines as i64),
             Field::CursorShape => text(name_of(&CursorShape::VALUES, c.cursor.shape)),
             Field::CursorBlinking => Value::Bool(c.cursor.blinking),
@@ -1130,6 +1134,7 @@ bell = true
         assert_eq!(m.text(Field::UpdatesInterval), "auto");
         assert!(m.on(Field::UpdatesCheck));
         assert!(m.on(Field::WindowProgress));
+        assert!(!m.on(Field::RestoreSession));
         assert!(m.on(Field::NotificationsProgram));
         assert!(m.on(Field::NotificationsCommandFinished));
         assert_eq!(m.text(Field::NotificationsCommandThreshold), "10");
@@ -1385,6 +1390,10 @@ bell = true
         assert_eq!(
             m.edit(Field::WindowProgress, Input::Toggle(false)),
             Ok(set(&["window", "progress"], Value::Bool(false)))
+        );
+        assert_eq!(
+            m.edit(Field::RestoreSession, Input::Toggle(true)),
+            Ok(set(&["window", "restore_session"], Value::Bool(true)))
         );
         assert_eq!(
             m.edit(Field::WordSeparators, Input::Text(" ;".into())),

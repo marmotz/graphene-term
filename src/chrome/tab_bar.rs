@@ -42,6 +42,13 @@ impl UiMetrics {
     }
 }
 
+/// Whether a left click on a tab, `clicks` being its rank in its series (see
+/// [`crate::selection::ClickTracker`]), opens the tab's rename box rather than grabbing
+/// the tab: the second click of a double click.
+pub fn opens_rename(clicks: u8) -> bool {
+    clicks == 2
+}
+
 /// Whether a window with `tab_count` tabs shows the bar.
 pub fn shown(tab_count: usize) -> bool {
     tab_count > 1
@@ -347,6 +354,28 @@ impl TabBarLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::selection::ClickTracker;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_double_click_on_a_tab_opens_its_rename_box() {
+        let mut clicks = ClickTracker::<usize>::default();
+        let start = Instant::now();
+        assert!(!opens_rename(clicks.click(1, start)));
+        assert!(opens_rename(
+            clicks.click(1, start + Duration::from_millis(100))
+        ));
+        // A third click grabs the tab again.
+        assert!(!opens_rename(
+            clicks.click(1, start + Duration::from_millis(200))
+        ));
+        // Two clicks on different tabs are no double click.
+        let mut clicks = ClickTracker::<usize>::default();
+        clicks.click(0, start);
+        assert!(!opens_rename(
+            clicks.click(1, start + Duration::from_millis(100))
+        ));
+    }
 
     const METRICS: UiMetrics = UiMetrics {
         line_height: 18.0,

@@ -149,6 +149,7 @@ impl Reader<'_> {
                 }
             }),
             ("window", "progress") => self.set(value, key_segments, path, &mut config.window.progress, &previous.window.progress, Checked::Valid),
+            ("window", "restore_session") => self.set(value, key_segments, path, &mut config.window.restore_session, &previous.window.restore_session, Checked::Valid),
             ("window", "background_opacity") => self.set(value, key_segments, path, &mut config.window.background_opacity, &previous.window.background_opacity, |opacity: f32| {
                 if !opacity.is_finite() {
                     Checked::Invalid("not a number".to_owned())
