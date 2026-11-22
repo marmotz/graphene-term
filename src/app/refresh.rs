@@ -67,6 +67,7 @@ impl Session {
         self.theme = new.theme.clone();
         self.keybindings = Keybindings::new(&new.keybindings);
         self.lang = new.language.resolve(Lang::detect);
+        self.notifications = new.notifications.clone();
         self.tab_position = new.tab_position.into();
         self.config_banner = banner;
         // A changed cursor style shows at once, visible.

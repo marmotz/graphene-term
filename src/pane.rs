@@ -71,6 +71,9 @@ pub struct Pane {
     redraw: Cell<bool>,
     /// Text to put in the primary selection, waiting for the window.
     primary: Option<String>,
+    /// Notices raised while the pane was not watched, reset once it is. Change it with
+    /// [`Self::add_unseen`] and [`Self::clear_unseen`], which redraw the pane.
+    unseen: u32,
 }
 
 impl TitleSource for Pane {
@@ -106,7 +109,29 @@ impl Pane {
             title_checked: None,
             redraw: Cell::new(false),
             primary: None,
+            unseen: 0,
         }
+    }
+
+    /// Notices raised while the pane was not watched.
+    pub fn unseen(&self) -> u32 {
+        self.unseen
+    }
+
+    /// Counts one more unseen notice.
+    pub fn add_unseen(&mut self) {
+        self.unseen = self.unseen.saturating_add(1);
+        self.request_redraw();
+    }
+
+    /// Resets the unseen notices (see [`crate::notifications::clear`]): the command
+    /// closing the pane's notification, `None` when nothing was unseen.
+    pub fn clear_unseen(&mut self) -> Option<crate::notifications::backend::Command> {
+        let command = crate::notifications::clear(&mut self.unseen, self.id);
+        if command.is_some() {
+            self.request_redraw();
+        }
+        command
     }
 
     fn request_redraw(&self) {

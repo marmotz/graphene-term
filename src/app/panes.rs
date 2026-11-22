@@ -28,6 +28,8 @@ impl Session {
         self.relayout();
         self.refresh_title();
         self.update_pointer();
+        // The new active pane is now watched.
+        self.clear_watched();
     }
 
     /// What a new pane is spawned from: the directory its shell starts in (the active
@@ -176,6 +178,8 @@ impl Session {
             event_loop.exit();
             return;
         }
+        // The closed pane's unseen notices leave the window's total.
+        self.sync_badge();
         // A dialog about panes that are all gone has nothing left to close.
         if let Some(Overlay::Confirm(confirm)) = &self.overlay
             && confirm.target != Target::Window

@@ -18,9 +18,17 @@ impl Session {
         let Some(pane) = self.workspace.pane_mut(id) else {
             return;
         };
+        let mut notices = Vec::new();
         match event {
             TermEvent::Wakeup => {
                 pane.terminal.wakeup_handled();
+                // A notice is always followed by a `Wakeup`: none is left behind.
+                notices.extend(
+                    pane::lock(&pane.terminal.timeline)
+                        .take_notices()
+                        .into_iter()
+                        .map(Notice::Pane),
+                );
                 if self.first_frame.output() {
                     perf::mark("first PTY output");
                 }
@@ -88,10 +96,15 @@ impl Session {
                 pane.terminal
                     .write(format(pane.layout.window_size()).into_bytes());
             }
-            TermEvent::Bell => self
-                .window
-                .request_user_attention(Some(winit::window::UserAttentionType::Informational)),
+            TermEvent::Bell => {
+                self.window
+                    .request_user_attention(Some(winit::window::UserAttentionType::Informational));
+                notices.push(Notice::Bell);
+            }
             TermEvent::Exit | TermEvent::ChildExit(_) => self.close_pane(id, event_loop),
+        }
+        for notice in notices {
+            self.notify(id, notice);
         }
     }
 }

@@ -38,6 +38,9 @@ pub enum UserEvent {
     ConfigChanged,
     /// The system light/dark appearance, at startup and on each change.
     Appearance(crate::appearance::Appearance),
+    /// The user clicked the desktop notification of a pane.
+    #[allow(dead_code, reason = "sent by the OS notification backends")]
+    NotificationClicked(PaneId),
 }
 
 /// Lets at most one `Wakeup` of a pane wait in the event loop: the PTY thread sends one

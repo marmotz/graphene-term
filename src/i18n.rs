@@ -347,6 +347,14 @@ pub enum Msg {
     // Command blocks.
     /// Summary of a folded block: its hidden output rows.
     LinesHidden(usize),
+    // Desktop notifications.
+    /// Title of the notification of a command that succeeded, or whose status is
+    /// unknown.
+    CommandFinished,
+    /// Title of the notification of a command that failed, by its exit code.
+    CommandFailed(i32),
+    /// Body of the notification of a bell.
+    Bell,
 }
 
 /// Every language, for tests that must cover each of them.
@@ -539,6 +547,9 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::IgnoreVersion => "Ignore this version",
         Msg::LinesHidden(1) => "1 line hidden",
         Msg::LinesHidden(rows) => return format!("{rows} lines hidden").into(),
+        Msg::CommandFinished => "Command finished",
+        Msg::CommandFailed(code) => return format!("Command failed (code {code})").into(),
+        Msg::Bell => "Bell",
     };
     Cow::Borrowed(text)
 }
@@ -723,6 +734,9 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::IgnoreVersion => "Ignorer cette version",
         Msg::LinesHidden(1) => "1 ligne masquée",
         Msg::LinesHidden(rows) => return format!("{rows} lignes masquées").into(),
+        Msg::CommandFinished => "Commande terminée",
+        Msg::CommandFailed(code) => return format!("Commande échouée (code {code})").into(),
+        Msg::Bell => "Sonnerie",
     };
     Cow::Borrowed(text)
 }
@@ -917,9 +931,12 @@ mod tests {
             Msg::NoActionMatches => 91,
             Msg::SearchShortcut => 92,
             Msg::NoActionForShortcut => 93,
+            Msg::CommandFinished => 94,
+            Msg::CommandFailed(_) => 95,
+            Msg::Bell => 96,
         }
     }
-    const VARIANT_COUNT: usize = 94;
+    const VARIANT_COUNT: usize = 97;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1019,6 +1036,9 @@ mod tests {
             Msg::ConfirmDeleteTheme("my-theme".into()),
             Msg::BuiltInTheme,
             Msg::KeepTextColor,
+            Msg::CommandFinished,
+            Msg::CommandFailed(2),
+            Msg::Bell,
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
@@ -1078,6 +1098,14 @@ mod tests {
         assert_eq!(text(Lang::En, &Msg::LinesHidden(12)), "12 lines hidden");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(1)), "1 ligne masquée");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(12)), "12 lignes masquées");
+        assert_eq!(
+            text(Lang::En, &Msg::CommandFailed(2)),
+            "Command failed (code 2)"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::CommandFailed(127)),
+            "Commande échouée (code 127)"
+        );
         assert_eq!(
             text(
                 Lang::Fr,

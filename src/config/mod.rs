@@ -70,7 +70,6 @@ pub struct Config {
     pub keybindings: BTreeMap<String, String>,
     #[allow(dead_code, reason = "applied by the update check thread task")]
     pub updates: UpdatesConfig,
-    #[allow(dead_code, reason = "applied by the notification tasks")]
     pub notifications: NotificationsConfig,
 }
 

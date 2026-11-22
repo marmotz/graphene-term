@@ -248,6 +248,9 @@ impl App {
             honeycomb: None,
             today,
             midnight: special_days::until_midnight().map(|left| Instant::now() + left),
+            notifications: self.config.notifications.clone(),
+            notifier: notifications::backend::spawn(self.proxy.clone()),
+            badge: Badge::default(),
         })
     }
 
@@ -466,7 +469,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::ConfigChanged => return self.reload_config(),
             UserEvent::Appearance(appearance) => return self.set_appearance(appearance),
-            UserEvent::Terminal(..) | UserEvent::Update(_) => {}
+            UserEvent::Terminal(..) | UserEvent::Update(_) | UserEvent::NotificationClicked(_) => {}
         }
         let Some(session) = self.session.as_mut() else {
             return;
@@ -480,6 +483,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // The banner may show or hide: the panes make room for it.
                 session.relayout();
             }
+            UserEvent::NotificationClicked(pane) => session.notification_clicked(pane),
             UserEvent::ConfigChanged | UserEvent::Appearance(_) => {}
         }
         session.flush_panes();
@@ -575,6 +579,7 @@ impl App {
                 {
                     pane.terminal.write(bytes);
                 }
+                session.clear_watched();
                 session.window.request_redraw();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
