@@ -1,11 +1,14 @@
-//! Linux taskbar backend: the `progress` of the `com.canonical.Unity.LauncherEntry` API,
-//! understood by KDE Plasma, Ubuntu Dock / Dash to Dock and Plank, and ignored without
-//! error elsewhere.
+//! Linux taskbar backend, through two channels, each ignored without error by the
+//! desktops that do not read it:
 //!
-//! A thread named `taskbar` reads the progress the UI thread hands over and emits one
-//! `Update` signal for each. Without session bus, it stops and the taskbar is inert.
-//! The Unity API has no states: an error or a pause shows its value, an indeterminate
-//! progress hides the bar.
+//! - the `progress` of the `com.canonical.Unity.LauncherEntry` API, understood by KDE
+//!   Plasma, Ubuntu Dock / Dash to Dock and Plank;
+//! - on X11, the XApp progress hints of the window ([`super::xapp`]), read by Cinnamon.
+//!
+//! A thread named `taskbar` reads the progress the UI thread hands over and sends it
+//! through each channel available. Without session bus nor X11 display, it stops and
+//! the taskbar is inert. The Unity API has no states: an error or a pause shows its
+//! value, an indeterminate progress hides the bar.
 
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -13,6 +16,7 @@ use std::thread;
 
 use zbus::Variant;
 
+use super::xapp::XAppHints;
 use super::{Shown, Taskbar};
 use crate::progress::ProgressState;
 
@@ -49,12 +53,13 @@ fn update_args(shown: Option<Shown>) -> UpdateArgs {
     (LAUNCHER_APP, properties)
 }
 
-/// Starts the backend thread. Without session bus, every progress is dropped.
-pub fn spawn() -> Taskbar {
+/// Starts the backend thread, writing the XApp hints of `x11_window` when the window is
+/// an X11 one. Without session bus nor X11 display, every progress is dropped.
+pub fn spawn(x11_window: Option<u32>) -> Taskbar {
     let (taskbar, progress) = Taskbar::channel();
     let spawned = thread::Builder::new()
         .name("taskbar".into())
-        .spawn(move || run(&progress));
+        .spawn(move || run(&progress, x11_window));
     match spawned {
         Ok(_) => taskbar,
         Err(error) => {
@@ -64,26 +69,37 @@ pub fn spawn() -> Taskbar {
     }
 }
 
-fn run(progress: &Receiver<Option<Shown>>) {
-    let connection = match zbus::block_on(zbus::Connection::session()) {
-        Ok(connection) => connection,
-        Err(error) => {
-            log::debug!("taskbar progress unavailable ({error})");
-            // Dropping the receiver makes `Taskbar::set_progress` a no-op.
-            return;
-        }
-    };
+fn run(progress: &Receiver<Option<Shown>>, x11_window: Option<u32>) {
+    let bus = zbus::block_on(zbus::Connection::session())
+        .map_err(|error| log::debug!("taskbar launcher entry unavailable ({error})"))
+        .ok();
+    let hints = x11_window.and_then(|window| {
+        XAppHints::connect(window)
+            .map_err(|error| log::debug!("taskbar XApp hints unavailable ({error:#})"))
+            .ok()
+    });
+    if bus.is_none() && hints.is_none() {
+        // Dropping the receiver makes `Taskbar::set_progress` a no-op.
+        return;
+    }
     // Waits for each value outside `block_on`, so the connection keeps running.
     for shown in progress {
-        let sent = zbus::block_on(connection.emit_signal(
-            None::<&str>,
-            LAUNCHER_PATH,
-            LAUNCHER_ENTRY,
-            "Update",
-            &update_args(shown),
-        ));
-        if let Err(error) = sent {
-            log::debug!("cannot update the taskbar progress: {error}");
+        if let Some(bus) = &bus {
+            let sent = zbus::block_on(bus.emit_signal(
+                None::<&str>,
+                LAUNCHER_PATH,
+                LAUNCHER_ENTRY,
+                "Update",
+                &update_args(shown),
+            ));
+            if let Err(error) = sent {
+                log::debug!("cannot update the taskbar progress: {error}");
+            }
+        }
+        if let Some(hints) = &hints
+            && let Err(error) = hints.show(shown)
+        {
+            log::debug!("cannot update the XApp progress hints: {error:#}");
         }
     }
 }

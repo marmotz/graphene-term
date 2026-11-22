@@ -84,6 +84,7 @@ src/
   taskbar/
     mod.rs         Taskbar: progress of the active tab on the window icon, deduplicated, per platform
     linux.rs       taskbar thread: com.canonical.Unity.LauncherEntry progress signal (zbus)
+    xapp.rs        X11: _NET_WM_XAPP_PROGRESS(_PULSE) window hints, read by Cinnamon (x11rb)
     dock.rs        macOS: bar drawn over the application icon on the NSDockTile (layout tested everywhere)
   graphics/
     mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,

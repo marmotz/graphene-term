@@ -4,8 +4,8 @@
 //! of events; [`Taskbar::set_progress`] only reaches the desktop when what the icon
 //! shows changes. Each platform has its own backend:
 //!
-//! - Linux: the `com.canonical.Unity.LauncherEntry` signal, sent by a thread of its own
-//!   ([`linux`]).
+//! - Linux: the `com.canonical.Unity.LauncherEntry` signal and, on X11, the XApp
+//!   progress hints of the window, sent by a thread of its own ([`linux`]).
 //! - macOS: a bar drawn over the application icon in the Dock, on the UI thread
 //!   (`dock`), in the interface colors given by [`Taskbar::set_colors`].
 //! - Elsewhere: nothing, every progress is dropped.
@@ -17,6 +17,8 @@
 mod dock;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
+#[cfg(target_os = "linux")]
+mod xapp;
 
 #[cfg(any(target_os = "linux", test))]
 use std::sync::mpsc;
@@ -170,18 +172,24 @@ impl Taskbar {
     }
 }
 
-/// Starts the taskbar backend of this system.
-pub fn spawn() -> Taskbar {
+/// Starts the taskbar backend of this system, for the progress of `window`.
+pub fn spawn(window: &winit::window::Window) -> Taskbar {
     #[cfg(target_os = "linux")]
     {
-        linux::spawn()
+        let x11_window = crate::x11_window::window_id(window)
+            .map_err(|error| log::debug!("no X11 window for the taskbar ({error:#})"))
+            .ok()
+            .flatten();
+        linux::spawn(x11_window)
     }
     #[cfg(target_os = "macos")]
     {
+        let _ = window;
         dock::spawn()
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
+        let _ = window;
         Taskbar::null()
     }
 }

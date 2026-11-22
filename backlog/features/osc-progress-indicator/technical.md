@@ -182,6 +182,23 @@ Dock / Dash to Dock et Plank ; ignoré sans erreur ailleurs.
   devra passer par le même module pour que les deux ne s'écrasent pas.
 - Échec de connexion au bus : log `debug`, le module devient inerte.
 
+### Linux X11 : indices XApp (Cinnamon)
+
+Cinnamon ne lit pas l'API Unity : ses listes de fenêtres (`window-list`,
+`grouped-window-list`) lisent `metaWindow.progress`, que Muffin tire des propriétés X11
+de la fenêtre `_NET_WM_XAPP_PROGRESS` (`CARDINAL`, 0 à 100) et
+`_NET_WM_XAPP_PROGRESS_PULSE` (`CARDINAL`, 1 pour un indéterminé), celles de
+`xapp_gtk_window_set_progress`. Le même thread « taskbar » les écrit sur la fenêtre du
+terminal par une connexion `x11rb` à lui (déjà une dépendance Linux), en plus du signal
+Unity ; chaque canal indisponible est ignoré (log `debug`), le module n'est inerte que
+sans aucun des deux.
+
+- Valeurs : la valeur pour normal, erreur et pause ; `PROGRESS = 0`, `PULSE = 1` pour
+  l'indéterminé ; les deux à 0 sans progression, comme le recommande XApp.
+- Les applets Cinnamon ignorent `PULSE` et toute valeur sous 1 : l'indéterminé et 0 %
+  n'y affichent rien, comme sous Unity.
+- Wayland : pas d'équivalent, seul le signal Unity est émis.
+
 ### macOS : `NSDockTile`
 
 Vue personnalisée `contentView` sur `NSApp.dockTile` (icône de l'app + barre dessinée)
@@ -238,8 +255,10 @@ préfixe `9;` dans le même `Scanner::finish` et laisse `9;4` à cette feature.
   avec leur rectangle et leur couleur par état.
 - `workspace` : `tab_progress` suit le pane actif.
 - `settings/model.rs` et `config` : lecture, défaut, écriture de `window.progress`.
-- Barre des tâches : seule la construction des propriétés Unity (fonction pure) est
-  testée ; l'émission D-Bus et le Dock sont vérifiés à la main.
+- Barre des tâches : la construction des propriétés Unity et des valeurs XApp (fonctions
+  pures) est testée, ainsi que l'écriture des indices XApp sur une fenêtre X11 quand un
+  serveur X est disponible ; l'émission D-Bus, Cinnamon et le Dock sont vérifiés à la
+  main.
 
 ## Découpage en tâches d'implémentation
 

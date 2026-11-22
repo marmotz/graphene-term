@@ -210,6 +210,7 @@ impl App {
 
         window.set_visible(true);
         perf::mark("window shown");
+        let taskbar = crate::taskbar::spawn(&window);
         let maximize_hold = maximized.then(|| {
             redraw::MaximizeHold::new(initial_size.to_physical(scale.into()), Instant::now())
         });
@@ -271,7 +272,7 @@ impl App {
             ),
             badge: Badge::default(),
             progress_epoch: Instant::now(),
-            taskbar: crate::taskbar::spawn(),
+            taskbar,
         })
     }
 

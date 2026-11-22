@@ -127,7 +127,7 @@ commande, ou après 15 secondes sans nouvelles. `[window] progress = false` (voi
 
 Sous Linux, la progression de l'onglet actif s'affiche aussi sur l'icône de Graphene dans
 la barre des tâches ou le dock, quand le bureau le permet (KDE Plasma, Ubuntu Dock, Dash
-to Dock, Plank). Une erreur ou une pause y affiche sa valeur ; une progression inconnue
+to Dock, Plank, et Cinnamon sous X11). Une erreur ou une pause y affiche sa valeur ; une progression inconnue
 n'y affiche pas de barre.
 
 Sous macOS, elle s'affiche en barre sur l'icône de Graphene dans le Dock, dans les mêmes
