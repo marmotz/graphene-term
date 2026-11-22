@@ -286,6 +286,8 @@ pub enum Msg {
     AtMost(String),
     /// Button adding a shortcut to an action.
     AddShortcut,
+    /// Button capturing a new shortcut in place of the current one.
+    ChangeShortcut,
     /// Tooltip of the button removing a shortcut.
     RemoveShortcut,
     /// An action without shortcut.
@@ -506,6 +508,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::AtLeast(min) => return format!("Must be at least {min}").into(),
         Msg::AtMost(max) => return format!("Must be at most {max}").into(),
         Msg::AddShortcut => "Add",
+        Msg::ChangeShortcut => "Change",
         Msg::RemoveShortcut => "Remove this shortcut",
         Msg::NoShortcut => "No shortcut",
         Msg::PressShortcut => "Press a shortcut · Esc to cancel",
@@ -707,6 +710,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::AtLeast(min) => return format!("Doit valoir au moins {min}").into(),
         Msg::AtMost(max) => return format!("Doit valoir au plus {max}").into(),
         Msg::AddShortcut => "Ajouter",
+        Msg::ChangeShortcut => "Modifier",
         Msg::RemoveShortcut => "Supprimer ce raccourci",
         Msg::NoShortcut => "Aucun raccourci",
         Msg::PressShortcut => "Appuyez sur un raccourci · Échap pour annuler",
@@ -952,6 +956,7 @@ mod tests {
             Msg::AtLeast(_) => 51,
             Msg::AtMost(_) => 52,
             Msg::AddShortcut => 53,
+            Msg::ChangeShortcut => 99,
             Msg::RemoveShortcut => 54,
             Msg::NoShortcut => 55,
             Msg::PressShortcut => 56,
@@ -988,7 +993,7 @@ mod tests {
             Msg::QuickTerminalUnavailableOnWayland => 98,
         }
     }
-    const VARIANT_COUNT: usize = 99;
+    const VARIANT_COUNT: usize = 100;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1066,6 +1071,7 @@ mod tests {
             Msg::AtLeast("6".into()),
             Msg::AtMost("72".into()),
             Msg::AddShortcut,
+            Msg::ChangeShortcut,
             Msg::RemoveShortcut,
             Msg::NoShortcut,
             Msg::PressShortcut,

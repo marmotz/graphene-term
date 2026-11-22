@@ -39,6 +39,8 @@ pub enum Widget {
     Toggle,
     /// Free text, written on `Enter` or focus loss.
     Text,
+    /// A shortcut captured from a key press, or cleared, written at once.
+    Shortcut,
 }
 
 /// Accepted values of a number field.
@@ -298,10 +300,8 @@ pub fn widget(field: Field) -> Widget {
         | Field::NotificationsCommandFinished
         | Field::NotificationsBell
         | Field::QuickTerminalHideOnFocusLoss => Widget::Toggle,
-        Field::WordSeparators
-        | Field::FontFeatures
-        | Field::QuickTerminalHotkey
-        | Field::QuickTerminalScreen => Widget::Text,
+        Field::WordSeparators | Field::FontFeatures | Field::QuickTerminalScreen => Widget::Text,
+        Field::QuickTerminalHotkey => Widget::Shortcut,
     }
 }
 
@@ -738,9 +738,8 @@ impl SettingsModel {
             return Ok(Vec::new());
         };
         let new = match (widget(field), input) {
-            (Widget::Choice, Input::Choice(value)) | (Widget::Text, Input::Text(value)) => {
-                Value::Text(value)
-            }
+            (Widget::Choice, Input::Choice(value))
+            | (Widget::Text | Widget::Shortcut, Input::Text(value)) => Value::Text(value),
             (Widget::Toggle, Input::Toggle(on)) => Value::Bool(on),
             (Widget::Number(range), Input::Text(text)) => parse_number(&text, range)?,
             (Widget::Slider { min, max, step }, Input::Number(number)) => {
@@ -1282,6 +1281,20 @@ bell = true
         assert_eq!(
             m.edit(Field::QuickTerminalAnimation, Input::Text("1001".into())),
             Err(InputError::AtMost("1000".into()))
+        );
+    }
+
+    #[test]
+    fn quick_terminal_hotkey_is_a_shortcut_field_that_can_be_cleared() {
+        assert_eq!(widget(Field::QuickTerminalHotkey), Widget::Shortcut);
+        let m = model("[quick_terminal]\nhotkey = \"Ctrl+F12\"\n");
+        assert_eq!(
+            m.edit(Field::QuickTerminalHotkey, Input::Text(String::new())),
+            Ok(set(&["quick_terminal", "hotkey"], text("")))
+        );
+        assert_eq!(
+            m.edit(Field::QuickTerminalHotkey, Input::Text("Ctrl+F12".into())),
+            Ok(Vec::new())
         );
     }
 

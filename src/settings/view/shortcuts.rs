@@ -35,7 +35,7 @@ fn fold(text: &str) -> String {
 impl View {
     /// Takes a key press while a shortcut is captured; returns the changes to write.
     /// `Escape` alone cancels, a modifier alone keeps waiting. A shortcut captured for
-    /// an action is bound to it, or waits for "Replace" or "Cancel" when bound to
+    /// a shortcut field becomes its value; one captured for an action is bound to it, or waits for "Replace" or "Cancel" when bound to
     /// another one; a shortcut searched for narrows the list to its actions and writes
     /// nothing.
     pub fn captured_key(
@@ -48,7 +48,11 @@ impl View {
         let Some(capture) = self.capturing else {
             return Vec::new();
         };
-        if model.locked(SettingsSection::KeyboardShortcuts).is_some()
+        let section = match capture {
+            Capture::Field(field) => field_section(field),
+            Capture::Bind(_) | Capture::Search => SettingsSection::KeyboardShortcuts,
+        };
+        if model.locked(section).is_some()
             || (mods.is_empty() && *key == Key::Named(NamedKey::Escape))
         {
             self.capturing = None;
@@ -60,6 +64,11 @@ impl View {
         self.capturing = None;
         let action = match capture {
             Capture::Bind(action) => action,
+            Capture::Field(field) => {
+                let mut changes = Vec::new();
+                self.write_input(model, field, Input::Text(shortcut.label()), &mut changes);
+                return changes;
+            }
             Capture::Search => {
                 let actions = model
                     .shortcut_rows()
