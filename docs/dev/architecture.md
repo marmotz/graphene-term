@@ -76,7 +76,8 @@ src/
   x11_window.rs    X11 _NET_WM_STATE (maximized, quick terminal) written on the hidden window before
                    it is mapped, cursor position (QueryPointer)
   quick_terminal/
-    mod.rs         QuickCommand, placement of the quick terminal: pick_monitor, frame (pure)
+    mod.rs         QuickCommand, placement of the quick terminal: pick_monitor, frame, slide
+                   (hidden_origin, slide_position, Slide) (pure)
     control.rs     quick.lock single instance (flock), quick.sock command thread, --quick-toggle client
     macos.rs       macOS: cursor (NSEvent), visible screen area (NSScreen), Spaces behavior (NSWindow)
   watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced

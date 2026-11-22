@@ -22,6 +22,23 @@ système (par exemple `F12`).
 Il n'y a jamais qu'un quick terminal par utilisateur : lancer la commande plusieurs fois
 en même temps n'en ouvre jamais un second.
 
+## Glissement, focus et fermeture
+
+Le quick terminal glisse depuis son bord quand il s'affiche et y repart quand il se
+masque, en 150 ms par défaut (`animation_ms`, `0` pour l'afficher et le masquer d'un
+coup). Le relancer pendant un glissement le fait repartir dans l'autre sens depuis là où
+il se trouve.
+
+Quand il perd le focus au profit d'une autre application, il se masque après un court
+délai (`hide_on_focus_loss`, activé par défaut). Ouvrir la fenêtre des paramètres depuis
+le quick terminal ne le masque pas.
+
+Le fermer, par son dernier panneau, par la sortie du shell ou par le raccourci de
+fermeture de la fenêtre, ne met pas fin au quick terminal : il se masque, et revient la
+fois suivante avec un seul onglet neuf, son shell dans votre dossier personnel. La
+confirmation demandée quand un programme tourne encore est la même que pour une fenêtre
+ordinaire.
+
 ## Où il apparaît
 
 Le quick terminal couvre une part de l'écran contre l'un de ses bords, réglée dans la
@@ -42,7 +59,8 @@ macOS.
 - **macOS** : le quick terminal apparaît sur l'espace (Space) courant, au-dessus des
   applications en plein écran, sous la barre des menus.
 - **Linux sous X11** : le quick terminal couvre tout le bord de l'écran, au-dessus des
-  panneaux du bureau.
+  panneaux du bureau. Certains gestionnaires de fenêtres (Mutter, Muffin) gardent toute
+  fenêtre dans l'écran : le quick terminal y apparaît et se masque alors sans glisser.
 - **Linux sous Wayland** : non disponible. `graphene --quick-toggle` affiche
   `the quick terminal is not available under Wayland` et sort avec le code 1. Une
   session Wayland qui lance Graphene par X11 (avec `WAYLAND_DISPLAY` vide) utilise le
