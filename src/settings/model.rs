@@ -11,7 +11,8 @@ use crate::appearance::Appearance;
 use crate::config::{
     self, Config, ConfigError, ConfigErrorKind, CursorShape, Language, MAX_FONT_SIZE,
     MAX_QUICK_TERMINAL_ANIMATION_MS, MAX_QUICK_TERMINAL_SIZE, MAX_SCROLLBACK_LINES, MIN_FONT_SIZE,
-    MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, QuickTerminalScreen, StartupMode, TabPosition, UpdateInterval,
+    MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, QuickTerminalScreen, StartupMode, TabPosition,
+    UpdateInterval,
 };
 use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
 use crate::input::Action;
