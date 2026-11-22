@@ -330,6 +330,16 @@ impl<P> Workspace<P> {
         Ok(())
     }
 
+    /// Closes every pane and tab, as the window would be left by closing them all.
+    /// The ids already handed out are never handed out again: events of a closed pane
+    /// still on their way cannot reach a new one.
+    pub fn clear(&mut self) {
+        self.tabs.clear();
+        self.active = 0;
+        self.panes.clear();
+        self.revisions.clear();
+    }
+
     /// Removes tab `index`; the shown tab stays shown, or the next one (the previous
     /// one for the last tab) replaces it.
     fn remove_tab(&mut self, index: usize) {
@@ -1053,6 +1063,21 @@ mod tests {
         let a = ws.allocate_id();
         let b = ws.allocate_id();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn clear_closes_everything_and_keeps_the_ids_unique() {
+        let mut ws = workspace(&[2, 1]);
+        let used: Vec<PaneId> = ws.panes().map(|(id, _)| id).collect();
+        ws.clear();
+        assert!(ws.tabs().is_empty());
+        assert_eq!(ws.panes().count(), 0);
+        assert_eq!(ws.active_pane_id(), None);
+        let id = ws.allocate_id();
+        assert!(!used.contains(&id));
+        ws.new_tab(id, Fake::default());
+        assert_eq!(ws.active_pane_id(), Some(id));
+        assert_eq!(ws.tabs().len(), 1);
     }
 
     #[test]

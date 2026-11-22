@@ -140,21 +140,22 @@ impl Session {
     }
 
     /// Closes `target` without asking: the window, or each of its panes still open;
-    /// the application exits with the last pane.
+    /// the window ends with the last pane (see [`Session::end_window`]).
     pub(super) fn close(&mut self, target: &Target, event_loop: &ActiveEventLoop) {
         if *target == Target::Window {
-            event_loop.exit();
+            self.end_window(event_loop);
             return;
         }
         for id in target.panes(&self.workspace) {
-            if event_loop.exiting() {
+            if event_loop.exiting() || self.quick_closed {
                 return;
             }
             self.close_pane(id, event_loop);
         }
     }
 
-    /// Closes the pane `id`; the application exits with the last one.
+    /// Closes the pane `id`; the window ends with the last one (see
+    /// [`Session::end_window`]).
     pub(super) fn close_pane(&mut self, id: PaneId, event_loop: &ActiveEventLoop) {
         // The closed pane's selection, and a divider of the tree it leaves, are dropped.
         // A dragged tab may be the one closing: the drag is dropped. A dragged pane is
@@ -175,7 +176,7 @@ impl Session {
         }
         let old = self.workspace.active_pane_id();
         if self.workspace.close_pane(id).is_err() {
-            event_loop.exit();
+            self.end_window(event_loop);
             return;
         }
         // The closed pane's unseen notices leave the window's total.

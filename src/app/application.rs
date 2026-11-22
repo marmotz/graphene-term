@@ -299,6 +299,8 @@ impl App {
             badge: Badge::default(),
             progress_epoch: Instant::now(),
             taskbar,
+            quick,
+            quick_closed: false,
         })
     }
 
@@ -520,6 +522,7 @@ impl ApplicationHandler<UserEvent> for App {
             session.flush_panes();
             deadline
         });
+        let deadline = earliest(deadline, self.quick_tick(event_loop, now));
         let deadline = earliest(
             deadline,
             self.settings.as_mut().and_then(|settings| {
@@ -554,6 +557,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         session.flush_panes();
         self.open_requested_settings(event_loop);
+        self.reset_closed_quick(event_loop);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -561,10 +565,19 @@ impl ApplicationHandler<UserEvent> for App {
         let settings_window = self.settings.as_ref().map(SettingsWindow::id);
         match route(id, session_window, settings_window) {
             Route::Session => {
+                if let WindowEvent::Focused(focused) = event {
+                    self.quick_focus_changed(focused);
+                }
                 self.session_window_event(event_loop, event);
                 self.open_requested_settings(event_loop);
+                self.reset_closed_quick(event_loop);
             }
             Route::Settings => {
+                if matches!(event, WindowEvent::Focused(true))
+                    && let Some(state) = self.quick_state()
+                {
+                    state.other_window_focused();
+                }
                 let Some(settings) = self.settings.as_mut() else {
                     return;
                 };
@@ -725,10 +738,7 @@ pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
         builder.with_activation_policy(ActivationPolicy::Accessory);
     }
     let event_loop = builder.build()?;
-    let mode = WindowMode::Quick(QuickState {
-        shown: false,
-        start_hidden: hidden,
-    });
+    let mode = WindowMode::Quick(QuickState::new(hidden));
     let code = run_app(event_loop, mode, None, GridSize::default());
     drop(lock);
     code

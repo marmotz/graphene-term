@@ -303,6 +303,11 @@ struct Session {
     progress_epoch: Instant,
     /// Shows the progress of the active tab on the window's icon.
     taskbar: Taskbar,
+    /// The window is the quick terminal: closing it hides it instead of exiting.
+    quick: bool,
+    /// Set when the quick terminal's last pane or window was closed: `App` hides it and
+    /// starts it over after the event.
+    quick_closed: bool,
 }
 
 impl Session {}
