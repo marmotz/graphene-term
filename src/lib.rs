@@ -31,6 +31,7 @@ mod palette;
 mod pane;
 mod perf;
 mod process;
+mod progress;
 mod pty;
 mod renderer;
 mod selection;

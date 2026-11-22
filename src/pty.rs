@@ -481,6 +481,7 @@ mod tests {
     use alacritty_terminal::term::Config;
     use alacritty_terminal::term::test::TermSize;
 
+    use crate::progress::ProgressState;
     use crate::timeline::Status;
     use crate::timeline::testing::{TOKEN, end, start, texts};
 
@@ -577,6 +578,18 @@ mod tests {
         let (term, timeline) = process_in_reads(bytes, bytes.len());
         assert!(timeline.current().header.is_none());
         assert_eq!(texts(&term)[..2], ["$ ls", "out"]);
+    }
+
+    #[test]
+    fn process_passes_progress_to_the_timeline() {
+        let bytes = "$ make\r\n\x1b]9;4;1;65\x1b\\building";
+        for split in [1, 4, bytes.len()] {
+            let (term, timeline) = process_in_reads(bytes, split);
+            let progress = timeline.progress.expect("progress");
+            assert_eq!(progress.state, ProgressState::Normal, "split {split}");
+            assert_eq!(progress.value, 65, "split {split}");
+            assert_eq!(texts(&term)[..2], ["$ make", "building"]);
+        }
     }
 
     /// Records each graphics call with the screen and cursor at that time.

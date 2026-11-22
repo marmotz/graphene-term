@@ -78,7 +78,9 @@ src/
   appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
-  signals.rs       incremental scanner of the private block signals and screen clears (pure)
+  signals.rs       incremental scanner of the private block signals, screen clears,
+                   OSC 9 / 777 notifications and OSC 9;4 progress (pure)
+  progress.rs      OSC 9;4 progress: parsing, state, transitions and expiry (pure, time passed in)
   graphics/
     mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
                    StoreHandler (runs kitty commands, keeps their PTY replies, places the

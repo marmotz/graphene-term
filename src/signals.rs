@@ -16,9 +16,13 @@
 //! `vte` drops unknown OSC without calling any handler, so the signals are found here,
 //! before the parser. The same goes for the desktop notifications programs send with
 //! OSC 9 (`ESC ] 9 ; <text> ST`) and OSC 777 (`ESC ] 777 ; notify ; <title> ; <body>
-//! ST`), reported as [`Chunk::Notify`]. The scanner is incremental (a sequence split across reads is
+//! ST`), reported as [`Chunk::Notify`], and for the progress of OSC 9;4
+//! (`ESC ] 9 ; 4 ; <state> [; <value>] ST`), reported as [`Chunk::Progress`] whatever
+//! the token, so a program run without shell integration is still seen. The scanner is incremental (a sequence split across reads is
 //! still found) and never consumes bytes: every byte, signals included, comes back as
 //! [`Chunk::Bytes`] so the `vte` parser still sees the whole stream.
+
+use crate::progress::{ProgressReport, parse_progress};
 
 /// The private OSC number used for block signals. Checked unused in xterm's ctlseqs,
 /// kitty, iTerm2, WezTerm and foot.
@@ -81,6 +85,8 @@ pub enum Chunk<'a> {
     Clear,
     /// A notification whose sequence ends with the previous `Bytes` chunk.
     Notify(Notice),
+    /// An OSC 9;4 progress whose sequence ends with the previous `Bytes` chunk.
+    Progress(ProgressReport),
 }
 
 /// What a finished sequence reports.
@@ -88,6 +94,7 @@ enum Event {
     Signal(Signal),
     Clear,
     Notify(Notice),
+    Progress(ProgressReport),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -124,7 +131,7 @@ pub struct Scanner {
 
 impl Scanner {
     /// A scanner reporting only the signals carrying `token`. An empty token matches
-    /// no signal.
+    /// no signal. Notifications and progress carry no token and are always reported.
     pub fn new(token: &str) -> Self {
         let prefix = if token.is_empty() {
             Vec::new()
@@ -300,6 +307,8 @@ impl Scanner {
     fn finish(&mut self) -> Option<Event> {
         let event = if self.is_signal() {
             parse(&self.payload[self.prefix.len()..], self.overflowed).map(Event::Signal)
+        } else if let Some(report) = parse_progress(&self.payload) {
+            Some(Event::Progress(report))
         } else {
             parse_notice(&self.payload).map(Event::Notify)
         };
@@ -325,6 +334,7 @@ impl<'a> Iterator for Split<'_, 'a> {
                 Event::Signal(signal) => Chunk::Signal(signal),
                 Event::Clear => Chunk::Clear,
                 Event::Notify(notice) => Chunk::Notify(notice),
+                Event::Progress(report) => Chunk::Progress(report),
             });
         }
         if self.pos >= self.bytes.len() {
@@ -460,6 +470,7 @@ fn decode_base64(input: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::ProgressState;
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
@@ -469,6 +480,7 @@ mod tests {
         Signal(Signal),
         Clear,
         Notify(Notice),
+        Progress(ProgressReport),
     }
 
     /// Feeds `reads` through one scanner; returns the concatenated bytes and the events.
@@ -483,6 +495,7 @@ mod tests {
                     Chunk::Signal(s) => seen.push(Seen::Signal(s)),
                     Chunk::Clear => seen.push(Seen::Clear),
                     Chunk::Notify(n) => seen.push(Seen::Notify(n)),
+                    Chunk::Progress(p) => seen.push(Seen::Progress(p)),
                 }
             }
         }
@@ -824,7 +837,7 @@ mod tests {
 
     #[test]
     fn conemu_sub_commands_are_not_notifications() {
-        let stream = b"\x1b]9;4;1;50\x07\x1b]9;9;/home\x07\x1b]9;1\x07\x1b]9;12;x\x07\
+        let stream = b"\x1b]9;4;9;50\x07\x1b]9;4\x07\x1b]9;9;/home\x07\x1b]9;1\x07\x1b]9;12;x\x07\
             \x1b]9;1;\x07";
         assert!(events(&[stream]).is_empty());
         // Numbers outside 1 to 12, or followed by text, are plain notifications.
@@ -865,6 +878,83 @@ mod tests {
         assert_eq!(
             events(&[stream.as_bytes()]),
             [notified(None, "x"), ended(Some(0))]
+        );
+    }
+
+    fn progress(state: ProgressState, value: Option<u8>) -> Seen {
+        Seen::Progress(ProgressReport::Set { state, value })
+    }
+
+    #[test]
+    fn progress_with_both_terminators() {
+        assert_eq!(
+            events(&[b"\x1b]9;4;1;40\x07", b"\x1b]9;4;3\x1b\\", b"\x1b]9;4;0\x07"]),
+            [
+                progress(ProgressState::Normal, Some(40)),
+                progress(ProgressState::Indeterminate, None),
+                Seen::Progress(ProgressReport::Clear),
+            ]
+        );
+    }
+
+    #[test]
+    fn progress_split_across_reads() {
+        let stream = b"\x1b]9;4;2;75\x1b\\";
+        for cut in 0..=stream.len() {
+            assert_eq!(
+                events(&[&stream[..cut], &stream[cut..]]),
+                [progress(ProgressState::Error, Some(75))],
+                "cut at {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn progress_follows_the_bytes_of_its_sequence() {
+        let mut scanner = Scanner::new(TOKEN);
+        let stream = b"a\x1b]9;4;4;5\x07b";
+        let chunks: Vec<_> = scanner.split(stream).collect();
+        assert_eq!(
+            chunks,
+            [
+                Chunk::Bytes(&stream[..stream.len() - 1]),
+                Chunk::Progress(ProgressReport::Set {
+                    state: ProgressState::Paused,
+                    value: Some(5)
+                }),
+                Chunk::Bytes(b"b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn progress_needs_no_token() {
+        let mut scanner = Scanner::new("");
+        let stream = b"x\x1b]9;4;1;10\x07y";
+        let mut bytes = Vec::new();
+        let mut reports = Vec::new();
+        for chunk in scanner.split(stream) {
+            match chunk {
+                Chunk::Bytes(b) => bytes.extend_from_slice(b),
+                Chunk::Progress(report) => reports.push(report),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(bytes, stream);
+        assert_eq!(
+            reports,
+            [ProgressReport::Set {
+                state: ProgressState::Normal,
+                value: Some(10)
+            }]
+        );
+    }
+
+    #[test]
+    fn plain_osc_9_is_not_progress() {
+        assert_eq!(
+            events(&[b"\x1b]9;4 done\x07\x1b]9;40%\x07"]),
+            [notified(None, "4 done"), notified(None, "40%")]
         );
     }
 }
