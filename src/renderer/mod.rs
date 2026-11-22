@@ -22,8 +22,8 @@ use winit::window::Window;
 use crate::frame::Frame;
 use crate::layout::{CellSize, GridLayout, Rect};
 use crate::perf;
-use cells::CellRenderer;
-pub use glyphs::{GlyphKey, Glyphs, UiFont};
+use cells::{CellRenderer, GlyphGroup};
+pub use glyphs::{FontOptions, GlyphKey, Glyphs, UiFont};
 use images::ImageRenderer;
 pub use rects::RectInstance;
 use rects::RectRenderer;
@@ -148,9 +148,10 @@ impl Layers {
         panes: &[PaneFrame<'_>],
         ui: &UiLayer,
     ) -> Prepared {
+        let ligatures = self.glyphs.ligatures();
         let scenes: Vec<_> = panes
             .iter()
-            .map(|pane| scene::build(pane.frame, pane.layout, self.srgb))
+            .map(|pane| scene::build(pane.frame, pane.layout, self.srgb, ligatures))
             .collect();
 
         let mut rects = Vec::new();
@@ -190,11 +191,16 @@ impl Layers {
         let mut overlay_glyphs = Vec::new();
         self.ui_text
             .glyphs(&mut self.glyphs, &ui.overlay_texts, &mut overlay_glyphs);
-        let mut groups: Vec<&[GlyphInstance]> =
-            scenes.iter().map(|scene| scene.glyphs.as_slice()).collect();
-        groups.push(&ui_glyphs);
-        groups.push(&banner_glyphs);
-        groups.push(&overlay_glyphs);
+        let mut groups: Vec<GlyphGroup<'_>> = scenes
+            .iter()
+            .map(|scene| GlyphGroup {
+                glyphs: &scene.glyphs,
+                runs: &scene.runs,
+            })
+            .collect();
+        groups.push(ui_glyphs.as_slice().into());
+        groups.push(banner_glyphs.as_slice().into());
+        groups.push(overlay_glyphs.as_slice().into());
         self.cells
             .prepare(device, queue, screen, &mut self.glyphs, &groups);
 
@@ -687,9 +693,9 @@ impl Renderer {
         self.layers.glyphs.set_font_size(font_size);
     }
 
-    /// Changes the font family (`None`: the system monospace font) and size.
-    pub fn set_font(&mut self, family: Option<String>, font_size: f32) {
-        self.layers.glyphs.set_font(family, font_size);
+    /// Changes the font (family, ligatures, features) and size.
+    pub fn set_font(&mut self, font: &FontOptions, font_size: f32) {
+        self.layers.glyphs.set_font(font, font_size);
     }
 
     /// Scales the interface font to a window of scale factor `scale`.
@@ -1163,19 +1169,24 @@ mod tests {
 
     #[test]
     fn renderer_draws_with_the_glyphs_it_is_given() {
-        let glyphs = Glyphs::new(None, 30.0);
+        let glyphs = Glyphs::new(&FontOptions::default(), 30.0);
         let expected = glyphs.cell_size();
         let Some(renderer) = Headless::new(SIZE, SIZE, glyphs) else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
         assert_eq!(renderer.cell_size(), expected);
-        assert_ne!(expected, Glyphs::new(None, 14.0).cell_size());
+        assert_ne!(
+            expected,
+            Glyphs::new(&FontOptions::default(), 14.0).cell_size()
+        );
     }
 
     #[test]
     fn x11_presentation_packs_the_drawn_pixels_as_argb() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
@@ -1194,6 +1205,7 @@ mod tests {
                 card_selected: WHITE,
             },
             cursor: None,
+            ligature_break: None,
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
@@ -1213,7 +1225,9 @@ mod tests {
 
     #[test]
     fn x11_readback_finishes_once_and_one_at_a_time() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
@@ -1232,6 +1246,7 @@ mod tests {
                 card_selected: WHITE,
             },
             cursor: None,
+            ligature_break: None,
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
@@ -1254,7 +1269,9 @@ mod tests {
 
     #[test]
     fn grid_glyph_pixels_reach_the_target_inside_their_cell() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
@@ -1274,6 +1291,7 @@ mod tests {
                 card_selected: WHITE,
             },
             cursor: None,
+            ligature_break: None,
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
@@ -1298,7 +1316,9 @@ mod tests {
 
     #[test]
     fn rounded_card_leaves_its_corner_pixel_at_the_background() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
@@ -1326,6 +1346,7 @@ mod tests {
                 card_selected: WHITE,
             },
             cursor: None,
+            ligature_break: None,
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
@@ -1387,6 +1408,7 @@ mod tests {
                 card_selected: WHITE,
             },
             cursor: None,
+            ligature_break: None,
             background: BLACK,
             banner: None,
             lang: crate::i18n::Lang::En,
@@ -1399,7 +1421,9 @@ mod tests {
         use crate::frame::FrameImage;
         use crate::graphics::{ImageCell, Pixels, SourceRect};
 
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
@@ -1448,7 +1472,9 @@ mod tests {
 
     #[test]
     fn each_pane_is_clipped_to_its_rect_and_the_ui_drawn_over_all() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
@@ -1508,7 +1534,9 @@ mod tests {
 
     #[test]
     fn ui_text_is_drawn_over_the_panes_at_its_position() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
@@ -1552,7 +1580,9 @@ mod tests {
 
     #[test]
     fn overlay_is_drawn_over_the_interface_with_its_own_text() {
-        let Some(mut renderer) = Headless::new(SIZE, SIZE, Glyphs::new(None, 14.0)) else {
+        let Some(mut renderer) =
+            Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };

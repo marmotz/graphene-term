@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use alacritty_terminal::term::{Config as TermConfig, Osc52};
 use alacritty_terminal::vte::ansi::{CursorShape as TermCursorShape, CursorStyle};
+use cosmic_text::{FeatureTag, FontFeatures};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use toml::Spanned;
@@ -80,6 +81,8 @@ impl Default for Config {
             font: FontConfig {
                 family: None,
                 size: DEFAULT_FONT_SIZE,
+                ligatures: true,
+                features: FontFeatureList::default(),
             },
             window: WindowConfig {
                 startup_mode: StartupMode::Default,
@@ -433,6 +436,8 @@ language = "fr"
 [font]
 family = "JetBrains Mono"
 size = 11.5
+ligatures = false
+features = "ss01 -calt cv05=2"
 
 [window]
 startup_mode = "remember"
@@ -478,6 +483,12 @@ bell = true
                 font: FontConfig {
                     family: Some("JetBrains Mono".to_owned()),
                     size: 11.5,
+                    ligatures: false,
+                    features: FontFeatureList(vec![
+                        (FeatureTag::new(b"ss01"), 1),
+                        (FeatureTag::new(b"calt"), 0),
+                        (FeatureTag::new(b"cv05"), 2),
+                    ]),
                 },
                 window: WindowConfig {
                     startup_mode: StartupMode::Remember,
@@ -552,6 +563,95 @@ bell = true
         let (config, errors) = parse("[font]\nfamily = \"\"\n");
         assert!(errors.is_empty());
         assert_eq!(config.font.family, None);
+    }
+
+    fn features(text: &str) -> Vec<(String, u32)> {
+        FontFeatureList::parse(text)
+            .unwrap()
+            .0
+            .into_iter()
+            .map(|(tag, value)| (String::from_utf8_lossy(tag.as_bytes()).into_owned(), value))
+            .collect()
+    }
+
+    #[test]
+    fn font_features_accept_every_syntax_and_separator() {
+        assert_eq!(
+            features("ss01 +zero,-calt  cv05=2,,"),
+            [
+                ("ss01".to_owned(), 1),
+                ("zero".to_owned(), 1),
+                ("calt".to_owned(), 0),
+                ("cv05".to_owned(), 2),
+            ]
+        );
+        assert_eq!(features(""), []);
+        assert_eq!(features(" , "), []);
+    }
+
+    #[test]
+    fn last_occurrence_of_a_font_feature_wins() {
+        assert_eq!(
+            features("calt ss01 -calt"),
+            [("ss01".to_owned(), 1), ("calt".to_owned(), 0)]
+        );
+    }
+
+    #[test]
+    fn invalid_font_feature_is_named_in_the_error() {
+        for item in ["ss1", "ss012", "+ss01=2", "cv05=x", "cv05=-1", "zéro", "-"] {
+            let error = FontFeatureList::parse(&format!("ss01 {item}")).unwrap_err();
+            assert!(error.contains(&format!("\"{item}\"")), "{item}: {error}");
+        }
+    }
+
+    #[test]
+    fn font_features_display_parses_back_to_the_same_list() {
+        let list = FontFeatureList::parse("+ss01, -calt cv05=2 zero=1").unwrap();
+        assert_eq!(list.to_string(), "ss01 -calt cv05=2 zero");
+        assert_eq!(FontFeatureList::parse(&list.to_string()), Ok(list));
+    }
+
+    #[test]
+    fn font_features_convert_to_cosmic_text_features() {
+        let list = FontFeatureList::parse("ss01 -calt").unwrap();
+        let features = list.font_features().features;
+        assert_eq!(features.len(), 2);
+        assert_eq!(
+            (features[0].tag, features[0].value),
+            (FeatureTag::new(b"ss01"), 1)
+        );
+        assert_eq!(
+            (features[1].tag, features[1].value),
+            (FeatureTag::new(b"calt"), 0)
+        );
+    }
+
+    #[test]
+    fn invalid_font_features_keep_the_previous_value() {
+        let mut previous = Config::default();
+        previous.font.features = FontFeatureList::parse("ss01").unwrap();
+        let (config, errors) =
+            Config::parse("[font]\nfeatures = \"zero bad\"\n", &previous, &file());
+        assert_eq!(config.font.features, previous.font.features);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, ConfigErrorKind::InvalidValue);
+        assert_eq!(errors[0].key.as_deref(), Some("font.features"));
+        assert!(
+            errors[0].message.contains("\"bad\""),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn invalid_ligatures_keep_the_previous_value() {
+        let mut previous = Config::default();
+        previous.font.ligatures = false;
+        let (config, errors) = Config::parse("[font]\nligatures = \"no\"\n", &previous, &file());
+        assert!(!config.font.ligatures);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].key.as_deref(), Some("font.ligatures"));
     }
 
     #[test]

@@ -130,6 +130,8 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 |-----------|--------|--------------------------------------------------------------------------------------------|
 | `family`  | `""`   | Nom de la famille de police. Vide : police monospace du système. Sous Linux, `fc-list : family` liste les polices installées. |
 | `size`    | `14.0` | Taille en points, de 6 à 72.                                                               |
+| `ligatures` | `true` | Affiche les ligatures des polices qui en ont (Fira Code, JetBrains Mono...) : `->`, `===` et autres sont dessinés comme un seul symbole. |
+| `features` | `""`  | Features OpenType du texte du terminal, séparées par des espaces ou des virgules : `"ss01"` ou `"+ss01"` active une feature, `"-calt"` la désactive, `"cv05=2"` fixe une valeur. Un tag fait 4 caractères ; si un tag est répété, le dernier l'emporte. Exemple : `"zero ss01"`. |
 
 ### `[window]`
 

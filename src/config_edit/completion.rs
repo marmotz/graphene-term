@@ -219,7 +219,8 @@ pub(super) fn missing_option_documentation(
         let Some(body) = comment_body(line) else {
             continue;
         };
-        if table_header(body).is_some() || body.contains('=') {
+        // A setting (`key = value`) ends the help; help text may contain `=` too.
+        if table_header(body).is_some() || commented_keys(None, body).is_some() {
             break;
         }
         has_existing_help = true;
@@ -867,6 +868,28 @@ mod tests {
         assert!(updated.contains(
             "## Cursor blinking: true or false. Applications can still change this (DECSCUSR).\n# blinking = false\n"
         ));
+    }
+
+    #[test]
+    fn help_containing_an_equal_sign_is_not_duplicated() {
+        let commented = concat!("# [font]\n", "# features = \"\"\n");
+        let updated = complete_defaults(commented).unwrap().unwrap();
+        assert_eq!(
+            updated.matches("## OpenType features").count(),
+            1,
+            "{updated}"
+        );
+        assert_eq!(complete_defaults(&updated).unwrap(), None);
+
+        let active = concat!("[font]\n", "features = \"zero\"\n");
+        let updated = complete_defaults(active).unwrap().unwrap();
+        assert_eq!(
+            updated.matches("## OpenType features").count(),
+            1,
+            "{updated}"
+        );
+        assert!(updated.contains("features = \"zero\"\n"));
+        assert_eq!(complete_defaults(&updated).unwrap(), None);
     }
 
     #[test]

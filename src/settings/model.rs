@@ -147,7 +147,12 @@ const SECTION_KEYS: [(&str, Section); 11] = [
 /// Fields of `section`, in display order.
 pub fn section_fields(section: Section) -> &'static [Field] {
     match section {
-        Section::Font => &[Field::FontFamily, Field::FontSize],
+        Section::Font => &[
+            Field::FontFamily,
+            Field::FontSize,
+            Field::FontLigatures,
+            Field::FontFeatures,
+        ],
         Section::Window => &[
             Field::StartupMode,
             Field::WindowWidth,
@@ -183,6 +188,8 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::Language => &["language"],
         Field::FontFamily => &["font", "family"],
         Field::FontSize => &["font", "size"],
+        Field::FontLigatures => &["font", "ligatures"],
+        Field::FontFeatures => &["font", "features"],
         Field::StartupMode => &["window", "startup_mode"],
         Field::WindowWidth => &["window", "width"],
         Field::WindowHeight => &["window", "height"],
@@ -253,13 +260,14 @@ pub fn widget(field: Field) -> Widget {
             max: Some(f64::from(u32::MAX)),
             integer: true,
         }),
-        Field::CursorBlinking
+        Field::FontLigatures
+        | Field::CursorBlinking
         | Field::UpdatesCheck
         | Field::ThemeFollow
         | Field::NotificationsProgram
         | Field::NotificationsCommandFinished
         | Field::NotificationsBell => Widget::Toggle,
-        Field::WordSeparators => Widget::Text,
+        Field::WordSeparators | Field::FontFeatures => Widget::Text,
     }
 }
 
@@ -570,6 +578,8 @@ impl SettingsModel {
             Field::Language => text(name_of(&Language::VALUES, c.language)),
             Field::FontFamily => text(c.font.family.as_deref().unwrap_or_default()),
             Field::FontSize => Value::Float(f64::from(c.font.size)),
+            Field::FontLigatures => Value::Bool(c.font.ligatures),
+            Field::FontFeatures => text(&c.font.features.to_string()),
             Field::StartupMode => text(name_of(&StartupMode::VALUES, c.window.startup_mode)),
             Field::WindowWidth => Value::Integer(i64::from(c.window.width)),
             Field::WindowHeight => Value::Integer(i64::from(c.window.height)),
@@ -1027,6 +1037,67 @@ bell = true
         assert!(m.on(Field::NotificationsCommandFinished));
         assert_eq!(m.text(Field::NotificationsCommandThreshold), "10");
         assert!(!m.on(Field::NotificationsBell));
+    }
+
+    #[test]
+    fn font_section_has_the_ligature_toggle_and_the_features_field() {
+        assert_eq!(
+            section_fields(Section::Font),
+            &[
+                Field::FontFamily,
+                Field::FontSize,
+                Field::FontLigatures,
+                Field::FontFeatures,
+            ]
+        );
+        assert_eq!(path(Field::FontLigatures), Some(&["font", "ligatures"][..]));
+        assert_eq!(path(Field::FontFeatures), Some(&["font", "features"][..]));
+        assert_eq!(widget(Field::FontLigatures), Widget::Toggle);
+        assert_eq!(widget(Field::FontFeatures), Widget::Text);
+    }
+
+    #[test]
+    fn font_ligatures_and_features_show_the_configured_values() {
+        let defaults = model("");
+        assert!(defaults.on(Field::FontLigatures));
+        assert_eq!(defaults.text(Field::FontFeatures), "");
+
+        // The features are shown in their canonical form.
+        let m = model("[font]\nligatures = false\nfeatures = \"+ss01, calt=0 cv05=2\"");
+        assert!(!m.on(Field::FontLigatures));
+        assert_eq!(m.text(Field::FontFeatures), "ss01 -calt cv05=2");
+    }
+
+    #[test]
+    fn font_ligatures_and_features_write_their_key() {
+        let m = model("");
+        assert_eq!(
+            m.edit(Field::FontLigatures, Input::Toggle(false)),
+            Ok(set(&["font", "ligatures"], Value::Bool(false)))
+        );
+        assert_eq!(
+            m.edit(Field::FontLigatures, Input::Toggle(true)),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            m.edit(Field::FontFeatures, Input::Text("ss01 -calt".into())),
+            Ok(set(&["font", "features"], text("ss01 -calt")))
+        );
+        assert_eq!(
+            m.edit(Field::FontFeatures, Input::Text(String::new())),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn an_invalid_feature_is_an_error_of_the_features_field() {
+        let m = model("[font]\nfeatures = \"ss01 toolong\"");
+        let errors = m.field_errors(Field::FontFeatures);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("toolong"), "{errors:?}");
+        assert!(m.field_errors(Field::FontLigatures).is_empty());
+        assert!(m.section_errors(Section::Font).is_empty());
+        assert!(m.other_errors().is_empty());
     }
 
     #[test]

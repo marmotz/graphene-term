@@ -124,6 +124,8 @@ This is the complete list. Values shown are the defaults.
 |----------|---------|--------------------------------------------------------------------------------------------|
 | `family` | `""`    | Font family name. Empty uses the system monospace font. On Linux, `fc-list : family` lists installed fonts. |
 | `size`   | `14.0`  | Size in points, from 6 to 72.                                                              |
+| `ligatures` | `true` | Shows the ligatures of the fonts that have some (Fira Code, JetBrains Mono...): `->`, `===` and the like are drawn as one symbol. |
+| `features` | `""`   | OpenType features of the terminal text, separated by spaces or commas: `"ss01"` or `"+ss01"` enables a feature, `"-calt"` disables it, `"cv05=2"` sets a value. A tag is 4 characters; when a tag is repeated, the last one wins. Example: `"zero ss01"`. |
 
 ### `[window]`
 

@@ -110,6 +110,7 @@ impl UiText {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::FontOptions;
 
     /// Every character 10 px wide.
     fn width(text: &str) -> f32 {
@@ -154,7 +155,7 @@ mod tests {
 
     #[test]
     fn items_become_ui_glyphs_at_their_position() {
-        let mut glyphs = Glyphs::new(None, 14.0);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), 14.0);
         let mut text = UiText::default();
         let mut out = Vec::new();
         text.glyphs(&mut glyphs, &[item("a b", 1000.0)], &mut out);
@@ -170,7 +171,7 @@ mod tests {
 
     #[test]
     fn items_are_truncated_to_their_width() {
-        let mut glyphs = Glyphs::new(None, 14.0);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), 14.0);
         let full = glyphs.shape_ui(UiFont::Chrome, "a long tab title").width;
         let mut text = UiText::default();
         let mut out = Vec::new();
@@ -185,7 +186,7 @@ mod tests {
 
     #[test]
     fn items_keep_their_font_and_each_font_is_cached_apart() {
-        let mut glyphs = Glyphs::new(None, 14.0);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), 14.0);
         let mut text = UiText::default();
         let palette = UiTextItem {
             font: UiFont::Palette,

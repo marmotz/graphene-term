@@ -2,8 +2,10 @@
 //!
 //! A terminal cell holds one character, so no shaping is needed per frame: each
 //! `(char, bold, italic)` is resolved once by shaping that single character (font
-//! fallback included), rasterized once and placed in the [`Atlas`]. The pixels of newly
-//! placed glyphs wait in [`Glyphs::take_uploads`] for the GPU side to copy them.
+//! fallback included). With ligatures, a run of cells is shaped once as a whole by
+//! [`Glyphs::shape_run`], so that the font can substitute its glyphs. Either way each
+//! glyph is rasterized once and placed in the [`Atlas`]. The pixels of newly placed
+//! glyphs wait in [`Glyphs::take_uploads`] for the GPU side to copy them.
 //!
 //! [`Glyphs`] also owns the font system and the cell metrics, and the interface font:
 //! interface text uses a sans-serif font at a fixed size per [`UiFont`], independent of
@@ -11,10 +13,11 @@
 //! grid's, under keys with `ui` set.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
-    fontdb,
+    Attrs, AttrsOwned, Buffer, CacheKey, Family, FontFeatures, FontSystem, Metrics, Shaping, Style,
+    SwashCache, SwashContent, Weight, fontdb,
 };
 
 use super::atlas::{Atlas, Page, Region};
@@ -22,6 +25,13 @@ use crate::layout::CellSize;
 
 /// Side of each atlas page, in pixels.
 const ATLAS_SIZE: u32 = 1024;
+
+/// Shaped runs kept by [`Glyphs::shape_run`] before its cache is dropped.
+const MAX_CACHED_RUNS: usize = 8192;
+
+/// Family of the test font, see [`Glyphs::with_test_font`].
+#[cfg(test)]
+pub(super) const TEST_FONT_FAMILY: &str = "JetBrains Mono";
 
 /// Size of the interface font of the chrome (tab bar, dialog), in logical pixels.
 pub const UI_FONT_SIZE: f32 = 13.0;
@@ -98,6 +108,43 @@ pub struct Glyph {
     pub top: i32,
 }
 
+impl Glyph {
+    /// The glyph moved by `offset` pixels.
+    fn offset_by(self, [x, y]: [i32; 2]) -> Self {
+        Self {
+            left: self.left + x,
+            top: self.top + y,
+            ..self
+        }
+    }
+}
+
+/// A glyph of a run shaped by [`Glyphs::shape_run`], drawn from one of its cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunGlyph {
+    /// Cell of the run the glyph is drawn from: the first character of its cluster. The
+    /// other cells of the cluster draw nothing, the glyph overflowing on them.
+    pub cell: u16,
+    /// Glyph to rasterize, see [`Glyphs::raster`].
+    pub raster: CacheKey,
+    /// Offset of the pen from the cell origin, in pixels: baseline and positioning.
+    pub offset: [i32; 2],
+    /// Part of a ligature: its cluster covers several characters, or the font replaced
+    /// the glyph the character has when shaped alone.
+    pub ligated: bool,
+}
+
+/// Shaped runs of one `(bold, italic)` style, by text.
+type RunCache = HashMap<Box<str>, Rc<[RunGlyph]>>;
+
+/// A character shaped alone: the glyph to rasterize and the pen offset from the cell
+/// origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Shaped {
+    raster: CacheKey,
+    offset: [i32; 2],
+}
+
 /// Pixels of a newly placed glyph, to copy into `region` of the `page` texture. Rows are
 /// tightly packed (`region.width * page.bytes_per_pixel()` bytes each).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,21 +154,63 @@ pub struct Upload {
     pub data: Vec<u8>,
 }
 
+/// The grid font: family and OpenType options.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontOptions {
+    /// `None` uses the system monospace font.
+    pub family: Option<String>,
+    /// Shows the ligatures of the fonts that have some.
+    pub ligatures: bool,
+    /// OpenType features applied to the grid text, not to the interface text.
+    pub features: FontFeatures,
+}
+
+impl Default for FontOptions {
+    fn default() -> Self {
+        Self {
+            family: None,
+            ligatures: true,
+            features: FontFeatures::new(),
+        }
+    }
+}
+
 pub struct Glyphs {
     font_system: FontSystem,
     swash_cache: SwashCache,
     /// Font family name, see [`resolve_family`]; `None` uses cosmic-text's monospace lookup.
     family: Option<String>,
+    ligatures: bool,
+    /// OpenType features of the grid text, see [`Self::grid_attrs`].
+    features: FontFeatures,
     metrics: Metrics,
     cell: CellSize,
     /// Scale factor of the window, applied to the interface fonts.
     ui_scale: f32,
-    /// `None` for characters with nothing to draw (space, empty bitmap).
-    cache: HashMap<GlyphKey, Option<Glyph>>,
+    /// Characters shaped alone; `None` when no font has a glyph for them.
+    chars: HashMap<GlyphKey, Option<Shaped>>,
+    /// Shaped runs of the grid, by `(bold, italic)` then text.
+    runs: HashMap<(bool, bool), RunCache>,
+    /// Number of entries of `runs`.
+    cached_runs: usize,
+    /// Rasterized glyphs, shared by characters and runs; `None` for glyphs with nothing
+    /// to draw (space, empty bitmap). Dropped with the atlas.
+    raster: HashMap<CacheKey, Option<Glyph>>,
     atlas: Atlas,
     uploads: Vec<Upload>,
     /// Bumped each time the atlas is reset: glyphs obtained before are stale.
     generation: u64,
+}
+
+/// `attrs` in bold and/or italic.
+fn styled(mut attrs: Attrs<'_>, bold: bool, italic: bool) -> Attrs<'_> {
+    if bold {
+        attrs = attrs.weight(Weight::BOLD);
+    }
+    if italic {
+        attrs = attrs.style(Style::Italic);
+    }
+    attrs
 }
 
 fn family(name: &Option<String>) -> Family<'_> {
@@ -159,22 +248,55 @@ fn resolve_family(db: &fontdb::Database, configured: Option<String>) -> Option<S
 }
 
 impl Glyphs {
-    pub fn new(family: Option<String>, font_size: f32) -> Self {
-        Self::with_atlas_size(family, font_size, ATLAS_SIZE)
+    pub fn new(font: &FontOptions, font_size: f32) -> Self {
+        Self::with_atlas_size(font, font_size, ATLAS_SIZE)
     }
 
-    pub(super) fn with_atlas_size(family: Option<String>, font_size: f32, atlas_size: u32) -> Self {
-        let mut font_system = FontSystem::new();
-        let family = resolve_family(font_system.db(), family);
+    pub(super) fn with_atlas_size(font: &FontOptions, font_size: f32, atlas_size: u32) -> Self {
+        Self::with_font_system(FontSystem::new(), font, font_size, atlas_size)
+    }
+
+    /// Glyphs whose font system only knows the test font, JetBrains Mono Regular
+    /// (`tests/fixtures/fonts/`), so the tests do not depend on the system fonts. The
+    /// family of `font` is ignored.
+    #[cfg(test)]
+    pub(super) fn with_test_font(font: &FontOptions, font_size: f32) -> Self {
+        let mut db = fontdb::Database::new();
+        db.load_font_file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/fonts/JetBrainsMono-Regular.ttf"
+        ))
+        .expect("test font is vendored");
+        let font_system = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+        let font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ..font.clone()
+        };
+        Self::with_font_system(font_system, &font, font_size, ATLAS_SIZE)
+    }
+
+    fn with_font_system(
+        font_system: FontSystem,
+        font: &FontOptions,
+        font_size: f32,
+        atlas_size: u32,
+    ) -> Self {
+        let mut font_system = font_system;
+        let family = resolve_family(font_system.db(), font.family.clone());
         let (metrics, cell) = Self::measure(&mut font_system, &family, font_size);
         Self {
             font_system,
             swash_cache: SwashCache::new(),
             family,
+            ligatures: font.ligatures,
+            features: font.features.clone(),
             metrics,
             cell,
             ui_scale: 1.0,
-            cache: HashMap::new(),
+            chars: HashMap::new(),
+            runs: HashMap::new(),
+            cached_runs: 0,
+            raster: HashMap::new(),
             atlas: Atlas::new(atlas_size),
             uploads: Vec::new(),
             generation: 0,
@@ -229,11 +351,27 @@ impl Glyphs {
         self.clear();
     }
 
-    /// Changes the font family (`None`: the system monospace font) and size: new
-    /// metrics, and every cached glyph is dropped.
-    pub fn set_font(&mut self, family: Option<String>, font_size: f32) {
-        self.family = resolve_family(self.font_system.db(), family);
+    /// Changes the font (family, ligatures, features) and size: new metrics, and every
+    /// cached glyph is dropped.
+    pub fn set_font(&mut self, font: &FontOptions, font_size: f32) {
+        self.family = resolve_family(self.font_system.db(), font.family.clone());
+        self.ligatures = font.ligatures;
+        self.features = font.features.clone();
         self.set_font_size(font_size);
+    }
+
+    /// Whether the grid shows the ligatures of the font, shaping its text by runs.
+    pub fn ligatures(&self) -> bool {
+        self.ligatures
+    }
+
+    /// Attributes the grid text is shaped with: its family, style and OpenType features.
+    /// Owned, so that the font system can be borrowed while shaping with them.
+    fn grid_attrs(&self, bold: bool, italic: bool) -> AttrsOwned {
+        let attrs = Attrs::new()
+            .family(family(&self.family))
+            .font_features(self.features.clone());
+        AttrsOwned::new(&styled(attrs, bold, italic))
     }
 
     /// Scales the interface font to a window of scale factor `scale`; the cache is
@@ -292,9 +430,17 @@ impl Glyphs {
         }
     }
 
-    /// Drops every cached glyph and frees the atlas.
+    /// Drops every cached glyph and shaped run, and frees the atlas.
     pub fn clear(&mut self) {
-        self.cache.clear();
+        self.chars.clear();
+        self.runs.clear();
+        self.cached_runs = 0;
+        self.reset_atlas();
+    }
+
+    /// Frees the atlas and drops the rasterized glyphs, keeping the shaping.
+    fn reset_atlas(&mut self) {
+        self.raster.clear();
         self.atlas.reset();
         self.uploads.clear();
         self.generation += 1;
@@ -328,32 +474,44 @@ impl Glyphs {
     /// The glyph of `key`, rasterized and placed in the atlas on first use. `None` when
     /// there is nothing to draw.
     pub fn get(&mut self, key: GlyphKey) -> Option<Glyph> {
-        if let Some(glyph) = self.cache.get(&key) {
-            return *glyph;
-        }
-        let glyph = self.rasterize(key);
-        self.cache.insert(key, glyph);
-        glyph
+        let shaped = self.shaped(key)?;
+        Some(self.raster(shaped.raster)?.offset_by(shaped.offset))
     }
 
-    fn rasterize(&mut self, key: GlyphKey) -> Option<Glyph> {
-        let (family, metrics) = match key.ui {
-            Some(font) => (ui_family(font, &self.family), self.ui_metrics(font)),
-            None => (family(&self.family), self.metrics),
+    /// The glyph of `glyph`, a glyph of a shaped run, rasterized and placed in the atlas
+    /// on first use, with its offset from the origin of its cell. `None` when there is
+    /// nothing to draw.
+    pub fn run_glyph(&mut self, glyph: &RunGlyph) -> Option<Glyph> {
+        Some(self.raster(glyph.raster)?.offset_by(glyph.offset))
+    }
+
+    /// The character of `key` shaped alone, cached.
+    fn shaped(&mut self, key: GlyphKey) -> Option<Shaped> {
+        if let Some(shaped) = self.chars.get(&key) {
+            return *shaped;
+        }
+        let shaped = self.shape_char(key);
+        self.chars.insert(key, shaped);
+        shaped
+    }
+
+    fn shape_char(&mut self, key: GlyphKey) -> Option<Shaped> {
+        let (attrs, metrics) = match key.ui {
+            Some(font) => {
+                let attrs = Attrs::new().family(ui_family(font, &self.family));
+                (
+                    AttrsOwned::new(&styled(attrs, key.bold, key.italic)),
+                    self.ui_metrics(font),
+                )
+            }
+            None => (self.grid_attrs(key.bold, key.italic), self.metrics),
         };
-        let mut attrs = Attrs::new().family(family);
-        if key.bold {
-            attrs = attrs.weight(Weight::BOLD);
-        }
-        if key.italic {
-            attrs = attrs.style(Style::Italic);
-        }
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         let mut text = [0; 4];
         // Advanced shaping keeps the font fallback for characters missing from the font.
         buffer.set_text(
             key.c.encode_utf8(&mut text),
-            &attrs,
+            &attrs.as_attrs(),
             Shaping::Advanced,
             None,
         );
@@ -361,9 +519,97 @@ impl Glyphs {
         let run = buffer.layout_runs().next()?;
         let physical = run.glyphs.first()?.physical((0.0, 0.0), 1.0);
         let line_y = run.line_y.round() as i32;
+        Some(Shaped {
+            raster: physical.cache_key,
+            offset: [physical.x, line_y + physical.y],
+        })
+    }
+
+    /// The glyphs of `text`, a run of grid cells of one column each, shaped together so
+    /// that the font can form its ligatures. Shaped once per `(text, bold, italic)`, then
+    /// served from a cache dropped by [`Self::clear`].
+    pub fn shape_run(&mut self, text: &str, bold: bool, italic: bool) -> Rc<[RunGlyph]> {
+        if let Some(run) = self
+            .runs
+            .get(&(bold, italic))
+            .and_then(|runs| runs.get(text))
+        {
+            return run.clone();
+        }
+        let run: Rc<[RunGlyph]> = self.shape_text(text, bold, italic).into();
+        if self.cached_runs >= MAX_CACHED_RUNS {
+            self.runs.clear();
+            self.cached_runs = 0;
+        }
+        self.runs
+            .entry((bold, italic))
+            .or_default()
+            .insert(text.into(), run.clone());
+        self.cached_runs += 1;
+        run
+    }
+
+    fn shape_text(&mut self, text: &str, bold: bool, italic: bool) -> Vec<RunGlyph> {
+        let attrs = self.grid_attrs(bold, italic);
+        let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
+        buffer.set_text(text, &attrs.as_attrs(), Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        let Some(line) = buffer.layout_runs().next() else {
+            return Vec::new();
+        };
+        let line_y = line.line_y.round() as i32;
+        // Each character is one cell: the cell of a byte offset is its character index.
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        let cell_of = |byte: usize| chars.partition_point(|&(start, _)| start < byte);
+        let mut glyphs = Vec::with_capacity(line.glyphs.len());
+        // Start and pen position of the current cluster: its glyphs are placed relative
+        // to its cell, not to the shaped position, which keeps the grid aligned.
+        let mut cluster = (usize::MAX, 0.0);
+        for glyph in line.glyphs {
+            if glyph.start != cluster.0 {
+                cluster = (glyph.start, glyph.x);
+            }
+            let cell = cell_of(glyph.start);
+            let (Some(&(_, c)), Ok(index)) = (chars.get(cell), u16::try_from(cell)) else {
+                continue;
+            };
+            let physical = glyph.physical((-cluster.1, 0.0), 1.0);
+            let alone = self.shaped(GlyphKey {
+                c,
+                bold,
+                italic,
+                ui: None,
+            });
+            let same_glyph = alone.is_some_and(|alone| {
+                (alone.raster.font_id, alone.raster.glyph_id)
+                    == (physical.cache_key.font_id, physical.cache_key.glyph_id)
+            });
+            glyphs.push(RunGlyph {
+                cell: index,
+                raster: physical.cache_key,
+                offset: [physical.x, line_y + physical.y],
+                ligated: cell_of(glyph.end) - cell > 1 || !same_glyph,
+            });
+        }
+        glyphs
+    }
+
+    /// The glyph `key` rasterized and placed in the atlas on first use, its offset taken
+    /// from the pen position. `None` when there is nothing to draw.
+    pub fn raster(&mut self, key: CacheKey) -> Option<Glyph> {
+        if let Some(glyph) = self.raster.get(&key) {
+            return *glyph;
+        }
+        let glyph = self.rasterize(key);
+        // Placed after any atlas reset it caused: valid in the current atlas.
+        self.raster.insert(key, glyph);
+        glyph
+    }
+
+    fn rasterize(&mut self, key: CacheKey) -> Option<Glyph> {
         let image = self
             .swash_cache
-            .get_image_uncached(&mut self.font_system, physical.cache_key)?;
+            .get_image_uncached(&mut self.font_system, key)?;
         let placement = image.placement;
         if placement.width == 0 || placement.height == 0 {
             return None;
@@ -382,19 +628,19 @@ impl Glyphs {
         Some(Glyph {
             page,
             region,
-            left: physical.x + placement.left,
-            top: line_y + physical.y - placement.top,
+            left: placement.left,
+            top: -placement.top,
         })
     }
 
-    /// Reserves an atlas region, resetting the atlas (and the cache) when the page is
-    /// full. `None` when the glyph does not fit even an empty page.
+    /// Reserves an atlas region, resetting the atlas (and the rasterized glyphs) when the
+    /// page is full. `None` when the glyph does not fit even an empty page.
     fn allocate(&mut self, page: Page, width: u32, height: u32) -> Option<Region> {
         if let Some(region) = self.atlas.allocate(page, width, height) {
             return Some(region);
         }
         log::debug!("glyph atlas full, resetting it");
-        self.clear();
+        self.reset_atlas();
         let region = self.atlas.allocate(page, width, height);
         if region.is_none() {
             log::warn!("glyph of {width}x{height} px does not fit the atlas, skipped");
@@ -448,7 +694,7 @@ mod tests {
 
     #[test]
     fn cache_hit_returns_the_same_glyph_without_new_upload() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let first = glyphs.get(key('a')).expect("'a' has pixels");
         assert_eq!(glyphs.take_uploads().len(), 1);
         assert_eq!(glyphs.get(key('a')), Some(first));
@@ -457,7 +703,7 @@ mod tests {
 
     #[test]
     fn upload_matches_the_region() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let glyph = glyphs.get(key('W')).unwrap();
         let uploads = glyphs.take_uploads();
         let upload = &uploads[0];
@@ -469,7 +715,7 @@ mod tests {
 
     #[test]
     fn glyph_sits_inside_its_cell() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let cell = glyphs.cell_size();
         let glyph = glyphs.get(key('M')).unwrap();
         assert!(glyph.left >= -1 && glyph.top >= 0, "{glyph:?}");
@@ -479,36 +725,48 @@ mod tests {
 
     #[test]
     fn bold_and_italic_are_distinct_entries() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
-        let regular = glyphs.get(key('a')).unwrap();
-        let bold = glyphs
-            .get(GlyphKey {
+        // Whether the font has bold and italic faces depends on the system fonts: a
+        // style without its face falls back to the same raster glyph, which then shares
+        // one atlas region. Regions must differ exactly when the raster glyphs differ.
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
+        let keys = [
+            key('a'),
+            GlyphKey {
                 bold: true,
                 ..key('a')
-            })
-            .unwrap();
-        let italic = glyphs
-            .get(GlyphKey {
+            },
+            GlyphKey {
                 italic: true,
                 ..key('a')
+            },
+        ];
+        let entries: Vec<_> = keys
+            .iter()
+            .map(|&k| {
+                let region = glyphs.get(k).unwrap().region;
+                (glyphs.shaped(k).unwrap().raster, region)
             })
-            .unwrap();
-        assert_ne!(regular.region, bold.region);
-        assert_ne!(regular.region, italic.region);
-        assert_ne!(bold.region, italic.region);
-        assert_eq!(glyphs.take_uploads().len(), 3);
+            .collect();
+        assert_eq!(glyphs.chars.len(), 3);
+        for (i, a) in entries.iter().enumerate() {
+            for b in &entries[i + 1..] {
+                assert_eq!(a.0 == b.0, a.1 == b.1);
+            }
+        }
+        let distinct: std::collections::HashSet<_> = entries.iter().map(|entry| entry.0).collect();
+        assert_eq!(glyphs.take_uploads().len(), distinct.len());
     }
 
     #[test]
     fn space_has_nothing_to_draw() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         assert_eq!(glyphs.get(key(' ')), None);
         assert!(glyphs.take_uploads().is_empty());
     }
 
     #[test]
     fn missing_glyph_falls_back_without_panic() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         // Private use area: no font is expected to cover it.
         let _ = glyphs.get(key('\u{10FFFD}'));
         // Box drawing and braille usually come from a fallback font.
@@ -519,7 +777,7 @@ mod tests {
 
     #[test]
     fn metrics_match_the_reference_glyph() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let cell = glyphs.cell_size();
         assert_eq!(cell.height, (FONT_SIZE * 1.3).ceil());
         assert_eq!(glyphs.metrics(), Metrics::new(FONT_SIZE, cell.height));
@@ -535,7 +793,7 @@ mod tests {
 
     #[test]
     fn font_size_change_updates_metrics_and_clears_the_cache() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let small = glyphs.get(key('a')).unwrap();
         let generation = glyphs.generation();
         glyphs.set_font_size(FONT_SIZE * 2.0);
@@ -548,18 +806,102 @@ mod tests {
 
     #[test]
     fn font_change_updates_the_family_and_metrics_and_clears_the_cache() {
-        let mut glyphs = Glyphs::new(Some("No Such Family".into()), FONT_SIZE);
+        let font = FontOptions {
+            family: Some("No Such Family".into()),
+            ..FontOptions::default()
+        };
+        let mut glyphs = Glyphs::new(&font, FONT_SIZE);
         glyphs.get(key('a')).unwrap();
         let generation = glyphs.generation();
-        glyphs.set_font(None, FONT_SIZE * 2.0);
+        glyphs.set_font(&FontOptions::default(), FONT_SIZE * 2.0);
         assert_eq!(glyphs.family, resolve_family(glyphs.font_system.db(), None));
         assert_eq!(glyphs.cell_size().height, (FONT_SIZE * 2.0 * 1.3).ceil());
         assert!(glyphs.generation() > generation);
     }
 
+    fn with_features(tags: &[&[u8; 4]]) -> FontOptions {
+        let mut features = FontFeatures::new();
+        for tag in tags {
+            features.enable(cosmic_text::FeatureTag::new(tag));
+        }
+        FontOptions {
+            features,
+            ..FontOptions::default()
+        }
+    }
+
+    /// Pixels of the glyph `key`, as uploaded to the atlas.
+    fn pixels(glyphs: &mut Glyphs, key: GlyphKey) -> Vec<u8> {
+        glyphs.get(key).expect("glyph has pixels");
+        glyphs
+            .take_uploads()
+            .pop()
+            .expect("glyph was uploaded")
+            .data
+    }
+
+    #[test]
+    fn test_font_is_the_only_font_loaded() {
+        let glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        assert_eq!(glyphs.family.as_deref(), Some(TEST_FONT_FAMILY));
+        let families: Vec<_> = glyphs
+            .font_system
+            .db()
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+            .collect();
+        assert_eq!(families, [TEST_FONT_FAMILY]);
+    }
+
+    #[test]
+    fn opentype_feature_changes_the_grid_glyph() {
+        let mut plain = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let mut zero = Glyphs::with_test_font(&with_features(&[b"zero"]), FONT_SIZE);
+        // `zero` swaps the dotted zero of JetBrains Mono for a slashed one.
+        assert_ne!(pixels(&mut plain, key('0')), pixels(&mut zero, key('0')));
+        // Other characters are untouched.
+        assert_eq!(pixels(&mut plain, key('a')), pixels(&mut zero, key('a')));
+    }
+
+    #[test]
+    fn opentype_features_are_not_applied_to_the_interface_font() {
+        let mut plain = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let mut zero = Glyphs::with_test_font(&with_features(&[b"zero"]), FONT_SIZE);
+        let mono = GlyphKey::ui(UiFont::Mono, '0');
+        assert_eq!(pixels(&mut plain, mono), pixels(&mut zero, mono));
+    }
+
+    #[test]
+    fn features_change_reloads_the_font_and_clears_the_cache() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let dotted = pixels(&mut glyphs, key('0'));
+        let generation = glyphs.generation();
+        let font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ..with_features(&[b"zero"])
+        };
+        glyphs.set_font(&font, FONT_SIZE);
+        assert!(glyphs.generation() > generation);
+        assert_eq!(glyphs.features, font.features);
+        assert_ne!(pixels(&mut glyphs, key('0')), dotted);
+    }
+
+    #[test]
+    fn ligatures_option_is_kept_by_set_font() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        assert!(glyphs.ligatures);
+        let font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ligatures: false,
+            ..FontOptions::default()
+        };
+        glyphs.set_font(&font, FONT_SIZE);
+        assert!(!glyphs.ligatures);
+    }
+
     #[test]
     fn full_atlas_resets_and_drops_the_cache() {
-        let mut glyphs = Glyphs::with_atlas_size(None, FONT_SIZE, 48);
+        let mut glyphs = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, 48);
         let first = glyphs.get(key('A')).unwrap();
         let generation = glyphs.generation();
         for c in 'B'..='Z' {
@@ -577,14 +919,14 @@ mod tests {
 
     #[test]
     fn glyph_larger_than_the_atlas_is_skipped() {
-        let mut glyphs = Glyphs::with_atlas_size(None, FONT_SIZE, 4);
+        let mut glyphs = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, 4);
         assert_eq!(glyphs.get(key('M')), None);
         assert!(glyphs.take_uploads().is_empty());
     }
 
     #[test]
     fn ui_font_has_a_fixed_size_scaled_to_the_window() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         assert_eq!(glyphs.ui_font_size(UiFont::Chrome), UI_FONT_SIZE);
         glyphs.set_font_size(FONT_SIZE * 3.0);
         assert_eq!(glyphs.ui_font_size(UiFont::Chrome), UI_FONT_SIZE);
@@ -604,7 +946,7 @@ mod tests {
 
     #[test]
     fn palette_font_is_larger_than_the_chrome_font() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         glyphs.set_ui_scale(2.0);
         assert_eq!(
             glyphs.ui_font_size(UiFont::Palette),
@@ -622,7 +964,7 @@ mod tests {
 
     #[test]
     fn mono_font_has_the_palette_size_and_a_fixed_advance() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         assert_eq!(glyphs.ui_font_size(UiFont::Mono), PALETTE_FONT_SIZE);
         let narrow = glyphs.shape_ui(UiFont::Mono, "iiii").width;
         let wide = glyphs.shape_ui(UiFont::Mono, "MMMM").width;
@@ -634,7 +976,7 @@ mod tests {
 
     #[test]
     fn ui_glyphs_are_distinct_from_grid_glyphs() {
-        let mut glyphs = Glyphs::new(None, 30.0);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), 30.0);
         let grid = glyphs.get(key('a')).unwrap();
         let ui = glyphs.get(GlyphKey::ui(UiFont::Chrome, 'a')).unwrap();
         assert_ne!(grid.region, ui.region);
@@ -645,7 +987,7 @@ mod tests {
 
     #[test]
     fn shaped_ui_line_places_each_character() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let line = glyphs.shape_ui(UiFont::Chrome, "ab c");
         let chars: Vec<char> = line.glyphs.iter().map(|&(_, c)| c).collect();
         assert_eq!(chars, ['a', 'b', ' ', 'c']);
@@ -653,5 +995,106 @@ mod tests {
         assert!(line.glyphs.windows(2).all(|pair| pair[0].0 < pair[1].0));
         assert!(line.width > line.glyphs[3].0);
         assert_eq!(glyphs.shape_ui(UiFont::Chrome, ""), UiLine::default());
+    }
+
+    fn test_font() -> Glyphs {
+        Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE)
+    }
+
+    fn ligated(run: &[RunGlyph]) -> Vec<(u16, bool)> {
+        run.iter()
+            .map(|glyph| (glyph.cell, glyph.ligated))
+            .collect()
+    }
+
+    #[test]
+    fn programming_ligatures_are_ligated() {
+        let mut glyphs = test_font();
+        assert_eq!(
+            ligated(&glyphs.shape_run("->", false, false)),
+            [(0, true), (1, true)]
+        );
+        assert_eq!(
+            ligated(&glyphs.shape_run("===", false, false)),
+            [(0, true), (1, true), (2, true)]
+        );
+    }
+
+    #[test]
+    fn plain_text_is_not_ligated_and_keeps_the_glyphs_of_its_characters() {
+        let mut glyphs = test_font();
+        let run = glyphs.shape_run("ab", false, false);
+        assert_eq!(ligated(&run), [(0, false), (1, false)]);
+        for (glyph, c) in run.iter().zip(['a', 'b']) {
+            let alone = glyphs.get(key(c));
+            assert_eq!(glyphs.run_glyph(glyph), alone);
+        }
+    }
+
+    #[test]
+    fn ligature_glyphs_differ_from_the_characters_alone() {
+        let mut glyphs = test_font();
+        let run = glyphs.shape_run("->", false, false);
+        let arrow: Vec<_> = run.iter().map(|g| glyphs.run_glyph(g)).collect();
+        let alone = [glyphs.get(key('-')), glyphs.get(key('>'))];
+        assert_ne!(arrow, alone);
+    }
+
+    #[test]
+    fn shaped_runs_are_served_from_the_cache() {
+        let mut glyphs = test_font();
+        let first = glyphs.shape_run("->", false, false);
+        assert!(Rc::ptr_eq(&first, &glyphs.shape_run("->", false, false)));
+        // The style is part of the key.
+        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("->", true, false)));
+        assert_eq!(glyphs.cached_runs, 2);
+        glyphs.clear();
+        assert_eq!(glyphs.cached_runs, 0);
+        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("->", false, false)));
+    }
+
+    #[test]
+    fn run_cache_is_dropped_past_its_limit() {
+        let mut glyphs = test_font();
+        let first = glyphs.shape_run("a0", false, false);
+        for index in 1..MAX_CACHED_RUNS {
+            glyphs.shape_run(&format!("a{index}"), false, false);
+        }
+        assert_eq!(glyphs.cached_runs, MAX_CACHED_RUNS);
+        assert!(Rc::ptr_eq(&first, &glyphs.shape_run("a0", false, false)));
+        glyphs.shape_run("full", false, false);
+        assert_eq!(glyphs.cached_runs, 1);
+        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("a0", false, false)));
+    }
+
+    #[test]
+    fn features_change_drops_the_shaped_runs() {
+        let mut glyphs = test_font();
+        assert!(glyphs.shape_run("->", false, false)[0].ligated);
+        let mut font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ..FontOptions::default()
+        };
+        font.features.disable(cosmic_text::FeatureTag::new(b"calt"));
+        glyphs.set_font(&font, FONT_SIZE);
+        assert_eq!(
+            ligated(&glyphs.shape_run("->", false, false)),
+            [(0, false), (1, false)]
+        );
+    }
+
+    #[test]
+    fn atlas_reset_keeps_the_shaping_and_rasterizes_again() {
+        let mut glyphs = test_font();
+        let run = glyphs.shape_run("->", false, false);
+        // JetBrains Mono draws the arrow from its last cell.
+        glyphs.run_glyph(&run[1]).expect("ligature has pixels");
+        glyphs.take_uploads();
+        let generation = glyphs.generation();
+        glyphs.reset_atlas();
+        assert!(glyphs.generation() > generation);
+        assert!(Rc::ptr_eq(&run, &glyphs.shape_run("->", false, false)));
+        glyphs.run_glyph(&run[1]).expect("ligature has pixels");
+        assert_eq!(glyphs.take_uploads().len(), 1);
     }
 }

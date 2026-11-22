@@ -108,6 +108,79 @@ pub struct FontConfig {
     /// `None` uses the system monospace font.
     pub family: Option<String>,
     pub size: f32,
+    /// Shows the ligatures of the fonts that have some.
+    pub ligatures: bool,
+    /// OpenType features applied to the grid text.
+    pub features: FontFeatureList,
+}
+
+/// `font.features`: OpenType features and their values, each tag at most once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontFeatureList(pub Vec<(FeatureTag, u32)>);
+
+impl FontFeatureList {
+    /// Parses a list of features separated by spaces or commas: `tag` or `+tag` enables
+    /// it, `-tag` disables it, `tag=N` sets the value `N`. A tag is 4 printable ASCII
+    /// characters; the last occurrence of a tag wins. The error names the invalid item.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let mut features: Vec<(FeatureTag, u32)> = Vec::new();
+        for item in text
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|item| !item.is_empty())
+        {
+            let invalid = || {
+                format!(
+                    "invalid feature \"{item}\", expected \"tag\", \"+tag\", \"-tag\" or \"tag=N\" with a tag of 4 ASCII characters"
+                )
+            };
+            let (tag, value) = match (item.strip_prefix('+'), item.strip_prefix('-')) {
+                (Some(tag), _) => (tag, 1),
+                (_, Some(tag)) => (tag, 0),
+                _ => match item.split_once('=') {
+                    Some((tag, value)) => (tag, value.parse().map_err(|_| invalid())?),
+                    None => (item, 1),
+                },
+            };
+            let tag: [u8; 4] = tag
+                .as_bytes()
+                .try_into()
+                .ok()
+                .filter(|tag: &[u8; 4]| tag.iter().all(u8::is_ascii_graphic))
+                .ok_or_else(invalid)?;
+            let tag = FeatureTag::new(&tag);
+            features.retain(|&(other, _)| other != tag);
+            features.push((tag, value));
+        }
+        Ok(Self(features))
+    }
+
+    /// The features in the form cosmic-text shapes with.
+    pub fn font_features(&self) -> FontFeatures {
+        let mut features = FontFeatures::new();
+        for &(tag, value) in &self.0 {
+            features.set(tag, value);
+        }
+        features
+    }
+}
+
+/// Canonical form, parsed back to the same list: `tag`, `-tag` or `tag=N`, separated
+/// by spaces.
+impl fmt::Display for FontFeatureList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, (tag, value)) in self.0.iter().enumerate() {
+            if index > 0 {
+                f.write_str(" ")?;
+            }
+            let tag = String::from_utf8_lossy(tag.as_bytes());
+            match value {
+                0 => write!(f, "-{tag}")?,
+                1 => write!(f, "{tag}")?,
+                value => write!(f, "{tag}={value}")?,
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

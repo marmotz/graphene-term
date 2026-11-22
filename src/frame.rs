@@ -198,6 +198,10 @@ pub struct Frame {
     pub row_tops: Vec<u32>,
     pub block_colors: BlockColors,
     pub cursor: Option<FrameCursor>,
+    /// Cell `(line, column)` of `rows` holding the terminal cursor, set while the
+    /// cursor is in the view and the application has not hidden it, whatever the blink
+    /// phase or the focus. The ligature covering it is drawn as isolated characters.
+    pub ligature_break: Option<(usize, usize)>,
     pub background: Rgb,
     pub banner: Option<FrameBanner>,
     /// Language of the fold summaries.
@@ -271,6 +275,9 @@ impl Frame {
             .position(|row| row.source == RowSource::Live && row.line == cursor_point.line);
         let cursor_column = cursor_point.column.0;
         let mut shape = content.cursor.shape;
+        let ligature_break = cursor_line
+            .filter(|_| shape != CursorShape::Hidden && cursor_column < columns)
+            .map(|line| (line, cursor_column));
         if !focused && shape != CursorShape::Hidden {
             shape = CursorShape::HollowBlock;
         } else if !cursor_visible {
@@ -311,6 +318,7 @@ impl Frame {
             row_tops: view.iter().map(|row| row.top).collect(),
             block_colors: BlockColors::resolve(palette, overrides),
             cursor,
+            ligature_break,
             background,
             banner: None,
             lang: Lang::default(),
@@ -904,6 +912,31 @@ mod tests {
             frame.cursor.expect("cursor visible").shape,
             CursorShape::HollowBlock
         );
+    }
+
+    #[test]
+    fn ligature_break_follows_the_cursor_whatever_the_blink_and_focus() {
+        let session = session_with("ab");
+        for (focused, cursor_visible) in [(true, true), (true, false), (false, false)] {
+            let frame = capture_blink(&session, focused, cursor_visible);
+            assert_eq!(
+                frame.ligature_break,
+                Some((0, 2)),
+                "{focused} {cursor_visible}"
+            );
+        }
+    }
+
+    #[test]
+    fn ligature_break_is_unset_when_the_cursor_is_hidden_or_out_of_view() {
+        let hidden = capture(&session_with("\x1b[?25l"), &Palette::default(), true);
+        assert_eq!(hidden.ligature_break, None);
+
+        let mut session = session_with("1\r\n2\r\n3\r\n4\r\n5");
+        let id = session.timeline.current().id;
+        view::scroll_block(&mut session.timeline, &session.term, id, 3, 2);
+        let scrolled = capture(&session, &Palette::default(), true);
+        assert_eq!(scrolled.ligature_break, None);
     }
 
     fn select<L>(term: &mut Term<L>, start: (i32, usize), end: (i32, usize)) {

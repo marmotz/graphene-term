@@ -634,6 +634,35 @@ mod tests {
     }
 
     #[test]
+    fn font_ligatures_and_features_are_written_to_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "graphene-settings-font-features-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(config::CONFIG_FILE);
+        let path = |segments: &[&str]| segments.iter().map(|s| (*s).to_owned()).collect();
+        write_changes(
+            &dir,
+            &[
+                Change::Set(path(&["font", "ligatures"]), Value::Bool(false)),
+                Change::Set(
+                    path(&["font", "features"]),
+                    Value::Text("ss01 -calt".into()),
+                ),
+            ],
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        let (config, errors) = Config::parse(&text, &Config::default(), &file);
+        assert_eq!(errors, vec![]);
+        assert!(!config.font.ligatures);
+        assert_eq!(config.font.features.to_string(), "ss01 -calt");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn unlocking_the_hidden_theme_writes_a_config_that_loads_it() {
         let dir =
             std::env::temp_dir().join(format!("graphene-settings-unlock-{}", std::process::id()));

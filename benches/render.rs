@@ -27,8 +27,8 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use graphene::bench::{
-    CellSize, Frame, FrameCache, GlyphKey, Glyphs, GridLayout, Headless, Palette, Rect, Scanner,
-    Timeline, pack_argb32, process, scene, scroll_block, view_rows,
+    CellSize, FontOptions, Frame, FrameCache, GlyphKey, Glyphs, GridLayout, Headless, Palette,
+    Rect, Scanner, Timeline, pack_argb32, process, scene, scroll_block, view_rows,
 };
 
 /// Terminal size of the recordings.
@@ -206,7 +206,7 @@ fn frame(c: &mut Criterion) {
         group.bench_function(fixture.name, |b| {
             b.iter(|| {
                 let frame = capture(black_box(&session), &palette);
-                scene::build(&frame, &layout, true)
+                scene::build(&frame, &layout, true, true)
             })
         });
     }
@@ -233,7 +233,7 @@ fn resolve_glyphs(glyphs: &mut Glyphs, frame: &Frame) -> usize {
 
 fn glyphs(c: &mut Criterion) {
     let palette = Palette::default();
-    let mut glyphs = Glyphs::new(None, FONT_SIZE);
+    let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
     let mut cold = c.benchmark_group("glyphs_cold");
     let frames: Vec<_> = FIXTURES
         .iter()
@@ -272,7 +272,11 @@ fn gpu_prepare(c: &mut Criterion) {
         )
     };
     let (width, height) = size(probe_cell);
-    let Some(mut renderer) = Headless::new(width, height, Glyphs::new(None, FONT_SIZE)) else {
+    let Some(mut renderer) = Headless::new(
+        width,
+        height,
+        Glyphs::new(&FontOptions::default(), FONT_SIZE),
+    ) else {
         eprintln!("gpu_prepare: no GPU adapter available, skipped");
         return;
     };
@@ -340,7 +344,11 @@ const PRESENT_SIZE: (u32, u32) = (1920, 1080);
 
 fn present(c: &mut Criterion) {
     let (width, height) = PRESENT_SIZE;
-    let Some(mut renderer) = Headless::new(width, height, Glyphs::new(None, FONT_SIZE)) else {
+    let Some(mut renderer) = Headless::new(
+        width,
+        height,
+        Glyphs::new(&FontOptions::default(), FONT_SIZE),
+    ) else {
         eprintln!("present: no GPU adapter available, skipped");
         return;
     };
