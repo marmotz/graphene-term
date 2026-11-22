@@ -268,6 +268,10 @@ pub enum Msg {
     FilterActions,
     /// No action name contains the filter text.
     NoActionMatches,
+    /// Button capturing a shortcut to find the actions bound to it.
+    SearchShortcut,
+    /// No action is bound to the shortcut searched for.
+    NoActionForShortcut,
     // Theme editor of the settings window.
     /// Heading of the theme editor block.
     ThemeEditor,
@@ -451,6 +455,8 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::Replace => "Replace",
         Msg::FilterActions => "Filter actions",
         Msg::NoActionMatches => "No action matches",
+        Msg::SearchShortcut => "Find a shortcut",
+        Msg::NoActionForShortcut => "No action uses this shortcut",
         Msg::ThemeEditor => "Theme editor",
         Msg::ThemeEditorIntro => {
             "Change the colors of your own themes. Built-in themes cannot be changed: duplicate one to get a copy you can edit."
@@ -626,6 +632,8 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::Replace => "Remplacer",
         Msg::FilterActions => "Filtrer les actions",
         Msg::NoActionMatches => "Aucune action ne correspond",
+        Msg::SearchShortcut => "Rechercher un raccourci",
+        Msg::NoActionForShortcut => "Aucune action n'utilise ce raccourci",
         Msg::ThemeEditor => "Éditeur de thème",
         Msg::ThemeEditorIntro => {
             "Modifiez les couleurs de vos propres thèmes. Les thèmes intégrés ne sont pas modifiables : dupliquez-en un pour obtenir une copie modifiable."
@@ -885,9 +893,11 @@ mod tests {
             Msg::SecretGraphene => 89,
             Msg::FilterActions => 90,
             Msg::NoActionMatches => 91,
+            Msg::SearchShortcut => 92,
+            Msg::NoActionForShortcut => 93,
         }
     }
-    const VARIANT_COUNT: usize = 92;
+    const VARIANT_COUNT: usize = 94;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -971,6 +981,8 @@ mod tests {
             Msg::Replace,
             Msg::FilterActions,
             Msg::NoActionMatches,
+            Msg::SearchShortcut,
+            Msg::NoActionForShortcut,
             Msg::ThemeEditor,
             Msg::ThemeEditorIntro,
             Msg::ThemeColorsHint,

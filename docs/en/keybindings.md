@@ -91,7 +91,9 @@ without `Shift`).
 ## Changing shortcuts
 
 Use the **Keyboard shortcuts** section of the settings window (`Ctrl+,`): press a new
-shortcut to add it, or remove one. Or edit `keybindings.toml`, which sits next to the
+shortcut to add it, or remove one. Type in the field above the list to keep only the
+actions whose name contains the text, or click **Find a shortcut** and press a shortcut
+to see the actions that use it. Or edit `keybindings.toml`, which sits next to the
 [configuration file](configuration.md#file-locations):
 
 ```toml
