@@ -194,6 +194,9 @@ pub struct WindowConfig {
     pub padding: f32,
     /// Opacity of the default background, from 0.0 (transparent) to 1.0 (opaque).
     pub background_opacity: f32,
+    /// Shows the progress reported by programs (OSC 9;4) in the tabs, panes, blocks and
+    /// taskbar.
+    pub progress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

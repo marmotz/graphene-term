@@ -48,6 +48,10 @@ The bar in its left margin shows its status:
 | Green     | It ended successfully (exit status 0) |
 | Red       | It failed (any other exit status) |
 
+While the command runs, a progress it reports (see
+[Tabs and panes](tabs-and-panes.md#progress)) is also drawn on the bottom edge of its
+card.
+
 Full-screen programs (`vim`, `htop`, `less`...) run as usual; their screen is not
 split into blocks.
 

@@ -28,6 +28,8 @@
 # padding = 8
 ## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.
 # background_opacity = 1.0
+## Show the progress reported by programs (OSC 9;4) in tabs, pane bars, blocks and the taskbar (true or false).
+# progress = true
 
 # [scrollback]
 ## Number of history lines to keep, up to 100000.

@@ -69,6 +69,7 @@ impl Session {
         self.lang = new.language.resolve(Lang::detect);
         self.notifications = new.notifications.clone();
         self.tab_position = new.tab_position.into();
+        self.workspace.set_progress_shown(new.window.progress);
         self.config_banner = banner;
         // A changed cursor style shows at once, visible.
         self.reset_blink();
@@ -125,6 +126,58 @@ impl Session {
             self.window.request_redraw();
         }
         deadline
+    }
+
+    /// Drops the progress of the panes that reported none for too long, and requests a
+    /// redraw for them, then for every frame while an indeterminate progress is on
+    /// screen. Returns the earliest of the next expiry and the next animation frame,
+    /// `None` without any progress.
+    pub(super) fn progress_tick(&mut self, now: Instant) -> Option<Instant> {
+        let bar_shown = self.tab_bar_shown();
+        let mut expired = Vec::new();
+        let mut deadline = None;
+        let mut animated = false;
+        for (id, pane) in self.workspace.panes_mut() {
+            if pane.expire_progress(now) {
+                expired.push(id);
+            }
+        }
+        for (id, pane) in self.workspace.panes() {
+            let Some(progress) = pane.progress() else {
+                continue;
+            };
+            deadline = earliest(deadline, Some(progress.expires_at()));
+            animated |= progress.state == ProgressState::Indeterminate
+                && self.workspace.progress_on_screen(id, bar_shown);
+        }
+        let redraw = expired
+            .iter()
+            .any(|&id| self.workspace.progress_on_screen(id, bar_shown));
+        for id in expired {
+            self.workspace.touch(id);
+        }
+        if animated {
+            deadline = earliest(deadline, Some(now + progress::INDETERMINATE_FRAME));
+        }
+        if redraw || animated {
+            self.window.request_redraw();
+        }
+        deadline
+    }
+
+    /// Hands the progress of the active tab to the taskbar, after each round of events:
+    /// a report, an expiry, a change of tab or of active pane, or the `[window]
+    /// progress` setting turned off. Only a change reaches the desktop.
+    pub(super) fn sync_taskbar(&mut self) {
+        let progress = self.workspace.tab_progress(self.workspace.active_index());
+        // Colors first: a backend drawing its own bar needs them for the first progress.
+        self.taskbar.set_colors(self.progress_colors());
+        self.taskbar.set_progress(progress);
+    }
+
+    /// `progress` as drawn in the frame at `now`.
+    pub(super) fn progress_view(&self, progress: Progress, now: Instant) -> ProgressView {
+        ProgressView::new(progress, now.saturating_duration_since(self.progress_epoch))
     }
 
     /// At the next local midnight, computes the special day again and updates the window

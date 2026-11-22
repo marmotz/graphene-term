@@ -29,12 +29,13 @@ use crate::input_editor::{self, EditorCommand};
 use crate::layout::{GridLayout, Hit};
 use crate::links::{self, Link};
 use crate::mouse;
+use crate::progress::{self, Progress};
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, PaneId, Terminal};
 use crate::timeline::{BlockId, Timeline};
 use crate::timeline_selection::{self, End, TimelineSelection};
 use crate::view::{self, Anchor, RowSource, ScrollTarget, ViewRow};
-use crate::workspace::TitleSource;
+use crate::workspace::{ProgressSource, TitleSource};
 
 /// How often a pane without OSC title has its fallback title (its directory) read
 /// again from `/proc`.
@@ -74,6 +75,14 @@ pub struct Pane {
     /// Notices raised while the pane was not watched, reset once it is. Change it with
     /// [`Self::add_unseen`] and [`Self::clear_unseen`], which redraw the pane.
     unseen: u32,
+    /// The timeline's progress as last read by the window (see [`Self::sync_progress`]).
+    progress_seen: Option<Progress>,
+}
+
+impl ProgressSource for Pane {
+    fn progress(&self) -> Option<Progress> {
+        self.progress_seen
+    }
 }
 
 impl TitleSource for Pane {
@@ -110,7 +119,23 @@ impl Pane {
             redraw: Cell::new(false),
             primary: None,
             unseen: 0,
+            progress_seen: None,
         }
+    }
+
+    /// Reads the timeline's progress; whether it changed since the last read.
+    pub fn sync_progress(&mut self) -> bool {
+        let progress = lock(&self.terminal.timeline).progress;
+        let changed = progress != self.progress_seen;
+        self.progress_seen = progress;
+        changed
+    }
+
+    /// Drops the progress, from the pane and its timeline, once it expired at `now`;
+    /// whether it did.
+    pub fn expire_progress(&mut self, now: Instant) -> bool {
+        let mut timeline = lock(&self.terminal.timeline);
+        progress::expire(&mut self.progress_seen, &mut timeline.progress, now)
     }
 
     /// Notices raised while the pane was not watched.

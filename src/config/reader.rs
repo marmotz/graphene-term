@@ -148,6 +148,7 @@ impl Reader<'_> {
                     Checked::Invalid("must be a non-negative number".to_owned())
                 }
             }),
+            ("window", "progress") => self.set(value, key_segments, path, &mut config.window.progress, &previous.window.progress, Checked::Valid),
             ("window", "background_opacity") => self.set(value, key_segments, path, &mut config.window.background_opacity, &previous.window.background_opacity, |opacity: f32| {
                 if !opacity.is_finite() {
                     Checked::Invalid("not a number".to_owned())

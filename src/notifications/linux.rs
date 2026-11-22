@@ -16,6 +16,7 @@ use winit::event_loop::EventLoopProxy;
 use zbus::Variant;
 
 use super::backend::{Command, Notifier};
+use crate::taskbar::linux::{LAUNCHER_APP, LAUNCHER_ENTRY, LAUNCHER_PATH};
 use crate::terminal::{PaneId, UserEvent};
 
 const SERVER: &str = "org.freedesktop.Notifications";
@@ -28,10 +29,6 @@ const DESKTOP_ENTRY: &str = "graphene";
 const DEFAULT_ACTION: &str = "default";
 /// The notification stays until the user dismisses it, or Graphene closes it.
 const NEVER_EXPIRES: i32 = -1;
-
-const LAUNCHER_ENTRY: &str = "com.canonical.Unity.LauncherEntry";
-const LAUNCHER_PATH: &str = "/dev/marmotz/graphene/LauncherEntry";
-const LAUNCHER_APP: &str = "application://graphene.desktop";
 
 /// Arguments of `org.freedesktop.Notifications.Notify`: app name, id to replace, icon,
 /// summary, body, actions, hints, timeout.

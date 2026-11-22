@@ -19,6 +19,7 @@ use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Color;
 
+use crate::progress::Progress;
 use crate::signals::{Chunk, Notice, Signal};
 
 /// Identifier of a command block, increasing with time.
@@ -183,6 +184,9 @@ pub struct Timeline {
     pending: Vec<Signal>,
     /// Notices not yet collected by the UI thread, oldest first.
     notices: Vec<PaneNotice>,
+    /// The OSC 9;4 progress last reported by a program; cleared when the command
+    /// ends. Read by the UI thread, which also drops it once expired.
+    pub progress: Option<Progress>,
 }
 
 impl Timeline {
@@ -197,6 +201,7 @@ impl Timeline {
             scrollback,
             pending: Vec::new(),
             notices: Vec::new(),
+            progress: None,
         }
     }
 
@@ -350,6 +355,11 @@ impl Timeline {
             Chunk::Clear if alt => {}
             Chunk::Clear => self.clear(term),
             Chunk::Notify(notice) => self.notices.push(PaneNotice::Program(notice)),
+            // Shown at once, even on the alternate screen: full-screen programs report
+            // progress too.
+            Chunk::Progress(report) => {
+                self.progress = Progress::apply(self.progress, report, now);
+            }
         }
     }
 
@@ -367,6 +377,7 @@ impl Timeline {
                 let duration = self.current.started.map_or(Duration::ZERO, |started| {
                     now.saturating_duration_since(started)
                 });
+                self.progress = None;
                 self.notices.push(PaneNotice::CommandFinished {
                     command: self.current.command.clone(),
                     status,
@@ -716,6 +727,7 @@ pub(crate) mod testing {
 mod tests {
     use super::testing::*;
     use super::*;
+    use crate::progress::ProgressState;
     use alacritty_terminal::vte::ansi::NamedColor;
 
     #[test]
@@ -1075,6 +1087,56 @@ mod tests {
         );
         assert!(session.timeline.take_notices().is_empty());
         assert_eq!(session.live()[0], "out");
+    }
+
+    fn progress_of(session: &Session) -> Option<(ProgressState, u8)> {
+        session
+            .timeline
+            .progress
+            .map(|progress| (progress.state, progress.value))
+    }
+
+    #[test]
+    fn progress_is_applied_and_cleared() {
+        let mut session = Session::new(100);
+        session.feed("\x1b]9;4;1;30\x07");
+        assert_eq!(progress_of(&session), Some((ProgressState::Normal, 30)));
+        assert_eq!(session.timeline.progress.unwrap().updated, session.now);
+        session.feed("\x1b]9;4;2\x07");
+        assert_eq!(progress_of(&session), Some((ProgressState::Error, 30)));
+        session.feed("\x1b]9;4;0\x07");
+        assert_eq!(progress_of(&session), None);
+    }
+
+    #[test]
+    fn progress_on_the_alternate_screen_is_not_held() {
+        let mut session = Session::new(100);
+        session.feed(&format!("$ vim\r\n{}", start("vim")));
+        session.feed("\x1b[?1049h\x1b]9;4;3\x07");
+        assert_eq!(
+            progress_of(&session),
+            Some((ProgressState::Indeterminate, 0))
+        );
+        assert_eq!(session.timeline.current().phase, Phase::Running);
+    }
+
+    #[test]
+    fn command_end_clears_the_progress() {
+        let mut session = Session::new(100);
+        session.feed(&format!("$ make\r\n{}", start("make")));
+        session.feed("\x1b]9;4;1;80\x07");
+        assert!(session.timeline.progress.is_some());
+        session.feed(&end(0));
+        assert_eq!(progress_of(&session), None);
+    }
+
+    #[test]
+    fn progress_is_kept_at_the_prompt() {
+        // Without shell integration, or at the prompt, only the expiry clears it.
+        let mut session = Session::new(100);
+        session.feed("\x1b]9;4;1;50\x07");
+        session.feed(&end(0));
+        assert_eq!(progress_of(&session), Some((ProgressState::Normal, 50)));
     }
 
     #[test]

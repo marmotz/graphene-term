@@ -77,6 +77,13 @@ mod tests {
             banner: None,
             lang: Lang::En,
             images: Vec::new(),
+            progress_colors: crate::progress::ProgressColors {
+                normal: color,
+                error: color,
+                paused: color,
+                track: color,
+            },
+            progress_thickness: 0.0,
         }
     }
 

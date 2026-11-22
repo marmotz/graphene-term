@@ -1,4 +1,4 @@
-//! X11 window state set before the window is mapped.
+//! X11 window state set before the window is mapped, and the X11 ID of a window.
 //!
 //! The terminal window is created hidden and shown once it can draw. winit asks for the
 //! maximized state with a client message, which window managers ignore before the
@@ -21,16 +21,24 @@ const MAXIMIZED: [&str; 2] = [
 /// Marks the hidden `window` maximized for its first mapping. `Ok(false)` means the
 /// window is not an X11 window.
 pub fn preset_maximized(window: &Window) -> anyhow::Result<bool> {
+    let Some(id) = window_id(window)? else {
+        return Ok(false);
+    };
+    let (connection, _) = x11rb::connect(None)?;
+    preset_maximized_on(&connection, id)?;
+    Ok(true)
+}
+
+/// The X11 ID of `window`, `None` when it is not an X11 window.
+pub fn window_id(window: &Window) -> anyhow::Result<Option<u32>> {
     let id = match window.window_handle()?.as_raw() {
         RawWindowHandle::Xlib(handle) => {
             u32::try_from(handle.window).context("X11 window ID overflow")?
         }
         RawWindowHandle::Xcb(handle) => handle.window.get(),
-        _ => return Ok(false),
+        _ => return Ok(None),
     };
-    let (connection, _) = x11rb::connect(None)?;
-    preset_maximized_on(&connection, id)?;
-    Ok(true)
+    Ok(Some(id))
 }
 
 /// Writes the maximized `_NET_WM_STATE` of `window` through `connection`, and waits

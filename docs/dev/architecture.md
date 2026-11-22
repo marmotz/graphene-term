@@ -78,7 +78,14 @@ src/
   appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
   pty.rs           PTY thread: poller, write queue, read, split (`process`) and parse (`feed`) into Term
-  signals.rs       incremental scanner of the private block signals and screen clears (pure)
+  signals.rs       incremental scanner of the private block signals, screen clears,
+                   OSC 9 / 777 notifications and OSC 9;4 progress (pure)
+  progress.rs      OSC 9;4 progress: parsing, state, transitions and expiry (pure, time passed in)
+  taskbar/
+    mod.rs         Taskbar: progress of the active tab on the window icon, deduplicated, per platform
+    linux.rs       taskbar thread: com.canonical.Unity.LauncherEntry progress signal (zbus)
+    xapp.rs        X11: _NET_WM_XAPP_PROGRESS(_PULSE) window hints, read by Cinnamon (x11rb)
+    dock.rs        macOS: bar drawn over the application icon on the NSDockTile (layout tested everywhere)
   graphics/
     mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
                    StoreHandler (runs kitty commands, keeps their PTY replies, places the
@@ -136,6 +143,7 @@ src/
   renderer/
     mod.rs         Gpu context (shared), per-window surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + glyph instances (pure, no GPU)
+    progress_bar.rs  progress bar track and fill rects, shared by tabs, pane bars and cards (pure)
     glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic, ui) -> atlas slot,
                    interface font shaping
     ui_text.rs     interface text: truncation with an ellipsis, shaped line cache, glyph instances

@@ -90,6 +90,7 @@ impl Default for Config {
                 height: 600,
                 padding: 8.0,
                 background_opacity: 1.0,
+                progress: true,
             },
             scrollback_lines: 10_000,
             cursor: CursorConfig {
@@ -445,6 +446,7 @@ width = 1200
 height = 800
 padding = 4
 background_opacity = 0.8
+progress = false
 
 [scrollback]
 lines = 5000
@@ -496,6 +498,7 @@ bell = true
                     height: 800,
                     padding: 4.0,
                     background_opacity: 0.8,
+                    progress: false,
                 },
                 scrollback_lines: 5000,
                 cursor: CursorConfig {
@@ -652,6 +655,26 @@ bell = true
         assert!(!config.font.ligatures);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].key.as_deref(), Some("font.ligatures"));
+    }
+
+    #[test]
+    fn window_progress_defaults_to_true() {
+        let (config, errors) = parse("");
+        assert!(errors.is_empty());
+        assert!(config.window.progress);
+        let (config, errors) = parse("[window]\nprogress = false\n");
+        assert!(errors.is_empty());
+        assert!(!config.window.progress);
+    }
+
+    #[test]
+    fn invalid_window_progress_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.window.progress = false;
+        let (config, errors) = Config::parse("[window]\nprogress = 1\n", &previous, &file());
+        assert!(!config.window.progress);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].key.as_deref(), Some("window.progress"));
     }
 
     #[test]

@@ -50,6 +50,10 @@ sa sortie. La barre dans sa marge gauche indique son état :
 | Verte               | Elle s'est terminée avec succès (code de sortie 0) |
 | Rouge               | Elle a échoué (tout autre code de sortie) |
 
+Pendant l'exécution de la commande, la progression qu'elle signale (voir
+[Onglets et panneaux](tabs-and-panes.md#progression)) est aussi dessinée sur le bord
+inférieur de sa carte.
+
 Les programmes plein écran (`vim`, `htop`, `less`...) fonctionnent comme d'habitude ;
 leur écran n'est pas découpé en blocs.
 

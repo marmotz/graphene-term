@@ -21,6 +21,7 @@ use crate::graphics::placeholder::{self, PLACEHOLDER};
 use crate::graphics::{ImageCell, ImageStore, Pixels, SourceRect};
 use crate::i18n::Lang;
 use crate::palette::Palette;
+use crate::progress::{ProgressColors, ProgressView};
 use crate::timeline::{BlockId, Phase, Status, Timeline};
 use crate::view::{self, RowSource, ViewRow};
 
@@ -108,6 +109,9 @@ pub struct Card {
     pub selected: bool,
     /// Scroll indicator of a block showing only part of its output.
     pub scroll: Option<ScrollBar>,
+    /// Progress reported by the command of the current block while it runs, drawn on
+    /// the card's bottom edge.
+    pub progress: Option<ProgressView>,
 }
 
 /// Scroll indicator drawn on a card's right edge, beside its output rows.
@@ -209,6 +213,10 @@ pub struct Frame {
     /// The image placements shown by the cells of `rows`, once [`Frame::attach_images`]
     /// has run. Cells naming an image or placement not listed here draw nothing.
     pub images: Vec<FrameImage>,
+    /// Colors of the progress bar of a card.
+    pub progress_colors: ProgressColors,
+    /// Thickness of the progress bar of a card, in physical pixels.
+    pub progress_thickness: f32,
 }
 
 impl Frame {
@@ -323,6 +331,21 @@ impl Frame {
             banner: None,
             lang: Lang::default(),
             images: Vec::new(),
+            progress_colors: ProgressColors::resolve(palette, overrides),
+            progress_thickness: 0.0,
+        }
+    }
+
+    /// Shows `progress` on the card of the current block while its command runs (the
+    /// card with the [`Status::Running`] status), with a bar `thickness` pixels thick.
+    pub fn show_progress(&mut self, progress: ProgressView, thickness: f32) {
+        if let Some(card) = self
+            .cards
+            .iter_mut()
+            .find(|card| card.status == Some(Status::Running))
+        {
+            card.progress = Some(progress);
+            self.progress_thickness = thickness;
         }
     }
 
@@ -485,6 +508,7 @@ pub fn marks<T>(
                     fold_progress: 1.0,
                     selected: false,
                     scroll: None,
+                    progress: None,
                 });
             }
         }
@@ -624,6 +648,7 @@ impl Frame {
         ] {
             *color = dim(*color);
         }
+        self.progress_colors = self.progress_colors.map(dim);
         if let Some(cursor) = &mut self.cursor {
             cursor.color = dim(cursor.color);
         }
@@ -1053,6 +1078,7 @@ mod tests {
             fold_progress: 1.0,
             selected: false,
             scroll: None,
+            progress: None,
         }
     }
 
@@ -1368,6 +1394,53 @@ mod tests {
         session.feed(&end(0));
         let frame = capture(&session, &Palette::default(), true);
         assert_eq!(frame.cards[0].status, Some(Status::Success));
+    }
+
+    fn indeterminate() -> ProgressView {
+        ProgressView {
+            state: crate::progress::ProgressState::Indeterminate,
+            value: 0,
+            offset: 0.5,
+        }
+    }
+
+    #[test]
+    fn progress_goes_on_the_card_of_the_running_block() {
+        let mut session = two_blocks();
+        session.feed(&format!("$ yes\r\n{}y\r\n", start("yes")));
+        let mut frame = capture(&session, &Palette::default(), true);
+        frame.show_progress(indeterminate(), 3.0);
+        let running: Vec<_> = frame
+            .cards
+            .iter()
+            .map(|card| (card.status, card.progress.is_some()))
+            .filter(|(_, shown)| *shown)
+            .collect();
+        assert_eq!(running, [(Some(Status::Running), true)]);
+        assert_eq!(frame.progress_thickness, 3.0);
+    }
+
+    #[test]
+    fn progress_is_not_shown_without_a_running_block() {
+        let mut frame = capture(&two_blocks(), &Palette::default(), true);
+        frame.show_progress(indeterminate(), 3.0);
+        assert!(frame.cards.iter().all(|card| card.progress.is_none()));
+        assert_eq!(frame.progress_thickness, 0.0);
+    }
+
+    #[test]
+    fn progress_colors_come_from_the_palette_and_dim_with_the_frame() {
+        let p = Palette::default();
+        let frame = capture(&two_blocks(), &p, true);
+        assert_eq!(
+            frame.progress_colors,
+            ProgressColors::resolve(&p, &Colors::default())
+        );
+        let dimmed = frame.clone().dimmed(0.5);
+        assert_eq!(
+            dimmed.progress_colors.error,
+            blend(frame.progress_colors.error, frame.background, 0.5)
+        );
     }
 
     #[test]

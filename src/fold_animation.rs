@@ -108,6 +108,7 @@ mod tests {
                 fold_progress: 1.0,
                 selected: false,
                 scroll: None,
+                progress: None,
             })
             .collect()
     }

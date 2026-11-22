@@ -10,6 +10,7 @@ use super::badge::Pill;
 use super::tab_bar::UiMetrics;
 use crate::layout::Rect;
 use crate::mouse::Button;
+use crate::progress::{self, ProgressBar, ProgressColors, ProgressView};
 use crate::terminal::PaneId;
 
 /// Height of a pane bar, in pixels: a line of interface text and its padding.
@@ -75,6 +76,8 @@ pub struct PaneBarLayout {
     pub badge: u32,
     /// The badge counting them, before the close button; `None` at 0.
     pub pill: Option<Pill>,
+    /// Progress of the pane, on the bar's bottom edge.
+    pub progress: Option<ProgressBar>,
 }
 
 impl PaneBarLayout {
@@ -103,7 +106,21 @@ impl PaneBarLayout {
             broadcast: None,
             badge: 0,
             pill: None,
+            progress: None,
         }
+    }
+
+    /// The same bar showing `view` on its bottom edge, in `colors`.
+    pub fn with_progress(
+        mut self,
+        view: Option<ProgressView>,
+        colors: ProgressColors,
+        metrics: UiMetrics,
+    ) -> Self {
+        let thickness = progress::bar_thickness(metrics.scale);
+        self.progress =
+            view.map(|view| ProgressBar::along_bottom(self.rect, thickness, view, colors));
+        self
     }
 
     /// The same bar counting `badge` unseen notifications: the pill takes its room

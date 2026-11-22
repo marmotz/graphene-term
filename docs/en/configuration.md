@@ -136,6 +136,7 @@ This is the complete list. Values shown are the defaults.
 | `height`             | `600`       | Height of a new window, in logical pixels (greater than zero).                             |
 | `padding`            | `8`         | Minimum space around the text, in logical pixels (zero or more).                           |
 | `background_opacity` | `1.0`       | From `0.0` (transparent) to `1.0` (opaque). See [Themes](themes.md#translucent-background). |
+| `progress`           | `true`      | Shows the progress reported by programs (OSC 9;4) in tabs, pane bars, blocks and the taskbar. `false` hides it everywhere. |
 
 ### `[scrollback]`
 

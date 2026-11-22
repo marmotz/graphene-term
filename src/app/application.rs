@@ -210,6 +210,7 @@ impl App {
 
         window.set_visible(true);
         perf::mark("window shown");
+        let taskbar = crate::taskbar::spawn(&window);
         let maximize_hold = maximized.then(|| {
             redraw::MaximizeHold::new(initial_size.to_physical(scale.into()), Instant::now())
         });
@@ -270,6 +271,8 @@ impl App {
                 crate::i18n::text(lang, &crate::i18n::Msg::ShowPane).into_owned(),
             ),
             badge: Badge::default(),
+            progress_epoch: Instant::now(),
+            taskbar,
         })
     }
 
@@ -326,6 +329,7 @@ impl App {
             self.first_program.take(),
         )?;
         workspace.new_tab(id, Pane::new(id, terminal, layout));
+        workspace.set_progress_shown(self.config.window.progress);
         perf::mark("shell spawned");
 
         Ok((glyphs, workspace))
@@ -466,6 +470,8 @@ impl ApplicationHandler<UserEvent> for App {
             let deadline = earliest(session.auto_scroll(now), session.animate(now));
             let deadline = earliest(deadline, session.blink(now));
             let deadline = earliest(deadline, session.fold_animate(now));
+            let deadline = earliest(deadline, session.progress_tick(now));
+            session.sync_taskbar();
             let deadline = earliest(deadline, session.honeycomb_tick(now));
             let deadline = earliest(deadline, session.special_day_tick(now));
             let deadline = earliest(deadline, session.pane_drag_tick(now));
@@ -884,6 +890,7 @@ mod tests {
             height: 600,
             padding: 8.0,
             background_opacity: 1.0,
+            progress: true,
         }
     }
 

@@ -9,6 +9,7 @@
 
 use super::badge::Pill;
 use crate::layout::Rect;
+use crate::progress::{self, ProgressBar, ProgressColors, ProgressView};
 use crate::workspace::TabBarPosition;
 
 /// Widest a tab gets, in logical pixels: also the width of a side bar.
@@ -87,6 +88,8 @@ pub struct TabSlot {
     pub badge: u32,
     /// The badge counting them, before the close button; `None` at 0.
     pub pill: Option<Pill>,
+    /// Progress of the tab's active pane, on the tab's bottom edge.
+    pub progress: Option<ProgressBar>,
 }
 
 /// The bar on its edge of the window, in pixels.
@@ -219,9 +222,28 @@ impl TabBarLayout {
             .enumerate()
             .map(|(index, tab)| {
                 let badge = badges.get(index).copied().unwrap_or(0);
-                self.slot(self.slot_start(index), tab.title, tab.active, badge)
+                self.moved(self.slot_start(index), TabSlot { badge, ..tab })
             })
             .collect();
+    }
+
+    /// Shows on each tab, in order, its progress from `progress` (`None`: no bar), on
+    /// its bottom edge, along a horizontal bar as along a side one.
+    pub fn set_progress(&mut self, progress: &[Option<ProgressView>], colors: ProgressColors) {
+        let thickness = progress::bar_thickness(self.metrics.scale);
+        for (tab, view) in self.tabs.iter_mut().zip(progress) {
+            tab.progress =
+                view.map(|view| ProgressBar::along_bottom(tab.rect, thickness, view, colors));
+        }
+    }
+
+    /// `tab` laid out again starting at `start` along the bar, with its progress.
+    fn moved(&self, start: f32, tab: TabSlot) -> TabSlot {
+        let slot = self.slot(start, tab.title, tab.active, tab.badge);
+        let progress = tab
+            .progress
+            .map(|bar| ProgressBar::along_bottom(slot.rect, bar.rect.height, bar.view, bar.colors));
+        TabSlot { progress, ..slot }
     }
 
     /// The tab of `title` starting at `start` along the bar, with `badge` unseen
@@ -257,6 +279,7 @@ impl TabBarLayout {
             close_hovered: false,
             badge,
             pill,
+            progress: None,
         }
     }
 
@@ -310,9 +333,9 @@ impl TabBarLayout {
         let mut dragged = None;
         for (index, tab) in order.into_iter().enumerate() {
             if index == to {
-                dragged = Some(self.slot(start, tab.title, tab.active, tab.badge));
+                dragged = Some(self.moved(start, tab));
             } else {
-                tabs.push(self.slot(self.slot_start(index), tab.title, tab.active, tab.badge));
+                tabs.push(self.moved(self.slot_start(index), tab));
             }
         }
         tabs.extend(dragged);
@@ -351,6 +374,77 @@ mod tests {
 
     fn bar_at(position: TabBarPosition, count: usize) -> TabBarLayout {
         TabBarLayout::new(window(), position, &titles(count), 0, METRICS)
+    }
+
+    fn progress_colors() -> ProgressColors {
+        let gray = |v| alacritty_terminal::vte::ansi::Rgb { r: v, g: v, b: v };
+        ProgressColors {
+            normal: gray(1),
+            error: gray(2),
+            paused: gray(3),
+            track: gray(4),
+        }
+    }
+
+    fn view(value: u8) -> ProgressView {
+        ProgressView {
+            state: crate::progress::ProgressState::Normal,
+            value,
+            offset: 0.0,
+        }
+    }
+
+    #[test]
+    fn progress_sits_on_the_bottom_edge_of_its_tab() {
+        for position in [TabBarPosition::Top, TabBarPosition::Left] {
+            let mut bar = bar_at(position, 3);
+            bar.set_progress(&[None, Some(view(40))], progress_colors());
+            assert_eq!(bar.tabs[0].progress, None);
+            assert_eq!(bar.tabs[2].progress, None);
+            let tab = &bar.tabs[1];
+            let progress = tab.progress.expect("a progress bar");
+            assert_eq!(
+                progress.rect,
+                Rect {
+                    x: tab.rect.x,
+                    y: tab.rect.y + tab.rect.height - 2.0,
+                    width: tab.rect.width,
+                    height: 2.0,
+                }
+            );
+            assert_eq!(progress.view, view(40));
+            assert_eq!(progress.colors, progress_colors());
+        }
+    }
+
+    #[test]
+    fn progress_bar_scales_with_the_window() {
+        let hidpi = UiMetrics {
+            line_height: 36.0,
+            scale: 2.0,
+        };
+        let mut bar = TabBarLayout::new(window(), TabBarPosition::Top, &titles(2), 0, hidpi);
+        bar.set_progress(&[Some(view(10))], progress_colors());
+        assert_eq!(bar.tabs[0].progress.unwrap().rect.height, 4.0);
+    }
+
+    #[test]
+    fn progress_follows_its_tab_through_badges_and_drags() {
+        let mut bar = bar_at(TabBarPosition::Top, 3);
+        bar.set_progress(&[Some(view(40)), None, None], progress_colors());
+        bar.set_badges(&[2, 0, 0]);
+        let tab = &bar.tabs[0];
+        assert_eq!(tab.progress.unwrap().rect.x, tab.rect.x);
+        let to = bar.dragged(0, bar.tab_width * 1.6);
+        let dragged = bar.tabs.last().unwrap();
+        assert_eq!(dragged.title, "tab 0");
+        assert_ne!(to, 0);
+        let progress = dragged
+            .progress
+            .expect("the dragged tab keeps its progress");
+        assert_eq!(progress.rect.x, dragged.rect.x);
+        assert_eq!(progress.rect.width, dragged.rect.width);
+        assert!(bar.tabs[..2].iter().all(|tab| tab.progress.is_none()));
     }
 
     #[test]

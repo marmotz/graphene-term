@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::index::Point;
+use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config as TermConfig, TermMode};
 #[cfg(target_os = "linux")]
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
@@ -78,9 +79,11 @@ use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
+use crate::progress::{self, Progress, ProgressColors, ProgressState, ProgressView};
 use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
 use crate::settings::{self, LoadErrors, SettingsWindow};
+use crate::taskbar::Taskbar;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
@@ -89,7 +92,9 @@ use crate::watcher;
 use crate::window_state::{self, WindowState};
 use crate::workspace::drop::{self, DropTarget};
 use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
-use crate::workspace::{self, DIVIDER_THICKNESS, RESIZE_STEP_CELLS, TabBarPosition, Workspace};
+use crate::workspace::{
+    self, DIVIDER_THICKNESS, ProgressSource, RESIZE_STEP_CELLS, TabBarPosition, Workspace,
+};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
@@ -292,6 +297,10 @@ struct Session {
     notifier: Notifier,
     /// Unseen notices shown on the window's icon.
     badge: Badge,
+    /// Origin of the indeterminate progress animation (see [`ProgressView::new`]).
+    progress_epoch: Instant,
+    /// Shows the progress of the active tab on the window's icon.
+    taskbar: Taskbar,
 }
 
 impl Session {}

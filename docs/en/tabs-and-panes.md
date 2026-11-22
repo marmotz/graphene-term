@@ -108,6 +108,26 @@ makes a rectangular selection, except where the application captures the mouse.
 The title bar of a pane in the set is drawn in the theme color `ui.pane_broadcast` and
 starts with `»` and the number of panes in the set.
 
+## Progress
+
+Programs that report their progress with the `OSC 9;4` sequence (as `winget`,
+`systemd`, some build tools and package managers do, or any script printing
+`\e]9;4;1;50\a`) get a thin progress bar on the bottom edge of the pane title bar and,
+while the tab bar is shown, of their tab (the tab follows its active pane). The bar is
+drawn in the accent color, red after an error, yellow while paused; an unknown progress
+shows a segment sliding along the bar. It disappears when the program clears it, when
+the command ends, or after 15 seconds without news. `[window] progress = false` (see
+[Configuration](configuration.md)) hides every progress bar.
+
+On Linux, the progress of the active tab also shows on the Graphene icon of the taskbar
+or dock, where the desktop supports it (KDE Plasma, Ubuntu Dock, Dash to Dock, Plank,
+and Cinnamon on X11). An error or a pause shows its value there; an unknown progress
+shows no bar.
+
+On macOS, it shows as a bar over the Graphene icon in the Dock, in the same colors as in
+the window; an unknown progress fills the whole bar, dimmed. The counter of unseen
+notifications stays visible above it.
+
 ## Command palette
 
 `Ctrl+Shift+P` opens the command palette: every action with its shortcut, then the open

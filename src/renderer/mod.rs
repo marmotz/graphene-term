@@ -6,6 +6,7 @@ mod glyphs;
 mod images;
 mod offscreen;
 mod pipeline;
+pub mod progress_bar;
 mod rects;
 pub mod scene;
 mod ui_text;
@@ -1210,6 +1211,13 @@ mod tests {
             banner: None,
             lang: crate::i18n::Lang::En,
             images: Vec::new(),
+            progress_colors: crate::progress::ProgressColors {
+                normal: WHITE,
+                error: WHITE,
+                paused: WHITE,
+                track: WHITE,
+            },
+            progress_thickness: 0.0,
         };
         let packed = renderer.present_x11(&frame, &layout).unwrap().to_vec();
         let rgba = renderer.read_pixels();
@@ -1251,6 +1259,13 @@ mod tests {
             banner: None,
             lang: crate::i18n::Lang::En,
             images: Vec::new(),
+            progress_colors: crate::progress::ProgressColors {
+                normal: WHITE,
+                error: WHITE,
+                paused: WHITE,
+                track: WHITE,
+            },
+            progress_thickness: 0.0,
         };
         assert!(!renderer.finish_x11(false).unwrap(), "nothing to finish");
         renderer.start_x11(&frame, &layout).unwrap();
@@ -1296,6 +1311,13 @@ mod tests {
             banner: None,
             lang: crate::i18n::Lang::En,
             images: Vec::new(),
+            progress_colors: crate::progress::ProgressColors {
+                normal: WHITE,
+                error: WHITE,
+                paused: WHITE,
+                track: WHITE,
+            },
+            progress_thickness: 0.0,
         };
         renderer.render(&frame, &layout).unwrap();
         let pixels = renderer.read_pixels();
@@ -1335,6 +1357,7 @@ mod tests {
                 fold_progress: 1.0,
                 selected: false,
                 scroll: None,
+                progress: None,
             }],
             row_tops: vec![0],
             block_colors: BlockColors {
@@ -1351,6 +1374,13 @@ mod tests {
             banner: None,
             lang: crate::i18n::Lang::En,
             images: Vec::new(),
+            progress_colors: crate::progress::ProgressColors {
+                normal: WHITE,
+                error: WHITE,
+                paused: WHITE,
+                track: WHITE,
+            },
+            progress_thickness: 0.0,
         };
         renderer.render(&frame, &layout).unwrap();
         let pixels = renderer.read_pixels();
@@ -1413,6 +1443,13 @@ mod tests {
             banner: None,
             lang: crate::i18n::Lang::En,
             images: Vec::new(),
+            progress_colors: crate::progress::ProgressColors {
+                normal: WHITE,
+                error: WHITE,
+                paused: WHITE,
+                track: WHITE,
+            },
+            progress_thickness: 0.0,
         }
     }
 

@@ -116,7 +116,21 @@ impl Session {
             self.ui_metrics(UiFont::Chrome),
         );
         bar.set_badges(&badges);
+        let now = Instant::now();
+        let progress: Vec<_> = (0..count)
+            .map(|index| {
+                self.workspace
+                    .tab_progress(index)
+                    .map(|progress| self.progress_view(progress, now))
+            })
+            .collect();
+        bar.set_progress(&progress, self.progress_colors());
         Some(bar)
+    }
+
+    /// Colors of the progress bars of the interface, from the theme.
+    pub(super) fn progress_colors(&self) -> ProgressColors {
+        ProgressColors::resolve(&self.palette, &Colors::default())
     }
 
     /// Area the tabs divide between their panes, and the sizes they are laid out with.
@@ -134,6 +148,8 @@ impl Session {
     /// Title bars of the panes of `layout`, the `active` one highlighted.
     pub(super) fn pane_bars(&self, layout: &Layout, active: Option<PaneId>) -> Vec<PaneBarLayout> {
         let metrics = self.ui_metrics(UiFont::Chrome);
+        let colors = self.progress_colors();
+        let now = Instant::now();
         layout
             .panes
             .iter()
@@ -143,8 +159,13 @@ impl Session {
                     .pane_title(id)
                     .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
                 let unseen = self.workspace.pane(id).map_or(0, Pane::unseen);
+                let progress = self
+                    .workspace
+                    .pane_progress(id)
+                    .map(|progress| self.progress_view(progress, now));
                 let mut bar = PaneBarLayout::new(id, rect, title, Some(id) == active, metrics)
-                    .with_badge(unseen, metrics);
+                    .with_badge(unseen, metrics)
+                    .with_progress(progress, colors, metrics);
                 if self.workspace.is_broadcast(id) {
                     bar.broadcast = Some(
                         self.workspace
