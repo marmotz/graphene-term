@@ -357,20 +357,24 @@ fn runnable(cells: &[frame::FrameCell], column: usize) -> bool {
         && !cells.get(column + 1).is_some_and(|next| next.spacer)
 }
 
-/// Whether two cells have the same style, so that they belong to the same run.
-fn same_style(a: &frame::FrameCell, b: &frame::FrameCell) -> bool {
-    (a.fg, a.bg, a.bold, a.italic, a.underline, a.strikeout)
-        == (b.fg, b.bg, b.bold, b.italic, b.underline, b.strikeout)
+/// Whether two cells have the same style, so that they belong to the same run. With
+/// `colors` false, only the attributes are compared: the colors of the block cursor's
+/// cell are baked by the cursor, which does not cut the run.
+fn same_style(a: &frame::FrameCell, b: &frame::FrameCell, colors: bool) -> bool {
+    (a.bold, a.italic, a.underline, a.strikeout) == (b.bold, b.italic, b.underline, b.strikeout)
+        && (!colors || (a.fg, a.bg) == (b.fg, b.bg))
 }
 
 /// Glyphs of the row `cells` starting at `origin`, with ligatures: maximal runs of
 /// runnable cells of one style go to `runs`, the other drawn cells (and the runs of a
-/// single cell) to `glyphs`, one each.
+/// single cell) to `glyphs`, one each. The column `cursor` holds the terminal cursor:
+/// its colors are left out of the style comparison, and its run records it.
 fn push_runs(
     layout: &GridLayout,
     srgb_target: bool,
     origin: [f32; 2],
     cells: &[frame::FrameCell],
+    cursor: Option<usize>,
     glyphs: &mut Vec<GlyphInstance>,
     runs: &mut Vec<TextRun>,
 ) {
@@ -386,8 +390,22 @@ fn push_runs(
             continue;
         }
         let start = column;
+        // The first cell of the run outside the cursor, whose colors the others match.
+        let mut reference = (cursor != Some(start)).then_some(c);
         column += 1;
-        while column < cells.len() && runnable(cells, column) && same_style(c, &cells[column]) {
+        while column < cells.len() && runnable(cells, column) {
+            let next = &cells[column];
+            let fits = match reference {
+                _ if cursor == Some(column) => same_style(c, next, false),
+                Some(reference) => same_style(reference, next, true),
+                None => same_style(c, next, false),
+            };
+            if !fits {
+                break;
+            }
+            if cursor != Some(column) {
+                reference.get_or_insert(next);
+            }
             column += 1;
         }
         if column - start == 1 {
@@ -406,7 +424,9 @@ fn push_runs(
                 .collect(),
             bold: c.bold,
             italic: c.italic,
-            cursor: None,
+            cursor: cursor
+                .filter(|cursor| (start..column).contains(cursor))
+                .map(|cursor| cursor - start),
         });
     }
 }
@@ -489,6 +509,10 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: b
                 srgb_target,
                 [layout.cell_x(0), y],
                 cells,
+                frame
+                    .ligature_break
+                    .filter(|(cursor_line, _)| *cursor_line == line)
+                    .map(|(_, column)| column),
                 &mut glyphs,
                 &mut runs,
             );
@@ -682,6 +706,7 @@ mod tests {
             },
             rows,
             cursor: None,
+            ligature_break: None,
             background: BG,
             banner: None,
             lang: crate::i18n::Lang::En,
@@ -1371,5 +1396,52 @@ mod tests {
             placed(&scene.glyphs),
             vec![([20.0, 0.0], '日'), ([60.0, 0.0], 'x')]
         );
+    }
+
+    /// The row `text` with the block cursor baked into the cell `column`.
+    fn with_block_cursor(text: &str, column: usize) -> Frame {
+        let mut cells = row(text);
+        cells[column].bg = RED;
+        cells[column].fg = GREY;
+        let mut frame = frame(vec![cells]);
+        frame.ligature_break = Some((0, column));
+        frame
+    }
+
+    #[test]
+    fn the_block_cursor_does_not_cut_the_run() {
+        for column in 0..3 {
+            let scene = build(&with_block_cursor("-->", column), &layout(), false, true);
+            assert_eq!(runs(&scene), vec![([0.0, 0.0], "-->".into(), false, false)]);
+            let run = &scene.runs[0];
+            assert_eq!(run.cursor, Some(column));
+            // The cursor cell keeps its own color.
+            assert_eq!(run.cells[column].color, gpu_color(GREY, false));
+        }
+    }
+
+    #[test]
+    fn the_cursor_keeps_the_other_style_cuts() {
+        // The cells around the cursor still differ in color.
+        let mut frame = with_block_cursor("->>", 1);
+        frame.rows[0][2].fg = RED;
+        let scene = build(&frame, &layout(), false, true);
+        assert_eq!(runs(&scene), vec![([0.0, 0.0], "->".into(), false, false)]);
+        assert_eq!(scene.runs[0].cursor, Some(1));
+
+        // A bold cursor cell cuts the run.
+        let mut frame = with_block_cursor("->>", 1);
+        frame.rows[0][1].bold = true;
+        let scene = build(&frame, &layout(), false, true);
+        assert!(scene.runs.is_empty());
+    }
+
+    #[test]
+    fn only_the_run_holding_the_cursor_records_it() {
+        let mut frame = frame(vec![row("-> =="), row("=>")]);
+        frame.ligature_break = Some((0, 3));
+        let scene = build(&frame, &layout(), false, true);
+        let cursors: Vec<_> = scene.runs.iter().map(|run| run.cursor).collect();
+        assert_eq!(cursors, [None, Some(0), None]);
     }
 }

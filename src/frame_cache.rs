@@ -72,6 +72,7 @@ mod tests {
                 card_selected: color,
             },
             cursor: None,
+            ligature_break: None,
             background: color,
             banner: None,
             lang: Lang::En,

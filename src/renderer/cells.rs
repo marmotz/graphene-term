@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use super::pipeline::{InstanceBuffer, ScreenUniform, instanced_pipeline, uniform_entry};
 
 use super::atlas::Page;
-use super::glyphs::{Glyph, Glyphs, Upload};
+use super::glyphs::{Glyph, GlyphKey, Glyphs, RunGlyph, Upload};
 use super::scene::{GlyphInstance, TextRun};
 
 /// One textured quad, as uploaded to the GPU.
@@ -75,8 +75,47 @@ pub fn resolve(glyphs: &mut Glyphs, items: &[GlyphInstance], out: &mut Vec<CellI
     }));
 }
 
+/// The cells of a run of `len` cells drawn as isolated characters around the cell
+/// `cursor`: the longest stretch of ligated cells holding it, empty when the cursor
+/// cell is not ligated. A cell belongs to the cluster of the last glyph drawn from a
+/// cell before or at it.
+fn ligature_break(shaped: &[RunGlyph], len: usize, cursor: usize) -> Range<usize> {
+    let mut ligated = vec![false; len];
+    let mut starts: Vec<usize> = shaped.iter().map(|g| usize::from(g.cell)).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    for glyph in shaped.iter().filter(|glyph| glyph.ligated) {
+        let start = usize::from(glyph.cell);
+        let end = starts
+            .iter()
+            .copied()
+            .find(|&next| next > start)
+            .unwrap_or(len)
+            .min(len);
+        for cell in ligated.iter_mut().take(end).skip(start) {
+            *cell = true;
+        }
+    }
+    if !ligated.get(cursor).copied().unwrap_or(false) {
+        return cursor..cursor;
+    }
+    let start = (0..cursor)
+        .rev()
+        .take_while(|&i| ligated[i])
+        .last()
+        .unwrap_or(cursor);
+    let end = (cursor..len)
+        .take_while(|&i| ligated[i])
+        .last()
+        .unwrap_or(cursor)
+        + 1;
+    start..end
+}
+
 /// Resolves `runs` into quads appended to `out`, each glyph in the color of the cell it
-/// is drawn from. `text` is a scratch buffer, reused between calls.
+/// is drawn from. The ligature under the cursor of a run is broken: its cells are
+/// drawn with the glyphs of their characters alone. `text` is a scratch buffer, reused
+/// between calls.
 pub fn resolve_runs(
     glyphs: &mut Glyphs,
     runs: &[TextRun],
@@ -87,16 +126,34 @@ pub fn resolve_runs(
         text.clear();
         text.extend(run.cells.iter().map(|cell| cell.c));
         let shaped = glyphs.shape_run(text, run.bold, run.italic);
+        let broken = run.cursor.map_or(0..0, |cursor| {
+            ligature_break(&shaped, run.cells.len(), cursor)
+        });
+        let origin = |index: usize| [run.origin[0] + index as f32 * run.advance, run.origin[1]];
         for run_glyph in shaped.iter() {
             let index = usize::from(run_glyph.cell);
+            if broken.contains(&index) {
+                continue;
+            }
             let Some(cell) = run.cells.get(index) else {
                 continue;
             };
             let Some(glyph) = glyphs.run_glyph(run_glyph) else {
                 continue;
             };
-            let origin = [run.origin[0] + index as f32 * run.advance, run.origin[1]];
-            out.push(quad(glyph, origin, cell.color));
+            out.push(quad(glyph, origin(index), cell.color));
+        }
+        for index in broken {
+            let cell = &run.cells[index];
+            let key = GlyphKey {
+                c: cell.c,
+                bold: run.bold,
+                italic: run.italic,
+                ui: None,
+            };
+            if let Some(glyph) = glyphs.get(key) {
+                out.push(quad(glyph, origin(index), cell.color));
+            }
         }
     }
 }
@@ -582,5 +639,84 @@ mod tests {
             let glyph = glyphs.get(key(c)).unwrap();
             assert_eq!(quad.uv, [glyph.region.x as f32, glyph.region.y as f32]);
         }
+    }
+
+    /// The quads of the characters of `text` drawn alone from the cells `cells`, `advance`
+    /// apart from the origin.
+    fn isolated(
+        glyphs: &mut Glyphs,
+        text: &str,
+        cells: Range<usize>,
+        advance: f32,
+    ) -> Vec<CellInstance> {
+        let items: Vec<_> = text
+            .chars()
+            .enumerate()
+            .filter(|(index, _)| cells.contains(index))
+            .map(|(index, c)| item(c, [index as f32 * advance, 0.0]))
+            .collect();
+        let mut out = Vec::new();
+        resolve(glyphs, &items, &mut out);
+        out
+    }
+
+    /// The quads of the run `text` shaped as a whole, drawn from the cells `cells` only.
+    fn contextual(
+        glyphs: &mut Glyphs,
+        text: &str,
+        cells: Range<usize>,
+        advance: f32,
+    ) -> Vec<CellInstance> {
+        let shaped = glyphs.shape_run(text, false, false);
+        shaped
+            .iter()
+            .filter(|run_glyph| cells.contains(&usize::from(run_glyph.cell)))
+            .filter_map(|run_glyph| {
+                let glyph = glyphs.run_glyph(run_glyph)?;
+                let cell = f32::from(run_glyph.cell);
+                Some(quad(glyph, [cell * advance, 0.0], WHITE))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ligature_under_the_cursor_is_drawn_as_isolated_characters() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        assert!(
+            glyphs
+                .shape_run("-->", false, false)
+                .iter()
+                .all(|g| g.ligated)
+        );
+        let mut arrow = run("-->", [0.0, 0.0], 10.0);
+        arrow.cursor = Some(0);
+        let quads = resolved_runs(&mut glyphs, &[arrow]);
+        assert_eq!(quads, isolated(&mut glyphs, "-->", 0..3, 10.0));
+        assert_ne!(quads, contextual(&mut glyphs, "-->", 0..3, 10.0));
+    }
+
+    #[test]
+    fn cells_out_of_the_broken_ligature_are_unchanged() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let shaped = glyphs.shape_run("->a->", false, false);
+        let ligated: Vec<_> = shaped.iter().map(|g| (g.cell, g.ligated)).collect();
+        assert!(ligated.contains(&(0, true)) && ligated.contains(&(3, true)));
+        assert!(ligated.contains(&(2, false)));
+        let mut text = run("->a->", [0.0, 0.0], 10.0);
+        text.cursor = Some(1);
+        let quads = resolved_runs(&mut glyphs, &[text]);
+        let mut expected = contextual(&mut glyphs, "->a->", 2..5, 10.0);
+        expected.extend(isolated(&mut glyphs, "->a->", 0..2, 10.0));
+        assert_eq!(quads, expected);
+    }
+
+    #[test]
+    fn cursor_on_a_cell_without_ligature_changes_nothing() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let mut text = run("a->", [0.0, 0.0], 10.0);
+        let without_cursor = resolved_runs(&mut glyphs, &[text.clone()]);
+        text.cursor = Some(0);
+        assert_eq!(resolved_runs(&mut glyphs, &[text]), without_cursor);
+        assert_eq!(without_cursor, contextual(&mut glyphs, "a->", 0..3, 10.0));
     }
 }
