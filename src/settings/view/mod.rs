@@ -58,6 +58,10 @@ pub struct View {
     conflict: Option<Conflict>,
     /// Shortcuts added in this window, oldest first, shown last in their row.
     added: Vec<Shortcut>,
+    /// What the shortcuts list is narrowed to.
+    filter: ShortcutFilter,
+    /// Whether the shortcuts filter field takes the focus on the next frame.
+    focus_filter: bool,
     /// The color picker open in the theme editor, until it closes and its color is
     /// written.
     picking: Option<Picking>,
@@ -144,6 +148,22 @@ struct Naming {
     error: Option<NameError>,
 }
 
+/// What the shortcuts list is narrowed to.
+#[derive(Debug, Clone, Default, PartialEq)]
+enum ShortcutFilter {
+    #[default]
+    None,
+    /// Actions whose label contains this text.
+    Text(String),
+    /// The actions bound to `shortcut` when it was captured, frozen.
+    // Built by the search by shortcut, which is not there yet.
+    #[allow(dead_code)]
+    Shortcut {
+        shortcut: Shortcut,
+        actions: Vec<Action>,
+    },
+}
+
 /// A captured shortcut already bound to `other`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Conflict {
@@ -190,16 +210,9 @@ impl View {
                         .selectable_label(selected, label(Msg::Section(section)))
                         .clicked()
                         && !selected
+                        && let Some(op) = self.select_section(section)
                     {
-                        if let Some(op) = self.finish_picking() {
-                            let _ = edits.theme_op(model, op);
-                        }
-                        self.section = section;
-                        self.capturing = None;
-                        self.conflict = None;
-                        self.naming = None;
-                        self.confirm_delete = false;
-                        self.hex = None;
+                        let _ = edits.theme_op(model, op);
                     }
                 }
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
@@ -220,6 +233,29 @@ impl View {
             });
         });
         edits
+    }
+
+    /// Shows `section` and drops what was being edited in the previous one; returns
+    /// the color of the open picker to write. Entering the shortcuts section gives the
+    /// focus to its filter field.
+    fn select_section(&mut self, section: SettingsSection) -> Option<ThemeOp> {
+        let op = self.finish_picking();
+        self.section = section;
+        self.capturing = None;
+        self.conflict = None;
+        self.naming = None;
+        self.confirm_delete = false;
+        self.hex = None;
+        self.filter = ShortcutFilter::None;
+        self.focus_filter = section == SettingsSection::KeyboardShortcuts;
+        op
+    }
+
+    /// Narrows the shortcuts list to `filter` and cancels the shortcut being edited.
+    fn set_filter(&mut self, filter: ShortcutFilter) {
+        self.filter = filter;
+        self.capturing = None;
+        self.conflict = None;
     }
 
     /// A click on the version label at `now`: the 7th within 2 seconds unlocks the
@@ -611,6 +647,141 @@ mod tests {
                 Value::Text("detach_pane".into())
             )]
         );
+    }
+
+    /// The actions of the rows kept by a text filter, in French.
+    fn filter_actions(model: &SettingsModel, text: &str) -> Vec<Action> {
+        shortcuts::filtered(
+            model.shortcut_rows(),
+            &ShortcutFilter::Text(text.into()),
+            Lang::Fr,
+        )
+        .into_iter()
+        .map(|(action, _)| action)
+        .collect()
+    }
+
+    #[test]
+    fn the_text_filter_keeps_the_actions_whose_name_contains_it() {
+        let model = model("");
+        // In the middle of the name.
+        assert_eq!(filter_actions(&model, "glet suiv"), vec![Action::NextTab]);
+        // Whatever the case.
+        let tabs = filter_actions(&model, "ONGLET");
+        for action in [Action::NewTab, Action::NextTab, Action::PreviousTab] {
+            assert!(tabs.contains(&action), "{action:?}");
+        }
+        assert!(!tabs.contains(&Action::Copy));
+        // Whatever the accents, typed or in the name.
+        assert_eq!(filter_actions(&model, "onglét"), tabs);
+        assert!(filter_actions(&model, "precedent").contains(&Action::PreviousTab));
+        // Nothing matches.
+        assert_eq!(filter_actions(&model, "zzz"), vec![]);
+        // An empty text or no filter keeps every row.
+        let all = model.shortcut_rows();
+        assert_eq!(filter_actions(&model, "").len(), all.len());
+        assert_eq!(
+            shortcuts::filtered(all.clone(), &ShortcutFilter::None, Lang::Fr),
+            all
+        );
+    }
+
+    #[test]
+    fn changing_the_filter_cancels_the_shortcut_being_edited() {
+        let mut view = View {
+            capturing: Some(Action::NextTab),
+            conflict: Some(Conflict {
+                action: Action::NextTab,
+                shortcut: Shortcut::parse("Ctrl+Shift+T").unwrap(),
+                other: Action::NewTab,
+            }),
+            ..View::default()
+        };
+        view.set_filter(ShortcutFilter::Text("tab".into()));
+        assert_eq!(view.filter, ShortcutFilter::Text("tab".into()));
+        assert!(!view.capturing());
+        assert_eq!(view.conflict, None);
+    }
+
+    #[test]
+    fn changing_section_clears_the_filter_and_focuses_it_in_shortcuts() {
+        let mut view = View {
+            filter: ShortcutFilter::Text("tab".into()),
+            ..View::default()
+        };
+        view.select_section(SettingsSection::KeyboardShortcuts);
+        assert_eq!(view.filter, ShortcutFilter::None);
+        assert!(view.focus_filter);
+        view.filter = ShortcutFilter::Text("tab".into());
+        view.select_section(SettingsSection::Theme);
+        assert_eq!(view.filter, ShortcutFilter::None);
+        assert!(!view.focus_filter);
+    }
+
+    /// Draws one frame of `view` with `events`; returns what it writes.
+    fn frame(
+        ctx: &egui::Context,
+        view: &mut View,
+        model: &SettingsModel,
+        events: Vec<egui::Event>,
+    ) -> Edits {
+        let mut edits = Edits::default();
+        let input = egui::RawInput {
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| edits = view.show(ui, Lang::Fr, model));
+        output.textures_delta.clear();
+        edits
+    }
+
+    fn press(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn the_filter_field_takes_the_typed_text_and_escape_clears_it() {
+        let model = model("");
+        let mut view = View::default();
+        view.select_section(SettingsSection::KeyboardShortcuts);
+        let ctx = egui::Context::default();
+        assert_eq!(frame(&ctx, &mut view, &model, vec![]), Edits::default());
+        assert!(!view.focus_filter);
+        frame(
+            &ctx,
+            &mut view,
+            &model,
+            vec![egui::Event::Text("zzz".into())],
+        );
+        assert_eq!(view.filter, ShortcutFilter::Text("zzz".into()));
+        // No action matches: the list is replaced by a hint, nothing is written.
+        assert_eq!(frame(&ctx, &mut view, &model, vec![]), Edits::default());
+        // Escape clears the filter and keeps the focus.
+        frame(&ctx, &mut view, &model, vec![press(egui::Key::Escape)]);
+        assert_eq!(view.filter, ShortcutFilter::None);
+        frame(
+            &ctx,
+            &mut view,
+            &model,
+            vec![egui::Event::Text("tab".into())],
+        );
+        assert_eq!(view.filter, ShortcutFilter::Text("tab".into()));
+        // Without filter, Escape only takes the focus away.
+        view.filter = ShortcutFilter::None;
+        frame(&ctx, &mut view, &model, vec![press(egui::Key::Escape)]);
+        frame(
+            &ctx,
+            &mut view,
+            &model,
+            vec![egui::Event::Text("tab".into())],
+        );
+        assert_eq!(view.filter, ShortcutFilter::None);
     }
 
     #[test]

@@ -1,6 +1,36 @@
 //! The shortcuts section: capture of a key press, conflicts and the list of bindings.
 
+use nucleo_matcher::chars;
+
 use super::*;
+
+/// The rows of `rows` kept by `filter`, in their order.
+pub(super) fn filtered(
+    rows: Vec<(Action, Vec<Shortcut>)>,
+    filter: &ShortcutFilter,
+    lang: Lang,
+) -> Vec<(Action, Vec<Shortcut>)> {
+    match filter {
+        ShortcutFilter::None => rows,
+        ShortcutFilter::Text(text) => {
+            let text = fold(text);
+            rows.into_iter()
+                .filter(|(action, _)| fold(&i18n::text(lang, &action.label())).contains(&text))
+                .collect()
+        }
+        ShortcutFilter::Shortcut { actions, .. } => rows
+            .into_iter()
+            .filter(|(action, _)| actions.contains(action))
+            .collect(),
+    }
+}
+
+/// `text` without accents and in lower case, to compare names loosely.
+fn fold(text: &str) -> String {
+    text.chars()
+        .map(|c| chars::to_lower_case(chars::normalize(c)))
+        .collect()
+}
 
 impl View {
     /// Takes a key press while a shortcut is captured; returns the changes to write.
@@ -42,9 +72,41 @@ impl View {
         }
     }
 
-    /// One row per action: its label, its shortcuts in aligned slots, each removable,
-    /// and the "Add" button that captures a new one on the right. The row under the
-    /// pointer, or being edited, is highlighted.
+    /// The field filtering the actions by name. `Escape` in it clears an active filter
+    /// and keeps the focus; without filter, the field only loses the focus.
+    fn filter_bar(&mut self, ui: &mut Ui, lang: Lang) {
+        let mut text = match &self.filter {
+            ShortcutFilter::Text(text) => text.clone(),
+            _ => String::new(),
+        };
+        let response = ui.add(
+            TextEdit::singleline(&mut text)
+                .hint_text(i18n::text(lang, &Msg::FilterActions))
+                .desired_width(FIELD_WIDTH),
+        );
+        if std::mem::take(&mut self.focus_filter) {
+            response.request_focus();
+        }
+        if response.changed() {
+            self.set_filter(if text.is_empty() {
+                ShortcutFilter::None
+            } else {
+                ShortcutFilter::Text(text)
+            });
+        }
+        if response.lost_focus()
+            && ui.input(|input| input.key_pressed(egui::Key::Escape))
+            && self.filter != ShortcutFilter::None
+        {
+            self.set_filter(ShortcutFilter::None);
+            response.request_focus();
+        }
+    }
+
+    /// The filter field, then one row per action kept by the filter: its label, its
+    /// shortcuts in aligned slots, each removable, and the "Add" button that captures a
+    /// new one on the right. The row under the pointer, or being edited, is
+    /// highlighted.
     pub(super) fn shortcuts(
         &mut self,
         ui: &mut Ui,
@@ -53,6 +115,8 @@ impl View {
         changes: &mut Vec<Change>,
     ) {
         let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        self.filter_bar(ui, lang);
+        ui.add_space(ui.spacing().item_spacing.y);
         let rows = model.shortcut_rows();
         let body = TextStyle::Body.resolve(ui.style());
         let button = TextStyle::Button.resolve(ui.style());
@@ -77,6 +141,11 @@ impl View {
             .map(|text| width(text, &button))
             .fold(0.0, f32::max)
             + 2.0 * ui.spacing().button_padding.x;
+        let rows = filtered(rows, &self.filter, lang);
+        if rows.is_empty() {
+            ui.label(RichText::new(label(Msg::NoActionMatches)).weak());
+            return;
+        }
         let row_gap = ui.spacing().item_spacing.y;
         ui.spacing_mut().item_spacing.y = 0.0;
         for (index, (action, mut shortcuts)) in rows.into_iter().enumerate() {

@@ -264,6 +264,10 @@ pub enum Msg {
     AlreadyUsedBy(String),
     /// Button binding a captured shortcut over the other action.
     Replace,
+    /// Hint of the field filtering the shortcuts list by action name.
+    FilterActions,
+    /// No action name contains the filter text.
+    NoActionMatches,
     // Theme editor of the settings window.
     /// Heading of the theme editor block.
     ThemeEditor,
@@ -445,6 +449,8 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::PressShortcut => "Press a shortcut · Esc to cancel",
         Msg::AlreadyUsedBy(action) => return format!("Already used by {action}").into(),
         Msg::Replace => "Replace",
+        Msg::FilterActions => "Filter actions",
+        Msg::NoActionMatches => "No action matches",
         Msg::ThemeEditor => "Theme editor",
         Msg::ThemeEditorIntro => {
             "Change the colors of your own themes. Built-in themes cannot be changed: duplicate one to get a copy you can edit."
@@ -618,6 +624,8 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::PressShortcut => "Appuyez sur un raccourci · Échap pour annuler",
         Msg::AlreadyUsedBy(action) => return format!("Déjà utilisé par {action}").into(),
         Msg::Replace => "Remplacer",
+        Msg::FilterActions => "Filtrer les actions",
+        Msg::NoActionMatches => "Aucune action ne correspond",
         Msg::ThemeEditor => "Éditeur de thème",
         Msg::ThemeEditorIntro => {
             "Modifiez les couleurs de vos propres thèmes. Les thèmes intégrés ne sont pas modifiables : dupliquez-en un pour obtenir une copie modifiable."
@@ -875,9 +883,11 @@ mod tests {
             Msg::SecretAnswer => 87,
             Msg::SecretAuthor => 88,
             Msg::SecretGraphene => 89,
+            Msg::FilterActions => 90,
+            Msg::NoActionMatches => 91,
         }
     }
-    const VARIANT_COUNT: usize = 90;
+    const VARIANT_COUNT: usize = 92;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -959,6 +969,8 @@ mod tests {
             Msg::PressShortcut,
             Msg::AlreadyUsedBy("Copy".into()),
             Msg::Replace,
+            Msg::FilterActions,
+            Msg::NoActionMatches,
             Msg::ThemeEditor,
             Msg::ThemeEditorIntro,
             Msg::ThemeColorsHint,
