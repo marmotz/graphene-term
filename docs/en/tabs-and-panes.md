@@ -123,6 +123,10 @@ On Linux, the progress of the active tab also shows on the Graphene icon of the 
 or dock, where the desktop supports it (KDE Plasma, Ubuntu Dock, Dash to Dock, Plank).
 An error or a pause shows its value there; an unknown progress shows no bar.
 
+On macOS, it shows as a bar over the Graphene icon in the Dock, in the same colors as in
+the window; an unknown progress fills the whole bar, dimmed. The counter of unseen
+notifications stays visible above it.
+
 ## Command palette
 
 `Ctrl+Shift+P` opens the command palette: every action with its shortcut, then the open

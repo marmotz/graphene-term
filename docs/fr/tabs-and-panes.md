@@ -130,6 +130,10 @@ la barre des tâches ou le dock, quand le bureau le permet (KDE Plasma, Ubuntu D
 to Dock, Plank). Une erreur ou une pause y affiche sa valeur ; une progression inconnue
 n'y affiche pas de barre.
 
+Sous macOS, elle s'affiche en barre sur l'icône de Graphene dans le Dock, dans les mêmes
+couleurs que dans la fenêtre ; une progression inconnue remplit toute la barre, atténuée.
+Le compteur des notifications non vues reste visible par-dessus.
+
 ## Palette de commandes
 
 `Ctrl+Shift+P` ouvre la palette de commandes : toutes les actions avec leur raccourci,

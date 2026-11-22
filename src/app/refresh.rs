@@ -170,6 +170,8 @@ impl Session {
     /// progress` setting turned off. Only a change reaches the desktop.
     pub(super) fn sync_taskbar(&mut self) {
         let progress = self.workspace.tab_progress(self.workspace.active_index());
+        // Colors first: a backend drawing its own bar needs them for the first progress.
+        self.taskbar.set_colors(self.progress_colors());
         self.taskbar.set_progress(progress);
     }
 
