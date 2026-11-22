@@ -47,8 +47,8 @@ choices are in [decisions.md](decisions.md).
 
 ```
 src/
-  main.rs          binary entry point: --version, --prune-config, -e <program>, logger setup,
-                   calls lib::run
+  main.rs          binary entry point: --version, --prune-config, --quick-toggle, --quick [--hidden],
+                   -e <program>, logger setup, calls lib::run
   build_version.rs version string from the crate version and GRAPHENE_CHANNEL, shared with build.rs
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup and redraw timing logs (`graphene::perf` target)
@@ -69,11 +69,16 @@ src/
     drop.rs        drop targets of a dragged pane: edge or center of a pane, tab, new tab, highlight (pure)
     tree.rs        binary split tree: split, remove, layout, neighbours, resize, equalise (pure)
   banner.rs        top banner: content, priority, update banner actions, pixel layout, hit-testing
-  config.rs        config.toml and state directory locations, model, key-by-key parsing and validation
+  config.rs        config.toml, state and runtime directory locations, model, key-by-key parsing and validation
   config_edit.rs   text-preserving config.toml edits (toml_edit): completion of missing options,
                    --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
-  x11_window.rs    X11 maximized state written on the hidden window before it is mapped
+  x11_window.rs    X11 _NET_WM_STATE (maximized, quick terminal) written on the hidden window before
+                   it is mapped, cursor position (QueryPointer)
+  quick_terminal/
+    mod.rs         QuickCommand, placement of the quick terminal: pick_monitor, frame (pure)
+    control.rs     quick.lock single instance (flock), quick.sock command thread, --quick-toggle client
+    macos.rs       macOS: cursor (NSEvent), visible screen area (NSScreen), Spaces behavior (NSWindow)
   watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
   appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread
@@ -403,7 +408,7 @@ Renderer::render(pane frames, interface rects)
   empty. `Gpu::new` runs on its own thread (`gpu_alongside`, in sequence on macOS) while
   `spawn_first_pane` loads the glyphs and spawns the shell. winit asks for the maximized
   state with a client message that X11 window managers ignore before mapping, so
-  `x11_window::preset_maximized` writes `_NET_WM_STATE` on the hidden window instead.
+  `x11_window::preset_states` writes `_NET_WM_STATE` on the hidden window instead.
   The window manager still sends the maximized size just after mapping: `MaximizeHold`
   (`app/redraw.rs`) holds the first frame while the window keeps its creation size, for
   150 ms at most.

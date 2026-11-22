@@ -42,6 +42,8 @@ décommenter la ligne ci-dessous.
 - **Sélection à la souris**, y compris rectangulaire, et transmission de la souris aux
   applications : [sélection et presse-papiers](docs/fr/selection-and-clipboard.md).
 - **Raccourcis clavier modifiables** : [raccourcis clavier](docs/fr/keybindings.md).
+- **Quick terminal** attaché à un bord de l'écran, affiché et masqué par
+  `graphene --quick-toggle` (macOS et X11) : [quick terminal](docs/fr/quick-terminal.md).
 - **Fenêtre des paramètres**, rechargement à chaud de la configuration, taille de
   fenêtre mémorisée, notification de mise à jour :
   [configuration](docs/fr/configuration.md).

@@ -235,7 +235,8 @@ panneau s'affichent.
 
 Un terminal qui glisse depuis un bord de l'écran et reste résident entre deux
 utilisations. Disponible sous macOS et sous Linux avec X11 ; sous Wayland, il ne démarre
-pas et sa section des paramètres est désactivée.
+pas et sa section des paramètres est désactivée. Voir [Quick terminal](quick-terminal.md)
+pour la commande qui l'affiche.
 
 | Paramètre            | Défaut     | Valeurs                                                                                    |
 |----------------------|------------|--------------------------------------------------------------------------------------------|

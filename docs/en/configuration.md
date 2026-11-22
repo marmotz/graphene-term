@@ -226,7 +226,8 @@ pane bars are shown.
 
 A terminal that slides from a screen edge and stays resident between two uses. Available
 on macOS and on Linux under X11; under Wayland it does not start and its settings
-section is disabled.
+section is disabled. See [Quick terminal](quick-terminal.md) for the command that shows
+it.
 
 | Setting              | Default    | Values                                                                                     |
 |----------------------|------------|--------------------------------------------------------------------------------------------|
