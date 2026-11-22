@@ -72,7 +72,9 @@ the **Quick terminal** section of the settings window:
 
 - `edge`: the edge it is attached to, `top` by default;
 - `size`: the share of the screen it covers, 40% by default;
-- `screen`: the screen it appears on, the one under the mouse cursor by default.
+- `screen`: the screen it appears on, the one under the mouse cursor by default. The
+  settings window offers the screen under the cursor, the primary screen and the
+  screens connected when it opens.
 
 These settings apply the next time it is shown. It has no title bar, stays above the
 other windows, and shows on every desktop. It is out of the taskbar on Linux, out of

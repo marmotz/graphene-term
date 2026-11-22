@@ -270,6 +270,10 @@ pub enum Msg {
     Field(SettingsField),
     /// Font family choice that leaves `font.family` empty.
     SystemMonospace,
+    /// Screen choice under the mouse cursor (`quick_terminal.screen = "active"`).
+    ActiveScreen,
+    /// Primary screen choice (`quick_terminal.screen = "primary"`).
+    PrimaryScreen,
     /// Heading of the unknown keys of the file.
     UnknownKeys,
     /// 1-based line of the file.
@@ -501,6 +505,8 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::QuickTerminalHideOnFocusLoss => "Hide when the focus is lost",
         },
         Msg::SystemMonospace => "System monospace",
+        Msg::ActiveScreen => "Screen under the mouse cursor",
+        Msg::PrimaryScreen => "Primary screen",
         Msg::UnknownKeys => "Unknown keys",
         Msg::AtLine(line) => return format!("line {line}").into(),
         Msg::FixFileByHand => {
@@ -703,6 +709,8 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsField::QuickTerminalHideOnFocusLoss => "Masquer à la perte du focus",
         },
         Msg::SystemMonospace => "Monospace du système",
+        Msg::ActiveScreen => "Écran sous le pointeur de la souris",
+        Msg::PrimaryScreen => "Écran principal",
         Msg::UnknownKeys => "Clés inconnues",
         Msg::AtLine(line) => return format!("ligne {line}").into(),
         Msg::FixFileByHand => {
@@ -1000,9 +1008,11 @@ mod tests {
             Msg::Bell => 96,
             Msg::ShowPane => 97,
             Msg::QuickTerminalUnavailableOnWayland => 98,
+            Msg::ActiveScreen => 101,
+            Msg::PrimaryScreen => 102,
         }
     }
-    const VARIANT_COUNT: usize = 101;
+    const VARIANT_COUNT: usize = 103;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1071,6 +1081,8 @@ mod tests {
             Msg::LinesHidden(1),
             Msg::LinesHidden(42),
             Msg::SystemMonospace,
+            Msg::ActiveScreen,
+            Msg::PrimaryScreen,
             Msg::UnknownKeys,
             Msg::AtLine(12),
             Msg::FixFileByHand,

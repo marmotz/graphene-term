@@ -77,7 +77,9 @@ la section **Quick terminal** de la fenêtre des paramètres :
 
 - `edge` : le bord auquel il est attaché, `top` (haut) par défaut ;
 - `size` : la part de l'écran qu'il couvre, 40 % par défaut ;
-- `screen` : l'écran où il apparaît, celui sous le pointeur de la souris par défaut.
+- `screen` : l'écran où il apparaît, celui sous le pointeur de la souris par défaut. La
+  fenêtre des paramètres propose l'écran sous le pointeur, l'écran principal et les
+  écrans branchés à son ouverture.
 
 Ces réglages s'appliquent au prochain affichage. Il n'a pas de barre de titre, reste
 au-dessus des autres fenêtres et s'affiche sur tous les bureaux. Il n'apparaît pas dans
