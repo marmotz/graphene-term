@@ -199,6 +199,82 @@ pub struct WindowConfig {
     pub progress: bool,
 }
 
+/// `quick_terminal.edge`: the screen edge the quick terminal is attached to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuickTerminalEdge {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl QuickTerminalEdge {
+    /// Accepted values, in the order shown to the user.
+    pub const VALUES: [(&'static str, QuickTerminalEdge); 4] = [
+        ("top", QuickTerminalEdge::Top),
+        ("bottom", QuickTerminalEdge::Bottom),
+        ("left", QuickTerminalEdge::Left),
+        ("right", QuickTerminalEdge::Right),
+    ];
+}
+
+/// `quick_terminal.screen`: the screen the quick terminal appears on.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum QuickTerminalScreen {
+    /// The screen under the mouse cursor.
+    #[default]
+    Active,
+    /// The primary screen.
+    Primary,
+    /// The screen of this name (`MonitorHandle::name`); the active one when absent.
+    Named(String),
+}
+
+impl QuickTerminalScreen {
+    /// Reads a value of the file: `"active"`, `"primary"` or a non-empty screen name.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "" => Err(
+                "must not be empty, expected \"active\", \"primary\" or a screen name".to_owned(),
+            ),
+            "active" => Ok(Self::Active),
+            "primary" => Ok(Self::Primary),
+            name => Ok(Self::Named(name.to_owned())),
+        }
+    }
+}
+
+/// The value written to the file.
+impl fmt::Display for QuickTerminalScreen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Active => f.write_str("active"),
+            Self::Primary => f.write_str("primary"),
+            Self::Named(name) => f.write_str(name),
+        }
+    }
+}
+
+/// `[quick_terminal]`: the drop-down terminal attached to a screen edge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuickTerminalConfig {
+    /// Native global shortcut, in the syntax of `keybindings.toml`; empty for none.
+    pub hotkey: String,
+    pub edge: QuickTerminalEdge,
+    /// Percentage of the screen, from [`MIN_QUICK_TERMINAL_SIZE`] to
+    /// [`MAX_QUICK_TERMINAL_SIZE`]: the height for `top`/`bottom`, the width for
+    /// `left`/`right`.
+    pub size: u32,
+    pub screen: QuickTerminalScreen,
+    /// Duration of the slide, in milliseconds; 0 for none, at most
+    /// [`MAX_QUICK_TERMINAL_ANIMATION_MS`].
+    pub animation_ms: u32,
+    /// Hides the quick terminal when it loses the focus.
+    pub hide_on_focus_loss: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CursorConfig {
     pub shape: CursorShape,

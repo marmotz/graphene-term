@@ -53,6 +53,11 @@ pub const MIN_FONT_SIZE: f32 = 6.0;
 pub const MAX_FONT_SIZE: f32 = 72.0;
 /// Upper bound of `scrollback.lines`.
 pub const MAX_SCROLLBACK_LINES: usize = 100_000;
+/// Bounds of `quick_terminal.size`, in percent of the screen.
+pub const MIN_QUICK_TERMINAL_SIZE: u32 = 10;
+pub const MAX_QUICK_TERMINAL_SIZE: u32 = 100;
+/// Upper bound of `quick_terminal.animation_ms`.
+pub const MAX_QUICK_TERMINAL_ANIMATION_MS: u32 = 1000;
 
 /// The user configuration. `Default` holds the built-in values, so a missing or empty
 /// file behaves like no configuration at all.
@@ -72,6 +77,8 @@ pub struct Config {
     #[allow(dead_code, reason = "applied by the update check thread task")]
     pub updates: UpdatesConfig,
     pub notifications: NotificationsConfig,
+    #[allow(dead_code, reason = "applied by the quick terminal process")]
+    pub quick_terminal: QuickTerminalConfig,
 }
 
 impl Default for Config {
@@ -115,6 +122,14 @@ impl Default for Config {
                 command_finished: true,
                 command_threshold: 10,
                 bell: false,
+            },
+            quick_terminal: QuickTerminalConfig {
+                hotkey: String::new(),
+                edge: QuickTerminalEdge::Top,
+                size: 40,
+                screen: QuickTerminalScreen::Active,
+                animation_ms: 150,
+                hide_on_focus_loss: true,
             },
         }
     }
@@ -174,7 +189,7 @@ impl Config {
                     format!("`[keybindings]` moved to {KEYBINDINGS_FILE}"),
                 ),
                 "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
-                | "updates" | "notifications" => {
+                | "updates" | "notifications" | "quick_terminal" => {
                     let DeValue::Table(table) = value.get_ref() else {
                         reader.error(
                             Some(value.span()),
@@ -475,6 +490,14 @@ program = false
 command_finished = false
 command_threshold = 30
 bell = true
+
+[quick_terminal]
+hotkey = "Ctrl+`"
+edge = "left"
+size = 60
+screen = "HDMI-1"
+animation_ms = 0
+hide_on_focus_loss = false
 "#;
         let (config, errors) = parse(text);
         assert_eq!(errors, Vec::new());
@@ -524,7 +547,130 @@ bell = true
                     command_threshold: 30,
                     bell: true,
                 },
+                quick_terminal: QuickTerminalConfig {
+                    hotkey: "Ctrl+`".to_owned(),
+                    edge: QuickTerminalEdge::Left,
+                    size: 60,
+                    screen: QuickTerminalScreen::Named("HDMI-1".to_owned()),
+                    animation_ms: 0,
+                    hide_on_focus_loss: false,
+                },
             }
+        );
+    }
+
+    #[test]
+    fn quick_terminal_defaults() {
+        let quick = Config::default().quick_terminal;
+        assert_eq!(quick.hotkey, "");
+        assert_eq!(quick.edge, QuickTerminalEdge::Top);
+        assert_eq!(quick.size, 40);
+        assert_eq!(quick.screen, QuickTerminalScreen::Active);
+        assert_eq!(quick.animation_ms, 150);
+        assert!(quick.hide_on_focus_loss);
+    }
+
+    #[test]
+    fn quick_terminal_edges_and_screens_are_read() {
+        for (name, edge) in QuickTerminalEdge::VALUES {
+            let (config, errors) = parse(&format!("[quick_terminal]\nedge = \"{name}\""));
+            assert_eq!(
+                (config.quick_terminal.edge, errors),
+                (edge, vec![]),
+                "{name}"
+            );
+        }
+        for (name, screen) in [
+            ("active", QuickTerminalScreen::Active),
+            ("primary", QuickTerminalScreen::Primary),
+            ("DP-2", QuickTerminalScreen::Named("DP-2".to_owned())),
+        ] {
+            let (config, errors) = parse(&format!("[quick_terminal]\nscreen = \"{name}\""));
+            assert_eq!(
+                (config.quick_terminal.screen.clone(), errors),
+                (screen, vec![]),
+                "{name}"
+            );
+            assert_eq!(config.quick_terminal.screen.to_string(), name);
+        }
+    }
+
+    #[test]
+    fn quick_terminal_size_is_clamped_to_its_bounds() {
+        for (value, expected) in [(10, 10), (100, 100), (5, 10), (0, 10), (150, 100)] {
+            let (config, errors) = parse(&format!("[quick_terminal]\nsize = {value}\n"));
+            assert_eq!(config.quick_terminal.size, expected, "{value}");
+            let clamped = value != expected;
+            assert_eq!(errors.len(), usize::from(clamped), "{value}");
+            if clamped {
+                assert_eq!(errors[0].kind, ConfigErrorKind::InvalidValue);
+                assert_eq!(errors[0].key.as_deref(), Some("quick_terminal.size"));
+            }
+        }
+    }
+
+    #[test]
+    fn quick_terminal_animation_is_capped() {
+        let (config, errors) = parse("[quick_terminal]\nanimation_ms = 1000\n");
+        assert_eq!((config.quick_terminal.animation_ms, errors), (1000, vec![]));
+        let (config, errors) = parse("[quick_terminal]\nanimation_ms = 5000\n");
+        assert_eq!(config.quick_terminal.animation_ms, 1000);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].key.as_deref(),
+            Some("quick_terminal.animation_ms")
+        );
+    }
+
+    #[test]
+    fn invalid_quick_terminal_values_keep_the_previous_ones() {
+        let mut previous = Config::default();
+        previous.quick_terminal.edge = QuickTerminalEdge::Bottom;
+        previous.quick_terminal.screen = QuickTerminalScreen::Primary;
+        previous.quick_terminal.hotkey = "Ctrl+F12".to_owned();
+        previous.quick_terminal.animation_ms = 300;
+        for (key, value) in [
+            ("edge", "\"middle\""),
+            ("screen", "\"\""),
+            ("screen", "3"),
+            ("hotkey", "\"Hyper+X\""),
+            ("hotkey", "\"Ctrl+NoSuchKey\""),
+            ("animation_ms", "-1"),
+        ] {
+            let text = format!("[quick_terminal]\n{key} = {value}\n");
+            let (config, errors) = Config::parse(&text, &previous, &file());
+            let (quick, before) = (&config.quick_terminal, &previous.quick_terminal);
+            let kept = match key {
+                "edge" => quick.edge == before.edge,
+                "screen" => quick.screen == before.screen,
+                "hotkey" => quick.hotkey == before.hotkey,
+                _ => quick.animation_ms == before.animation_ms,
+            };
+            assert!(kept, "{key} = {value}: {quick:?}");
+            assert_eq!(errors.len(), 1, "{key} = {value}");
+            assert_eq!(
+                errors[0].kind,
+                ConfigErrorKind::InvalidValue,
+                "{key} = {value}"
+            );
+            let path = format!("quick_terminal.{key}");
+            assert_eq!(
+                errors[0].key.as_deref(),
+                Some(path.as_str()),
+                "{key} = {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_quick_terminal_hotkey_is_accepted() {
+        let mut previous = Config::default();
+        previous.quick_terminal.hotkey = "Ctrl+F12".to_owned();
+        let (config, errors) =
+            Config::parse("[quick_terminal]\nhotkey = \"\"\n", &previous, &file());
+        assert_eq!(
+            (config.quick_terminal.hotkey.as_str(), errors),
+            ("", vec![])
         );
     }
 
