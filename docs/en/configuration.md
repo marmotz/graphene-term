@@ -74,8 +74,9 @@ describes each problem (click it to hide it):
 Open it with `Ctrl+,`, with **Settings** in the [command palette](tabs-and-panes.md#command-palette),
 or from the right-click menu. It shows the same sections as the file (language, font,
 window, scrollback, cursor, selection, tabs, theme, keyboard shortcuts, notifications,
-updates), and each change is written at once to `config.toml`, or to `keybindings.toml`
-for keyboard shortcuts, keeping the files' comments, then applied like a hand edit.
+quick terminal, updates), and each change is written at once to `config.toml`, or to
+`keybindings.toml` for keyboard shortcuts, keeping the files' comments, then applied like
+a hand edit.
 
 - **Keyboard shortcuts**: lists every action with its shortcuts. Add a shortcut by
   pressing it (`Escape` cancels), or remove one.
@@ -220,6 +221,25 @@ first one: each pane shows at most one, clicking it brings back the pane, and th
 window's unseen count is shown on the Dock icon. Notifications need Graphene to run from
 `Graphene.app`; run another way, only the Dock badge and the counters on the tabs and
 pane bars are shown.
+
+### `[quick_terminal]`
+
+A terminal that slides from a screen edge and stays resident between two uses. Available
+on macOS and on Linux under X11; under Wayland it does not start and its settings
+section is disabled. See [Quick terminal](quick-terminal.md) for the command that shows
+it.
+
+| Setting              | Default    | Values                                                                                     |
+|----------------------|------------|--------------------------------------------------------------------------------------------|
+| `hotkey`             | `""`       | Native global shortcut showing or hiding the quick terminal, written like a [keyboard shortcut](#keyboard-shortcuts) (`"Ctrl+F12"`). Empty: none. |
+| `edge`               | `"top"`    | Screen edge it slides from: `"top"`, `"bottom"`, `"left"` or `"right"`.                    |
+| `size`               | `40`       | Percentage of the screen, from 10 to 100: the height for `top` and `bottom`, the width for `left` and `right`. The other dimension takes the whole screen. |
+| `screen`             | `"active"` | `"active"` (the screen under the mouse cursor), `"primary"`, or the name of a screen. A name that matches no screen falls back to `"active"`. |
+| `animation_ms`       | `150`      | Duration of the slide in milliseconds, `0` for none, at most 1000.                         |
+| `hide_on_focus_loss` | `true`     | `true` or `false`. Hide the quick terminal when it loses the focus.                        |
+
+`edge`, `size`, `screen` and `animation_ms` apply the next time the quick terminal is
+shown.
 
 ## Update check
 

@@ -197,6 +197,38 @@ impl Reader<'_> {
                 }
             }),
             ("notifications", "bell") => self.set(value, key_segments, path, &mut config.notifications.bell, &previous.notifications.bell, Checked::Valid),
+            ("quick_terminal", "hotkey") => self.set(value, key_segments, path, &mut config.quick_terminal.hotkey, &previous.quick_terminal.hotkey, |hotkey: String| {
+                if hotkey.is_empty() {
+                    return Checked::Valid(hotkey);
+                }
+                match keybindings::Shortcut::parse(&hotkey) {
+                    Ok(_) => Checked::Valid(hotkey),
+                    Err(message) => Checked::Invalid(message),
+                }
+            }),
+            ("quick_terminal", "edge") => self.set(value, key_segments, path, &mut config.quick_terminal.edge, &previous.quick_terminal.edge, Checked::Valid),
+            ("quick_terminal", "size") => self.set(value, key_segments, path, &mut config.quick_terminal.size, &previous.quick_terminal.size, |size: u32| {
+                if (MIN_QUICK_TERMINAL_SIZE..=MAX_QUICK_TERMINAL_SIZE).contains(&size) {
+                    Checked::Valid(size)
+                } else {
+                    let clamped = size.clamp(MIN_QUICK_TERMINAL_SIZE, MAX_QUICK_TERMINAL_SIZE);
+                    Checked::Clamped(clamped, format!("{size} is out of {MIN_QUICK_TERMINAL_SIZE}..={MAX_QUICK_TERMINAL_SIZE}, using {clamped}"))
+                }
+            }),
+            ("quick_terminal", "screen") => self.set(value, key_segments, path, &mut config.quick_terminal.screen, &previous.quick_terminal.screen, |screen: String| {
+                match QuickTerminalScreen::parse(&screen) {
+                    Ok(screen) => Checked::Valid(screen),
+                    Err(message) => Checked::Invalid(message),
+                }
+            }),
+            ("quick_terminal", "animation_ms") => self.set(value, key_segments, path, &mut config.quick_terminal.animation_ms, &previous.quick_terminal.animation_ms, |ms: u32| {
+                if ms <= MAX_QUICK_TERMINAL_ANIMATION_MS {
+                    Checked::Valid(ms)
+                } else {
+                    Checked::Clamped(MAX_QUICK_TERMINAL_ANIMATION_MS, format!("{ms} is above the maximum, using {MAX_QUICK_TERMINAL_ANIMATION_MS}"))
+                }
+            }),
+            ("quick_terminal", "hide_on_focus_loss") => self.set(value, key_segments, path, &mut config.quick_terminal.hide_on_focus_loss, &previous.quick_terminal.hide_on_focus_loss, Checked::Valid),
             ("keybindings", keys) => {
                 let previous_action = previous.keybindings.get(keys).cloned();
                 let mut action = previous_action.clone();

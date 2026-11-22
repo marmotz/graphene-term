@@ -72,3 +72,17 @@
 # command_threshold = 10
 ## Turn the terminal bell into a notification.
 # bell = false
+
+# [quick_terminal]
+## Native global shortcut showing or hiding the quick terminal, written like a keyboard shortcut (e.g. "Ctrl+F12"); empty for none.
+# hotkey = ""
+## Screen edge the quick terminal slides from: "top", "bottom", "left", "right".
+# edge = "top"
+## Percentage of the screen taken, from 10 to 100: the height for top/bottom, the width for left/right.
+# size = 40
+## Screen it appears on: "active" (under the mouse cursor), "primary", or a screen name.
+# screen = "active"
+## Duration of the slide in milliseconds, 0 for none, at most 1000.
+# animation_ms = 150
+## Hide the quick terminal when it loses the focus.
+# hide_on_focus_loss = true

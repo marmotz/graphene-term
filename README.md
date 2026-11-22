@@ -38,6 +38,8 @@ uncomment the line below.
 - **Mouse selection**, including rectangular selection, and mouse reporting to
   applications: [selection and clipboard](docs/en/selection-and-clipboard.md).
 - **Remappable keybindings**: [keyboard shortcuts](docs/en/keybindings.md).
+- **Quick terminal** attached to a screen edge, shown and hidden by
+  `graphene --quick-toggle` (macOS and X11): [quick terminal](docs/en/quick-terminal.md).
 - **Settings window**, live config reload, remembered window size, update
   notification: [configuration](docs/en/configuration.md).
 - **Eight built-in themes**, your own theme files, and themes that follow the system

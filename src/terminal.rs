@@ -44,6 +44,8 @@ pub enum UserEvent {
         allow(dead_code, reason = "sent by the OS notification backends")
     )]
     NotificationClicked(PaneId),
+    /// A command of the quick terminal socket.
+    Quick(crate::quick_terminal::QuickCommand),
 }
 
 /// Lets at most one `Wakeup` of a pane wait in the event loop: the PTY thread sends one

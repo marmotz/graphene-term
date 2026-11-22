@@ -169,6 +169,8 @@ enum Capture {
     Bind(Action),
     /// The shortcut whose actions the list is narrowed to.
     Search,
+    /// The value of a shortcut field.
+    Field(Field),
 }
 
 /// A captured shortcut already bound to `other`.
@@ -234,7 +236,9 @@ impl View {
                 file_problems(ui, lang, model, self.section);
                 ui.heading(label(Msg::Section(self.section)));
                 ui.separator();
-                ui.add_enabled_ui(model.locked(self.section).is_none(), |ui| {
+                let enabled = model.locked(self.section).is_none()
+                    && model.unavailable(self.section).is_none();
+                ui.add_enabled_ui(enabled, |ui| {
                     self.section_body(ui, lang, model, &mut edits);
                 });
             });
@@ -332,6 +336,7 @@ impl View {
                     .then_some(Input::Toggle(on))
             }
             Widget::Text | Widget::Number(_) => self.text_field(ui, model, field),
+            Widget::Shortcut => self.shortcut_field(ui, lang, model, field),
             Widget::Slider { min, max, step } => {
                 let mut value = self
                     .sliding
@@ -354,7 +359,19 @@ impl View {
                 })
             }
         };
-        let Some(input) = input else { return };
+        if let Some(input) = input {
+            self.write_input(model, field, input, changes);
+        }
+    }
+
+    /// Adds the changes `input` makes to `field`, or keeps why it was refused.
+    fn write_input(
+        &mut self,
+        model: &SettingsModel,
+        field: Field,
+        input: Input,
+        changes: &mut Vec<Change>,
+    ) {
         match model.edit(field, input) {
             Ok(edit) => {
                 self.input_errors.remove(&field);
@@ -381,6 +398,67 @@ impl View {
         }
         response.lost_focus().then_some(Input::Text(text))
     }
+
+    /// A shortcut field: its shortcut, removed on click, or "No shortcut", then the
+    /// button capturing the next key press as its new value, as in the shortcuts
+    /// section. Returns the cleared value when the shortcut is removed.
+    fn shortcut_field(
+        &mut self,
+        ui: &mut Ui,
+        lang: Lang,
+        model: &SettingsModel,
+        field: Field,
+    ) -> Option<Input> {
+        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let text = model.text(field);
+        let capturing = self.capturing == Some(Capture::Field(field));
+        let mut input = None;
+        ui.horizontal(|ui| {
+            if text.is_empty() {
+                if !capturing {
+                    ui.label(RichText::new(label(Msg::NoShortcut)).weak());
+                }
+            } else {
+                let shortcut =
+                    Shortcut::parse(&text).map_or_else(|_| text.clone(), Shortcut::label);
+                if ui
+                    .add(chip(&shortcut))
+                    .on_hover_text(label(Msg::RemoveShortcut))
+                    .clicked()
+                {
+                    self.capturing = None;
+                    input = Some(Input::Text(String::new()));
+                }
+            }
+            if capturing {
+                if ui.button(label(Msg::Cancel)).clicked() {
+                    self.capturing = None;
+                }
+            } else {
+                let start = if text.is_empty() {
+                    Msg::AddShortcut
+                } else {
+                    Msg::ChangeShortcut
+                };
+                if ui.button(label(start)).clicked() {
+                    self.capturing = Some(Capture::Field(field));
+                    self.conflict = None;
+                }
+            }
+        });
+        if capturing {
+            ui.label(RichText::new(label(Msg::PressShortcut)).weak());
+        }
+        input
+    }
+}
+
+/// The section showing `field`.
+fn field_section(field: Field) -> SettingsSection {
+    SettingsSection::ALL
+        .into_iter()
+        .find(|&section| model::section_fields(section).contains(&field))
+        .unwrap_or_default()
 }
 
 /// A column of `width` at `x` on the cursor's line, laid out with `layout` and as tall
@@ -393,9 +471,35 @@ fn column(ui: &mut Ui, x: f32, width: f32, layout: Layout, add: impl FnOnce(&mut
     child.min_rect().bottom()
 }
 
-/// Text of a shortcut's removal button.
-fn chip_text(shortcut: Shortcut) -> String {
-    format!("{} \u{00d7}", shortcut.label())
+/// Removal mark shown at the right edge of a shortcut chip.
+const CHIP_REMOVE: &str = "\u{00d7}";
+
+/// A shortcut's removal button: the removal mark sits at the right edge and the
+/// shortcut is centered in the space left of it.
+fn chip(shortcut: &str) -> Button<'static> {
+    Button::new((
+        egui::Atom::grow(),
+        shortcut.to_owned(),
+        egui::Atom::grow(),
+        CHIP_REMOVE,
+    ))
+}
+
+/// Smallest width of the `chip` of `shortcut`: its two texts, the gaps egui keeps
+/// between its four atoms, and the button padding.
+fn chip_width(ui: &Ui, shortcut: &str) -> f32 {
+    let font = TextStyle::Button.resolve(ui.style());
+    let width = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let spacing = ui.spacing();
+    width(shortcut)
+        + width(CHIP_REMOVE)
+        + 3.0 * spacing.icon_spacing
+        + 2.0 * spacing.button_padding.x
 }
 
 /// A combo box of the field's choices; returns the picked value when it changed.
@@ -518,6 +622,10 @@ fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: Settin
         error_label(ui, &error.to_string());
         ui.label(error.file.display().to_string());
         ui.label(label(Msg::FixFileByHand));
+        shown = true;
+    }
+    if let Some(reason) = model.unavailable(section) {
+        warn_label(ui, &label(reason));
         shown = true;
     }
     if let Some(error) = model.write_error() {
@@ -1006,6 +1114,87 @@ mod tests {
     }
 
     #[test]
+    fn a_captured_key_press_sets_the_quick_terminal_hotkey() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Capture::Field(Field::QuickTerminalHotkey)),
+            ..View::default()
+        };
+        // A modifier alone keeps waiting.
+        let (control, control_left) = (
+            Key::Named(NamedKey::Control),
+            PhysicalKey::Code(KeyCode::ControlLeft),
+        );
+        assert_eq!(
+            view.captured_key(&model, &control, control_left, CTRL_ALT),
+            vec![]
+        );
+        assert!(view.capturing());
+        let (key, physical) = letter("d", KeyCode::KeyD);
+        assert_eq!(
+            view.captured_key(&model, &key, physical, CTRL_ALT),
+            vec![Change::Set(
+                vec!["quick_terminal".into(), "hotkey".into()],
+                Value::Text("Ctrl+Alt+D".into())
+            )]
+        );
+        assert!(!view.capturing());
+        assert_eq!(view.conflict, None);
+    }
+
+    #[test]
+    fn a_hotkey_already_set_is_replaced_and_the_same_one_writes_nothing() {
+        let model = model("[quick_terminal]\nhotkey = \"Ctrl+Alt+D\"\n");
+        let mut view = View {
+            capturing: Some(Capture::Field(Field::QuickTerminalHotkey)),
+            ..View::default()
+        };
+        let (key, physical) = letter("d", KeyCode::KeyD);
+        assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT), vec![]);
+        assert!(!view.capturing());
+        view.capturing = Some(Capture::Field(Field::QuickTerminalHotkey));
+        let (f12, f12_code) = (Key::Named(NamedKey::F12), PhysicalKey::Code(KeyCode::F12));
+        assert_eq!(
+            view.captured_key(&model, &f12, f12_code, ModifiersState::CONTROL),
+            vec![Change::Set(
+                vec!["quick_terminal".into(), "hotkey".into()],
+                Value::Text("Ctrl+F12".into())
+            )]
+        );
+    }
+
+    #[test]
+    fn escape_alone_cancels_the_hotkey_capture() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Capture::Field(Field::QuickTerminalHotkey)),
+            ..View::default()
+        };
+        let (escape, physical) = (
+            Key::Named(NamedKey::Escape),
+            PhysicalKey::Code(KeyCode::Escape),
+        );
+        assert_eq!(
+            view.captured_key(&model, &escape, physical, ModifiersState::empty()),
+            vec![]
+        );
+        assert!(!view.capturing());
+    }
+
+    #[test]
+    fn a_locked_config_file_cancels_the_hotkey_capture() {
+        let model = model("[quick_terminal\n");
+        assert!(model.locked(SettingsSection::QuickTerminal).is_some());
+        let mut view = View {
+            capturing: Some(Capture::Field(Field::QuickTerminalHotkey)),
+            ..View::default()
+        };
+        let (key, physical) = letter("d", KeyCode::KeyD);
+        assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT), vec![]);
+        assert!(!view.capturing());
+    }
+
+    #[test]
     fn added_shortcuts_come_last_in_the_order_they_were_added() {
         let model = model("");
         let mut view = View {
@@ -1354,6 +1543,67 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_chip_centers_its_shortcut_left_of_a_right_aligned_removal_mark() {
+        let shortcut = Shortcut::parse("Ctrl+Shift+T").unwrap();
+        let ctx = egui::Context::default();
+        let mut rect = Rect::NOTHING;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            rect = ui
+                .add(chip(&shortcut.label()).min_size(Vec2::new(300.0, 0.0)))
+                .rect;
+        });
+        output.textures_delta.clear();
+        let texts: Vec<(String, Rect)> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                _ => None,
+            })
+            .collect();
+        let find = |wanted: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == wanted)
+                .map(|(_, rect)| *rect)
+                .unwrap_or_else(|| panic!("no {wanted:?} text in {texts:?}"))
+        };
+        let label = find(&shortcut.label());
+        let mark = find(CHIP_REMOVE);
+        let spacing = ctx.global_style().spacing.clone();
+        let padding = spacing.button_padding.x;
+        assert!((rect.right() - padding - mark.right()).abs() <= 1.0);
+        let left_gap = label.left() - (rect.left() + padding);
+        // The space before the mark ends at the atom gap egui keeps next to it.
+        let right_gap = mark.left() - spacing.icon_spacing - label.right();
+        assert!(left_gap > 10.0, "{left_gap}");
+        assert!(
+            (left_gap - right_gap).abs() <= 2.0,
+            "{left_gap} vs {right_gap}"
+        );
+    }
+
+    #[test]
+    fn a_chip_is_exactly_as_wide_as_its_measured_width() {
+        let ctx = egui::Context::default();
+        let mut widths = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for text in ["Ctrl+T", "Ctrl+Shift+Alt+PageDown"] {
+                let drawn = ui.add(chip(text)).rect.width();
+                widths.push((drawn, chip_width(ui, text)));
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(widths.len(), 2);
+        for (drawn, measured) in widths {
+            assert!((drawn - measured).abs() <= 0.5, "{drawn} vs {measured}");
+        }
     }
 
     #[test]

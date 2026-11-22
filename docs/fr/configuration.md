@@ -78,10 +78,10 @@ Ouvrez-la avec `Ctrl+,`, avec **Paramètres** dans la
 [palette de commandes](tabs-and-panes.md#palette-de-commandes), ou depuis le menu du
 clic droit. Elle présente les mêmes sections que le fichier (**Langue**, **Police**,
 **Fenêtre**, **Historique**, **Curseur**, **Sélection**, **Onglets**, **Thème**,
-**Raccourcis clavier**, **Notifications**, **Mises à jour**), et chaque changement est
-écrit aussitôt dans `config.toml`, ou dans `keybindings.toml` pour les raccourcis
-clavier, en conservant les commentaires des fichiers, puis appliqué comme une
-modification à la main.
+**Raccourcis clavier**, **Notifications**, **Quick terminal**, **Mises à jour**), et
+chaque changement est écrit aussitôt dans `config.toml`, ou dans `keybindings.toml` pour
+les raccourcis clavier, en conservant les commentaires des fichiers, puis appliqué comme
+une modification à la main.
 
 - **Raccourcis clavier** : liste chaque action avec ses raccourcis. Ajoutez un raccourci
   en l'appuyant (`Échap` annule), ou supprimez-en un.
@@ -230,6 +230,25 @@ ramène le panneau, et le nombre de notifications non vues de la fenêtre s'affi
 l'icône du Dock. Les notifications demandent de lancer Graphene depuis `Graphene.app` ;
 lancé autrement, seuls le badge du Dock et les compteurs des onglets et des barres de
 panneau s'affichent.
+
+### `[quick_terminal]`
+
+Un terminal qui glisse depuis un bord de l'écran et reste résident entre deux
+utilisations. Disponible sous macOS et sous Linux avec X11 ; sous Wayland, il ne démarre
+pas et sa section des paramètres est désactivée. Voir [Quick terminal](quick-terminal.md)
+pour la commande qui l'affiche.
+
+| Paramètre            | Défaut     | Valeurs                                                                                    |
+|----------------------|------------|--------------------------------------------------------------------------------------------|
+| `hotkey`             | `""`       | Raccourci global natif qui affiche ou masque le quick terminal, écrit comme un [raccourci clavier](#raccourcis-clavier) (`"Ctrl+F12"`). Vide : aucun. |
+| `edge`               | `"top"`    | Bord de l'écran d'où il glisse : `"top"`, `"bottom"`, `"left"` ou `"right"`.               |
+| `size`               | `40`       | Pourcentage de l'écran, de 10 à 100 : la hauteur pour `top` et `bottom`, la largeur pour `left` et `right`. L'autre dimension prend tout l'écran. |
+| `screen`             | `"active"` | `"active"` (l'écran sous le curseur de la souris), `"primary"`, ou le nom d'un écran. Un nom qui ne correspond à aucun écran revient à `"active"`. |
+| `animation_ms`       | `150`      | Durée du glissement en millisecondes, `0` pour aucun, au plus 1000.                        |
+| `hide_on_focus_loss` | `true`     | `true` ou `false`. Masquer le quick terminal quand il perd le focus.                       |
+
+`edge`, `size`, `screen` et `animation_ms` s'appliquent au prochain affichage du quick
+terminal.
 
 ## Recherche de mises à jour
 

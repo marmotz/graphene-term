@@ -19,6 +19,7 @@ is called `graphene`.
 | [Tabs and panes](tabs-and-panes.md)                   | Tabs, split panes, zoom, drag to rearrange, command palette        |
 | [Selection and clipboard](selection-and-clipboard.md) | Mouse selection, rectangular selection, copy, paste                |
 | [Images and links](images-and-links.md)               | Inline images (kitty graphics, sixel), clickable links             |
+| [Quick terminal](quick-terminal.md)                   | A resident terminal attached to a screen edge, shown by a command  |
 
 ## Customizing Graphene
 

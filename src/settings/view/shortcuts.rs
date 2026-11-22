@@ -35,7 +35,7 @@ fn fold(text: &str) -> String {
 impl View {
     /// Takes a key press while a shortcut is captured; returns the changes to write.
     /// `Escape` alone cancels, a modifier alone keeps waiting. A shortcut captured for
-    /// an action is bound to it, or waits for "Replace" or "Cancel" when bound to
+    /// a shortcut field becomes its value; one captured for an action is bound to it, or waits for "Replace" or "Cancel" when bound to
     /// another one; a shortcut searched for narrows the list to its actions and writes
     /// nothing.
     pub fn captured_key(
@@ -48,7 +48,11 @@ impl View {
         let Some(capture) = self.capturing else {
             return Vec::new();
         };
-        if model.locked(SettingsSection::KeyboardShortcuts).is_some()
+        let section = match capture {
+            Capture::Field(field) => field_section(field),
+            Capture::Bind(_) | Capture::Search => SettingsSection::KeyboardShortcuts,
+        };
+        if model.locked(section).is_some()
             || (mods.is_empty() && *key == Key::Named(NamedKey::Escape))
         {
             self.capturing = None;
@@ -60,6 +64,11 @@ impl View {
         self.capturing = None;
         let action = match capture {
             Capture::Bind(action) => action,
+            Capture::Field(field) => {
+                let mut changes = Vec::new();
+                self.write_input(model, field, Input::Text(shortcut.label()), &mut changes);
+                return changes;
+            }
             Capture::Search => {
                 let actions = model
                     .shortcut_rows()
@@ -109,7 +118,7 @@ impl View {
                         self.capturing = None;
                     }
                 } else if let ShortcutFilter::Shortcut { shortcut, .. } = self.filter {
-                    if ui.button(chip_text(shortcut)).clicked() {
+                    if ui.add(chip(&shortcut.label())).clicked() {
                         self.set_filter(ShortcutFilter::None);
                     }
                 } else if ui.button(label(Msg::SearchShortcut)).clicked() {
@@ -171,9 +180,11 @@ impl View {
         let slot_width = rows
             .iter()
             .flat_map(|(_, shortcuts)| shortcuts)
-            .map(|shortcut| width(chip_text(*shortcut), &button))
-            .fold(width(label(Msg::NoShortcut), &body), f32::max)
-            + 2.0 * ui.spacing().button_padding.x;
+            .map(|shortcut| chip_width(ui, &shortcut.label()))
+            .fold(
+                width(label(Msg::NoShortcut), &body) + 2.0 * ui.spacing().button_padding.x,
+                f32::max,
+            );
         let add_width = [label(Msg::AddShortcut), label(Msg::Cancel)]
             .into_iter()
             .map(|text| width(text, &button))
@@ -225,8 +236,8 @@ impl View {
                                 );
                             }
                             for shortcut in shortcuts {
-                                let chip = Button::new(chip_text(shortcut))
-                                    .min_size(Vec2::new(slot_width, 0.0));
+                                let chip =
+                                    chip(&shortcut.label()).min_size(Vec2::new(slot_width, 0.0));
                                 if ui
                                     .add(chip)
                                     .on_hover_text(label(Msg::RemoveShortcut))

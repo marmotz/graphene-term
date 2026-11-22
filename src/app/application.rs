@@ -123,6 +123,17 @@ pub struct App {
     pub(super) first_program: Option<Vec<String>>,
     /// Size of the first window asked by `--columns` and `--lines`.
     pub(super) grid: GridSize,
+    /// An ordinary window, or the quick terminal of `graphene --quick`.
+    pub(super) mode: WindowMode,
+    /// Exit code of the process once the event loop ends.
+    pub(super) exit_code: i32,
+    /// Global hotkey of the quick terminal process, created at its first registration.
+    pub(super) hotkey: Option<crate::hotkey::Hotkey>,
+    /// Why the hotkey could not be registered, shown by the configuration banner.
+    pub(super) hotkey_error: Option<ConfigError>,
+    /// Whether the session supports the quick terminal (not Wayland), known once the
+    /// event loop resumed.
+    pub(super) quick_supported: bool,
 }
 
 /// Whether the window is created transparent for a background `opacity`. Elsewhere
@@ -164,11 +175,12 @@ impl App {
             StartupMode::Remember => window_state::path().and_then(|file| WindowState::load(&file)),
             StartupMode::Default | StartupMode::Maximized => None,
         };
-        let (initial_size, maximized) = initial_window(&self.config.window, remembered);
-        let maximized = maximized && !self.grid.is_set();
+        let (mut initial_size, maximized) = initial_window(&self.config.window, remembered);
+        let quick = matches!(self.mode, WindowMode::Quick(_));
+        let maximized = maximized && !self.grid.is_set() && !quick;
         let today = special_days::today();
         let title = special_days::titled(today.as_ref(), DEFAULT_TITLE);
-        let attributes = Window::default_attributes()
+        let mut attributes = Window::default_attributes()
             .with_title(&title)
             .with_inner_size(initial_size)
             .with_maximized(maximized)
@@ -179,9 +191,36 @@ impl App {
                 self.config.window.background_opacity,
                 cfg!(target_os = "macos"),
             ));
+        if quick {
+            // Created at its place, hidden until a command shows it: the shell is
+            // already running when it first appears.
+            attributes = attributes
+                .with_decorations(false)
+                .with_window_level(winit::window::WindowLevel::AlwaysOnTop);
+            // A dock window: window managers neither play their opening effect on it
+            // nor keep it inside the screen, which would stop its slide. They do not
+            // focus it either: the quick terminal takes the focus itself.
+            #[cfg(target_os = "linux")]
+            {
+                use winit::platform::x11::{WindowAttributesExtX11, WindowType};
+                attributes = attributes.with_x11_window_type(vec![WindowType::Dock]);
+            }
+            if let Some(placement) = quick::placement(event_loop, &self.config.quick_terminal) {
+                initial_size = placement.logical;
+                attributes = attributes
+                    .with_inner_size(placement.size)
+                    .with_position(placement.position);
+            }
+        }
         let window = Arc::new(event_loop.create_window(attributes)?);
+        if quick {
+            quick::prepare_window(&window);
+        }
         #[cfg(target_os = "linux")]
-        if maximized && let Err(error) = crate::x11_window::preset_maximized(&window) {
+        if maximized
+            && let Err(error) =
+                crate::x11_window::preset_states(&window, &crate::x11_window::MAXIMIZED)
+        {
             log::warn!("cannot open the window maximized: {error:#}");
         }
         perf::mark("window created");
@@ -208,8 +247,10 @@ impl App {
             self.config.theme.active(self.appearance),
         ));
 
-        window.set_visible(true);
-        perf::mark("window shown");
+        if !quick {
+            window.set_visible(true);
+            perf::mark("window shown");
+        }
         let taskbar = crate::taskbar::spawn(&window);
         let maximize_hold = maximized.then(|| {
             redraw::MaximizeHold::new(initial_size.to_physical(scale.into()), Instant::now())
@@ -273,6 +314,8 @@ impl App {
             badge: Badge::default(),
             progress_epoch: Instant::now(),
             taskbar,
+            quick,
+            quick_closed: false,
         })
     }
 
@@ -339,12 +382,20 @@ impl App {
     /// them to the open window.
     pub(super) fn reload_config(&mut self) {
         let (config, errors) = config::reload(&self.config);
-        let (config, palette, banner, load_errors) = with_theme(config, errors, self.appearance);
+        let (config, palette, _, load_errors) = with_theme(config, errors, self.appearance);
         let old = std::mem::replace(&mut self.config, config);
         self.watch_appearance();
         self.palette = palette;
-        self.config_banner = banner.clone();
         self.load_errors = load_errors;
+        self.register_hotkey();
+        if hotkey::hotkey_turned_on(
+            &old.quick_terminal.hotkey,
+            &self.config.quick_terminal.hotkey,
+        ) {
+            self.start_hidden_quick();
+        }
+        let banner = hotkey::config_banner(&self.load_errors, self.hotkey_error.as_ref());
+        self.config_banner = banner.clone();
         if let Some(settings) = self.settings.as_mut() {
             settings.apply(
                 &self.palette,
@@ -445,6 +496,11 @@ impl ApplicationHandler<UserEvent> for App {
         if self.session.is_some() {
             return;
         }
+        self.quick_supported = quick::quick_supported(event_loop);
+        if self.quick_state().is_some() && !self.quick_supported {
+            self.exit_code = crate::quick_terminal::control::WAYLAND_EXIT_CODE;
+            return event_loop.exit();
+        }
         match self.create_session(event_loop) {
             Ok(mut session) => {
                 session.update_pointer();
@@ -454,11 +510,26 @@ impl ApplicationHandler<UserEvent> for App {
             Err(error) => return self.fail(event_loop, error),
         }
         self.update_checker.apply(&self.config.updates);
+        // The window is shown: a hidden quick terminal starts for the hotkey.
+        self.start_hidden_quick();
+        if let Some(state) = self.quick_state() {
+            let start_hidden = state.start_hidden;
+            if let Err(error) = self.listen_quick() {
+                return self.fail(event_loop, error);
+            }
+            if self.register_hotkey() {
+                self.refresh_config_banner();
+            }
+            if !start_hidden {
+                self.show_quick(event_loop);
+            }
+        }
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(session) = &self.session
             && !session.sized_by_grid
+            && self.mode == WindowMode::Normal
         {
             session.save_window_state();
         }
@@ -480,6 +551,7 @@ impl ApplicationHandler<UserEvent> for App {
             session.flush_panes();
             deadline
         });
+        let deadline = earliest(deadline, self.quick_tick(event_loop, now));
         let deadline = earliest(
             deadline,
             self.settings.as_mut().and_then(|settings| {
@@ -494,6 +566,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::ConfigChanged => return self.reload_config(),
             UserEvent::Appearance(appearance) => return self.set_appearance(appearance),
+            UserEvent::Quick(command) => return self.quick_command(event_loop, command),
             UserEvent::Terminal(..) | UserEvent::Update(_) | UserEvent::NotificationClicked(_) => {}
         }
         let Some(session) = self.session.as_mut() else {
@@ -509,10 +582,11 @@ impl ApplicationHandler<UserEvent> for App {
                 session.relayout();
             }
             UserEvent::NotificationClicked(pane) => session.notification_clicked(pane),
-            UserEvent::ConfigChanged | UserEvent::Appearance(_) => {}
+            UserEvent::ConfigChanged | UserEvent::Appearance(_) | UserEvent::Quick(_) => {}
         }
         session.flush_panes();
         self.open_requested_settings(event_loop);
+        self.reset_closed_quick(event_loop);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -520,10 +594,26 @@ impl ApplicationHandler<UserEvent> for App {
         let settings_window = self.settings.as_ref().map(SettingsWindow::id);
         match route(id, session_window, settings_window) {
             Route::Session => {
+                if let WindowEvent::Focused(focused) = event {
+                    self.quick_focus_changed(focused);
+                }
+                if let WindowEvent::MouseInput {
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                } = event
+                {
+                    self.quick_clicked();
+                }
                 self.session_window_event(event_loop, event);
                 self.open_requested_settings(event_loop);
+                self.reset_closed_quick(event_loop);
             }
             Route::Settings => {
+                if matches!(event, WindowEvent::Focused(true))
+                    && let Some(state) = self.quick_state()
+                {
+                    state.other_window_focused();
+                }
                 let Some(settings) = self.settings.as_mut() else {
                     return;
                 };
@@ -667,6 +757,50 @@ pub(super) fn with_theme(
 
 pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    run_app(event_loop, WindowMode::Normal, first_program, grid).map(|_| ())
+}
+
+/// Runs the quick terminal process: see [`crate::run_quick`].
+pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
+    let dir = config::runtime_dir()?;
+    let Some(lock) = crate::quick_terminal::control::claim(&dir, hidden)? else {
+        return Ok(0);
+    };
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        // Neither in the Dock nor in the application switcher.
+        builder.with_activation_policy(ActivationPolicy::Accessory);
+    }
+    let event_loop = builder.build()?;
+    let mode = WindowMode::Quick(QuickState::new(hidden));
+    let code = run_app(event_loop, mode, None, GridSize::default());
+    drop(lock);
+    code
+}
+
+impl App {
+    /// Listens on the quick terminal socket, once the process knows it can run: a
+    /// `--quick-toggle` that reaches the socket takes the window for started.
+    fn listen_quick(&mut self) -> anyhow::Result<()> {
+        let dir = config::runtime_dir()?;
+        let listener = crate::quick_terminal::control::bind(&dir)?;
+        let proxy = self.proxy.clone();
+        crate::quick_terminal::control::serve(listener, move |command| {
+            proxy.send_event(UserEvent::Quick(command)).is_ok()
+        })?;
+        Ok(())
+    }
+}
+
+/// Runs `event_loop` with the application in `mode`, and returns the exit code.
+fn run_app(
+    event_loop: EventLoop<UserEvent>,
+    mode: WindowMode,
+    first_program: Option<Vec<String>>,
+    grid: GridSize,
+) -> anyhow::Result<i32> {
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner, load_errors) = load_config();
     if let Some(dir) = config::config_dir() {
@@ -694,6 +828,11 @@ pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result
         appearance_watched: false,
         first_program,
         grid,
+        mode,
+        exit_code: 0,
+        hotkey: None,
+        hotkey_error: None,
+        quick_supported: false,
     };
     if let Some(first) = app.watch_appearance()
         && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)
@@ -703,7 +842,7 @@ pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result
     event_loop.run_app(&mut app)?;
     match app.error {
         Some(error) => Err(error),
-        None => Ok(()),
+        None => Ok(app.exit_code),
     }
 }
 

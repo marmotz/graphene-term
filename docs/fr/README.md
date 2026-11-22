@@ -24,6 +24,7 @@ paramètres) sont ceux de l'interface en français : voir le paramètre `languag
 | [Onglets et panneaux](tabs-and-panes.md)                   | Onglets, panneaux, zoom, réorganisation à la souris, palette de commandes |
 | [Sélection et presse-papiers](selection-and-clipboard.md)  | Sélection à la souris, sélection rectangulaire, copier, coller            |
 | [Images et liens](images-and-links.md)                     | Images dans le terminal (kitty graphics, sixel), liens cliquables         |
+| [Quick terminal](quick-terminal.md)                        | Un terminal résident attaché à un bord de l'écran, affiché par une commande |
 
 ## Personnaliser Graphene
 
