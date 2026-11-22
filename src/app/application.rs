@@ -271,6 +271,7 @@ impl App {
             ),
             badge: Badge::default(),
             progress_epoch: Instant::now(),
+            taskbar: crate::taskbar::spawn(),
         })
     }
 
@@ -469,6 +470,7 @@ impl ApplicationHandler<UserEvent> for App {
             let deadline = earliest(deadline, session.blink(now));
             let deadline = earliest(deadline, session.fold_animate(now));
             let deadline = earliest(deadline, session.progress_tick(now));
+            session.sync_taskbar();
             let deadline = earliest(deadline, session.honeycomb_tick(now));
             let deadline = earliest(deadline, session.special_day_tick(now));
             let deadline = earliest(deadline, session.pane_drag_tick(now));

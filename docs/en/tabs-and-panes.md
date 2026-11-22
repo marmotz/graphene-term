@@ -119,6 +119,10 @@ shows a segment sliding along the bar. It disappears when the program clears it,
 the command ends, or after 15 seconds without news. `[window] progress = false` (see
 [Configuration](configuration.md)) hides every progress bar.
 
+On Linux, the progress of the active tab also shows on the Graphene icon of the taskbar
+or dock, where the desktop supports it (KDE Plasma, Ubuntu Dock, Dash to Dock, Plank).
+An error or a pause shows its value there; an unknown progress shows no bar.
+
 ## Command palette
 
 `Ctrl+Shift+P` opens the command palette: every action with its shortcut, then the open

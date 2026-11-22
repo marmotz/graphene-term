@@ -165,6 +165,14 @@ impl Session {
         deadline
     }
 
+    /// Hands the progress of the active tab to the taskbar, after each round of events:
+    /// a report, an expiry, a change of tab or of active pane, or the `[window]
+    /// progress` setting turned off. Only a change reaches the desktop.
+    pub(super) fn sync_taskbar(&mut self) {
+        let progress = self.workspace.tab_progress(self.workspace.active_index());
+        self.taskbar.set_progress(progress);
+    }
+
     /// `progress` as drawn in the frame at `now`.
     pub(super) fn progress_view(&self, progress: Progress, now: Instant) -> ProgressView {
         ProgressView::new(progress, now.saturating_duration_since(self.progress_epoch))

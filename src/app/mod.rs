@@ -83,6 +83,7 @@ use crate::progress::{self, Progress, ProgressColors, ProgressState, ProgressVie
 use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
 use crate::settings::{self, LoadErrors, SettingsWindow};
+use crate::taskbar::Taskbar;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
 use crate::update::checker::Checker;
@@ -298,6 +299,8 @@ struct Session {
     badge: Badge,
     /// Origin of the indeterminate progress animation (see [`ProgressView::new`]).
     progress_epoch: Instant,
+    /// Shows the progress of the active tab on the window's icon.
+    taskbar: Taskbar,
 }
 
 impl Session {}

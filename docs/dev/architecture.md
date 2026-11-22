@@ -81,6 +81,9 @@ src/
   signals.rs       incremental scanner of the private block signals, screen clears,
                    OSC 9 / 777 notifications and OSC 9;4 progress (pure)
   progress.rs      OSC 9;4 progress: parsing, state, transitions and expiry (pure, time passed in)
+  taskbar/
+    mod.rs         Taskbar: progress of the active tab on the window icon, deduplicated, per platform
+    linux.rs       taskbar thread: com.canonical.Unity.LauncherEntry progress signal (zbus)
   graphics/
     mod.rs         Image (kitty / sixel sequence), Handler hook called by the PTY thread,
                    StoreHandler (runs kitty commands, keeps their PTY replies, places the

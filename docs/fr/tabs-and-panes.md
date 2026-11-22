@@ -125,6 +125,11 @@ glisse le long de la barre. Elle disparaît quand le programme l'efface, à la f
 commande, ou après 15 secondes sans nouvelles. `[window] progress = false` (voir
 [Configuration](configuration.md)) masque toutes les barres de progression.
 
+Sous Linux, la progression de l'onglet actif s'affiche aussi sur l'icône de Graphene dans
+la barre des tâches ou le dock, quand le bureau le permet (KDE Plasma, Ubuntu Dock, Dash
+to Dock, Plank). Une erreur ou une pause y affiche sa valeur ; une progression inconnue
+n'y affiche pas de barre.
+
 ## Palette de commandes
 
 `Ctrl+Shift+P` ouvre la palette de commandes : toutes les actions avec leur raccourci,

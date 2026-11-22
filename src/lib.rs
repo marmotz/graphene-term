@@ -38,6 +38,7 @@ mod selection;
 mod settings;
 mod shell_integration;
 mod signals;
+mod taskbar;
 mod terminal;
 mod theme;
 mod theme_edit;
