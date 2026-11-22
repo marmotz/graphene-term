@@ -5,6 +5,8 @@
 pub mod backend;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "macos", test))]
+mod macos;
 
 use std::time::Duration;
 

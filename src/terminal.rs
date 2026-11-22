@@ -40,7 +40,7 @@ pub enum UserEvent {
     Appearance(crate::appearance::Appearance),
     /// The user clicked the desktop notification of a pane.
     #[cfg_attr(
-        not(target_os = "linux"),
+        not(any(target_os = "linux", target_os = "macos")),
         allow(dead_code, reason = "sent by the OS notification backends")
     )]
     NotificationClicked(PaneId),

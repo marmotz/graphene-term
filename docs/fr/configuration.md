@@ -221,6 +221,13 @@ Sans serveur de notifications, seuls les compteurs des onglets et des barres de 
 s'affichent. Sous Wayland, ramener la fenêtre au premier plan après un clic dépend du
 compositeur.
 
+Sous macOS, les notifications passent par le centre de notifications, qui demande
+l'autorisation à la première : chaque panneau en affiche au plus une, un clic dessus
+ramène le panneau, et le nombre de notifications non vues de la fenêtre s'affiche sur
+l'icône du Dock. Les notifications demandent de lancer Graphene depuis `Graphene.app` ;
+lancé autrement, seuls le badge du Dock et les compteurs des onglets et des barres de
+panneau s'affichent.
+
 ## Recherche de mises à jour
 
 Tant que `updates.check` vaut `true`, Graphene demande en arrière-plan à GitHub si une

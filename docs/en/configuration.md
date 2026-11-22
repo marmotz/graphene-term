@@ -212,6 +212,12 @@ Dock). Without a notification server, only the counters on the tabs and pane bar
 shown. On Wayland, whether clicking a notification raises the window depends on the
 compositor.
 
+On macOS, notifications go to the Notification Center, which asks for permission at the
+first one: each pane shows at most one, clicking it brings back the pane, and the
+window's unseen count is shown on the Dock icon. Notifications need Graphene to run from
+`Graphene.app`; run another way, only the Dock badge and the counters on the tabs and
+pane bars are shown.
+
 ## Update check
 
 While `updates.check` is `true`, Graphene asks GitHub in the background whether a newer
