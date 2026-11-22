@@ -14,7 +14,9 @@
 //! command line, with Graphene's editor key bindings installed.
 //!
 //! `vte` drops unknown OSC without calling any handler, so the signals are found here,
-//! before the parser. The scanner is incremental (a sequence split across reads is
+//! before the parser. The same goes for the desktop notifications programs send with
+//! OSC 9 (`ESC ] 9 ; <text> ST`) and OSC 777 (`ESC ] 777 ; notify ; <title> ; <body>
+//! ST`), reported as [`Chunk::Notify`]. The scanner is incremental (a sequence split across reads is
 //! still found) and never consumes bytes: every byte, signals included, comes back as
 //! [`Chunk::Bytes`] so the `vte` parser still sees the whole stream.
 
@@ -32,6 +34,9 @@ const MAX_OSC_LEN: usize = 4096;
 /// OSC payload length after which a signal stops being collected: the base64 of the
 /// longest command line, plus room for the number, the token and the kind.
 const MAX_SIGNAL_LEN: usize = MAX_COMMAND_LEN.div_ceil(3) * 4 + 256;
+
+/// Longest title or body of a notification, in characters.
+pub const MAX_NOTICE_LEN: usize = 256;
 
 /// Parameter bytes kept for a CSI sequence; longer parameters are never a clear.
 const MAX_CSI_PARAMS: usize = 16;
@@ -57,6 +62,14 @@ pub enum Signal {
     Prompt,
 }
 
+/// A desktop notification requested by a program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Notice {
+    /// OSC 9 or OSC 777 `notify`. `title` is `None` for OSC 9, or when OSC 777 gave
+    /// an empty one.
+    Program { title: Option<String>, body: String },
+}
+
 /// A piece of the byte stream returned by [`Scanner::split`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Chunk<'a> {
@@ -66,12 +79,15 @@ pub enum Chunk<'a> {
     Signal(Signal),
     /// `CSI 2 J` or `CSI 3 J`, ending with the previous `Bytes` chunk.
     Clear,
+    /// A notification whose sequence ends with the previous `Bytes` chunk.
+    Notify(Notice),
 }
 
 /// What a finished sequence reports.
 enum Event {
     Signal(Signal),
     Clear,
+    Notify(Notice),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -282,13 +298,13 @@ impl Scanner {
 
     /// Ends the current OSC and parses its payload.
     fn finish(&mut self) -> Option<Event> {
-        let signal = if self.is_signal() {
-            parse(&self.payload[self.prefix.len()..], self.overflowed)
+        let event = if self.is_signal() {
+            parse(&self.payload[self.prefix.len()..], self.overflowed).map(Event::Signal)
         } else {
-            None
+            parse_notice(&self.payload).map(Event::Notify)
         };
         self.reset();
-        signal.map(Event::Signal)
+        event
     }
 }
 
@@ -308,6 +324,7 @@ impl<'a> Iterator for Split<'_, 'a> {
             return Some(match event {
                 Event::Signal(signal) => Chunk::Signal(signal),
                 Event::Clear => Chunk::Clear,
+                Event::Notify(notice) => Chunk::Notify(notice),
             });
         }
         if self.pos >= self.bytes.len() {
@@ -354,6 +371,49 @@ fn parse(rest: &[u8], overflowed: bool) -> Option<Signal> {
         b"prompt" if !overflowed => Some(Signal::Prompt),
         _ => None,
     }
+}
+
+/// Parses an OSC payload as a notification: `9;<text>` or
+/// `777;notify;<title>;<body>`. ConEmu's OSC 9 sub-commands (`9;1` to `9;12`, such as
+/// `9;4` progress) and the other OSC 777 sub-commands are not notifications.
+fn parse_notice(payload: &[u8]) -> Option<Notice> {
+    if let Some(text) = payload.strip_prefix(b"9;") {
+        let code_len = text.iter().take_while(|b| b.is_ascii_digit()).count();
+        let is_conemu = matches!(text.get(code_len), None | Some(b';'))
+            && std::str::from_utf8(&text[..code_len])
+                .ok()
+                .and_then(|code| code.parse::<u32>().ok())
+                .is_some_and(|code| (1..=12).contains(&code));
+        if is_conemu {
+            return None;
+        }
+        let body = sanitize(text);
+        return (!body.is_empty()).then_some(Notice::Program { title: None, body });
+    }
+    let rest = payload.strip_prefix(b"777;notify")?;
+    let rest = match rest.split_first() {
+        None => &[][..],
+        Some((b';', rest)) => rest,
+        Some(_) => return None,
+    };
+    let mut parts = rest.splitn(2, |&b| b == b';');
+    let title = sanitize(parts.next().unwrap_or_default());
+    let body = sanitize(parts.next().unwrap_or_default());
+    if title.is_empty() && body.is_empty() {
+        return None;
+    }
+    let title = (!title.is_empty()).then_some(title);
+    Some(Notice::Program { title, body })
+}
+
+/// Decodes notification text: lossy UTF-8, control characters removed, cut at
+/// [`MAX_NOTICE_LEN`] characters.
+fn sanitize(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_NOTICE_LEN)
+        .collect()
 }
 
 /// Decodes standard base64, padded or not, ignoring ASCII whitespace. `None` when a
@@ -408,6 +468,7 @@ mod tests {
     enum Seen {
         Signal(Signal),
         Clear,
+        Notify(Notice),
     }
 
     /// Feeds `reads` through one scanner; returns the concatenated bytes and the events.
@@ -421,6 +482,7 @@ mod tests {
                     Chunk::Bytes(b) => bytes.extend_from_slice(b),
                     Chunk::Signal(s) => seen.push(Seen::Signal(s)),
                     Chunk::Clear => seen.push(Seen::Clear),
+                    Chunk::Notify(n) => seen.push(Seen::Notify(n)),
                 }
             }
         }
@@ -701,5 +763,108 @@ mod tests {
         assert!(decode_base64(b"Q").is_none());
         assert!(decode_base64(b"QQ===").is_none());
         assert!(decode_base64(b"Q=Q=").is_none());
+    }
+
+    fn notified(title: Option<&str>, body: &str) -> Seen {
+        Seen::Notify(Notice::Program {
+            title: title.map(str::to_owned),
+            body: body.to_owned(),
+        })
+    }
+
+    #[test]
+    fn osc_9_with_both_terminators() {
+        assert_eq!(
+            events(&[b"\x1b]9;build done\x07", b"\x1b]9;tests done\x1b\\"]),
+            [notified(None, "build done"), notified(None, "tests done")]
+        );
+    }
+
+    #[test]
+    fn osc_777_notify() {
+        assert_eq!(
+            events(&[b"\x1b]777;notify;Claude;needs input; now\x1b\\"]),
+            [notified(Some("Claude"), "needs input; now")]
+        );
+        assert_eq!(
+            events(&[b"\x1b]777;notify;;body\x07\x1b]777;notify;Title\x07"]),
+            [notified(None, "body"), notified(Some("Title"), "")]
+        );
+    }
+
+    #[test]
+    fn notification_follows_the_bytes_of_its_sequence() {
+        let mut scanner = Scanner::new(TOKEN);
+        let stream = b"a\x1b]9;hi\x07b";
+        let chunks: Vec<_> = scanner.split(stream).collect();
+        assert_eq!(
+            chunks,
+            [
+                Chunk::Bytes(&stream[..stream.len() - 1]),
+                Chunk::Notify(Notice::Program {
+                    title: None,
+                    body: "hi".to_owned()
+                }),
+                Chunk::Bytes(b"b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn notification_split_across_reads() {
+        let stream = b"\x1b]777;notify;T;B\x1b\\";
+        for cut in 0..=stream.len() {
+            assert_eq!(
+                events(&[&stream[..cut], &stream[cut..]]),
+                [notified(Some("T"), "B")],
+                "cut at {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn conemu_sub_commands_are_not_notifications() {
+        let stream = b"\x1b]9;4;1;50\x07\x1b]9;9;/home\x07\x1b]9;1\x07\x1b]9;12;x\x07\
+            \x1b]9;1;\x07";
+        assert!(events(&[stream]).is_empty());
+        // Numbers outside 1 to 12, or followed by text, are plain notifications.
+        assert_eq!(
+            events(&[b"\x1b]9;13\x07\x1b]9;0;x\x07\x1b]9;4 done\x07"]),
+            [
+                notified(None, "13"),
+                notified(None, "0;x"),
+                notified(None, "4 done")
+            ]
+        );
+    }
+
+    #[test]
+    fn other_osc_777_and_empty_notifications_are_ignored() {
+        let stream = b"\x1b]777;preexec;x\x07\x1b]777;notifyx;a;b\x07\x1b]777;notify\x07\
+            \x1b]777;notify;;\x07\x1b]9;\x07\x1b]9\x07\x1b]99;x\x07";
+        assert!(events(&[stream]).is_empty());
+    }
+
+    #[test]
+    fn notification_text_is_sanitized() {
+        let long = "é".repeat(MAX_NOTICE_LEN + 10);
+        let mut stream = format!("\x1b]777;notify;{long};a\tb\x7fc\x1b\\").into_bytes();
+        stream.extend_from_slice(b"\x1b]9;bad \xff utf8\x07");
+        assert_eq!(
+            events(&[&stream]),
+            [
+                notified(Some(&"é".repeat(MAX_NOTICE_LEN)), "abc"),
+                notified(None, "bad \u{fffd} utf8")
+            ]
+        );
+    }
+
+    #[test]
+    fn signals_still_win_over_notifications() {
+        let stream = format!("\x1b]9;x\x07\x1b]6973;{TOKEN};end;0\x07");
+        assert_eq!(
+            events(&[stream.as_bytes()]),
+            [notified(None, "x"), ended(Some(0))]
+        );
     }
 }

@@ -4,11 +4,11 @@
 
 ## Notifications de bureau  ·  [overview](features/desktop-notifications/overview.md)
 
-_tâches créées — voir [technical.md](features/desktop-notifications/technical.md)_ — 0/7 tasks done
+_tâches créées — voir [technical.md](features/desktop-notifications/technical.md)_ — 1/7 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#175](https://github.com/marmotz/graphene-term/issues/175) | [Notifications] Détecter OSC 9 et OSC 777 dans le flux PTY | — |
+| [x]  | [#175](https://github.com/marmotz/graphene-term/issues/175) | [Notifications] Détecter OSC 9 et OSC 777 dans le flux PTY | — |
 | [ ]  | [#177](https://github.com/marmotz/graphene-term/issues/177) | [Notifications] Section de configuration [notifications] | — |
 | [ ]  | [#183](https://github.com/marmotz/graphene-term/issues/183) | [Notifications] Mesurer la durée des commandes et signaler leur fin | #175 |
 | [ ]  | [#184](https://github.com/marmotz/graphene-term/issues/184) | [Notifications] Décider, compter et effacer les notifications | #175, #183, #177 |

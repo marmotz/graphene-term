@@ -18,7 +18,7 @@ use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Color;
 
-use crate::signals::{Chunk, Signal};
+use crate::signals::{Chunk, Notice, Signal};
 
 /// Identifier of a command block, increasing with time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -147,6 +147,14 @@ impl Current {
     }
 }
 
+/// Something in a pane that may deserve a desktop notification, queued by the PTY
+/// thread for the UI thread to decide on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneNotice {
+    /// A program asked for a notification (OSC 9 or OSC 777).
+    Program(Notice),
+}
+
 /// The blocks of a session.
 pub struct Timeline {
     /// Finished blocks, oldest first.
@@ -159,6 +167,8 @@ pub struct Timeline {
     scrollback: usize,
     /// Signals received on the alternate screen, applied once it is left.
     pending: Vec<Signal>,
+    /// Notices not yet collected by the UI thread, oldest first.
+    notices: Vec<PaneNotice>,
 }
 
 impl Timeline {
@@ -172,7 +182,13 @@ impl Timeline {
             scroll: 0,
             scrollback,
             pending: Vec::new(),
+            notices: Vec::new(),
         }
+    }
+
+    /// Takes the notices queued since the last call, oldest first.
+    pub fn take_notices(&mut self) -> Vec<PaneNotice> {
+        mem::take(&mut self.notices)
     }
 
     /// Finished blocks, oldest first.
@@ -303,7 +319,8 @@ impl Timeline {
 
     /// Applies a chunk of the PTY stream to `term`, the session's terminal. `Bytes`
     /// must be passed after the parser handled them: they only release the signals
-    /// held while the alternate screen was active.
+    /// held while the alternate screen was active. Notifications are queued at once,
+    /// even on the alternate screen.
     pub fn apply<L: EventListener>(&mut self, term: &mut Term<L>, chunk: Chunk<'_>) {
         let alt = term.mode().contains(TermMode::ALT_SCREEN);
         if !alt && !self.pending.is_empty() {
@@ -317,6 +334,7 @@ impl Timeline {
             Chunk::Signal(signal) => self.signal(term, signal),
             Chunk::Clear if alt => {}
             Chunk::Clear => self.clear(term),
+            Chunk::Notify(notice) => self.notices.push(PaneNotice::Program(notice)),
         }
     }
 
@@ -1010,6 +1028,34 @@ mod tests {
         assert_eq!(session.timeline.blocks().len(), 1);
         assert_eq!(session.timeline.blocks()[0].status, Status::Success);
         assert_eq!(session.timeline.current().phase, Phase::Prompt);
+    }
+
+    fn program(title: Option<&str>, body: &str) -> PaneNotice {
+        PaneNotice::Program(Notice::Program {
+            title: title.map(str::to_owned),
+            body: body.to_owned(),
+        })
+    }
+
+    #[test]
+    fn notifications_are_queued_until_taken() {
+        let mut session = Session::new(100);
+        session.feed("\x1b]9;one\x07out\r\n\x1b]777;notify;T;two\x1b\\");
+        assert_eq!(
+            session.timeline.take_notices(),
+            [program(None, "one"), program(Some("T"), "two")]
+        );
+        assert!(session.timeline.take_notices().is_empty());
+        assert_eq!(session.live()[0], "out");
+    }
+
+    #[test]
+    fn notifications_on_the_alternate_screen_are_not_held() {
+        let mut session = Session::new(100);
+        session.feed(&format!("$ vim\r\n{}", start("vim")));
+        session.feed("\x1b[?1049h\x1b]9;saved\x07");
+        assert_eq!(session.timeline.take_notices(), [program(None, "saved")]);
+        assert_eq!(session.timeline.current().phase, Phase::Running);
     }
 
     #[test]
