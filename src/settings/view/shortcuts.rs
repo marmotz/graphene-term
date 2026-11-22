@@ -1,11 +1,43 @@
 //! The shortcuts section: capture of a key press, conflicts and the list of bindings.
 
+use nucleo_matcher::chars;
+
 use super::*;
+
+/// The rows of `rows` kept by `filter`, in their order.
+pub(super) fn filtered(
+    rows: Vec<(Action, Vec<Shortcut>)>,
+    filter: &ShortcutFilter,
+    lang: Lang,
+) -> Vec<(Action, Vec<Shortcut>)> {
+    match filter {
+        ShortcutFilter::None => rows,
+        ShortcutFilter::Text(text) => {
+            let text = fold(text);
+            rows.into_iter()
+                .filter(|(action, _)| fold(&i18n::text(lang, &action.label())).contains(&text))
+                .collect()
+        }
+        ShortcutFilter::Shortcut { actions, .. } => rows
+            .into_iter()
+            .filter(|(action, _)| actions.contains(action))
+            .collect(),
+    }
+}
+
+/// `text` without accents and in lower case, to compare names loosely.
+fn fold(text: &str) -> String {
+    text.chars()
+        .map(|c| chars::to_lower_case(chars::normalize(c)))
+        .collect()
+}
 
 impl View {
     /// Takes a key press while a shortcut is captured; returns the changes to write.
-    /// `Escape` alone cancels, a modifier alone keeps waiting, a shortcut bound to
-    /// another action waits for "Replace" or "Cancel".
+    /// `Escape` alone cancels, a modifier alone keeps waiting. A shortcut captured for
+    /// an action is bound to it, or waits for "Replace" or "Cancel" when bound to
+    /// another one; a shortcut searched for narrows the list to its actions and writes
+    /// nothing.
     pub fn captured_key(
         &mut self,
         model: &SettingsModel,
@@ -13,7 +45,7 @@ impl View {
         physical: PhysicalKey,
         mods: ModifiersState,
     ) -> Vec<Change> {
-        let Some(action) = self.capturing else {
+        let Some(capture) = self.capturing else {
             return Vec::new();
         };
         if model.locked(SettingsSection::KeyboardShortcuts).is_some()
@@ -26,6 +58,19 @@ impl View {
             return Vec::new();
         };
         self.capturing = None;
+        let action = match capture {
+            Capture::Bind(action) => action,
+            Capture::Search => {
+                let actions = model
+                    .shortcut_rows()
+                    .into_iter()
+                    .filter(|(_, shortcuts)| shortcuts.contains(&shortcut))
+                    .map(|(action, _)| action)
+                    .collect();
+                self.set_filter(ShortcutFilter::Shortcut { shortcut, actions });
+                return Vec::new();
+            }
+        };
         match model.add_shortcut(action, shortcut) {
             Ok(changes) => {
                 self.mark_added(shortcut);
@@ -42,9 +87,64 @@ impl View {
         }
     }
 
-    /// One row per action: its label, its shortcuts in aligned slots, each removable,
-    /// and the "Add" button that captures a new one on the right. The row under the
-    /// pointer, or being edited, is highlighted.
+    /// The field filtering the actions by name, then the button searching them by
+    /// shortcut: it starts the capture, cancels it, or shows the shortcut found and
+    /// clears the filter. `Escape` in the field clears an active filter and keeps the
+    /// focus; without filter, the field only loses the focus.
+    fn filter_bar(&mut self, ui: &mut Ui, lang: Lang) {
+        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let mut text = match &self.filter {
+            ShortcutFilter::Text(text) => text.clone(),
+            _ => String::new(),
+        };
+        let response = ui
+            .horizontal(|ui| {
+                let response = ui.add(
+                    TextEdit::singleline(&mut text)
+                        .hint_text(label(Msg::FilterActions))
+                        .desired_width(FIELD_WIDTH),
+                );
+                if self.capturing == Some(Capture::Search) {
+                    if ui.button(label(Msg::Cancel)).clicked() {
+                        self.capturing = None;
+                    }
+                } else if let ShortcutFilter::Shortcut { shortcut, .. } = self.filter {
+                    if ui.button(chip_text(shortcut)).clicked() {
+                        self.set_filter(ShortcutFilter::None);
+                    }
+                } else if ui.button(label(Msg::SearchShortcut)).clicked() {
+                    self.capturing = Some(Capture::Search);
+                    self.conflict = None;
+                }
+                response
+            })
+            .inner;
+        if self.capturing == Some(Capture::Search) {
+            ui.label(RichText::new(label(Msg::PressShortcut)).weak());
+        }
+        if std::mem::take(&mut self.focus_filter) {
+            response.request_focus();
+        }
+        if response.changed() {
+            self.set_filter(if text.is_empty() {
+                ShortcutFilter::None
+            } else {
+                ShortcutFilter::Text(text)
+            });
+        }
+        if response.lost_focus()
+            && ui.input(|input| input.key_pressed(egui::Key::Escape))
+            && self.filter != ShortcutFilter::None
+        {
+            self.set_filter(ShortcutFilter::None);
+            response.request_focus();
+        }
+    }
+
+    /// The filter field, then one row per action kept by the filter: its label, its
+    /// shortcuts in aligned slots, each removable, and the "Add" button that captures a
+    /// new one on the right. The row under the pointer, or being edited, is
+    /// highlighted.
     pub(super) fn shortcuts(
         &mut self,
         ui: &mut Ui,
@@ -53,6 +153,8 @@ impl View {
         changes: &mut Vec<Change>,
     ) {
         let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        self.filter_bar(ui, lang);
+        ui.add_space(ui.spacing().item_spacing.y);
         let rows = model.shortcut_rows();
         let body = TextStyle::Body.resolve(ui.style());
         let button = TextStyle::Button.resolve(ui.style());
@@ -77,6 +179,15 @@ impl View {
             .map(|text| width(text, &button))
             .fold(0.0, f32::max)
             + 2.0 * ui.spacing().button_padding.x;
+        let rows = filtered(rows, &self.filter, lang);
+        if rows.is_empty() {
+            let empty = match self.filter {
+                ShortcutFilter::Shortcut { .. } => Msg::NoActionForShortcut,
+                _ => Msg::NoActionMatches,
+            };
+            ui.label(RichText::new(label(empty)).weak());
+            return;
+        }
         let row_gap = ui.spacing().item_spacing.y;
         ui.spacing_mut().item_spacing.y = 0.0;
         for (index, (action, mut shortcuts)) in rows.into_iter().enumerate() {
@@ -106,7 +217,8 @@ impl View {
                         slots_width,
                         slots,
                         |ui| {
-                            if shortcuts.is_empty() && self.capturing != Some(action) {
+                            if shortcuts.is_empty() && self.capturing != Some(Capture::Bind(action))
+                            {
                                 ui.add_sized(
                                     [slot_width, ui.spacing().interact_size.y],
                                     Label::new(RichText::new(label(Msg::NoShortcut)).weak()),
@@ -132,17 +244,17 @@ impl View {
                         add_width,
                         Layout::top_down(Align::Max),
                         |ui| {
-                            if self.capturing == Some(action) {
+                            if self.capturing == Some(Capture::Bind(action)) {
                                 if ui.button(label(Msg::Cancel)).clicked() {
                                     self.capturing = None;
                                 }
                             } else if ui.button(label(Msg::AddShortcut)).clicked() {
-                                self.capturing = Some(action);
+                                self.capturing = Some(Capture::Bind(action));
                                 self.conflict = None;
                             }
                         },
                     ));
-                    if self.capturing == Some(action) {
+                    if self.capturing == Some(Capture::Bind(action)) {
                         let hint_top = bottom + row_gap;
                         let hint_rect = Rect::from_min_size(
                             Pos2::new(left + name_width + SHORTCUTS_GAP, hint_top),
@@ -168,8 +280,8 @@ impl View {
                     }
                 });
             let rect = Rect::from_x_y_ranges(ui.max_rect().x_range(), row.response.rect.y_range());
-            let edited =
-                self.capturing == Some(action) || self.conflict.is_some_and(|c| c.action == action);
+            let edited = self.capturing == Some(Capture::Bind(action))
+                || self.conflict.is_some_and(|c| c.action == action);
             let visuals = ui.visuals();
             let fill = if edited || ui.rect_contains_pointer(rect) {
                 visuals.selection.bg_fill.gamma_multiply(HIGHLIGHT)

@@ -52,12 +52,16 @@ pub struct View {
     input_errors: BTreeMap<Field, InputError>,
     /// Slider value while it is dragged.
     sliding: BTreeMap<Field, f64>,
-    /// Action whose new shortcut is the next key press.
-    capturing: Option<Action>,
+    /// What the next key press is captured for.
+    capturing: Option<Capture>,
     /// A captured shortcut bound to another action, waiting for "Replace" or "Cancel".
     conflict: Option<Conflict>,
     /// Shortcuts added in this window, oldest first, shown last in their row.
     added: Vec<Shortcut>,
+    /// What the shortcuts list is narrowed to.
+    filter: ShortcutFilter,
+    /// Whether the shortcuts filter field takes the focus on the next frame.
+    focus_filter: bool,
     /// The color picker open in the theme editor, until it closes and its color is
     /// written.
     picking: Option<Picking>,
@@ -144,6 +148,29 @@ struct Naming {
     error: Option<NameError>,
 }
 
+/// What the shortcuts list is narrowed to.
+#[derive(Debug, Clone, Default, PartialEq)]
+enum ShortcutFilter {
+    #[default]
+    None,
+    /// Actions whose label contains this text.
+    Text(String),
+    /// The actions bound to `shortcut` when it was captured, frozen.
+    Shortcut {
+        shortcut: Shortcut,
+        actions: Vec<Action>,
+    },
+}
+
+/// What a captured key press is for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Capture {
+    /// A new shortcut of this action.
+    Bind(Action),
+    /// The shortcut whose actions the list is narrowed to.
+    Search,
+}
+
 /// A captured shortcut already bound to `other`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Conflict {
@@ -190,16 +217,9 @@ impl View {
                         .selectable_label(selected, label(Msg::Section(section)))
                         .clicked()
                         && !selected
+                        && let Some(op) = self.select_section(section)
                     {
-                        if let Some(op) = self.finish_picking() {
-                            let _ = edits.theme_op(model, op);
-                        }
-                        self.section = section;
-                        self.capturing = None;
-                        self.conflict = None;
-                        self.naming = None;
-                        self.confirm_delete = false;
-                        self.hex = None;
+                        let _ = edits.theme_op(model, op);
                     }
                 }
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
@@ -220,6 +240,29 @@ impl View {
             });
         });
         edits
+    }
+
+    /// Shows `section` and drops what was being edited in the previous one; returns
+    /// the color of the open picker to write. Entering the shortcuts section gives the
+    /// focus to its filter field.
+    fn select_section(&mut self, section: SettingsSection) -> Option<ThemeOp> {
+        let op = self.finish_picking();
+        self.section = section;
+        self.capturing = None;
+        self.conflict = None;
+        self.naming = None;
+        self.confirm_delete = false;
+        self.hex = None;
+        self.filter = ShortcutFilter::None;
+        self.focus_filter = section == SettingsSection::KeyboardShortcuts;
+        op
+    }
+
+    /// Narrows the shortcuts list to `filter` and cancels the shortcut being edited.
+    fn set_filter(&mut self, filter: ShortcutFilter) {
+        self.filter = filter;
+        self.capturing = None;
+        self.conflict = None;
     }
 
     /// A click on the version label at `now`: the 7th within 2 seconds unlocks the
@@ -561,7 +604,7 @@ mod tests {
     fn a_captured_key_press_binds_the_shortcut() {
         let model = model("");
         let mut view = View {
-            capturing: Some(Action::DetachPane),
+            capturing: Some(Capture::Bind(Action::DetachPane)),
             ..View::default()
         };
         // A modifier alone keeps waiting.
@@ -591,7 +634,7 @@ mod tests {
     fn escape_alone_cancels_the_capture() {
         let model = model("");
         let mut view = View {
-            capturing: Some(Action::DetachPane),
+            capturing: Some(Capture::Bind(Action::DetachPane)),
             ..View::default()
         };
         let escape = Key::Named(NamedKey::Escape);
@@ -602,7 +645,7 @@ mod tests {
         );
         assert!(!view.capturing());
         // With a modifier, Escape is a shortcut.
-        view.capturing = Some(Action::DetachPane);
+        view.capturing = Some(Capture::Bind(Action::DetachPane));
         let changes = view.captured_key(&model, &escape, physical, ModifiersState::SHIFT);
         assert_eq!(
             changes,
@@ -611,6 +654,283 @@ mod tests {
                 Value::Text("detach_pane".into())
             )]
         );
+    }
+
+    /// The actions of the rows kept by a text filter, in French.
+    fn filter_actions(model: &SettingsModel, text: &str) -> Vec<Action> {
+        shortcuts::filtered(
+            model.shortcut_rows(),
+            &ShortcutFilter::Text(text.into()),
+            Lang::Fr,
+        )
+        .into_iter()
+        .map(|(action, _)| action)
+        .collect()
+    }
+
+    #[test]
+    fn the_text_filter_keeps_the_actions_whose_name_contains_it() {
+        let model = model("");
+        // In the middle of the name.
+        assert_eq!(filter_actions(&model, "glet suiv"), vec![Action::NextTab]);
+        // Whatever the case.
+        let tabs = filter_actions(&model, "ONGLET");
+        for action in [Action::NewTab, Action::NextTab, Action::PreviousTab] {
+            assert!(tabs.contains(&action), "{action:?}");
+        }
+        assert!(!tabs.contains(&Action::Copy));
+        // Whatever the accents, typed or in the name.
+        assert_eq!(filter_actions(&model, "onglét"), tabs);
+        assert!(filter_actions(&model, "precedent").contains(&Action::PreviousTab));
+        // Nothing matches.
+        assert_eq!(filter_actions(&model, "zzz"), vec![]);
+        // An empty text or no filter keeps every row.
+        let all = model.shortcut_rows();
+        assert_eq!(filter_actions(&model, "").len(), all.len());
+        assert_eq!(
+            shortcuts::filtered(all.clone(), &ShortcutFilter::None, Lang::Fr),
+            all
+        );
+    }
+
+    #[test]
+    fn changing_the_filter_cancels_the_shortcut_being_edited() {
+        let mut view = View {
+            capturing: Some(Capture::Bind(Action::NextTab)),
+            conflict: Some(Conflict {
+                action: Action::NextTab,
+                shortcut: Shortcut::parse("Ctrl+Shift+T").unwrap(),
+                other: Action::NewTab,
+            }),
+            ..View::default()
+        };
+        view.set_filter(ShortcutFilter::Text("tab".into()));
+        assert_eq!(view.filter, ShortcutFilter::Text("tab".into()));
+        assert!(!view.capturing());
+        assert_eq!(view.conflict, None);
+    }
+
+    #[test]
+    fn changing_section_clears_the_filter_and_focuses_it_in_shortcuts() {
+        let mut view = View {
+            filter: ShortcutFilter::Text("tab".into()),
+            ..View::default()
+        };
+        view.select_section(SettingsSection::KeyboardShortcuts);
+        assert_eq!(view.filter, ShortcutFilter::None);
+        assert!(view.focus_filter);
+        view.filter = ShortcutFilter::Text("tab".into());
+        view.select_section(SettingsSection::Theme);
+        assert_eq!(view.filter, ShortcutFilter::None);
+        assert!(!view.focus_filter);
+    }
+
+    /// Draws one frame of `view` with `events`; returns what it writes.
+    fn frame(
+        ctx: &egui::Context,
+        view: &mut View,
+        model: &SettingsModel,
+        events: Vec<egui::Event>,
+    ) -> Edits {
+        let mut edits = Edits::default();
+        let input = egui::RawInput {
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| edits = view.show(ui, Lang::Fr, model));
+        output.textures_delta.clear();
+        edits
+    }
+
+    fn press(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn the_filter_field_takes_the_typed_text_and_escape_clears_it() {
+        let model = model("");
+        let mut view = View::default();
+        view.select_section(SettingsSection::KeyboardShortcuts);
+        let ctx = egui::Context::default();
+        assert_eq!(frame(&ctx, &mut view, &model, vec![]), Edits::default());
+        assert!(!view.focus_filter);
+        frame(
+            &ctx,
+            &mut view,
+            &model,
+            vec![egui::Event::Text("zzz".into())],
+        );
+        assert_eq!(view.filter, ShortcutFilter::Text("zzz".into()));
+        // No action matches: the list is replaced by a hint, nothing is written.
+        assert_eq!(frame(&ctx, &mut view, &model, vec![]), Edits::default());
+        // Escape clears the filter and keeps the focus.
+        frame(&ctx, &mut view, &model, vec![press(egui::Key::Escape)]);
+        assert_eq!(view.filter, ShortcutFilter::None);
+        frame(
+            &ctx,
+            &mut view,
+            &model,
+            vec![egui::Event::Text("tab".into())],
+        );
+        assert_eq!(view.filter, ShortcutFilter::Text("tab".into()));
+        // Without filter, Escape only takes the focus away.
+        view.filter = ShortcutFilter::None;
+        frame(&ctx, &mut view, &model, vec![press(egui::Key::Escape)]);
+        frame(
+            &ctx,
+            &mut view,
+            &model,
+            vec![egui::Event::Text("tab".into())],
+        );
+        assert_eq!(view.filter, ShortcutFilter::None);
+    }
+
+    /// The model of `keybindings`, read as `keybindings.toml` over the defaults.
+    fn model_with_keybindings(keybindings: &str) -> SettingsModel {
+        let file = std::path::PathBuf::from("/tmp/keybindings.toml");
+        let (bindings, errors, _) =
+            Config::parse_keybindings(keybindings, &Config::default(), &file);
+        assert_eq!(errors, vec![]);
+        let config = Config {
+            keybindings: bindings,
+            ..Config::default()
+        };
+        SettingsModel::new(
+            &config,
+            &LoadErrors {
+                config: Vec::new(),
+                theme: Vec::new(),
+            },
+            None,
+            Appearance::Dark,
+        )
+    }
+
+    #[test]
+    fn a_searched_shortcut_narrows_the_list_to_its_actions() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Capture::Search),
+            filter: ShortcutFilter::Text("tab".into()),
+            ..View::default()
+        };
+        // A modifier alone keeps waiting.
+        let (control, control_left) = (
+            Key::Named(NamedKey::Control),
+            PhysicalKey::Code(KeyCode::ControlLeft),
+        );
+        let mods = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(
+            view.captured_key(&model, &control, control_left, mods),
+            vec![]
+        );
+        assert!(view.capturing());
+        // The shortcut replaces the text filter and writes nothing.
+        let (key, physical) = letter("T", KeyCode::KeyT);
+        assert_eq!(view.captured_key(&model, &key, physical, mods), vec![]);
+        assert!(!view.capturing());
+        let shortcut = Shortcut::parse("Ctrl+Shift+T").unwrap();
+        assert_eq!(
+            view.filter,
+            ShortcutFilter::Shortcut {
+                shortcut,
+                actions: vec![Action::NewTab],
+            }
+        );
+        assert!(view.added.is_empty());
+        // A shortcut bound to nothing keeps no action.
+        view.capturing = Some(Capture::Search);
+        let (key, physical) = letter("q", KeyCode::KeyQ);
+        assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT), vec![]);
+        assert_eq!(
+            view.filter,
+            ShortcutFilter::Shortcut {
+                shortcut: Shortcut::parse("Ctrl+Alt+Q").unwrap(),
+                actions: vec![],
+            }
+        );
+        assert_eq!(
+            shortcuts::filtered(model.shortcut_rows(), &view.filter, Lang::Fr),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn escape_alone_cancels_the_shortcut_search() {
+        let model = model("");
+        let mut view = View {
+            capturing: Some(Capture::Search),
+            filter: ShortcutFilter::Text("tab".into()),
+            ..View::default()
+        };
+        let escape = Key::Named(NamedKey::Escape);
+        let physical = PhysicalKey::Code(KeyCode::Escape);
+        assert_eq!(
+            view.captured_key(&model, &escape, physical, ModifiersState::empty()),
+            vec![]
+        );
+        assert!(!view.capturing());
+        // The filter is left as it was.
+        assert_eq!(view.filter, ShortcutFilter::Text("tab".into()));
+    }
+
+    #[test]
+    fn the_actions_of_a_searched_shortcut_stay_frozen() {
+        let shortcut = Shortcut::parse("Ctrl+Shift+T").unwrap();
+        let filter = ShortcutFilter::Shortcut {
+            shortcut,
+            actions: vec![Action::NewTab],
+        };
+        // After "Replace", the shortcut belongs to another action: the list keeps the
+        // action that lost it, with its current shortcuts, and does not add the other.
+        let model = model_with_keybindings("[keybindings]\n\"Ctrl+Shift+T\" = \"next_tab\"\n");
+        let rows = shortcuts::filtered(model.shortcut_rows(), &filter, Lang::Fr);
+        assert_eq!(rows.len(), 1);
+        let (action, shortcuts) = &rows[0];
+        assert_eq!(*action, Action::NewTab);
+        assert!(!shortcuts.contains(&shortcut));
+    }
+
+    #[test]
+    fn typed_text_replaces_a_searched_shortcut() {
+        let model = model("");
+        let mut view = View::default();
+        view.select_section(SettingsSection::KeyboardShortcuts);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut view, &model, vec![]);
+        // The search waits for a key press, then shows the actions found.
+        view.capturing = Some(Capture::Search);
+        assert_eq!(frame(&ctx, &mut view, &model, vec![]), Edits::default());
+        view.capturing = None;
+        view.filter = ShortcutFilter::Shortcut {
+            shortcut: Shortcut::parse("Ctrl+Alt+Q").unwrap(),
+            actions: vec![],
+        };
+        // No action uses it: the list is replaced by a hint, nothing is written.
+        assert_eq!(frame(&ctx, &mut view, &model, vec![]), Edits::default());
+        frame(
+            &ctx,
+            &mut view,
+            &model,
+            vec![egui::Event::Text("tab".into())],
+        );
+        assert_eq!(view.filter, ShortcutFilter::Text("tab".into()));
+    }
+
+    #[test]
+    fn a_new_filter_stops_the_shortcut_search() {
+        let mut view = View {
+            capturing: Some(Capture::Search),
+            ..View::default()
+        };
+        view.set_filter(ShortcutFilter::Text("tab".into()));
+        assert!(!view.capturing());
     }
 
     #[test]
@@ -632,7 +952,7 @@ mod tests {
     fn a_shortcut_of_another_action_waits_for_replace() {
         let model = model("");
         let mut view = View {
-            capturing: Some(Action::NextTab),
+            capturing: Some(Capture::Bind(Action::NextTab)),
             ..View::default()
         };
         let (key, physical) = letter("T", KeyCode::KeyT);
@@ -664,7 +984,7 @@ mod tests {
         );
         assert!(model.locked(SettingsSection::KeyboardShortcuts).is_some());
         let mut view = View {
-            capturing: Some(Action::DetachPane),
+            capturing: Some(Capture::Bind(Action::DetachPane)),
             ..View::default()
         };
         let (key, physical) = letter("d", KeyCode::KeyD);
@@ -678,7 +998,7 @@ mod tests {
         assert!(model.locked(SettingsSection::Font).is_some());
         assert!(model.locked(SettingsSection::KeyboardShortcuts).is_none());
         let mut view = View {
-            capturing: Some(Action::DetachPane),
+            capturing: Some(Capture::Bind(Action::DetachPane)),
             ..View::default()
         };
         let (key, physical) = letter("d", KeyCode::KeyD);
@@ -689,7 +1009,7 @@ mod tests {
     fn added_shortcuts_come_last_in_the_order_they_were_added() {
         let model = model("");
         let mut view = View {
-            capturing: Some(Action::Copy),
+            capturing: Some(Capture::Bind(Action::Copy)),
             ..View::default()
         };
         let (key, physical) = letter("a", KeyCode::KeyA);
@@ -720,7 +1040,7 @@ mod tests {
     fn a_conflict_marks_nothing_added_before_replace() {
         let model = model("");
         let mut view = View {
-            capturing: Some(Action::NextTab),
+            capturing: Some(Capture::Bind(Action::NextTab)),
             ..View::default()
         };
         let (key, physical) = letter("T", KeyCode::KeyT);
@@ -1133,7 +1453,7 @@ mod tests {
             .insert(Field::FontSize, InputError::NotANumber);
         view.sliding.insert(Field::BackgroundOpacity, 0.5);
         view.section = SettingsSection::Cursor;
-        view.capturing = Some(Action::Copy);
+        view.capturing = Some(Capture::Bind(Action::Copy));
         view.reset_inputs();
         assert!(view.editing.is_empty());
         assert!(view.input_errors.is_empty());

@@ -137,9 +137,9 @@ _tâches créées — voir [technical.md](features/session-restore/technical.md)
 
 ## Recherche dans les réglages des raccourcis  ·  [overview](features/shortcuts-settings-search/overview.md)
 
-_tâches créées — voir [technical.md](features/shortcuts-settings-search/technical.md)_ — 0/2 tasks done
+_terminé — voir [technical.md](features/shortcuts-settings-search/technical.md)_ — 2/2 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#227](https://github.com/marmotz/graphene-term/issues/227) | [Recherche raccourcis] Filtrer les actions par texte | — |
-| [ ]  | [#228](https://github.com/marmotz/graphene-term/issues/228) | [Recherche raccourcis] Retrouver une action en tapant son raccourci | #227 |
+| [x]  | [#227](https://github.com/marmotz/graphene-term/issues/227) | [Recherche raccourcis] Filtrer les actions par texte | — |
+| [x]  | [#228](https://github.com/marmotz/graphene-term/issues/228) | [Recherche raccourcis] Retrouver une action en tapant son raccourci | #227 |
