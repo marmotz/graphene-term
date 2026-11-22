@@ -102,12 +102,13 @@ pub enum SettingsSection {
     Tabs,
     Theme,
     KeyboardShortcuts,
+    Notifications,
     Updates,
 }
 
 impl SettingsSection {
     /// Every section, in sidebar order.
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::Language,
         SettingsSection::Font,
         SettingsSection::Window,
@@ -117,6 +118,7 @@ impl SettingsSection {
         SettingsSection::Tabs,
         SettingsSection::Theme,
         SettingsSection::KeyboardShortcuts,
+        SettingsSection::Notifications,
         SettingsSection::Updates,
     ];
 }
@@ -145,11 +147,15 @@ pub enum SettingsField {
     ThemeDark,
     UpdatesCheck,
     UpdatesInterval,
+    NotificationsProgram,
+    NotificationsCommandFinished,
+    NotificationsCommandThreshold,
+    NotificationsBell,
 }
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 19] = [
+    pub const ALL: [SettingsField; 23] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -169,6 +175,10 @@ impl SettingsField {
         SettingsField::ThemeDark,
         SettingsField::UpdatesCheck,
         SettingsField::UpdatesInterval,
+        SettingsField::NotificationsProgram,
+        SettingsField::NotificationsCommandFinished,
+        SettingsField::NotificationsCommandThreshold,
+        SettingsField::NotificationsBell,
     ];
 }
 
@@ -413,6 +423,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::Language => "Language",
             SettingsSection::Theme => "Theme",
             SettingsSection::KeyboardShortcuts => "Keyboard shortcuts",
+            SettingsSection::Notifications => "Notifications",
             SettingsSection::Updates => "Updates",
         },
         Msg::Field(field) => match field {
@@ -435,6 +446,10 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::ThemeDark => "Dark theme",
             SettingsField::UpdatesCheck => "Check for updates",
             SettingsField::UpdatesInterval => "Check interval",
+            SettingsField::NotificationsProgram => "Notifications from programs",
+            SettingsField::NotificationsCommandFinished => "Notify when a long command finishes",
+            SettingsField::NotificationsCommandThreshold => "Long command threshold (seconds)",
+            SettingsField::NotificationsBell => "Notify on terminal bell",
         },
         Msg::SystemMonospace => "System monospace",
         Msg::UnknownKeys => "Unknown keys",
@@ -590,6 +605,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::Language => "Langue",
             SettingsSection::Theme => "Thème",
             SettingsSection::KeyboardShortcuts => "Raccourcis clavier",
+            SettingsSection::Notifications => "Notifications",
             SettingsSection::Updates => "Mises à jour",
         },
         Msg::Field(field) => match field {
@@ -612,6 +628,12 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsField::ThemeDark => "Thème sombre",
             SettingsField::UpdatesCheck => "Rechercher les mises à jour",
             SettingsField::UpdatesInterval => "Intervalle de recherche",
+            SettingsField::NotificationsProgram => "Notifications des programmes",
+            SettingsField::NotificationsCommandFinished => "Signaler la fin d'une commande longue",
+            SettingsField::NotificationsCommandThreshold => {
+                "Seuil d'une commande longue (secondes)"
+            }
+            SettingsField::NotificationsBell => "Signaler la sonnerie du terminal",
         },
         Msg::SystemMonospace => "Monospace du système",
         Msg::UnknownKeys => "Clés inconnues",
@@ -1032,7 +1054,10 @@ mod tests {
     #[test]
     fn texts_differ_between_languages() {
         // Names that are the same in every language.
-        let same = [Msg::SecretGraphene];
+        let same = [
+            Msg::SecretGraphene,
+            Msg::Section(SettingsSection::Notifications),
+        ];
         for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {
             assert_ne!(text(Lang::En, &msg), text(Lang::Fr, &msg), "{msg:?}");
         }

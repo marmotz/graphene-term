@@ -179,6 +179,16 @@ impl Reader<'_> {
                     }
                 }
             }),
+            ("notifications", "program") => self.set(value, key_segments, path, &mut config.notifications.program, &previous.notifications.program, Checked::Valid),
+            ("notifications", "command_finished") => self.set(value, key_segments, path, &mut config.notifications.command_finished, &previous.notifications.command_finished, Checked::Valid),
+            ("notifications", "command_threshold") => self.set(value, key_segments, path, &mut config.notifications.command_threshold, &previous.notifications.command_threshold, |seconds: u64| {
+                if seconds >= 1 {
+                    Checked::Valid(seconds)
+                } else {
+                    Checked::Invalid("must be at least 1".to_owned())
+                }
+            }),
+            ("notifications", "bell") => self.set(value, key_segments, path, &mut config.notifications.bell, &previous.notifications.bell, Checked::Valid),
             ("keybindings", keys) => {
                 let previous_action = previous.keybindings.get(keys).cloned();
                 let mut action = previous_action.clone();

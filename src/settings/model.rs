@@ -130,7 +130,7 @@ impl InputError {
 }
 
 /// Section of the file holding the keys of each settings section.
-const SECTION_KEYS: [(&str, Section); 10] = [
+const SECTION_KEYS: [(&str, Section); 11] = [
     ("language", Section::Language),
     ("font", Section::Font),
     ("window", Section::Window),
@@ -140,6 +140,7 @@ const SECTION_KEYS: [(&str, Section); 10] = [
     ("tabs", Section::Tabs),
     ("theme", Section::Theme),
     ("keybindings", Section::KeyboardShortcuts),
+    ("notifications", Section::Notifications),
     ("updates", Section::Updates),
 ];
 
@@ -166,6 +167,12 @@ pub fn section_fields(section: Section) -> &'static [Field] {
             Field::ThemeDark,
         ],
         Section::KeyboardShortcuts => &[],
+        Section::Notifications => &[
+            Field::NotificationsProgram,
+            Field::NotificationsCommandFinished,
+            Field::NotificationsCommandThreshold,
+            Field::NotificationsBell,
+        ],
         Section::Updates => &[Field::UpdatesCheck, Field::UpdatesInterval],
     }
 }
@@ -192,6 +199,10 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::ThemeDark => &["theme", "dark"],
         Field::UpdatesCheck => &["updates", "check"],
         Field::UpdatesInterval => &["updates", "interval"],
+        Field::NotificationsProgram => &["notifications", "program"],
+        Field::NotificationsCommandFinished => &["notifications", "command_finished"],
+        Field::NotificationsCommandThreshold => &["notifications", "command_threshold"],
+        Field::NotificationsBell => &["notifications", "bell"],
     })
 }
 
@@ -237,7 +248,17 @@ pub fn widget(field: Field) -> Widget {
             max: 1.0,
             step: 0.01,
         },
-        Field::CursorBlinking | Field::UpdatesCheck | Field::ThemeFollow => Widget::Toggle,
+        Field::NotificationsCommandThreshold => Widget::Number(NumberRange {
+            min: 1.0,
+            max: Some(f64::from(u32::MAX)),
+            integer: true,
+        }),
+        Field::CursorBlinking
+        | Field::UpdatesCheck
+        | Field::ThemeFollow
+        | Field::NotificationsProgram
+        | Field::NotificationsCommandFinished
+        | Field::NotificationsBell => Widget::Toggle,
         Field::WordSeparators => Widget::Text,
     }
 }
@@ -565,6 +586,12 @@ impl SettingsModel {
             Field::ThemeDark => text(c.theme.dark.as_deref().unwrap_or(&c.theme.name)),
             Field::UpdatesCheck => Value::Bool(c.updates.check),
             Field::UpdatesInterval => text(name_of(&UpdateInterval::VALUES, c.updates.interval)),
+            Field::NotificationsProgram => Value::Bool(c.notifications.program),
+            Field::NotificationsCommandFinished => Value::Bool(c.notifications.command_finished),
+            Field::NotificationsCommandThreshold => {
+                Value::Integer(i64::try_from(c.notifications.command_threshold).unwrap_or(i64::MAX))
+            }
+            Field::NotificationsBell => Value::Bool(c.notifications.bell),
         }
     }
 
@@ -952,6 +979,11 @@ name = "gruvbox-dark"
 [updates]
 check = false
 interval = "1w"
+[notifications]
+program = false
+command_finished = false
+command_threshold = 25
+bell = true
 "#,
         );
         let texts = [
@@ -968,6 +1000,7 @@ interval = "1w"
             (Field::TabPosition, "left"),
             (Field::ThemeName, "gruvbox-dark"),
             (Field::UpdatesInterval, "1w"),
+            (Field::NotificationsCommandThreshold, "25"),
         ];
         for (field, expected) in texts {
             assert_eq!(m.text(field), expected, "{field:?}");
@@ -976,6 +1009,9 @@ interval = "1w"
         assert!(m.on(Field::CursorBlinking));
         assert!(!m.on(Field::UpdatesCheck));
         assert!(!m.on(Field::ThemeFollow));
+        assert!(!m.on(Field::NotificationsProgram));
+        assert!(!m.on(Field::NotificationsCommandFinished));
+        assert!(m.on(Field::NotificationsBell));
         assert!(m.locked(Section::Font).is_none());
     }
 
@@ -987,6 +1023,70 @@ interval = "1w"
         assert_eq!(m.text(Field::Language), "auto");
         assert_eq!(m.text(Field::UpdatesInterval), "auto");
         assert!(m.on(Field::UpdatesCheck));
+        assert!(m.on(Field::NotificationsProgram));
+        assert!(m.on(Field::NotificationsCommandFinished));
+        assert_eq!(m.text(Field::NotificationsCommandThreshold), "10");
+        assert!(!m.on(Field::NotificationsBell));
+    }
+
+    #[test]
+    fn notification_fields_write_their_key() {
+        let m = model("");
+        assert_eq!(
+            m.edit(Field::NotificationsProgram, Input::Toggle(false)),
+            Ok(set(&["notifications", "program"], Value::Bool(false)))
+        );
+        assert_eq!(
+            m.edit(Field::NotificationsCommandFinished, Input::Toggle(false)),
+            Ok(set(
+                &["notifications", "command_finished"],
+                Value::Bool(false)
+            ))
+        );
+        assert_eq!(
+            m.edit(Field::NotificationsBell, Input::Toggle(true)),
+            Ok(set(&["notifications", "bell"], Value::Bool(true)))
+        );
+        assert_eq!(
+            m.edit(
+                Field::NotificationsCommandThreshold,
+                Input::Text("30".into())
+            ),
+            Ok(set(
+                &["notifications", "command_threshold"],
+                Value::Integer(30)
+            ))
+        );
+        assert_eq!(
+            m.edit(
+                Field::NotificationsCommandThreshold,
+                Input::Text("10".into())
+            ),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            m.edit(
+                Field::NotificationsCommandThreshold,
+                Input::Text("0".into())
+            ),
+            Err(InputError::AtLeast("1".into()))
+        );
+        assert_eq!(
+            m.edit(
+                Field::NotificationsCommandThreshold,
+                Input::Text("2.5".into())
+            ),
+            Err(InputError::NotAWholeNumber)
+        );
+        assert_eq!(
+            section_fields(Section::Notifications),
+            &[
+                Field::NotificationsProgram,
+                Field::NotificationsCommandFinished,
+                Field::NotificationsCommandThreshold,
+                Field::NotificationsBell,
+            ]
+        );
     }
 
     #[test]
