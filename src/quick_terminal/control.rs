@@ -393,9 +393,17 @@ mod tests {
         assert!(claim(&dir, true).unwrap().is_none());
         assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
 
-        // The lock is free once the first process is gone.
+        // The lock is free once the first process is gone. A child another test forks
+        // meanwhile holds the lock file until it runs its program, which closes it:
+        // the claim is tried again for a while.
         drop(first);
-        assert!(claim(&dir, true).unwrap().is_some());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut lock = claim(&dir, true).unwrap();
+        while lock.is_none() && Instant::now() < deadline {
+            std::thread::sleep(POLL_INTERVAL);
+            lock = claim(&dir, true).unwrap();
+        }
+        assert!(lock.is_some());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
