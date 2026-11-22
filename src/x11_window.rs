@@ -1,9 +1,11 @@
-//! X11 window state set before the window is mapped, and the X11 ID of a window.
+//! X11 window state set before the window is mapped, the X11 ID of a window, and the
+//! position of the mouse cursor.
 //!
 //! The terminal window is created hidden and shown once it can draw. winit asks for the
 //! maximized state with a client message, which window managers ignore before the
 //! window is mapped, so a hidden window would open at its configured size. Writing the
 //! `_NET_WM_STATE` property instead makes the window manager map it maximized at once.
+//! The quick terminal sets its own states the same way.
 
 use anyhow::Context;
 use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
@@ -13,20 +15,37 @@ use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, PropMode};
 use x11rb::wrapper::ConnectionExt as _;
 
 /// Atoms of the maximized state, both directions.
-const MAXIMIZED: [&str; 2] = [
+pub const MAXIMIZED: [&str; 2] = [
     "_NET_WM_STATE_MAXIMIZED_VERT",
     "_NET_WM_STATE_MAXIMIZED_HORZ",
 ];
 
-/// Marks the hidden `window` maximized for its first mapping. `Ok(false)` means the
-/// window is not an X11 window.
-pub fn preset_maximized(window: &Window) -> anyhow::Result<bool> {
+/// Atoms of the quick terminal: out of the taskbar and the pager, above the other
+/// windows, on every desktop.
+pub const QUICK: [&str; 4] = [
+    "_NET_WM_STATE_SKIP_TASKBAR",
+    "_NET_WM_STATE_SKIP_PAGER",
+    "_NET_WM_STATE_ABOVE",
+    "_NET_WM_STATE_STICKY",
+];
+
+/// Gives the hidden `window` the `_NET_WM_STATE` atoms `states` for its first mapping.
+/// `Ok(false)` means the window is not an X11 window.
+pub fn preset_states(window: &Window, states: &[&str]) -> anyhow::Result<bool> {
     let Some(id) = window_id(window)? else {
         return Ok(false);
     };
     let (connection, _) = x11rb::connect(None)?;
-    preset_maximized_on(&connection, id)?;
+    preset_states_on(&connection, id, states)?;
     Ok(true)
+}
+
+/// Position of the mouse cursor on the X11 root window, in physical pixels.
+pub fn cursor_position() -> anyhow::Result<(i32, i32)> {
+    let (connection, screen) = x11rb::connect(None)?;
+    let root = connection.setup().roots[screen].root;
+    let pointer = connection.query_pointer(root)?.reply()?;
+    Ok((pointer.root_x.into(), pointer.root_y.into()))
 }
 
 /// The X11 ID of `window`, `None` when it is not an X11 window.
@@ -41,20 +60,27 @@ pub fn window_id(window: &Window) -> anyhow::Result<Option<u32>> {
     Ok(Some(id))
 }
 
-/// Writes the maximized `_NET_WM_STATE` of `window` through `connection`, and waits
-/// until the server has applied it: winit maps the window through its own connection.
-fn preset_maximized_on(connection: &impl Connection, window: u32) -> anyhow::Result<()> {
+/// Writes the `_NET_WM_STATE` atoms `states` of `window` through `connection`, and
+/// waits until the server has applied them: winit maps the window through its own
+/// connection.
+fn preset_states_on(
+    connection: &impl Connection,
+    window: u32,
+    states: &[&str],
+) -> anyhow::Result<()> {
     let state = connection
         .intern_atom(false, b"_NET_WM_STATE")?
         .reply()?
         .atom;
-    let mut atoms = [0; 2];
-    for (atom, name) in atoms.iter_mut().zip(MAXIMIZED) {
-        *atom = connection
-            .intern_atom(false, name.as_bytes())?
-            .reply()?
-            .atom;
-    }
+    let atoms = states
+        .iter()
+        .map(|name| {
+            Ok(connection
+                .intern_atom(false, name.as_bytes())?
+                .reply()?
+                .atom)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     connection.change_property32(PropMode::REPLACE, window, state, AtomEnum::ATOM, &atoms)?;
     connection.sync()?;
     Ok(())
@@ -66,7 +92,23 @@ mod tests {
     use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
 
     #[test]
-    fn preset_maximized_writes_both_directions_before_mapping() {
+    fn preset_states_writes_the_maximized_and_quick_states_before_mapping() {
+        for states in [&MAXIMIZED[..], &QUICK[..]] {
+            preset_states_writes(states);
+        }
+    }
+
+    #[test]
+    fn cursor_position_is_read_on_the_root_window() {
+        if x11rb::connect(None).is_err() {
+            eprintln!("skipped: no X11 display");
+            return;
+        }
+        let (x, y) = cursor_position().unwrap();
+        assert!(x >= 0 && y >= 0, "cursor at {x},{y}");
+    }
+
+    fn preset_states_writes(states: &[&str]) {
         let Ok((connection, screen)) = x11rb::connect(None) else {
             eprintln!("skipped: no X11 display");
             return;
@@ -89,7 +131,7 @@ mod tests {
             )
             .unwrap();
 
-        preset_maximized_on(&connection, window).unwrap();
+        preset_states_on(&connection, window, states).unwrap();
 
         let state = connection
             .intern_atom(false, b"_NET_WM_STATE")
@@ -98,7 +140,7 @@ mod tests {
             .unwrap()
             .atom;
         let value: Vec<u32> = connection
-            .get_property(false, window, state, AtomEnum::ATOM, 0, 8)
+            .get_property(false, window, state, AtomEnum::ATOM, 0, 16)
             .unwrap()
             .reply()
             .unwrap()
@@ -112,7 +154,7 @@ mod tests {
                 String::from_utf8(reply.name).unwrap()
             })
             .collect();
-        assert_eq!(names, MAXIMIZED);
+        assert_eq!(names, states);
         connection.destroy_window(window).unwrap();
         connection.flush().unwrap();
     }

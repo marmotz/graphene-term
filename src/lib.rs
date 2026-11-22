@@ -33,6 +33,7 @@ mod perf;
 mod process;
 mod progress;
 mod pty;
+mod quick_terminal;
 mod renderer;
 mod selection;
 mod settings;
@@ -62,6 +63,21 @@ pub const VERSION: &str = env!("GRAPHENE_VERSION");
 /// the window is sized to show `grid` when it sets a dimension.
 pub fn run(program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
     app::run(program, grid)
+}
+
+/// Runs the resident quick terminal process (`graphene --quick`), hidden at startup
+/// when `hidden`, and returns its exit code: `3` under Wayland, where it cannot run.
+/// Exits at once, with `0`, when another quick terminal process runs, after asking it
+/// to toggle its window unless `hidden`.
+pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
+    app::run_quick(hidden)
+}
+
+/// `graphene --quick-toggle`: shows or hides the quick terminal, starting it when it
+/// does not run. The error is the message to print.
+pub fn quick_toggle() -> Result<(), String> {
+    let dir = config::runtime_dir().map_err(|error| format!("no runtime folder: {error}"))?;
+    quick_terminal::control::toggle(&dir).map_err(|error| error.to_string())
 }
 
 /// Lists and optionally removes unknown entries from the user's configuration file.

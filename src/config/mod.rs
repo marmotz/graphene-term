@@ -77,7 +77,6 @@ pub struct Config {
     #[allow(dead_code, reason = "applied by the update check thread task")]
     pub updates: UpdatesConfig,
     pub notifications: NotificationsConfig,
-    #[allow(dead_code, reason = "applied by the quick terminal process")]
     pub quick_terminal: QuickTerminalConfig,
 }
 

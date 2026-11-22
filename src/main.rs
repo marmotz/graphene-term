@@ -19,6 +19,22 @@ fn main() -> anyhow::Result<()> {
                 .init();
             graphene::prune_config(yes)
         }
+        Command::QuickToggle => match graphene::quick_toggle() {
+            Ok(()) => Ok(()),
+            Err(message) => {
+                eprintln!("graphene: {message}");
+                std::process::exit(1);
+            }
+        },
+        Command::Quick { hidden } => {
+            graphene::start_perf_clock();
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+                .init();
+            match graphene::run_quick(hidden)? {
+                0 => Ok(()),
+                code => std::process::exit(code),
+            }
+        }
         Command::Run { program, grid } => {
             graphene::start_perf_clock();
             env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
@@ -33,6 +49,13 @@ enum Command {
     Version,
     PruneConfig {
         yes: bool,
+    },
+    /// Shows or hides the quick terminal, starting it when it does not run.
+    QuickToggle,
+    /// Runs the resident quick terminal process (internal, started by `QuickToggle`),
+    /// its window hidden until a command shows it when `hidden`.
+    Quick {
+        hidden: bool,
     },
     /// Opens the window; its first pane runs `program` instead of the shell when given,
     /// and the window is sized to `grid` when it sets a dimension.
@@ -60,6 +83,12 @@ fn command(args: &[String]) -> Result<Command, &'static str> {
     } else if options.iter().any(|arg| arg == "--prune-config") {
         Command::PruneConfig {
             yes: options.iter().any(|arg| arg == "--yes"),
+        }
+    } else if options.iter().any(|arg| arg == "--quick-toggle") {
+        Command::QuickToggle
+    } else if options.iter().any(|arg| arg == "--quick") {
+        Command::Quick {
+            hidden: options.iter().any(|arg| arg == "--hidden"),
         }
     } else {
         Command::Run {
@@ -100,6 +129,34 @@ mod tests {
         assert_eq!(
             command(&args(&["--prune-config", "--yes"])),
             Ok(Command::PruneConfig { yes: true })
+        );
+    }
+
+    #[test]
+    fn quick_toggle_dispatches_before_the_gui() {
+        assert_eq!(
+            command(&args(&["--quick-toggle"])),
+            Ok(Command::QuickToggle)
+        );
+    }
+
+    #[test]
+    fn quick_runs_the_quick_terminal_optionally_hidden() {
+        assert_eq!(
+            command(&args(&["--quick"])),
+            Ok(Command::Quick { hidden: false })
+        );
+        assert_eq!(
+            command(&args(&["--quick", "--hidden"])),
+            Ok(Command::Quick { hidden: true })
+        );
+        // `--hidden` alone is not an option of an ordinary window.
+        assert_eq!(
+            command(&args(&["--hidden"])),
+            Ok(Command::Run {
+                program: None,
+                grid: GridSize::default()
+            })
         );
     }
 

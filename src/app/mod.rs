@@ -4,9 +4,11 @@ mod application;
 mod geometry;
 mod notices;
 mod panes;
+mod quick;
 mod refresh;
 mod terminal_events;
 pub use self::application::*;
+use self::quick::{QuickState, WindowMode};
 
 mod copy_paste;
 mod hover;
