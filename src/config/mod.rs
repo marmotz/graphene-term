@@ -70,6 +70,7 @@ pub struct Config {
     pub keybindings: BTreeMap<String, String>,
     #[allow(dead_code, reason = "applied by the update check thread task")]
     pub updates: UpdatesConfig,
+    pub notifications: NotificationsConfig,
 }
 
 impl Default for Config {
@@ -104,6 +105,12 @@ impl Default for Config {
             updates: UpdatesConfig {
                 check: true,
                 interval: UpdateInterval::Auto,
+            },
+            notifications: NotificationsConfig {
+                program: true,
+                command_finished: true,
+                command_threshold: 10,
+                bell: false,
             },
         }
     }
@@ -163,7 +170,7 @@ impl Config {
                     format!("`[keybindings]` moved to {KEYBINDINGS_FILE}"),
                 ),
                 "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
-                | "updates" => {
+                | "updates" | "notifications" => {
                     let DeValue::Table(table) = value.get_ref() else {
                         reader.error(
                             Some(value.span()),
@@ -455,6 +462,12 @@ dark = "graphene-night"
 [updates]
 check = false
 interval = "2d"
+
+[notifications]
+program = false
+command_finished = false
+command_threshold = 30
+bell = true
 "#;
         let (config, errors) = parse(text);
         assert_eq!(errors, Vec::new());
@@ -491,8 +504,47 @@ interval = "2d"
                     check: false,
                     interval: UpdateInterval::Days2,
                 },
+                notifications: NotificationsConfig {
+                    program: false,
+                    command_finished: false,
+                    command_threshold: 30,
+                    bell: true,
+                },
             }
         );
+    }
+
+    #[test]
+    fn invalid_command_threshold_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.notifications.command_threshold = 42;
+        for value in ["0", "-5", "1.5", "\"ten\""] {
+            let text = format!("[notifications]\ncommand_threshold = {value}\n");
+            let (config, errors) = Config::parse(&text, &previous, &file());
+            assert_eq!(config.notifications.command_threshold, 42, "{value}");
+            assert_eq!(errors.len(), 1, "{value}");
+            assert_eq!(errors[0].kind, ConfigErrorKind::InvalidValue, "{value}");
+            assert_eq!(
+                errors[0].key.as_deref(),
+                Some("notifications.command_threshold"),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_threshold_of_one_second_is_accepted() {
+        let (config, errors) = parse("[notifications]\ncommand_threshold = 1\n");
+        assert_eq!(errors, Vec::new());
+        assert_eq!(config.notifications.command_threshold, 1);
+    }
+
+    #[test]
+    fn notifications_must_be_a_table() {
+        let (config, errors) = parse("notifications = true\n");
+        assert_eq!(config.notifications, Config::default().notifications);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, ConfigErrorKind::InvalidValue);
     }
 
     #[test]

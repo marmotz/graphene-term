@@ -102,12 +102,13 @@ pub enum SettingsSection {
     Tabs,
     Theme,
     KeyboardShortcuts,
+    Notifications,
     Updates,
 }
 
 impl SettingsSection {
     /// Every section, in sidebar order.
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::Language,
         SettingsSection::Font,
         SettingsSection::Window,
@@ -117,6 +118,7 @@ impl SettingsSection {
         SettingsSection::Tabs,
         SettingsSection::Theme,
         SettingsSection::KeyboardShortcuts,
+        SettingsSection::Notifications,
         SettingsSection::Updates,
     ];
 }
@@ -145,11 +147,15 @@ pub enum SettingsField {
     ThemeDark,
     UpdatesCheck,
     UpdatesInterval,
+    NotificationsProgram,
+    NotificationsCommandFinished,
+    NotificationsCommandThreshold,
+    NotificationsBell,
 }
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 19] = [
+    pub const ALL: [SettingsField; 23] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -169,6 +175,10 @@ impl SettingsField {
         SettingsField::ThemeDark,
         SettingsField::UpdatesCheck,
         SettingsField::UpdatesInterval,
+        SettingsField::NotificationsProgram,
+        SettingsField::NotificationsCommandFinished,
+        SettingsField::NotificationsCommandThreshold,
+        SettingsField::NotificationsBell,
     ];
 }
 
@@ -337,6 +347,16 @@ pub enum Msg {
     // Command blocks.
     /// Summary of a folded block: its hidden output rows.
     LinesHidden(usize),
+    // Desktop notifications.
+    /// Title of the notification of a command that succeeded, or whose status is
+    /// unknown.
+    CommandFinished,
+    /// Title of the notification of a command that failed, by its exit code.
+    CommandFailed(i32),
+    /// Body of the notification of a bell.
+    Bell,
+    /// Action of a notification: shows the pane that raised it.
+    ShowPane,
 }
 
 /// Every language, for tests that must cover each of them.
@@ -413,6 +433,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::Language => "Language",
             SettingsSection::Theme => "Theme",
             SettingsSection::KeyboardShortcuts => "Keyboard shortcuts",
+            SettingsSection::Notifications => "Notifications",
             SettingsSection::Updates => "Updates",
         },
         Msg::Field(field) => match field {
@@ -435,6 +456,10 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::ThemeDark => "Dark theme",
             SettingsField::UpdatesCheck => "Check for updates",
             SettingsField::UpdatesInterval => "Check interval",
+            SettingsField::NotificationsProgram => "Notifications from programs",
+            SettingsField::NotificationsCommandFinished => "Notify when a long command finishes",
+            SettingsField::NotificationsCommandThreshold => "Long command threshold (seconds)",
+            SettingsField::NotificationsBell => "Notify on terminal bell",
         },
         Msg::SystemMonospace => "System monospace",
         Msg::UnknownKeys => "Unknown keys",
@@ -524,6 +549,10 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::IgnoreVersion => "Ignore this version",
         Msg::LinesHidden(1) => "1 line hidden",
         Msg::LinesHidden(rows) => return format!("{rows} lines hidden").into(),
+        Msg::CommandFinished => "Command finished",
+        Msg::CommandFailed(code) => return format!("Command failed (code {code})").into(),
+        Msg::Bell => "Bell",
+        Msg::ShowPane => "Show pane",
     };
     Cow::Borrowed(text)
 }
@@ -590,6 +619,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsSection::Language => "Langue",
             SettingsSection::Theme => "Thème",
             SettingsSection::KeyboardShortcuts => "Raccourcis clavier",
+            SettingsSection::Notifications => "Notifications",
             SettingsSection::Updates => "Mises à jour",
         },
         Msg::Field(field) => match field {
@@ -612,6 +642,12 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsField::ThemeDark => "Thème sombre",
             SettingsField::UpdatesCheck => "Rechercher les mises à jour",
             SettingsField::UpdatesInterval => "Intervalle de recherche",
+            SettingsField::NotificationsProgram => "Notifications des programmes",
+            SettingsField::NotificationsCommandFinished => "Signaler la fin d'une commande longue",
+            SettingsField::NotificationsCommandThreshold => {
+                "Seuil d'une commande longue (secondes)"
+            }
+            SettingsField::NotificationsBell => "Signaler la sonnerie du terminal",
         },
         Msg::SystemMonospace => "Monospace du système",
         Msg::UnknownKeys => "Clés inconnues",
@@ -701,6 +737,10 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::IgnoreVersion => "Ignorer cette version",
         Msg::LinesHidden(1) => "1 ligne masquée",
         Msg::LinesHidden(rows) => return format!("{rows} lignes masquées").into(),
+        Msg::CommandFinished => "Commande terminée",
+        Msg::CommandFailed(code) => return format!("Commande échouée (code {code})").into(),
+        Msg::Bell => "Sonnerie",
+        Msg::ShowPane => "Afficher le panneau",
     };
     Cow::Borrowed(text)
 }
@@ -895,9 +935,13 @@ mod tests {
             Msg::NoActionMatches => 91,
             Msg::SearchShortcut => 92,
             Msg::NoActionForShortcut => 93,
+            Msg::CommandFinished => 94,
+            Msg::CommandFailed(_) => 95,
+            Msg::Bell => 96,
+            Msg::ShowPane => 97,
         }
     }
-    const VARIANT_COUNT: usize = 94;
+    const VARIANT_COUNT: usize = 98;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -997,6 +1041,10 @@ mod tests {
             Msg::ConfirmDeleteTheme("my-theme".into()),
             Msg::BuiltInTheme,
             Msg::KeepTextColor,
+            Msg::CommandFinished,
+            Msg::CommandFailed(2),
+            Msg::Bell,
+            Msg::ShowPane,
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
@@ -1032,7 +1080,10 @@ mod tests {
     #[test]
     fn texts_differ_between_languages() {
         // Names that are the same in every language.
-        let same = [Msg::SecretGraphene];
+        let same = [
+            Msg::SecretGraphene,
+            Msg::Section(SettingsSection::Notifications),
+        ];
         for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {
             assert_ne!(text(Lang::En, &msg), text(Lang::Fr, &msg), "{msg:?}");
         }
@@ -1053,6 +1104,14 @@ mod tests {
         assert_eq!(text(Lang::En, &Msg::LinesHidden(12)), "12 lines hidden");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(1)), "1 ligne masquée");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(12)), "12 lignes masquées");
+        assert_eq!(
+            text(Lang::En, &Msg::CommandFailed(2)),
+            "Command failed (code 2)"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::CommandFailed(127)),
+            "Commande échouée (code 127)"
+        );
         assert_eq!(
             text(
                 Lang::Fr,

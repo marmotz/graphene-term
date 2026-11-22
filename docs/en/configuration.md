@@ -73,9 +73,9 @@ describes each problem (click it to hide it):
 
 Open it with `Ctrl+,`, with **Settings** in the [command palette](tabs-and-panes.md#command-palette),
 or from the right-click menu. It shows the same sections as the file (language, font,
-window, scrollback, cursor, selection, tabs, theme, keyboard shortcuts, updates), and
-each change is written at once to `config.toml`, or to `keybindings.toml` for keyboard
-shortcuts, keeping the files' comments, then applied like a hand edit.
+window, scrollback, cursor, selection, tabs, theme, keyboard shortcuts, notifications,
+updates), and each change is written at once to `config.toml`, or to `keybindings.toml`
+for keyboard shortcuts, keeping the files' comments, then applied like a hand edit.
 
 - **Keyboard shortcuts**: lists every action with its shortcuts. Add a shortcut by
   pressing it (`Escape` cancels), or remove one.
@@ -193,6 +193,30 @@ moved to `keybindings.toml` at startup.
 |------------|----------|-------------------------------------------------------------------------------------------------|
 | `check`    | `true`   | `true` or `false`. Check GitHub for a newer release; `false` makes no network call at all.      |
 | `interval` | `"auto"` | `"auto"`, `"6h"`, `"12h"`, `"24h"`, `"2d"`, `"3d"` or `"1w"`. `"auto"` is 24 hours for a release, 6 hours for a development build. |
+
+### `[notifications]`
+
+| Setting             | Default | Values                                                                                     |
+|---------------------|---------|--------------------------------------------------------------------------------------------|
+| `program`           | `true`  | `true` or `false`. Show the notifications requested by programs (OSC 9, OSC 777).          |
+| `command_finished`  | `true`  | `true` or `false`. Notify when a command that ran at least `command_threshold` seconds finishes. |
+| `command_threshold` | `10`    | Whole number of seconds, at least 1. A value below 1 is rejected and the previous one kept. |
+| `bell`              | `false` | `true` or `false`. Turn the terminal bell into a notification.                             |
+
+A change applies to the next notification.
+
+On Linux, notifications go to the desktop's notification server over D-Bus: each pane
+shows at most one, clicking it brings back the pane, and the window's unseen count is
+shown on the taskbar icon by docks that support it (KDE Plasma, the Ubuntu dock, Dash to
+Dock). Without a notification server, only the counters on the tabs and pane bars are
+shown. On Wayland, whether clicking a notification raises the window depends on the
+compositor.
+
+On macOS, notifications go to the Notification Center, which asks for permission at the
+first one: each pane shows at most one, clicking it brings back the pane, and the
+window's unseen count is shown on the Dock icon. Notifications need Graphene to run from
+`Graphene.app`; run another way, only the Dock badge and the counters on the tabs and
+pane bars are shown.
 
 ## Update check
 

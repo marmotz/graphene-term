@@ -78,9 +78,10 @@ Ouvrez-la avec `Ctrl+,`, avec **Paramètres** dans la
 [palette de commandes](tabs-and-panes.md#palette-de-commandes), ou depuis le menu du
 clic droit. Elle présente les mêmes sections que le fichier (**Langue**, **Police**,
 **Fenêtre**, **Historique**, **Curseur**, **Sélection**, **Onglets**, **Thème**,
-**Raccourcis clavier**, **Mises à jour**), et chaque changement est écrit aussitôt dans
-`config.toml`, ou dans `keybindings.toml` pour les raccourcis clavier, en conservant
-les commentaires des fichiers, puis appliqué comme une modification à la main.
+**Raccourcis clavier**, **Notifications**, **Mises à jour**), et chaque changement est
+écrit aussitôt dans `config.toml`, ou dans `keybindings.toml` pour les raccourcis
+clavier, en conservant les commentaires des fichiers, puis appliqué comme une
+modification à la main.
 
 - **Raccourcis clavier** : liste chaque action avec ses raccourcis. Ajoutez un raccourci
   en l'appuyant (`Échap` annule), ou supprimez-en un.
@@ -200,6 +201,32 @@ démarrage.
 |------------|----------|-------------------------------------------------------------------------------------------------|
 | `check`    | `true`   | `true` ou `false`. Rechercher une version plus récente sur GitHub ; `false` ne fait plus aucun appel réseau. |
 | `interval` | `"auto"` | `"auto"`, `"6h"`, `"12h"`, `"24h"`, `"2d"`, `"3d"` ou `"1w"`. `"auto"` vaut 24 heures pour une version publiée, 6 heures pour une version de développement. |
+
+### `[notifications]`
+
+| Paramètre           | Défaut  | Valeurs                                                                                    |
+|---------------------|---------|--------------------------------------------------------------------------------------------|
+| `program`           | `true`  | `true` ou `false`. Afficher les notifications demandées par les programmes (OSC 9, OSC 777). |
+| `command_finished`  | `true`  | `true` ou `false`. Signaler la fin d'une commande qui a duré au moins `command_threshold` secondes. |
+| `command_threshold` | `10`    | Nombre entier de secondes, au moins 1. Une valeur inférieure à 1 est refusée et la précédente conservée. |
+| `bell`              | `false` | `true` ou `false`. Transformer la sonnerie du terminal en notification.                    |
+
+Un changement s'applique à la notification suivante.
+
+Sous Linux, les notifications passent par le serveur de notifications du bureau, via
+D-Bus : chaque panneau en affiche au plus une, un clic dessus ramène le panneau, et le
+nombre de notifications non vues de la fenêtre s'affiche sur l'icône de la barre des
+tâches avec les docks qui le permettent (KDE Plasma, le dock d'Ubuntu, Dash to Dock).
+Sans serveur de notifications, seuls les compteurs des onglets et des barres de panneau
+s'affichent. Sous Wayland, ramener la fenêtre au premier plan après un clic dépend du
+compositeur.
+
+Sous macOS, les notifications passent par le centre de notifications, qui demande
+l'autorisation à la première : chaque panneau en affiche au plus une, un clic dessus
+ramène le panneau, et le nombre de notifications non vues de la fenêtre s'affiche sur
+l'icône du Dock. Les notifications demandent de lancer Graphene depuis `Graphene.app` ;
+lancé autrement, seuls le badge du Dock et les compteurs des onglets et des barres de
+panneau s'affichent.
 
 ## Recherche de mises à jour
 

@@ -4,6 +4,7 @@
 //! and border are only drawn while the tab shows several panes, the tab bar while there
 //! are several tabs.
 
+use super::badge::Pill;
 use super::command_palette::PaletteLayout;
 use super::context_menu::{MenuLayout, MenuRow};
 use super::dialog::DialogLayout;
@@ -419,6 +420,10 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
         if tab.close_hovered {
             button_hover(tab.close, text, ui);
         }
+        if let Some(pill) = &tab.pill {
+            let (fill, label) = badge_colors(colors, colors.palette_match);
+            badge(pill, fill, label, srgb_target, ui);
+        }
         ui.texts.push(UiTextItem {
             text: tab.title.clone(),
             x: tab.title_x,
@@ -490,12 +495,16 @@ pub fn panes(
 
 /// One pane title bar: its background, then its title and close button.
 fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
-    let (background, text) = pane_bar_colors(colors, bar.active, bar.broadcast.is_some());
-    let text = gpu_color(text, srgb_target);
+    let (background, text_rgb) = pane_bar_colors(colors, bar.active, bar.broadcast.is_some());
+    let text = gpu_color(text_rgb, srgb_target);
     ui.rects
         .push(rect(bar.rect, gpu_color(background, srgb_target)));
     if bar.close_hovered {
         button_hover(bar.close, text, ui);
+    }
+    if let Some(pill) = &bar.pill {
+        let (fill, label) = badge_colors(colors, pane_badge_fill(colors, background, text_rgb));
+        badge(pill, fill, label, srgb_target, ui);
     }
     ui.texts.push(UiTextItem {
         text: pane_bar_text(bar),
@@ -512,6 +521,36 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         y: bar.title_y,
         color: text,
         max_width: bar.close.width,
+        font: UiFont::Chrome,
+    });
+}
+
+/// Fill of the badge of a pane bar: the accent color, unless the bar is already
+/// filled with it (the active pane's bar), where the pill takes the bar's text color.
+fn pane_badge_fill(colors: &UiColors, background: Rgb, text: Rgb) -> Rgb {
+    if background == colors.palette_match {
+        text
+    } else {
+        colors.palette_match
+    }
+}
+
+/// Fill and label colors of a badge filled with `fill`: the label is the palette
+/// background, made readable on the fill.
+pub fn badge_colors(colors: &UiColors, fill: Rgb) -> (Rgb, Rgb) {
+    (fill, readable_on(colors.palette_background, fill))
+}
+
+/// A counter badge: its rounded pill in `fill`, then its label in `label`.
+fn badge(pill: &Pill, fill: Rgb, label: Rgb, srgb_target: bool, ui: &mut UiLayer) {
+    ui.rects
+        .push(rect(pill.rect, gpu_color(fill, srgb_target)).with_radius(pill.rect.height / 2.0));
+    ui.texts.push(UiTextItem {
+        text: pill.label.clone(),
+        x: pill.label_x,
+        y: pill.rect.y,
+        color: gpu_color(label, srgb_target),
+        max_width: pill.rect.width,
         font: UiFont::Chrome,
     });
 }
@@ -754,6 +793,44 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_badge_is_an_accent_pill_with_its_count_after_the_title() {
+        let single = Layout {
+            panes: vec![(PaneId(1), area(0.0, 30.0, 1000.0, 100.0))],
+            dividers: Vec::new(),
+            divider: 1.0,
+        };
+        let colors = UiColors {
+            palette_background: LABEL,
+            ..tab_colors()
+        };
+        let mut bar = bar();
+        bar.set_badges(&[0, 150]);
+        let ui = build(
+            &single,
+            Some(PaneId(1)),
+            &[],
+            Some(&bar),
+            None,
+            &colors,
+            false,
+        );
+        let pill = bar.tabs[1].pill.as_ref().unwrap();
+        let drawn_pill = ui
+            .rects
+            .iter()
+            .find(|r| r.position == [pill.rect.x, pill.rect.y])
+            .unwrap();
+        assert_eq!(drawn_pill.color, gpu_color(ACCENT, false));
+        assert_eq!(drawn_pill.radius, pill.rect.height / 2.0);
+        let label = ui.texts.iter().find(|t| t.text == "99+").unwrap();
+        assert_eq!(label.x, pill.label_x);
+        assert_eq!(label.color, gpu_color(readable_on(LABEL, ACCENT), false));
+        // The tab without unseen notifications has no pill.
+        assert!(bar.tabs[0].pill.is_none());
+        assert_eq!(ui.texts.len(), 5);
+    }
+
+    #[test]
     fn tab_bar_comes_after_the_pane_rects() {
         let bar = bar();
         let ui = build(
@@ -866,6 +943,44 @@ mod tests {
         let [r, g, b, _] = color(INACTIVE_TEXT);
         assert_eq!(rects[2].color, [r, g, b, DIVIDER_OPACITY]);
         assert!(rects[3..].iter().all(|r| r.color == color(ACCENT)));
+    }
+
+    #[test]
+    fn a_pane_badge_is_an_accent_pill_or_the_text_color_on_the_active_bar() {
+        let layout = two_columns();
+        let colors = UiColors {
+            palette_background: LABEL,
+            ..tab_colors()
+        };
+        let bars: Vec<PaneBarLayout> = pane_bars_of(&layout, Some(PaneId(2)))
+            .into_iter()
+            .map(|bar| bar.with_badge(3, pane_bar_metrics()))
+            .collect();
+        let ui = build(&layout, Some(PaneId(2)), &bars, None, None, &colors, false);
+        let fill_of = |bar: &PaneBarLayout| {
+            let pill = bar.pill.as_ref().unwrap();
+            ui.rects
+                .iter()
+                .find(|r| r.position == [pill.rect.x, pill.rect.y] && r.radius > 0.0)
+                .unwrap()
+                .color
+        };
+        // Inactive bar: the accent. Active bar, already the accent: its text color.
+        assert_eq!(fill_of(&bars[0]), gpu_color(ACCENT, false));
+        assert_eq!(fill_of(&bars[1]), gpu_color(LABEL, false));
+        let labels: Vec<[f32; 4]> = ui
+            .texts
+            .iter()
+            .filter(|t| t.text == "3")
+            .map(|t| t.color)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                gpu_color(readable_on(LABEL, ACCENT), false),
+                gpu_color(readable_on(LABEL, LABEL), false),
+            ]
+        );
     }
 
     #[test]

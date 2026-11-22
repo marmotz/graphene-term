@@ -10,6 +10,7 @@
 
 use std::collections::VecDeque;
 use std::mem;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{EventListener, VoidListener};
 use alacritty_terminal::grid::{Dimensions, Grid};
@@ -18,7 +19,7 @@ use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Color;
 
-use crate::signals::{Chunk, Signal};
+use crate::signals::{Chunk, Notice, Signal};
 
 /// Identifier of a command block, increasing with time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -117,6 +118,8 @@ pub struct Current {
     /// line counted from the top of the live history (so it stays on its text while the
     /// screen scrolls) and the column.
     prompt_start: Option<(usize, Column)>,
+    /// When the command started (`start` signal). `None` at the prompt.
+    started: Option<Instant>,
 }
 
 impl Current {
@@ -131,6 +134,7 @@ impl Current {
             pin_top: false,
             editing: false,
             prompt_start: None,
+            started: None,
         }
     }
 
@@ -147,6 +151,24 @@ impl Current {
     }
 }
 
+/// Something in a pane that may deserve a desktop notification, queued by the PTY
+/// thread for the UI thread to decide on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneNotice {
+    /// A program asked for a notification (OSC 9 or OSC 777).
+    Program(Notice),
+    /// A command run through the shell integration ended. Always queued: the UI thread
+    /// applies the configured duration threshold.
+    CommandFinished {
+        /// The command line from the `start` signal, empty when the hook sent none.
+        command: String,
+        /// [`Status::Success`], [`Status::Failure`] or [`Status::Unknown`].
+        status: Status,
+        /// Time between the `start` and `end` signals.
+        duration: Duration,
+    },
+}
+
 /// The blocks of a session.
 pub struct Timeline {
     /// Finished blocks, oldest first.
@@ -159,6 +181,8 @@ pub struct Timeline {
     scrollback: usize,
     /// Signals received on the alternate screen, applied once it is left.
     pending: Vec<Signal>,
+    /// Notices not yet collected by the UI thread, oldest first.
+    notices: Vec<PaneNotice>,
 }
 
 impl Timeline {
@@ -172,7 +196,13 @@ impl Timeline {
             scroll: 0,
             scrollback,
             pending: Vec::new(),
+            notices: Vec::new(),
         }
+    }
+
+    /// Takes the notices queued since the last call, oldest first.
+    pub fn take_notices(&mut self) -> Vec<PaneNotice> {
+        mem::take(&mut self.notices)
     }
 
     /// Finished blocks, oldest first.
@@ -303,34 +333,47 @@ impl Timeline {
 
     /// Applies a chunk of the PTY stream to `term`, the session's terminal. `Bytes`
     /// must be passed after the parser handled them: they only release the signals
-    /// held while the alternate screen was active.
-    pub fn apply<L: EventListener>(&mut self, term: &mut Term<L>, chunk: Chunk<'_>) {
+    /// held while the alternate screen was active. Notifications are queued at once,
+    /// even on the alternate screen. `now` is the time the chunk is applied, used to
+    /// measure how long commands run.
+    pub fn apply<L: EventListener>(&mut self, term: &mut Term<L>, chunk: Chunk<'_>, now: Instant) {
         let alt = term.mode().contains(TermMode::ALT_SCREEN);
         if !alt && !self.pending.is_empty() {
             for signal in mem::take(&mut self.pending) {
-                self.signal(term, signal);
+                self.signal(term, signal, now);
             }
         }
         match chunk {
             Chunk::Bytes(_) => {}
             Chunk::Signal(signal) if alt => self.pending.push(signal),
-            Chunk::Signal(signal) => self.signal(term, signal),
+            Chunk::Signal(signal) => self.signal(term, signal, now),
             Chunk::Clear if alt => {}
             Chunk::Clear => self.clear(term),
+            Chunk::Notify(notice) => self.notices.push(PaneNotice::Program(notice)),
         }
     }
 
-    fn signal<L: EventListener>(&mut self, term: &mut Term<L>, signal: Signal) {
+    fn signal<L: EventListener>(&mut self, term: &mut Term<L>, signal: Signal, now: Instant) {
         match (signal, self.current.phase) {
             (Signal::Start { command }, Phase::Prompt) => {
                 self.current.header = Some(detach_header(term, self.scrollback));
                 self.current.command = command;
                 self.current.phase = Phase::Running;
                 self.current.editing = false;
+                self.current.started = Some(now);
             }
             (Signal::End { status }, Phase::Running) => {
+                let status = Status::from_signal(status);
+                let duration = self.current.started.map_or(Duration::ZERO, |started| {
+                    now.saturating_duration_since(started)
+                });
+                self.notices.push(PaneNotice::CommandFinished {
+                    command: self.current.command.clone(),
+                    status,
+                    duration,
+                });
                 let output = detach(term, self.scrollback);
-                let block = self.finish(term, output, Status::from_signal(status));
+                let block = self.finish(term, output, status);
                 // A `clear` command: its block is empty, the next prompt goes on top.
                 if block.pin_top && block.output_is_empty() {
                     block.pin_top = false;
@@ -570,6 +613,8 @@ pub(crate) mod testing {
         pub timeline: Timeline,
         scanner: Scanner,
         parser: Processor<StdSyncHandler>,
+        /// Time passed to the timeline with each chunk; tests move it forward.
+        pub now: Instant,
     }
 
     impl Session {
@@ -587,6 +632,7 @@ pub(crate) mod testing {
                 timeline: Timeline::new(scrollback),
                 scanner: Scanner::new(TOKEN),
                 parser: Processor::new(),
+                now: Instant::now(),
             }
         }
 
@@ -596,7 +642,7 @@ pub(crate) mod testing {
                 if let Chunk::Bytes(bytes) = chunk {
                     self.parser.advance(&mut self.term, bytes);
                 }
-                self.timeline.apply(&mut self.term, chunk);
+                self.timeline.apply(&mut self.term, chunk, self.now);
             }
         }
 
@@ -1010,6 +1056,95 @@ mod tests {
         assert_eq!(session.timeline.blocks().len(), 1);
         assert_eq!(session.timeline.blocks()[0].status, Status::Success);
         assert_eq!(session.timeline.current().phase, Phase::Prompt);
+    }
+
+    fn program(title: Option<&str>, body: &str) -> PaneNotice {
+        PaneNotice::Program(Notice::Program {
+            title: title.map(str::to_owned),
+            body: body.to_owned(),
+        })
+    }
+
+    #[test]
+    fn notifications_are_queued_until_taken() {
+        let mut session = Session::new(100);
+        session.feed("\x1b]9;one\x07out\r\n\x1b]777;notify;T;two\x1b\\");
+        assert_eq!(
+            session.timeline.take_notices(),
+            [program(None, "one"), program(Some("T"), "two")]
+        );
+        assert!(session.timeline.take_notices().is_empty());
+        assert_eq!(session.live()[0], "out");
+    }
+
+    #[test]
+    fn notifications_on_the_alternate_screen_are_not_held() {
+        let mut session = Session::new(100);
+        session.feed(&format!("$ vim\r\n{}", start("vim")));
+        session.feed("\x1b[?1049h\x1b]9;saved\x07");
+        assert_eq!(session.timeline.take_notices(), [program(None, "saved")]);
+        assert_eq!(session.timeline.current().phase, Phase::Running);
+    }
+
+    fn finished(command: &str, status: Status, seconds: u64) -> PaneNotice {
+        PaneNotice::CommandFinished {
+            command: command.to_owned(),
+            status,
+            duration: Duration::from_secs(seconds),
+        }
+    }
+
+    #[test]
+    fn command_end_queues_its_duration_and_status() {
+        let mut session = Session::new(100);
+        session.feed(&format!("$ make\r\n{}", start("make")));
+        session.now += Duration::from_secs(42);
+        session.feed(&format!("done\r\n{}", end(0)));
+        assert_eq!(
+            session.timeline.take_notices(),
+            [finished("make", Status::Success, 42)]
+        );
+    }
+
+    #[test]
+    fn command_end_carries_a_failure_or_an_unknown_status() {
+        let mut session = Session::new(100);
+        session.command("false", &[], 3);
+        session.feed(&format!("$ x\r\n{}\x1b]6973;{TOKEN};end\x07", start("x")));
+        assert_eq!(
+            session.timeline.take_notices(),
+            [
+                finished("false", Status::Failure(3), 0),
+                finished("x", Status::Unknown, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn command_end_held_on_the_alternate_screen_is_measured_when_left() {
+        let mut session = Session::new(100);
+        session.feed(&format!("$ vim\r\n{}", start("vim")));
+        session.feed("\x1b[?1049h");
+        session.now += Duration::from_secs(5);
+        session.feed(&end(0));
+        assert!(session.timeline.take_notices().is_empty());
+
+        session.now += Duration::from_secs(2);
+        session.feed("\x1b[?1049l");
+        assert_eq!(
+            session.timeline.take_notices(),
+            [finished("vim", Status::Success, 7)]
+        );
+    }
+
+    #[test]
+    fn cancelled_or_empty_command_lines_queue_nothing() {
+        let mut session = Session::new(100);
+        session.feed(&format!("{}$ ", prompt()));
+        session.feed(&format!("{}{}$ ", cancel(), prompt()));
+        session.feed(&format!("{}$ ", prompt()));
+        assert_eq!(session.timeline.blocks().len(), 2);
+        assert!(session.timeline.take_notices().is_empty());
     }
 
     #[test]

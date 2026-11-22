@@ -25,6 +25,7 @@ mod keybindings;
 mod layout;
 mod links;
 mod mouse;
+mod notifications;
 mod opener;
 mod palette;
 mod pane;

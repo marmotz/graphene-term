@@ -95,13 +95,28 @@ impl Session {
                     .unwrap_or_else(|| special_days::titled(self.today.as_ref(), DEFAULT_TITLE))
             })
             .collect();
-        Some(TabBarLayout::new(
+        let badges: Vec<u32> = self
+            .workspace
+            .tabs()
+            .iter()
+            .map(|tab| {
+                tab.tree
+                    .leaves()
+                    .into_iter()
+                    .filter_map(|id| self.workspace.pane(id))
+                    .map(Pane::unseen)
+                    .fold(0, u32::saturating_add)
+            })
+            .collect();
+        let mut bar = TabBarLayout::new(
             self.chrome_area(),
             self.tab_position,
             &titles,
             self.workspace.active_index(),
             self.ui_metrics(UiFont::Chrome),
-        ))
+        );
+        bar.set_badges(&badges);
+        Some(bar)
     }
 
     /// Area the tabs divide between their panes, and the sizes they are laid out with.
@@ -127,7 +142,9 @@ impl Session {
                     .workspace
                     .pane_title(id)
                     .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
-                let mut bar = PaneBarLayout::new(id, rect, title, Some(id) == active, metrics);
+                let unseen = self.workspace.pane(id).map_or(0, Pane::unseen);
+                let mut bar = PaneBarLayout::new(id, rect, title, Some(id) == active, metrics)
+                    .with_badge(unseen, metrics);
                 if self.workspace.is_broadcast(id) {
                     bar.broadcast = Some(
                         self.workspace

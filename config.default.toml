@@ -56,3 +56,13 @@
 # check = true
 ## Check interval: "auto", "6h", "12h", "24h", "2d", "3d" or "1w"; "auto" is 6h for dev builds, 24h for stable builds.
 # interval = "auto"
+
+# [notifications]
+## Notifications requested by programs (OSC 9, OSC 777).
+# program = true
+## Notify when a command that ran at least `command_threshold` seconds finishes.
+# command_finished = true
+## Minimum duration of a command for its end to be notified, in whole seconds (at least 1).
+# command_threshold = 10
+## Turn the terminal bell into a notification.
+# bell = false

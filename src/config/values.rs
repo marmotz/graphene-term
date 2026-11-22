@@ -170,6 +170,19 @@ pub struct UpdatesConfig {
     pub interval: UpdateInterval,
 }
 
+/// `[notifications]`: which events raise a desktop notification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NotificationsConfig {
+    /// Notifications requested by programs (OSC 9, OSC 777).
+    pub program: bool,
+    /// Notify when a command that ran at least `command_threshold` seconds finishes.
+    pub command_finished: bool,
+    /// Minimum duration of a command for its end to be notified, in seconds (at least 1).
+    pub command_threshold: u64,
+    /// Turn the terminal bell into a notification.
+    pub bell: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeConfig {
     pub name: String,

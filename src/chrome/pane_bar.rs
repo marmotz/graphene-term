@@ -6,6 +6,7 @@
 //! content the terminal grid is laid out in. Titles are truncated by the interface
 //! text.
 
+use super::badge::Pill;
 use super::tab_bar::UiMetrics;
 use crate::layout::Rect;
 use crate::mouse::Button;
@@ -70,6 +71,10 @@ pub struct PaneBarLayout {
     pub close_hovered: bool,
     /// Size of the broadcast set when the pane is part of it.
     pub broadcast: Option<usize>,
+    /// Unseen notifications of the pane.
+    pub badge: u32,
+    /// The badge counting them, before the close button; `None` at 0.
+    pub pill: Option<Pill>,
 }
 
 impl PaneBarLayout {
@@ -91,12 +96,24 @@ impl PaneBarLayout {
             title,
             title_x,
             title_y: bar.y + ((bar.height - metrics.line_height) / 2.0).round(),
-            title_width: (close.x - padding / 2.0 - title_x).max(0.0),
+            title_width: title_width(close, title_x, 0.0, metrics),
             close,
             active,
             close_hovered: false,
             broadcast: None,
+            badge: 0,
+            pill: None,
         }
+    }
+
+    /// The same bar counting `badge` unseen notifications: the pill takes its room
+    /// from the title.
+    pub fn with_badge(mut self, badge: u32, metrics: UiMetrics) -> Self {
+        self.pill = Pill::new(badge, self.close.x, self.title_y, metrics);
+        let room = self.pill.as_ref().map_or(0.0, |pill| pill.room(metrics));
+        self.title_width = title_width(self.close, self.title_x, room, metrics);
+        self.badge = badge;
+        self
     }
 
     /// What is under the pixel `(x, y)`: the close button before the title.
@@ -109,6 +126,12 @@ impl PaneBarLayout {
             Some(PaneBarHit::Title)
         }
     }
+}
+
+/// Width left to a title starting at `title_x`, before the `close` button and the
+/// `room` a badge takes.
+fn title_width(close: Rect, title_x: f32, room: f32, metrics: UiMetrics) -> f32 {
+    (close.x - metrics.padding() / 2.0 - room - title_x).max(0.0)
 }
 
 /// The bar under the pixel `(x, y)` among the panes `panes` (pane and rectangle, as a
@@ -253,6 +276,35 @@ mod tests {
         assert_eq!(bar.title_y, 56.0);
         // The title stops half a padding before the button.
         assert_eq!(bar.title_width, bar.close.x - 5.0 - 110.0);
+    }
+
+    #[test]
+    fn a_badge_takes_its_room_from_the_title() {
+        let plain = PaneBarLayout::new(PaneId(3), pane(), "vim".to_owned(), false, METRICS);
+        // At 0, the bar is unchanged.
+        assert_eq!(plain.clone().with_badge(0, METRICS), plain);
+        let bar = plain.clone().with_badge(12, METRICS);
+        let pill = bar.pill.as_ref().unwrap();
+        assert_eq!(bar.badge, 12);
+        assert_eq!(pill.label, "12");
+        assert_eq!(bar.title_width, plain.title_width - pill.room(METRICS));
+        assert!(bar.title_x + bar.title_width < pill.rect.x);
+        assert_eq!(pill.rect.x + pill.rect.width, bar.close.x - 5.0);
+        assert_eq!(pill.rect.y, bar.title_y);
+        assert_eq!(
+            plain.clone().with_badge(100, METRICS).pill.unwrap().label,
+            "99+"
+        );
+        // Counting again replaces the badge: back to 0, back to the plain bar.
+        assert_eq!(bar.with_badge(0, METRICS), plain);
+        // A narrow bar never leaves a negative width to its title.
+        let narrow = Rect {
+            width: 40.0,
+            ..pane()
+        };
+        let bar = PaneBarLayout::new(PaneId(1), narrow, "t".to_owned(), false, METRICS)
+            .with_badge(5, METRICS);
+        assert_eq!(bar.title_width, 0.0);
     }
 
     #[test]

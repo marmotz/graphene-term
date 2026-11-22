@@ -2,6 +2,7 @@
 
 mod application;
 mod geometry;
+mod notices;
 mod panes;
 mod refresh;
 mod terminal_events;
@@ -48,8 +49,8 @@ use crate::chrome::tab_bar::{self, TabBarHit, TabBarLayout, UiMetrics};
 use crate::chrome::tooltip::TooltipLayout;
 use crate::clipboard::{self, Content};
 use crate::config::{
-    self, Config, ConfigError, FontConfig, MAX_FONT_SIZE, MIN_FONT_SIZE, StartupMode, ThemeConfig,
-    WindowConfig,
+    self, Config, ConfigError, FontConfig, MAX_FONT_SIZE, MIN_FONT_SIZE, NotificationsConfig,
+    StartupMode, ThemeConfig, WindowConfig,
 };
 use crate::config_edit::{self, ConfigEdit};
 use crate::cursor_blink::CursorBlink;
@@ -71,6 +72,8 @@ use crate::keybindings::Keybindings;
 use crate::layout::{CellSize, GridLayout, Hit, Rect};
 use crate::links::{self, Link};
 use crate::mouse;
+use crate::notifications::backend::{Command as NotificationCommand, Notifier};
+use crate::notifications::{self, Badge, Notice};
 use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
@@ -283,6 +286,12 @@ struct Session {
     /// Next local midnight, when `today` is computed again; `None` if the local time is
     /// unknown.
     midnight: Option<Instant>,
+    /// Which notices raise a desktop notification.
+    notifications: NotificationsConfig,
+    /// Hands the notifications and the badge to the desktop.
+    notifier: Notifier,
+    /// Unseen notices shown on the window's icon.
+    badge: Badge,
 }
 
 impl Session {}
