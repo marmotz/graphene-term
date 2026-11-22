@@ -205,6 +205,13 @@ moved to `keybindings.toml` at startup.
 
 A change applies to the next notification.
 
+On Linux, notifications go to the desktop's notification server over D-Bus: each pane
+shows at most one, clicking it brings back the pane, and the window's unseen count is
+shown on the taskbar icon by docks that support it (KDE Plasma, the Ubuntu dock, Dash to
+Dock). Without a notification server, only the counters on the tabs and pane bars are
+shown. On Wayland, whether clicking a notification raises the window depends on the
+compositor.
+
 ## Update check
 
 While `updates.check` is `true`, Graphene asks GitHub in the background whether a newer

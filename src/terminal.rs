@@ -39,7 +39,10 @@ pub enum UserEvent {
     /// The system light/dark appearance, at startup and on each change.
     Appearance(crate::appearance::Appearance),
     /// The user clicked the desktop notification of a pane.
-    #[allow(dead_code, reason = "sent by the OS notification backends")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "sent by the OS notification backends")
+    )]
     NotificationClicked(PaneId),
 }
 

@@ -355,6 +355,8 @@ pub enum Msg {
     CommandFailed(i32),
     /// Body of the notification of a bell.
     Bell,
+    /// Action of a notification: shows the pane that raised it.
+    ShowPane,
 }
 
 /// Every language, for tests that must cover each of them.
@@ -550,6 +552,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::CommandFinished => "Command finished",
         Msg::CommandFailed(code) => return format!("Command failed (code {code})").into(),
         Msg::Bell => "Bell",
+        Msg::ShowPane => "Show pane",
     };
     Cow::Borrowed(text)
 }
@@ -737,6 +740,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::CommandFinished => "Commande terminée",
         Msg::CommandFailed(code) => return format!("Commande échouée (code {code})").into(),
         Msg::Bell => "Sonnerie",
+        Msg::ShowPane => "Afficher le panneau",
     };
     Cow::Borrowed(text)
 }
@@ -934,9 +938,10 @@ mod tests {
             Msg::CommandFinished => 94,
             Msg::CommandFailed(_) => 95,
             Msg::Bell => 96,
+            Msg::ShowPane => 97,
         }
     }
-    const VARIANT_COUNT: usize = 97;
+    const VARIANT_COUNT: usize = 98;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1039,6 +1044,7 @@ mod tests {
             Msg::CommandFinished,
             Msg::CommandFailed(2),
             Msg::Bell,
+            Msg::ShowPane,
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));

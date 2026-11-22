@@ -202,6 +202,7 @@ impl App {
         let clipboard = arboard::Clipboard::new()
             .map_err(|e| log::warn!("clipboard unavailable: {e}"))
             .ok();
+        let lang = self.config.language.resolve(Lang::detect);
 
         Ok(Session {
             window,
@@ -233,7 +234,7 @@ impl App {
             config_banner: self.config_banner.clone(),
             update: UpdateBanner::default(),
             ignored_tag: None,
-            lang: self.config.language.resolve(Lang::detect),
+            lang,
             tab_position: self.config.tab_position.into(),
             keybindings: Keybindings::new(&self.config.keybindings),
             first_frame: perf::FirstFrame::default(),
@@ -249,7 +250,10 @@ impl App {
             today,
             midnight: special_days::until_midnight().map(|left| Instant::now() + left),
             notifications: self.config.notifications.clone(),
-            notifier: notifications::backend::spawn(self.proxy.clone()),
+            notifier: notifications::backend::spawn(
+                self.proxy.clone(),
+                crate::i18n::text(lang, &crate::i18n::Msg::ShowPane).into_owned(),
+            ),
             badge: Badge::default(),
         })
     }

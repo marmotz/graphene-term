@@ -3,6 +3,8 @@
 //! hands the result to a [`backend`].
 
 pub mod backend;
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::time::Duration;
 

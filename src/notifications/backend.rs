@@ -1,8 +1,9 @@
 //! What the UI thread asks of the desktop: the commands every notification backend
 //! takes, and the handle that hands them over without blocking.
 //!
-//! No OS backend exists yet: [`spawn`] returns a handle that drops every command. The
-//! counters drawn by Graphene itself work the same without one.
+//! On Linux, the commands go to the desktop over D-Bus ([`super::linux`]). Elsewhere,
+//! or when the desktop has no notification server, they are dropped: the counters drawn
+//! by Graphene itself work the same without a backend.
 
 use std::sync::mpsc;
 
@@ -40,8 +41,8 @@ impl Notifier {
         Self::default()
     }
 
-    /// A handle whose commands are read from the returned receiver.
-    #[cfg(test)]
+    /// A handle whose commands are read from the returned receiver, by the thread of a
+    /// backend.
     pub fn channel() -> (Self, mpsc::Receiver<Command>) {
         let (sender, receiver) = mpsc::channel();
         (
@@ -61,11 +62,18 @@ impl Notifier {
 }
 
 /// Starts the notification backend of this system. Clicks on a notification come back
-/// through `proxy` as [`UserEvent::NotificationClicked`].
-pub fn spawn(proxy: EventLoopProxy<UserEvent>) -> Notifier {
-    // The OS backends plug in here.
-    let _ = proxy;
-    Notifier::null()
+/// through `proxy` as [`UserEvent::NotificationClicked`]. `action` labels the action of
+/// a notification that shows its pane, on desktops that display it.
+pub fn spawn(proxy: EventLoopProxy<UserEvent>, action: String) -> Notifier {
+    #[cfg(target_os = "linux")]
+    {
+        super::linux::spawn(proxy, action)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (proxy, action);
+        Notifier::null()
+    }
 }
 
 #[cfg(test)]
