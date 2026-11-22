@@ -132,6 +132,12 @@ impl SettingsWindow {
         let mut model = SettingsModel::new(config, errors, Some(dir.clone()), appearance);
         model.set_font_families(model::monospace_families(fonts));
         model.set_wayland(is_wayland(event_loop));
+        model.set_screens(
+            event_loop
+                .available_monitors()
+                .filter_map(|monitor| monitor.name())
+                .collect(),
+        );
 
         let mut settings = Self {
             window,

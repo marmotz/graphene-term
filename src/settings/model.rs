@@ -11,7 +11,7 @@ use crate::appearance::Appearance;
 use crate::config::{
     self, Config, ConfigError, ConfigErrorKind, CursorShape, Language, MAX_FONT_SIZE,
     MAX_QUICK_TERMINAL_ANIMATION_MS, MAX_QUICK_TERMINAL_SIZE, MAX_SCROLLBACK_LINES, MIN_FONT_SIZE,
-    MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, StartupMode, TabPosition, UpdateInterval,
+    MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, QuickTerminalScreen, StartupMode, TabPosition, UpdateInterval,
 };
 use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
 use crate::input::Action;
@@ -254,7 +254,8 @@ pub fn widget(field: Field) -> Widget {
         | Field::ThemeLight
         | Field::ThemeDark
         | Field::UpdatesInterval
-        | Field::QuickTerminalEdge => Widget::Choice,
+        | Field::QuickTerminalEdge
+        | Field::QuickTerminalScreen => Widget::Choice,
         Field::FontSize => Widget::Number(NumberRange {
             min: f64::from(MIN_FONT_SIZE),
             max: Some(f64::from(MAX_FONT_SIZE)),
@@ -300,7 +301,7 @@ pub fn widget(field: Field) -> Widget {
         | Field::NotificationsCommandFinished
         | Field::NotificationsBell
         | Field::QuickTerminalHideOnFocusLoss => Widget::Toggle,
-        Field::WordSeparators | Field::FontFeatures | Field::QuickTerminalScreen => Widget::Text,
+        Field::WordSeparators | Field::FontFeatures => Widget::Text,
         Field::QuickTerminalHotkey => Widget::Shortcut,
     }
 }
@@ -378,6 +379,8 @@ pub struct SettingsModel {
     write_error: Option<String>,
     theme_choices: Vec<String>,
     font_families: Vec<String>,
+    /// Names of the connected screens, offered by `quick_terminal.screen`.
+    screens: Vec<String>,
     /// The shortcut table of `config`.
     keybindings: Keybindings,
     /// The config directory, holding the user themes; `None` for built-in themes only.
@@ -411,6 +414,7 @@ impl SettingsModel {
             write_error: None,
             theme_choices: theme::available(dir.as_deref(), &config.theme.unlocked),
             font_families: Vec::new(),
+            screens: Vec::new(),
             keybindings: Keybindings::new(&config.keybindings),
             dir,
             appearance,
@@ -556,6 +560,22 @@ impl SettingsModel {
 
     pub fn set_font_families(&mut self, families: Vec<String>) {
         self.font_families = families;
+    }
+
+    /// Sets the names of the connected screens, without duplicates nor the reserved
+    /// `active` and `primary` values.
+    pub fn set_screens(&mut self, screens: Vec<String>) {
+        let mut kept: Vec<String> = Vec::new();
+        for name in screens {
+            let reserved = matches!(
+                QuickTerminalScreen::parse(&name),
+                Err(_) | Ok(QuickTerminalScreen::Active | QuickTerminalScreen::Primary)
+            );
+            if !reserved && !kept.contains(&name) {
+                kept.push(name);
+            }
+        }
+        self.screens = kept;
     }
 
     pub fn config(&self) -> &Config {
@@ -717,6 +737,20 @@ impl SettingsModel {
             Field::ThemeName | Field::ThemeLight | Field::ThemeDark => named(&self.theme_choices),
             Field::UpdatesInterval => names(&UpdateInterval::VALUES),
             Field::QuickTerminalEdge => names(&QuickTerminalEdge::VALUES),
+            Field::QuickTerminalScreen => {
+                let mut choices = vec![
+                    Choice {
+                        value: QuickTerminalScreen::Active.to_string(),
+                        label: Some(Msg::ActiveScreen),
+                    },
+                    Choice {
+                        value: QuickTerminalScreen::Primary.to_string(),
+                        label: Some(Msg::PrimaryScreen),
+                    },
+                ];
+                choices.extend(named(&self.screens));
+                choices
+            }
             _ => return Vec::new(),
         };
         let current = self.text(field);
@@ -1252,7 +1286,7 @@ bell = true
             Ok(set(&["quick_terminal", "edge"], text("bottom")))
         );
         assert_eq!(
-            m.edit(Field::QuickTerminalScreen, Input::Text("primary".into())),
+            m.edit(Field::QuickTerminalScreen, Input::Choice("primary".into())),
             Ok(set(&["quick_terminal", "screen"], text("primary")))
         );
         assert_eq!(
@@ -1641,6 +1675,29 @@ bell = true
                 Change::Remove(owned(&["theme", "light"])),
                 Change::Remove(owned(&["theme", "dark"])),
             ])
+        );
+    }
+
+    #[test]
+    fn quick_terminal_screen_offers_the_connected_screens() {
+        assert_eq!(widget(Field::QuickTerminalScreen), Widget::Choice);
+        let mut m = model("[quick_terminal]\nscreen = \"HDMI-1\"\n");
+        m.set_screens(vec![
+            "DP-2".into(),
+            "active".into(),
+            "DP-2".into(),
+            String::new(),
+            "eDP-1".into(),
+        ]);
+        let choices = m.choices(Field::QuickTerminalScreen);
+        let values: Vec<_> = choices.iter().map(|choice| choice.value.as_str()).collect();
+        assert_eq!(values, ["active", "primary", "DP-2", "eDP-1", "HDMI-1"]);
+        assert_eq!(choices[0].label, Some(Msg::ActiveScreen));
+        assert_eq!(choices[1].label, Some(Msg::PrimaryScreen));
+        assert_eq!(choices[2].label, None);
+        assert_eq!(
+            m.edit(Field::QuickTerminalScreen, Input::Choice("DP-2".into())),
+            Ok(set(&["quick_terminal", "screen"], text("DP-2")))
         );
     }
 
