@@ -3,16 +3,24 @@ name: CI
 on:
   pull_request:
     branches: [develop]
+  # Runs on develop save the Cargo caches: caches saved by a pull request are
+  # scoped to it and never reach the other pull requests.
+  push:
+    branches: [develop]
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # Smaller, faster debug builds: CI never reuses incremental state and never
+  # needs debug info. Neither changes the code the tests run.
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   check-linux:
@@ -20,15 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
 
       - name: Format
         run: cargo fmt --check
@@ -39,8 +41,10 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # Pull requests skip it: release.yml builds in release before publishing.
       # A fresh timestamp: a restored target/ cache must not carry an older one.
       - name: Release build
+        if: github.event_name == 'push'
         run: SOURCE_DATE_EPOCH=$(date +%s) cargo build --release --locked
 
   check-macos:
@@ -56,15 +60,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-cargo-
+          key: ${{ matrix.arch }}
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
 
       # macOS-only cfg branches: warnings there are invisible to the Linux job.
       - name: Clippy
@@ -73,5 +72,7 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # Pull requests skip it: release.yml builds in release before publishing.
       - name: Release build
+        if: github.event_name == 'push'
         run: SOURCE_DATE_EPOCH=$(date +%s) cargo build --release --locked
