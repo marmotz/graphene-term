@@ -294,7 +294,7 @@ impl CellRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::glyphs::GlyphKey;
+    use crate::renderer::glyphs::{FontOptions, GlyphKey};
 
     const FONT_SIZE: f32 = 14.0;
     const WHITE: [f32; 4] = [1.0; 4];
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn quad_is_the_cell_origin_plus_the_glyph_placement() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let glyph = glyphs
             .get(GlyphKey {
                 c: 'M',
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn glyphs_without_pixels_are_skipped() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let mut out = Vec::new();
         resolve(
             &mut glyphs,
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn groups_are_resolved_in_order_into_their_own_ranges() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let mut out = Vec::new();
         let first = [item('a', [0.0, 0.0]), item('b', [10.0, 0.0])];
         let empty = [item(' ', [0.0, 0.0])];
@@ -381,7 +381,7 @@ mod tests {
             ui: None,
         };
         // How many of `chars` fit a fresh atlas before it resets.
-        let mut probe = Glyphs::with_atlas_size(None, FONT_SIZE, ATLAS);
+        let mut probe = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, ATLAS);
         let capacity = chars
             .iter()
             .position(|&c| {
@@ -392,7 +392,7 @@ mod tests {
         assert!(capacity >= 2 && capacity + 2 <= chars.len(), "{capacity}");
 
         // Leave room for two glyphs: the third glyph of the frame resets the atlas.
-        let mut glyphs = Glyphs::with_atlas_size(None, FONT_SIZE, ATLAS);
+        let mut glyphs = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, ATLAS);
         for &c in &chars[..capacity - 2] {
             glyphs.get(key(c));
         }

@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
-    fontdb,
+    Attrs, AttrsOwned, Buffer, Family, FontFeatures, FontSystem, Metrics, Shaping, Style,
+    SwashCache, SwashContent, Weight, fontdb,
 };
 
 use super::atlas::{Atlas, Page, Region};
@@ -22,6 +22,10 @@ use crate::layout::CellSize;
 
 /// Side of each atlas page, in pixels.
 const ATLAS_SIZE: u32 = 1024;
+
+/// Family of the test font, see [`Glyphs::with_test_font`].
+#[cfg(test)]
+pub(super) const TEST_FONT_FAMILY: &str = "JetBrains Mono";
 
 /// Size of the interface font of the chrome (tab bar, dialog), in logical pixels.
 pub const UI_FONT_SIZE: f32 = 13.0;
@@ -107,11 +111,36 @@ pub struct Upload {
     pub data: Vec<u8>,
 }
 
+/// The grid font: family and OpenType options.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontOptions {
+    /// `None` uses the system monospace font.
+    pub family: Option<String>,
+    /// Shows the ligatures of the fonts that have some.
+    pub ligatures: bool,
+    /// OpenType features applied to the grid text, not to the interface text.
+    pub features: FontFeatures,
+}
+
+impl Default for FontOptions {
+    fn default() -> Self {
+        Self {
+            family: None,
+            ligatures: true,
+            features: FontFeatures::new(),
+        }
+    }
+}
+
 pub struct Glyphs {
     font_system: FontSystem,
     swash_cache: SwashCache,
     /// Font family name, see [`resolve_family`]; `None` uses cosmic-text's monospace lookup.
     family: Option<String>,
+    #[allow(dead_code, reason = "read by the shaping of the grid by runs")]
+    ligatures: bool,
+    /// OpenType features of the grid text, see [`Self::grid_attrs`].
+    features: FontFeatures,
     metrics: Metrics,
     cell: CellSize,
     /// Scale factor of the window, applied to the interface fonts.
@@ -122,6 +151,17 @@ pub struct Glyphs {
     uploads: Vec<Upload>,
     /// Bumped each time the atlas is reset: glyphs obtained before are stale.
     generation: u64,
+}
+
+/// `attrs` in bold and/or italic.
+fn styled(mut attrs: Attrs<'_>, bold: bool, italic: bool) -> Attrs<'_> {
+    if bold {
+        attrs = attrs.weight(Weight::BOLD);
+    }
+    if italic {
+        attrs = attrs.style(Style::Italic);
+    }
+    attrs
 }
 
 fn family(name: &Option<String>) -> Family<'_> {
@@ -159,18 +199,48 @@ fn resolve_family(db: &fontdb::Database, configured: Option<String>) -> Option<S
 }
 
 impl Glyphs {
-    pub fn new(family: Option<String>, font_size: f32) -> Self {
-        Self::with_atlas_size(family, font_size, ATLAS_SIZE)
+    pub fn new(font: &FontOptions, font_size: f32) -> Self {
+        Self::with_atlas_size(font, font_size, ATLAS_SIZE)
     }
 
-    pub(super) fn with_atlas_size(family: Option<String>, font_size: f32, atlas_size: u32) -> Self {
-        let mut font_system = FontSystem::new();
-        let family = resolve_family(font_system.db(), family);
+    pub(super) fn with_atlas_size(font: &FontOptions, font_size: f32, atlas_size: u32) -> Self {
+        Self::with_font_system(FontSystem::new(), font, font_size, atlas_size)
+    }
+
+    /// Glyphs whose font system only knows the test font, JetBrains Mono Regular
+    /// (`tests/fixtures/fonts/`), so the tests do not depend on the system fonts. The
+    /// family of `font` is ignored.
+    #[cfg(test)]
+    pub(super) fn with_test_font(font: &FontOptions, font_size: f32) -> Self {
+        let mut db = fontdb::Database::new();
+        db.load_font_file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/fonts/JetBrainsMono-Regular.ttf"
+        ))
+        .expect("test font is vendored");
+        let font_system = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+        let font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ..font.clone()
+        };
+        Self::with_font_system(font_system, &font, font_size, ATLAS_SIZE)
+    }
+
+    fn with_font_system(
+        font_system: FontSystem,
+        font: &FontOptions,
+        font_size: f32,
+        atlas_size: u32,
+    ) -> Self {
+        let mut font_system = font_system;
+        let family = resolve_family(font_system.db(), font.family.clone());
         let (metrics, cell) = Self::measure(&mut font_system, &family, font_size);
         Self {
             font_system,
             swash_cache: SwashCache::new(),
             family,
+            ligatures: font.ligatures,
+            features: font.features.clone(),
             metrics,
             cell,
             ui_scale: 1.0,
@@ -229,11 +299,22 @@ impl Glyphs {
         self.clear();
     }
 
-    /// Changes the font family (`None`: the system monospace font) and size: new
-    /// metrics, and every cached glyph is dropped.
-    pub fn set_font(&mut self, family: Option<String>, font_size: f32) {
-        self.family = resolve_family(self.font_system.db(), family);
+    /// Changes the font (family, ligatures, features) and size: new metrics, and every
+    /// cached glyph is dropped.
+    pub fn set_font(&mut self, font: &FontOptions, font_size: f32) {
+        self.family = resolve_family(self.font_system.db(), font.family.clone());
+        self.ligatures = font.ligatures;
+        self.features = font.features.clone();
         self.set_font_size(font_size);
+    }
+
+    /// Attributes the grid text is shaped with: its family, style and OpenType features.
+    /// Owned, so that the font system can be borrowed while shaping with them.
+    fn grid_attrs(&self, bold: bool, italic: bool) -> AttrsOwned {
+        let attrs = Attrs::new()
+            .family(family(&self.family))
+            .font_features(self.features.clone());
+        AttrsOwned::new(&styled(attrs, bold, italic))
     }
 
     /// Scales the interface font to a window of scale factor `scale`; the cache is
@@ -337,23 +418,22 @@ impl Glyphs {
     }
 
     fn rasterize(&mut self, key: GlyphKey) -> Option<Glyph> {
-        let (family, metrics) = match key.ui {
-            Some(font) => (ui_family(font, &self.family), self.ui_metrics(font)),
-            None => (family(&self.family), self.metrics),
+        let (attrs, metrics) = match key.ui {
+            Some(font) => {
+                let attrs = Attrs::new().family(ui_family(font, &self.family));
+                (
+                    AttrsOwned::new(&styled(attrs, key.bold, key.italic)),
+                    self.ui_metrics(font),
+                )
+            }
+            None => (self.grid_attrs(key.bold, key.italic), self.metrics),
         };
-        let mut attrs = Attrs::new().family(family);
-        if key.bold {
-            attrs = attrs.weight(Weight::BOLD);
-        }
-        if key.italic {
-            attrs = attrs.style(Style::Italic);
-        }
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         let mut text = [0; 4];
         // Advanced shaping keeps the font fallback for characters missing from the font.
         buffer.set_text(
             key.c.encode_utf8(&mut text),
-            &attrs,
+            &attrs.as_attrs(),
             Shaping::Advanced,
             None,
         );
@@ -448,7 +528,7 @@ mod tests {
 
     #[test]
     fn cache_hit_returns_the_same_glyph_without_new_upload() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let first = glyphs.get(key('a')).expect("'a' has pixels");
         assert_eq!(glyphs.take_uploads().len(), 1);
         assert_eq!(glyphs.get(key('a')), Some(first));
@@ -457,7 +537,7 @@ mod tests {
 
     #[test]
     fn upload_matches_the_region() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let glyph = glyphs.get(key('W')).unwrap();
         let uploads = glyphs.take_uploads();
         let upload = &uploads[0];
@@ -469,7 +549,7 @@ mod tests {
 
     #[test]
     fn glyph_sits_inside_its_cell() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let cell = glyphs.cell_size();
         let glyph = glyphs.get(key('M')).unwrap();
         assert!(glyph.left >= -1 && glyph.top >= 0, "{glyph:?}");
@@ -479,7 +559,7 @@ mod tests {
 
     #[test]
     fn bold_and_italic_are_distinct_entries() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let regular = glyphs.get(key('a')).unwrap();
         let bold = glyphs
             .get(GlyphKey {
@@ -501,14 +581,14 @@ mod tests {
 
     #[test]
     fn space_has_nothing_to_draw() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         assert_eq!(glyphs.get(key(' ')), None);
         assert!(glyphs.take_uploads().is_empty());
     }
 
     #[test]
     fn missing_glyph_falls_back_without_panic() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         // Private use area: no font is expected to cover it.
         let _ = glyphs.get(key('\u{10FFFD}'));
         // Box drawing and braille usually come from a fallback font.
@@ -519,7 +599,7 @@ mod tests {
 
     #[test]
     fn metrics_match_the_reference_glyph() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let cell = glyphs.cell_size();
         assert_eq!(cell.height, (FONT_SIZE * 1.3).ceil());
         assert_eq!(glyphs.metrics(), Metrics::new(FONT_SIZE, cell.height));
@@ -535,7 +615,7 @@ mod tests {
 
     #[test]
     fn font_size_change_updates_metrics_and_clears_the_cache() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let small = glyphs.get(key('a')).unwrap();
         let generation = glyphs.generation();
         glyphs.set_font_size(FONT_SIZE * 2.0);
@@ -548,18 +628,102 @@ mod tests {
 
     #[test]
     fn font_change_updates_the_family_and_metrics_and_clears_the_cache() {
-        let mut glyphs = Glyphs::new(Some("No Such Family".into()), FONT_SIZE);
+        let font = FontOptions {
+            family: Some("No Such Family".into()),
+            ..FontOptions::default()
+        };
+        let mut glyphs = Glyphs::new(&font, FONT_SIZE);
         glyphs.get(key('a')).unwrap();
         let generation = glyphs.generation();
-        glyphs.set_font(None, FONT_SIZE * 2.0);
+        glyphs.set_font(&FontOptions::default(), FONT_SIZE * 2.0);
         assert_eq!(glyphs.family, resolve_family(glyphs.font_system.db(), None));
         assert_eq!(glyphs.cell_size().height, (FONT_SIZE * 2.0 * 1.3).ceil());
         assert!(glyphs.generation() > generation);
     }
 
+    fn with_features(tags: &[&[u8; 4]]) -> FontOptions {
+        let mut features = FontFeatures::new();
+        for tag in tags {
+            features.enable(cosmic_text::FeatureTag::new(tag));
+        }
+        FontOptions {
+            features,
+            ..FontOptions::default()
+        }
+    }
+
+    /// Pixels of the glyph `key`, as uploaded to the atlas.
+    fn pixels(glyphs: &mut Glyphs, key: GlyphKey) -> Vec<u8> {
+        glyphs.get(key).expect("glyph has pixels");
+        glyphs
+            .take_uploads()
+            .pop()
+            .expect("glyph was uploaded")
+            .data
+    }
+
+    #[test]
+    fn test_font_is_the_only_font_loaded() {
+        let glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        assert_eq!(glyphs.family.as_deref(), Some(TEST_FONT_FAMILY));
+        let families: Vec<_> = glyphs
+            .font_system
+            .db()
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+            .collect();
+        assert_eq!(families, [TEST_FONT_FAMILY]);
+    }
+
+    #[test]
+    fn opentype_feature_changes_the_grid_glyph() {
+        let mut plain = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let mut zero = Glyphs::with_test_font(&with_features(&[b"zero"]), FONT_SIZE);
+        // `zero` swaps the dotted zero of JetBrains Mono for a slashed one.
+        assert_ne!(pixels(&mut plain, key('0')), pixels(&mut zero, key('0')));
+        // Other characters are untouched.
+        assert_eq!(pixels(&mut plain, key('a')), pixels(&mut zero, key('a')));
+    }
+
+    #[test]
+    fn opentype_features_are_not_applied_to_the_interface_font() {
+        let mut plain = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let mut zero = Glyphs::with_test_font(&with_features(&[b"zero"]), FONT_SIZE);
+        let mono = GlyphKey::ui(UiFont::Mono, '0');
+        assert_eq!(pixels(&mut plain, mono), pixels(&mut zero, mono));
+    }
+
+    #[test]
+    fn features_change_reloads_the_font_and_clears_the_cache() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let dotted = pixels(&mut glyphs, key('0'));
+        let generation = glyphs.generation();
+        let font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ..with_features(&[b"zero"])
+        };
+        glyphs.set_font(&font, FONT_SIZE);
+        assert!(glyphs.generation() > generation);
+        assert_eq!(glyphs.features, font.features);
+        assert_ne!(pixels(&mut glyphs, key('0')), dotted);
+    }
+
+    #[test]
+    fn ligatures_option_is_kept_by_set_font() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        assert!(glyphs.ligatures);
+        let font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ligatures: false,
+            ..FontOptions::default()
+        };
+        glyphs.set_font(&font, FONT_SIZE);
+        assert!(!glyphs.ligatures);
+    }
+
     #[test]
     fn full_atlas_resets_and_drops_the_cache() {
-        let mut glyphs = Glyphs::with_atlas_size(None, FONT_SIZE, 48);
+        let mut glyphs = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, 48);
         let first = glyphs.get(key('A')).unwrap();
         let generation = glyphs.generation();
         for c in 'B'..='Z' {
@@ -577,14 +741,14 @@ mod tests {
 
     #[test]
     fn glyph_larger_than_the_atlas_is_skipped() {
-        let mut glyphs = Glyphs::with_atlas_size(None, FONT_SIZE, 4);
+        let mut glyphs = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, 4);
         assert_eq!(glyphs.get(key('M')), None);
         assert!(glyphs.take_uploads().is_empty());
     }
 
     #[test]
     fn ui_font_has_a_fixed_size_scaled_to_the_window() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         assert_eq!(glyphs.ui_font_size(UiFont::Chrome), UI_FONT_SIZE);
         glyphs.set_font_size(FONT_SIZE * 3.0);
         assert_eq!(glyphs.ui_font_size(UiFont::Chrome), UI_FONT_SIZE);
@@ -604,7 +768,7 @@ mod tests {
 
     #[test]
     fn palette_font_is_larger_than_the_chrome_font() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         glyphs.set_ui_scale(2.0);
         assert_eq!(
             glyphs.ui_font_size(UiFont::Palette),
@@ -622,7 +786,7 @@ mod tests {
 
     #[test]
     fn mono_font_has_the_palette_size_and_a_fixed_advance() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         assert_eq!(glyphs.ui_font_size(UiFont::Mono), PALETTE_FONT_SIZE);
         let narrow = glyphs.shape_ui(UiFont::Mono, "iiii").width;
         let wide = glyphs.shape_ui(UiFont::Mono, "MMMM").width;
@@ -634,7 +798,7 @@ mod tests {
 
     #[test]
     fn ui_glyphs_are_distinct_from_grid_glyphs() {
-        let mut glyphs = Glyphs::new(None, 30.0);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), 30.0);
         let grid = glyphs.get(key('a')).unwrap();
         let ui = glyphs.get(GlyphKey::ui(UiFont::Chrome, 'a')).unwrap();
         assert_ne!(grid.region, ui.region);
@@ -645,7 +809,7 @@ mod tests {
 
     #[test]
     fn shaped_ui_line_places_each_character() {
-        let mut glyphs = Glyphs::new(None, FONT_SIZE);
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let line = glyphs.shape_ui(UiFont::Chrome, "ab c");
         let chars: Vec<char> = line.glyphs.iter().map(|&(_, c)| c).collect();
         assert_eq!(chars, ['a', 'b', ' ', 'c']);

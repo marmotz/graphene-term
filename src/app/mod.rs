@@ -78,7 +78,7 @@ use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
-use crate::renderer::{Glyphs, Gpu, PaneFrame, Renderer, UiFont};
+use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
 use crate::settings::{self, LoadErrors, SettingsWindow};
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};

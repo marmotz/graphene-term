@@ -74,6 +74,21 @@ pub(super) fn reloaded_font_size(old: &FontConfig, new: &FontConfig, current: f3
     }
 }
 
+/// The grid font of the renderer for the configured `font`.
+pub(super) fn font_options(font: &FontConfig) -> FontOptions {
+    FontOptions {
+        family: font.family.clone(),
+        ligatures: font.ligatures,
+        features: font.features.font_features(),
+    }
+}
+
+/// Whether a reload from `old` to `new` changes the grid font, so it must be loaded
+/// again (which drops the glyph caches).
+pub(super) fn font_changed(old: &FontConfig, new: &FontConfig) -> bool {
+    new.family != old.family || new.ligatures != old.ligatures || new.features != old.features
+}
+
 pub(super) fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -263,7 +278,7 @@ impl App {
     fn spawn_first_pane(&mut self, window: &Window) -> anyhow::Result<(Glyphs, Workspace<Pane>)> {
         let scale = window.scale_factor() as f32;
         let mut glyphs = Glyphs::new(
-            self.config.font.family.clone(),
+            &font_options(&self.config.font),
             self.config.font.size * scale,
         );
         glyphs.set_ui_scale(scale);
@@ -689,6 +704,7 @@ pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::FontFeatureList;
 
     #[test]
     fn grid_size_gives_the_window_size_holding_that_grid() {
@@ -804,7 +820,40 @@ mod tests {
         FontConfig {
             family: family.map(str::to_owned),
             size,
+            ..Config::default().font
         }
+    }
+
+    #[test]
+    fn font_is_reloaded_when_family_ligatures_or_features_change() {
+        let base = font(None, 14.0);
+        assert!(!font_changed(&base, &base));
+        assert!(!font_changed(&base, &font(None, 12.0)));
+        assert!(font_changed(&base, &font(Some("Fira Code"), 14.0)));
+        let no_ligatures = FontConfig {
+            ligatures: false,
+            ..base.clone()
+        };
+        assert!(font_changed(&base, &no_ligatures));
+        let features = FontConfig {
+            features: FontFeatureList::parse("zero").unwrap(),
+            ..base.clone()
+        };
+        assert!(font_changed(&base, &features));
+    }
+
+    #[test]
+    fn font_options_carry_the_configured_font() {
+        let config = FontConfig {
+            family: Some("Fira Code".to_owned()),
+            ligatures: false,
+            features: FontFeatureList::parse("ss01 -calt").unwrap(),
+            ..Config::default().font
+        };
+        let options = font_options(&config);
+        assert_eq!(options.family.as_deref(), Some("Fira Code"));
+        assert!(!options.ligatures);
+        assert_eq!(options.features, config.features.font_features());
     }
 
     #[test]

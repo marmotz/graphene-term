@@ -33,11 +33,11 @@ _terminé — voir [technical.md](features/easter-eggs/technical.md)_ — 8/8 ta
 
 ## Ligatures de police  ·  [overview](features/font-ligatures/overview.md)
 
-_tâches créées — voir [technical.md](features/font-ligatures/technical.md)_ — 0/4 tasks done
+_tâches créées — voir [technical.md](features/font-ligatures/technical.md)_ — 1/4 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#182](https://github.com/marmotz/graphene-term/issues/182) | [Config] Options [font] ligatures et features, appliquées à la police de la grille | — |
+| [x]  | [#182](https://github.com/marmotz/graphene-term/issues/182) | [Config] Options [font] ligatures et features, appliquées à la police de la grille | — |
 | [ ]  | [#185](https://github.com/marmotz/graphene-term/issues/185) | [Réglages] Interrupteur des ligatures et features OpenType | #182 |
 | [ ]  | [#186](https://github.com/marmotz/graphene-term/issues/186) | [Rendu] Mise en forme de la grille par runs, avec cache | #182 |
 | [ ]  | [#190](https://github.com/marmotz/graphene-term/issues/190) | [Rendu] Ligature sous le curseur affichée en caractères isolés | #186 |

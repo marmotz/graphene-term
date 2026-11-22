@@ -131,6 +131,13 @@ impl Reader<'_> {
                     Checked::Clamped(clamped, format!("{size} is out of {MIN_FONT_SIZE}..={MAX_FONT_SIZE}, using {clamped}"))
                 }
             }),
+            ("font", "ligatures") => self.set(value, key_segments, path, &mut config.font.ligatures, &previous.font.ligatures, Checked::Valid),
+            ("font", "features") => self.set(value, key_segments, path, &mut config.font.features, &previous.font.features, |features: String| {
+                match FontFeatureList::parse(&features) {
+                    Ok(features) => Checked::Valid(features),
+                    Err(message) => Checked::Invalid(message),
+                }
+            }),
             ("window", "startup_mode") => self.set(value, key_segments, path, &mut config.window.startup_mode, &previous.window.startup_mode, Checked::Valid),
             ("window", "width") => self.set(value, key_segments, path, &mut config.window.width, &previous.window.width, positive_size),
             ("window", "height") => self.set(value, key_segments, path, &mut config.window.height, &previous.window.height, positive_size),

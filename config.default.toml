@@ -12,6 +12,10 @@
 # family = ""
 ## Size in points, from 6 to 72.
 # size = 14.0
+## Show the ligatures of fonts that have some (Fira Code, JetBrains Mono...).
+# ligatures = true
+## OpenType features, separated by spaces: "ss01" enables, "-calt" disables, "cv05=2" sets a value.
+# features = ""
 
 # [window]
 ## Startup mode: "default" (configured size), "maximized", or "remember" (last closed window size/state).

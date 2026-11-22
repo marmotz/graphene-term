@@ -47,11 +47,11 @@ impl Session {
         self.term_config = term_config;
 
         let font_size = reloaded_font_size(&old.font, &new.font, self.font_size);
-        if new.font.family != old.font.family {
+        if font_changed(&old.font, &new.font) {
             self.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
             let scale = self.window.scale_factor() as f32;
             self.renderer
-                .set_font(new.font.family.clone(), self.font_size * scale);
+                .set_font(&font_options(&new.font), self.font_size * scale);
         } else if font_size != self.font_size {
             self.apply_font_size(font_size);
         }
