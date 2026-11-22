@@ -4,7 +4,7 @@
 
 ## Notifications de bureau  ·  [overview](features/desktop-notifications/overview.md)
 
-_tâches créées — voir [technical.md](features/desktop-notifications/technical.md)_ — 4/7 tasks done
+_tâches créées — voir [technical.md](features/desktop-notifications/technical.md)_ — 5/7 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
@@ -12,7 +12,7 @@ _tâches créées — voir [technical.md](features/desktop-notifications/technic
 | [x]  | [#177](https://github.com/marmotz/graphene-term/issues/177) | [Notifications] Section de configuration [notifications] | — |
 | [x]  | [#183](https://github.com/marmotz/graphene-term/issues/183) | [Notifications] Mesurer la durée des commandes et signaler leur fin | #175 |
 | [x]  | [#184](https://github.com/marmotz/graphene-term/issues/184) | [Notifications] Décider, compter et effacer les notifications | #175, #183, #177 |
-| [ ]  | [#187](https://github.com/marmotz/graphene-term/issues/187) | [Notifications] Badges compteurs sur les onglets et les barres de pane | #184 |
+| [x]  | [#187](https://github.com/marmotz/graphene-term/issues/187) | [Notifications] Badges compteurs sur les onglets et les barres de pane | #184 |
 | [ ]  | [#188](https://github.com/marmotz/graphene-term/issues/188) | [Notifications] Backend Linux : D-Bus et badge LauncherEntry | #184 |
 | [ ]  | [#189](https://github.com/marmotz/graphene-term/issues/189) | [Notifications] Backend macOS : UNUserNotificationCenter et badge du Dock | #184 |
 

@@ -7,6 +7,7 @@
 //! high each, in a bar as wide as that maximum. Titles are truncated by the interface
 //! text.
 
+use super::badge::Pill;
 use crate::layout::Rect;
 use crate::workspace::TabBarPosition;
 
@@ -82,6 +83,10 @@ pub struct TabSlot {
     pub active: bool,
     /// Whether the mouse is over the close button.
     pub close_hovered: bool,
+    /// Unseen notifications of the panes of the tab.
+    pub badge: u32,
+    /// The badge counting them, before the close button; `None` at 0.
+    pub pill: Option<Pill>,
 }
 
 /// The bar on its edge of the window, in pixels.
@@ -166,7 +171,7 @@ impl TabBarLayout {
             height: new_tab_size.1,
         };
         for (index, title) in titles.iter().enumerate() {
-            let slot = layout.slot(layout.slot_start(index), title.clone(), index == active);
+            let slot = layout.slot(layout.slot_start(index), title.clone(), index == active, 0);
             layout.tabs.push(slot);
         }
         layout
@@ -205,8 +210,23 @@ impl TabBarLayout {
         }
     }
 
-    /// The tab of `title` starting at `start` along the bar.
-    fn slot(&self, start: f32, title: String, active: bool) -> TabSlot {
+    /// Counts the unseen notifications of each tab, in order, in its badge: the title
+    /// gives the pill its room. A missing count is 0.
+    pub fn set_badges(&mut self, badges: &[u32]) {
+        let tabs = std::mem::take(&mut self.tabs);
+        self.tabs = tabs
+            .into_iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let badge = badges.get(index).copied().unwrap_or(0);
+                self.slot(self.slot_start(index), tab.title, tab.active, badge)
+            })
+            .collect();
+    }
+
+    /// The tab of `title` starting at `start` along the bar, with `badge` unseen
+    /// notifications.
+    fn slot(&self, start: f32, title: String, active: bool, badge: u32) -> TabSlot {
         let (x, y) = self.at(start);
         let (width, height) = (self.tab_width, self.tab_height);
         let padding = self.metrics.padding();
@@ -218,6 +238,9 @@ impl TabBarLayout {
             height: side,
         };
         let title_x = x + padding;
+        let title_y = y + ((height - self.metrics.line_height) / 2.0).round();
+        let pill = Pill::new(badge, close.x, title_y, self.metrics);
+        let room = pill.as_ref().map_or(0.0, |pill| pill.room(self.metrics));
         TabSlot {
             rect: Rect {
                 x,
@@ -227,11 +250,13 @@ impl TabBarLayout {
             },
             title,
             title_x,
-            title_y: y + ((height - self.metrics.line_height) / 2.0).round(),
-            title_width: (close.x - padding / 2.0 - title_x).max(0.0),
+            title_y,
+            title_width: (close.x - padding / 2.0 - room - title_x).max(0.0),
             close,
             active,
             close_hovered: false,
+            badge,
+            pill,
         }
     }
 
@@ -285,9 +310,9 @@ impl TabBarLayout {
         let mut dragged = None;
         for (index, tab) in order.into_iter().enumerate() {
             if index == to {
-                dragged = Some(self.slot(start, tab.title, tab.active));
+                dragged = Some(self.slot(start, tab.title, tab.active, tab.badge));
             } else {
-                tabs.push(self.slot(self.slot_start(index), tab.title, tab.active));
+                tabs.push(self.slot(self.slot_start(index), tab.title, tab.active, tab.badge));
             }
         }
         tabs.extend(dragged);
@@ -374,6 +399,43 @@ mod tests {
         let narrow = top(130.0, &titles(4), 0, METRICS);
         assert!(narrow.tabs[0].title_width < tab.title_width);
         assert!(narrow.tabs.iter().all(|t| t.title_width >= 0.0));
+    }
+
+    #[test]
+    fn a_badge_takes_its_room_from_the_title() {
+        let plain = top(2000.0, &titles(3), 0, METRICS);
+        let mut bar = plain.clone();
+        bar.set_badges(&[0, 5, 1000]);
+        // No badge: the tab is unchanged.
+        assert_eq!(bar.tabs[0], plain.tabs[0]);
+        assert_eq!(bar.tabs[0].badge, 0);
+        let tab = &bar.tabs[1];
+        let pill = tab.pill.as_ref().unwrap();
+        assert_eq!(tab.badge, 5);
+        assert_eq!(pill.label, "5");
+        assert_eq!(
+            tab.title_width,
+            plain.tabs[1].title_width - pill.room(METRICS)
+        );
+        assert!(tab.title_x + tab.title_width < pill.rect.x);
+        assert!(pill.rect.x + pill.rect.width < tab.close.x);
+        assert_eq!(bar.tabs[2].pill.as_ref().unwrap().label, "99+");
+        // A missing count is 0.
+        bar.set_badges(&[]);
+        assert_eq!(bar.tabs, plain.tabs);
+    }
+
+    #[test]
+    fn a_dragged_tab_keeps_its_badge() {
+        let mut bar = top(2000.0, &titles(3), 0, METRICS);
+        bar.set_badges(&[4, 0, 0]);
+        let to = bar.dragged(0, 400.0);
+        assert_eq!(to, 2);
+        let dragged = bar.tabs.last().unwrap();
+        assert_eq!(dragged.title, "tab 0");
+        assert_eq!(dragged.badge, 4);
+        assert!(dragged.pill.is_some());
+        assert!(bar.tabs[..2].iter().all(|t| t.pill.is_none()));
     }
 
     #[test]
