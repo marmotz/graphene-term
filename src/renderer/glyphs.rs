@@ -2,8 +2,10 @@
 //!
 //! A terminal cell holds one character, so no shaping is needed per frame: each
 //! `(char, bold, italic)` is resolved once by shaping that single character (font
-//! fallback included), rasterized once and placed in the [`Atlas`]. The pixels of newly
-//! placed glyphs wait in [`Glyphs::take_uploads`] for the GPU side to copy them.
+//! fallback included). With ligatures, a run of cells is shaped once as a whole by
+//! [`Glyphs::shape_run`], so that the font can substitute its glyphs. Either way each
+//! glyph is rasterized once and placed in the [`Atlas`]. The pixels of newly placed
+//! glyphs wait in [`Glyphs::take_uploads`] for the GPU side to copy them.
 //!
 //! [`Glyphs`] also owns the font system and the cell metrics, and the interface font:
 //! interface text uses a sans-serif font at a fixed size per [`UiFont`], independent of
@@ -11,9 +13,10 @@
 //! grid's, under keys with `ui` set.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use cosmic_text::{
-    Attrs, AttrsOwned, Buffer, Family, FontFeatures, FontSystem, Metrics, Shaping, Style,
+    Attrs, AttrsOwned, Buffer, CacheKey, Family, FontFeatures, FontSystem, Metrics, Shaping, Style,
     SwashCache, SwashContent, Weight, fontdb,
 };
 
@@ -22,6 +25,9 @@ use crate::layout::CellSize;
 
 /// Side of each atlas page, in pixels.
 const ATLAS_SIZE: u32 = 1024;
+
+/// Shaped runs kept by [`Glyphs::shape_run`] before its cache is dropped.
+const MAX_CACHED_RUNS: usize = 8192;
 
 /// Family of the test font, see [`Glyphs::with_test_font`].
 #[cfg(test)]
@@ -102,6 +108,43 @@ pub struct Glyph {
     pub top: i32,
 }
 
+impl Glyph {
+    /// The glyph moved by `offset` pixels.
+    fn offset_by(self, [x, y]: [i32; 2]) -> Self {
+        Self {
+            left: self.left + x,
+            top: self.top + y,
+            ..self
+        }
+    }
+}
+
+/// A glyph of a run shaped by [`Glyphs::shape_run`], drawn from one of its cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunGlyph {
+    /// Cell of the run the glyph is drawn from: the first character of its cluster. The
+    /// other cells of the cluster draw nothing, the glyph overflowing on them.
+    pub cell: u16,
+    /// Glyph to rasterize, see [`Glyphs::raster`].
+    pub raster: CacheKey,
+    /// Offset of the pen from the cell origin, in pixels: baseline and positioning.
+    pub offset: [i32; 2],
+    /// Part of a ligature: its cluster covers several characters, or the font replaced
+    /// the glyph the character has when shaped alone.
+    pub ligated: bool,
+}
+
+/// Shaped runs of one `(bold, italic)` style, by text.
+type RunCache = HashMap<Box<str>, Rc<[RunGlyph]>>;
+
+/// A character shaped alone: the glyph to rasterize and the pen offset from the cell
+/// origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Shaped {
+    raster: CacheKey,
+    offset: [i32; 2],
+}
+
 /// Pixels of a newly placed glyph, to copy into `region` of the `page` texture. Rows are
 /// tightly packed (`region.width * page.bytes_per_pixel()` bytes each).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,7 +180,6 @@ pub struct Glyphs {
     swash_cache: SwashCache,
     /// Font family name, see [`resolve_family`]; `None` uses cosmic-text's monospace lookup.
     family: Option<String>,
-    #[allow(dead_code, reason = "read by the shaping of the grid by runs")]
     ligatures: bool,
     /// OpenType features of the grid text, see [`Self::grid_attrs`].
     features: FontFeatures,
@@ -145,8 +187,15 @@ pub struct Glyphs {
     cell: CellSize,
     /// Scale factor of the window, applied to the interface fonts.
     ui_scale: f32,
-    /// `None` for characters with nothing to draw (space, empty bitmap).
-    cache: HashMap<GlyphKey, Option<Glyph>>,
+    /// Characters shaped alone; `None` when no font has a glyph for them.
+    chars: HashMap<GlyphKey, Option<Shaped>>,
+    /// Shaped runs of the grid, by `(bold, italic)` then text.
+    runs: HashMap<(bool, bool), RunCache>,
+    /// Number of entries of `runs`.
+    cached_runs: usize,
+    /// Rasterized glyphs, shared by characters and runs; `None` for glyphs with nothing
+    /// to draw (space, empty bitmap). Dropped with the atlas.
+    raster: HashMap<CacheKey, Option<Glyph>>,
     atlas: Atlas,
     uploads: Vec<Upload>,
     /// Bumped each time the atlas is reset: glyphs obtained before are stale.
@@ -244,7 +293,10 @@ impl Glyphs {
             metrics,
             cell,
             ui_scale: 1.0,
-            cache: HashMap::new(),
+            chars: HashMap::new(),
+            runs: HashMap::new(),
+            cached_runs: 0,
+            raster: HashMap::new(),
             atlas: Atlas::new(atlas_size),
             uploads: Vec::new(),
             generation: 0,
@@ -306,6 +358,11 @@ impl Glyphs {
         self.ligatures = font.ligatures;
         self.features = font.features.clone();
         self.set_font_size(font_size);
+    }
+
+    /// Whether the grid shows the ligatures of the font, shaping its text by runs.
+    pub fn ligatures(&self) -> bool {
+        self.ligatures
     }
 
     /// Attributes the grid text is shaped with: its family, style and OpenType features.
@@ -373,9 +430,17 @@ impl Glyphs {
         }
     }
 
-    /// Drops every cached glyph and frees the atlas.
+    /// Drops every cached glyph and shaped run, and frees the atlas.
     pub fn clear(&mut self) {
-        self.cache.clear();
+        self.chars.clear();
+        self.runs.clear();
+        self.cached_runs = 0;
+        self.reset_atlas();
+    }
+
+    /// Frees the atlas and drops the rasterized glyphs, keeping the shaping.
+    fn reset_atlas(&mut self) {
+        self.raster.clear();
         self.atlas.reset();
         self.uploads.clear();
         self.generation += 1;
@@ -409,15 +474,28 @@ impl Glyphs {
     /// The glyph of `key`, rasterized and placed in the atlas on first use. `None` when
     /// there is nothing to draw.
     pub fn get(&mut self, key: GlyphKey) -> Option<Glyph> {
-        if let Some(glyph) = self.cache.get(&key) {
-            return *glyph;
-        }
-        let glyph = self.rasterize(key);
-        self.cache.insert(key, glyph);
-        glyph
+        let shaped = self.shaped(key)?;
+        Some(self.raster(shaped.raster)?.offset_by(shaped.offset))
     }
 
-    fn rasterize(&mut self, key: GlyphKey) -> Option<Glyph> {
+    /// The glyph of `glyph`, a glyph of a shaped run, rasterized and placed in the atlas
+    /// on first use, with its offset from the origin of its cell. `None` when there is
+    /// nothing to draw.
+    pub fn run_glyph(&mut self, glyph: &RunGlyph) -> Option<Glyph> {
+        Some(self.raster(glyph.raster)?.offset_by(glyph.offset))
+    }
+
+    /// The character of `key` shaped alone, cached.
+    fn shaped(&mut self, key: GlyphKey) -> Option<Shaped> {
+        if let Some(shaped) = self.chars.get(&key) {
+            return *shaped;
+        }
+        let shaped = self.shape_char(key);
+        self.chars.insert(key, shaped);
+        shaped
+    }
+
+    fn shape_char(&mut self, key: GlyphKey) -> Option<Shaped> {
         let (attrs, metrics) = match key.ui {
             Some(font) => {
                 let attrs = Attrs::new().family(ui_family(font, &self.family));
@@ -441,9 +519,97 @@ impl Glyphs {
         let run = buffer.layout_runs().next()?;
         let physical = run.glyphs.first()?.physical((0.0, 0.0), 1.0);
         let line_y = run.line_y.round() as i32;
+        Some(Shaped {
+            raster: physical.cache_key,
+            offset: [physical.x, line_y + physical.y],
+        })
+    }
+
+    /// The glyphs of `text`, a run of grid cells of one column each, shaped together so
+    /// that the font can form its ligatures. Shaped once per `(text, bold, italic)`, then
+    /// served from a cache dropped by [`Self::clear`].
+    pub fn shape_run(&mut self, text: &str, bold: bool, italic: bool) -> Rc<[RunGlyph]> {
+        if let Some(run) = self
+            .runs
+            .get(&(bold, italic))
+            .and_then(|runs| runs.get(text))
+        {
+            return run.clone();
+        }
+        let run: Rc<[RunGlyph]> = self.shape_text(text, bold, italic).into();
+        if self.cached_runs >= MAX_CACHED_RUNS {
+            self.runs.clear();
+            self.cached_runs = 0;
+        }
+        self.runs
+            .entry((bold, italic))
+            .or_default()
+            .insert(text.into(), run.clone());
+        self.cached_runs += 1;
+        run
+    }
+
+    fn shape_text(&mut self, text: &str, bold: bool, italic: bool) -> Vec<RunGlyph> {
+        let attrs = self.grid_attrs(bold, italic);
+        let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
+        buffer.set_text(text, &attrs.as_attrs(), Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        let Some(line) = buffer.layout_runs().next() else {
+            return Vec::new();
+        };
+        let line_y = line.line_y.round() as i32;
+        // Each character is one cell: the cell of a byte offset is its character index.
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        let cell_of = |byte: usize| chars.partition_point(|&(start, _)| start < byte);
+        let mut glyphs = Vec::with_capacity(line.glyphs.len());
+        // Start and pen position of the current cluster: its glyphs are placed relative
+        // to its cell, not to the shaped position, which keeps the grid aligned.
+        let mut cluster = (usize::MAX, 0.0);
+        for glyph in line.glyphs {
+            if glyph.start != cluster.0 {
+                cluster = (glyph.start, glyph.x);
+            }
+            let cell = cell_of(glyph.start);
+            let (Some(&(_, c)), Ok(index)) = (chars.get(cell), u16::try_from(cell)) else {
+                continue;
+            };
+            let physical = glyph.physical((-cluster.1, 0.0), 1.0);
+            let alone = self.shaped(GlyphKey {
+                c,
+                bold,
+                italic,
+                ui: None,
+            });
+            let same_glyph = alone.is_some_and(|alone| {
+                (alone.raster.font_id, alone.raster.glyph_id)
+                    == (physical.cache_key.font_id, physical.cache_key.glyph_id)
+            });
+            glyphs.push(RunGlyph {
+                cell: index,
+                raster: physical.cache_key,
+                offset: [physical.x, line_y + physical.y],
+                ligated: cell_of(glyph.end) - cell > 1 || !same_glyph,
+            });
+        }
+        glyphs
+    }
+
+    /// The glyph `key` rasterized and placed in the atlas on first use, its offset taken
+    /// from the pen position. `None` when there is nothing to draw.
+    pub fn raster(&mut self, key: CacheKey) -> Option<Glyph> {
+        if let Some(glyph) = self.raster.get(&key) {
+            return *glyph;
+        }
+        let glyph = self.rasterize(key);
+        // Placed after any atlas reset it caused: valid in the current atlas.
+        self.raster.insert(key, glyph);
+        glyph
+    }
+
+    fn rasterize(&mut self, key: CacheKey) -> Option<Glyph> {
         let image = self
             .swash_cache
-            .get_image_uncached(&mut self.font_system, physical.cache_key)?;
+            .get_image_uncached(&mut self.font_system, key)?;
         let placement = image.placement;
         if placement.width == 0 || placement.height == 0 {
             return None;
@@ -462,19 +628,19 @@ impl Glyphs {
         Some(Glyph {
             page,
             region,
-            left: physical.x + placement.left,
-            top: line_y + physical.y - placement.top,
+            left: placement.left,
+            top: -placement.top,
         })
     }
 
-    /// Reserves an atlas region, resetting the atlas (and the cache) when the page is
-    /// full. `None` when the glyph does not fit even an empty page.
+    /// Reserves an atlas region, resetting the atlas (and the rasterized glyphs) when the
+    /// page is full. `None` when the glyph does not fit even an empty page.
     fn allocate(&mut self, page: Page, width: u32, height: u32) -> Option<Region> {
         if let Some(region) = self.atlas.allocate(page, width, height) {
             return Some(region);
         }
         log::debug!("glyph atlas full, resetting it");
-        self.clear();
+        self.reset_atlas();
         let region = self.atlas.allocate(page, width, height);
         if region.is_none() {
             log::warn!("glyph of {width}x{height} px does not fit the atlas, skipped");
@@ -817,5 +983,106 @@ mod tests {
         assert!(line.glyphs.windows(2).all(|pair| pair[0].0 < pair[1].0));
         assert!(line.width > line.glyphs[3].0);
         assert_eq!(glyphs.shape_ui(UiFont::Chrome, ""), UiLine::default());
+    }
+
+    fn test_font() -> Glyphs {
+        Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE)
+    }
+
+    fn ligated(run: &[RunGlyph]) -> Vec<(u16, bool)> {
+        run.iter()
+            .map(|glyph| (glyph.cell, glyph.ligated))
+            .collect()
+    }
+
+    #[test]
+    fn programming_ligatures_are_ligated() {
+        let mut glyphs = test_font();
+        assert_eq!(
+            ligated(&glyphs.shape_run("->", false, false)),
+            [(0, true), (1, true)]
+        );
+        assert_eq!(
+            ligated(&glyphs.shape_run("===", false, false)),
+            [(0, true), (1, true), (2, true)]
+        );
+    }
+
+    #[test]
+    fn plain_text_is_not_ligated_and_keeps_the_glyphs_of_its_characters() {
+        let mut glyphs = test_font();
+        let run = glyphs.shape_run("ab", false, false);
+        assert_eq!(ligated(&run), [(0, false), (1, false)]);
+        for (glyph, c) in run.iter().zip(['a', 'b']) {
+            let alone = glyphs.get(key(c));
+            assert_eq!(glyphs.run_glyph(glyph), alone);
+        }
+    }
+
+    #[test]
+    fn ligature_glyphs_differ_from_the_characters_alone() {
+        let mut glyphs = test_font();
+        let run = glyphs.shape_run("->", false, false);
+        let arrow: Vec<_> = run.iter().map(|g| glyphs.run_glyph(g)).collect();
+        let alone = [glyphs.get(key('-')), glyphs.get(key('>'))];
+        assert_ne!(arrow, alone);
+    }
+
+    #[test]
+    fn shaped_runs_are_served_from_the_cache() {
+        let mut glyphs = test_font();
+        let first = glyphs.shape_run("->", false, false);
+        assert!(Rc::ptr_eq(&first, &glyphs.shape_run("->", false, false)));
+        // The style is part of the key.
+        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("->", true, false)));
+        assert_eq!(glyphs.cached_runs, 2);
+        glyphs.clear();
+        assert_eq!(glyphs.cached_runs, 0);
+        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("->", false, false)));
+    }
+
+    #[test]
+    fn run_cache_is_dropped_past_its_limit() {
+        let mut glyphs = test_font();
+        let first = glyphs.shape_run("a0", false, false);
+        for index in 1..MAX_CACHED_RUNS {
+            glyphs.shape_run(&format!("a{index}"), false, false);
+        }
+        assert_eq!(glyphs.cached_runs, MAX_CACHED_RUNS);
+        assert!(Rc::ptr_eq(&first, &glyphs.shape_run("a0", false, false)));
+        glyphs.shape_run("full", false, false);
+        assert_eq!(glyphs.cached_runs, 1);
+        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("a0", false, false)));
+    }
+
+    #[test]
+    fn features_change_drops_the_shaped_runs() {
+        let mut glyphs = test_font();
+        assert!(glyphs.shape_run("->", false, false)[0].ligated);
+        let mut font = FontOptions {
+            family: Some(TEST_FONT_FAMILY.to_owned()),
+            ..FontOptions::default()
+        };
+        font.features.disable(cosmic_text::FeatureTag::new(b"calt"));
+        glyphs.set_font(&font, FONT_SIZE);
+        assert_eq!(
+            ligated(&glyphs.shape_run("->", false, false)),
+            [(0, false), (1, false)]
+        );
+    }
+
+    #[test]
+    fn atlas_reset_keeps_the_shaping_and_rasterizes_again() {
+        let mut glyphs = test_font();
+        let run = glyphs.shape_run("->", false, false);
+        // JetBrains Mono draws the arrow from its last cell.
+        glyphs.run_glyph(&run[1]).expect("ligature has pixels");
+        glyphs.take_uploads();
+        let generation = glyphs.generation();
+        glyphs.reset_atlas();
+        assert!(glyphs.generation() > generation);
+        assert!(Rc::ptr_eq(&run, &glyphs.shape_run("->", false, false)));
+        glyphs.run_glyph(&run[1]).expect("ligature has pixels");
+        assert_eq!(glyphs.take_uploads().len(), 1);
     }
 }

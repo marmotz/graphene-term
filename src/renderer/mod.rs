@@ -22,7 +22,7 @@ use winit::window::Window;
 use crate::frame::Frame;
 use crate::layout::{CellSize, GridLayout, Rect};
 use crate::perf;
-use cells::CellRenderer;
+use cells::{CellRenderer, GlyphGroup};
 pub use glyphs::{FontOptions, GlyphKey, Glyphs, UiFont};
 use images::ImageRenderer;
 pub use rects::RectInstance;
@@ -148,9 +148,10 @@ impl Layers {
         panes: &[PaneFrame<'_>],
         ui: &UiLayer,
     ) -> Prepared {
+        let ligatures = self.glyphs.ligatures();
         let scenes: Vec<_> = panes
             .iter()
-            .map(|pane| scene::build(pane.frame, pane.layout, self.srgb))
+            .map(|pane| scene::build(pane.frame, pane.layout, self.srgb, ligatures))
             .collect();
 
         let mut rects = Vec::new();
@@ -190,11 +191,16 @@ impl Layers {
         let mut overlay_glyphs = Vec::new();
         self.ui_text
             .glyphs(&mut self.glyphs, &ui.overlay_texts, &mut overlay_glyphs);
-        let mut groups: Vec<&[GlyphInstance]> =
-            scenes.iter().map(|scene| scene.glyphs.as_slice()).collect();
-        groups.push(&ui_glyphs);
-        groups.push(&banner_glyphs);
-        groups.push(&overlay_glyphs);
+        let mut groups: Vec<GlyphGroup<'_>> = scenes
+            .iter()
+            .map(|scene| GlyphGroup {
+                glyphs: &scene.glyphs,
+                runs: &scene.runs,
+            })
+            .collect();
+        groups.push(ui_glyphs.as_slice().into());
+        groups.push(banner_glyphs.as_slice().into());
+        groups.push(overlay_glyphs.as_slice().into());
         self.cells
             .prepare(device, queue, screen, &mut self.glyphs, &groups);
 

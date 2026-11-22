@@ -206,7 +206,7 @@ fn frame(c: &mut Criterion) {
         group.bench_function(fixture.name, |b| {
             b.iter(|| {
                 let frame = capture(black_box(&session), &palette);
-                scene::build(&frame, &layout, true)
+                scene::build(&frame, &layout, true, true)
             })
         });
     }

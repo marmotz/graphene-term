@@ -1,7 +1,9 @@
 //! Instanced rendering of the glyphs (grid cells and banner text) from the glyph atlas.
 //!
 //! Each [`GlyphInstance`] of the scene is resolved through [`Glyphs`] into one quad
-//! anchored at its cell origin plus the glyph placement, aligned on whole pixels. The
+//! anchored at its cell origin plus the glyph placement, aligned on whole pixels. Each
+//! [`TextRun`] is shaped as a whole, each of its glyphs anchored at the origin of the
+//! cell it is drawn from. The
 //! atlas pages live in two textures (`R8Unorm` masks tinted with the instance color,
 //! RGBA color glyphs drawn as is) fed by the uploads of newly rasterized glyphs.
 
@@ -14,8 +16,8 @@ use bytemuck::{Pod, Zeroable};
 use super::pipeline::{InstanceBuffer, ScreenUniform, instanced_pipeline, uniform_entry};
 
 use super::atlas::Page;
-use super::glyphs::{Glyphs, Upload};
-use super::scene::GlyphInstance;
+use super::glyphs::{Glyph, Glyphs, Upload};
+use super::scene::{GlyphInstance, TextRun};
 
 /// One textured quad, as uploaded to the GPU.
 #[repr(C)]
@@ -37,40 +39,86 @@ pub struct CellInstance {
 /// (the glyphs resolved before the reset point to freed regions).
 const MAX_RESOLVE_ATTEMPTS: usize = 2;
 
+/// What one draw call shows: glyphs drawn one by one and runs shaped together.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GlyphGroup<'a> {
+    pub glyphs: &'a [GlyphInstance],
+    pub runs: &'a [TextRun],
+}
+
+impl<'a> From<&'a [GlyphInstance]> for GlyphGroup<'a> {
+    fn from(glyphs: &'a [GlyphInstance]) -> Self {
+        Self { glyphs, runs: &[] }
+    }
+}
+
+/// The quad of `glyph` drawn from the cell at `origin`.
+fn quad(glyph: Glyph, origin: [f32; 2], color: [f32; 4]) -> CellInstance {
+    CellInstance {
+        position: [
+            (origin[0] + glyph.left as f32).round(),
+            (origin[1] + glyph.top as f32).round(),
+        ],
+        size: [glyph.region.width as f32, glyph.region.height as f32],
+        uv: [glyph.region.x as f32, glyph.region.y as f32],
+        color,
+        is_color: u32::from(glyph.page == Page::Color),
+    }
+}
+
 /// Resolves `items` into quads appended to `out`. Glyphs with nothing to draw are
 /// skipped.
 pub fn resolve(glyphs: &mut Glyphs, items: &[GlyphInstance], out: &mut Vec<CellInstance>) {
     out.extend(items.iter().filter_map(|item| {
         let glyph = glyphs.get(item.key)?;
-        Some(CellInstance {
-            position: [
-                (item.origin[0] + glyph.left as f32).round(),
-                (item.origin[1] + glyph.top as f32).round(),
-            ],
-            size: [glyph.region.width as f32, glyph.region.height as f32],
-            uv: [glyph.region.x as f32, glyph.region.y as f32],
-            color: item.color,
-            is_color: u32::from(glyph.page == Page::Color),
-        })
+        Some(quad(glyph, item.origin, item.color))
     }));
 }
 
-/// Resolves each group of `groups` in order into `out` (cleared first). Returns the
-/// range of quads of each group. Starts over when the atlas was reset meanwhile, so
-/// every quad points to a region of the current atlas.
+/// Resolves `runs` into quads appended to `out`, each glyph in the color of the cell it
+/// is drawn from. `text` is a scratch buffer, reused between calls.
+pub fn resolve_runs(
+    glyphs: &mut Glyphs,
+    runs: &[TextRun],
+    text: &mut String,
+    out: &mut Vec<CellInstance>,
+) {
+    for run in runs {
+        text.clear();
+        text.extend(run.cells.iter().map(|cell| cell.c));
+        let shaped = glyphs.shape_run(text, run.bold, run.italic);
+        for run_glyph in shaped.iter() {
+            let index = usize::from(run_glyph.cell);
+            let Some(cell) = run.cells.get(index) else {
+                continue;
+            };
+            let Some(glyph) = glyphs.run_glyph(run_glyph) else {
+                continue;
+            };
+            let origin = [run.origin[0] + index as f32 * run.advance, run.origin[1]];
+            out.push(quad(glyph, origin, cell.color));
+        }
+    }
+}
+
+/// Resolves each group of `groups` in order into `out` (cleared first): its glyphs,
+/// then its runs. Returns the range of quads of each group. Starts over when the atlas
+/// was reset meanwhile, so every quad points to a region of the current atlas.
 pub fn resolve_groups(
     glyphs: &mut Glyphs,
-    groups: &[&[GlyphInstance]],
+    groups: &[GlyphGroup<'_>],
     out: &mut Vec<CellInstance>,
 ) -> Vec<Range<u32>> {
     let mut ranges = Vec::with_capacity(groups.len());
+    let mut text = String::new();
     for _ in 0..MAX_RESOLVE_ATTEMPTS {
         let generation = glyphs.generation();
         out.clear();
         ranges.clear();
         for group in groups {
             let start = out.len() as u32;
-            resolve(glyphs, group, out);
+            resolve(glyphs, group.glyphs, out);
+            resolve_runs(glyphs, group.runs, &mut text, out);
             ranges.push(start..out.len() as u32);
         }
         if glyphs.generation() == generation {
@@ -230,7 +278,7 @@ impl CellRenderer {
         queue: &wgpu::Queue,
         screen: (u32, u32),
         glyphs: &mut Glyphs,
-        groups: &[&[GlyphInstance]],
+        groups: &[GlyphGroup<'_>],
     ) {
         self.uniform_buffer.write(queue, screen);
 
@@ -295,6 +343,7 @@ impl CellRenderer {
 mod tests {
     use super::*;
     use crate::renderer::glyphs::{FontOptions, GlyphKey};
+    use crate::renderer::scene::RunCell;
 
     const FONT_SIZE: f32 = 14.0;
     const WHITE: [f32; 4] = [1.0; 4];
@@ -356,7 +405,8 @@ mod tests {
         let first = [item('a', [0.0, 0.0]), item('b', [10.0, 0.0])];
         let empty = [item(' ', [0.0, 0.0])];
         let last = [item('x', [0.0, 0.0])];
-        let ranges = resolve_groups(&mut glyphs, &[&first, &empty, &last], &mut out);
+        let groups = [first.as_slice(), &empty, &last].map(GlyphGroup::from);
+        let ranges = resolve_groups(&mut glyphs, &groups, &mut out);
         assert_eq!(ranges, [0..2, 2..2, 2..3]);
         assert_eq!(out.len(), 3);
         let x = glyphs
@@ -402,12 +452,134 @@ mod tests {
             .map(|(i, &c)| item(c, [i as f32 * 10.0, 0.0]))
             .collect();
         let mut out = Vec::new();
-        resolve_groups(&mut glyphs, &[&grid], &mut out);
+        resolve_groups(&mut glyphs, &[GlyphGroup::from(grid.as_slice())], &mut out);
         assert_eq!(glyphs.generation(), 1, "the frame did not reset the atlas");
         // Every quad points to the region its glyph holds in the current atlas.
         assert_eq!(out.len(), grid.len());
         for (quad, item) in out.iter().zip(&grid) {
             let glyph = glyphs.get(item.key).unwrap();
+            assert_eq!(quad.uv, [glyph.region.x as f32, glyph.region.y as f32]);
+        }
+    }
+
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+
+    fn run(text: &str, origin: [f32; 2], advance: f32) -> TextRun {
+        TextRun {
+            origin,
+            advance,
+            cells: text.chars().map(|c| RunCell { c, color: WHITE }).collect(),
+            bold: false,
+            italic: false,
+            cursor: None,
+        }
+    }
+
+    fn resolved_runs(glyphs: &mut Glyphs, runs: &[TextRun]) -> Vec<CellInstance> {
+        let mut out = Vec::new();
+        resolve_runs(glyphs, runs, &mut String::new(), &mut out);
+        out
+    }
+
+    #[test]
+    fn run_without_ligature_is_drawn_like_its_cells() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let advance = glyphs.cell_size().width;
+        let runs = [run("ab", [16.4, 40.0], advance)];
+        let mut cells = Vec::new();
+        resolve(
+            &mut glyphs,
+            &[item('a', [16.4, 40.0]), item('b', [16.4 + advance, 40.0])],
+            &mut cells,
+        );
+        assert_eq!(resolved_runs(&mut glyphs, &runs), cells);
+    }
+
+    #[test]
+    fn ligature_is_drawn_from_its_cells_in_their_colors() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let mut arrow = run("->", [0.0, 0.0], 10.0);
+        arrow.cells[1].color = RED;
+        let quads = resolved_runs(&mut glyphs, &[arrow]);
+        let shaped = glyphs.shape_run("->", false, false);
+        let expected: Vec<_> = shaped
+            .iter()
+            .filter_map(|run_glyph| {
+                let glyph = glyphs.run_glyph(run_glyph)?;
+                let cell = f32::from(run_glyph.cell);
+                let color = if run_glyph.cell == 1 { RED } else { WHITE };
+                Some(quad(glyph, [cell * 10.0, 0.0], color))
+            })
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(quads, expected);
+        // Not the glyphs of the characters drawn one by one.
+        let mut cells = Vec::new();
+        resolve(
+            &mut glyphs,
+            &[item('-', [0.0, 0.0]), item('>', [10.0, 0.0])],
+            &mut cells,
+        );
+        assert_ne!(quads, cells);
+    }
+
+    #[test]
+    fn group_runs_follow_its_glyphs_in_its_range() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let single = [item('x', [0.0, 0.0])];
+        let runs = [run("ab", [0.0, 20.0], 10.0)];
+        let groups = [
+            GlyphGroup {
+                glyphs: &single,
+                runs: &runs,
+            },
+            GlyphGroup::default(),
+            GlyphGroup::from(single.as_slice()),
+        ];
+        let mut out = Vec::new();
+        let ranges = resolve_groups(&mut glyphs, &groups, &mut out);
+        assert_eq!(ranges, [0..3, 3..3, 3..4]);
+        assert_eq!(out[1..3], resolved_runs(&mut glyphs, &runs)[..]);
+    }
+
+    #[test]
+    fn runs_are_resolved_again_after_an_atlas_reset() {
+        const ATLAS: u32 = 64;
+        let chars: String = ('A'..='Z').chain('0'..='9').collect();
+        let key = |c: char| GlyphKey {
+            c,
+            bold: false,
+            italic: false,
+            ui: None,
+        };
+        let mut probe = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, ATLAS);
+        let capacity = chars
+            .chars()
+            .position(|c| {
+                probe.get(key(c));
+                probe.generation() > 0
+            })
+            .expect("the atlas never filled up");
+        assert!(capacity >= 2 && capacity + 2 <= chars.len(), "{capacity}");
+
+        // Leave room for two glyphs: the third glyph of the run resets the atlas.
+        let mut glyphs = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, ATLAS);
+        for c in chars[..capacity - 2].chars() {
+            glyphs.get(key(c));
+        }
+        let text = &chars[capacity - 2..capacity + 2];
+        let runs = [run(text, [0.0, 0.0], 10.0)];
+        let mut out = Vec::new();
+        let groups = [GlyphGroup {
+            glyphs: &[],
+            runs: &runs,
+        }];
+        resolve_groups(&mut glyphs, &groups, &mut out);
+        assert_eq!(glyphs.generation(), 1, "the run did not reset the atlas");
+        // Every quad points to the region its glyph holds in the current atlas.
+        assert_eq!(out.len(), text.len());
+        for (quad, c) in out.iter().zip(text.chars()) {
+            let glyph = glyphs.get(key(c)).unwrap();
             assert_eq!(quad.uv, [glyph.region.x as f32, glyph.region.y as f32]);
         }
     }

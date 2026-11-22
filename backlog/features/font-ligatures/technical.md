@@ -88,7 +88,8 @@ Dans [settings/model.rs](../../../src/settings/model.rs) :
 ### Découpage (scène, pur)
 
 Avec `ligatures = true`, `scene::build` regroupe les cellules d'une ligne en
-`TextRun { origin, cells: Vec<RunCell { c, color }>, bold, italic, cursor: Option<usize> }`.
+`TextRun { origin, advance, cells: Vec<RunCell { c, color }>, bold, italic, cursor: Option<usize> }`
+(`advance` : largeur de cellule, la cellule `i` commence à `origin + i * advance`).
 La scène gagne `runs: Vec<TextRun>` à côté de `glyphs`. Un run est une suite maximale de
 cellules contiguës qui respectent toutes ces conditions :
 
@@ -115,7 +116,8 @@ réussite du cache.
 ### Shaping (Glyphs)
 
 `Glyphs::shape_run(text: &str, bold, italic) -> Rc<[RunGlyph]>`, avec
-`RunGlyph { cell: u16, raster: CacheKey, ligated: bool }`.
+`RunGlyph { cell: u16, raster: CacheKey, offset: [i32; 2], ligated: bool }`
+(`offset` : position du stylo par rapport à l'origine de la cellule, ligne de base comprise).
 
 - Le shaping est fait une fois par `(texte, bold, italic)` puis mis en cache dans
   `HashMap<(bool, bool), HashMap<Box<str>, Rc<[RunGlyph]>>>`, consulté avec un `&str`
