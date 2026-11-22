@@ -159,6 +159,7 @@ pub fn section_fields(section: Section) -> &'static [Field] {
             Field::WindowHeight,
             Field::Padding,
             Field::BackgroundOpacity,
+            Field::WindowProgress,
         ],
         Section::Scrollback => &[Field::ScrollbackLines],
         Section::Cursor => &[Field::CursorShape, Field::CursorBlinking],
@@ -195,6 +196,7 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::WindowHeight => &["window", "height"],
         Field::Padding => &["window", "padding"],
         Field::BackgroundOpacity => &["window", "background_opacity"],
+        Field::WindowProgress => &["window", "progress"],
         Field::ScrollbackLines => &["scrollback", "lines"],
         Field::CursorShape => &["cursor", "shape"],
         Field::CursorBlinking => &["cursor", "blinking"],
@@ -263,6 +265,7 @@ pub fn widget(field: Field) -> Widget {
         Field::FontLigatures
         | Field::CursorBlinking
         | Field::UpdatesCheck
+        | Field::WindowProgress
         | Field::ThemeFollow
         | Field::NotificationsProgram
         | Field::NotificationsCommandFinished
@@ -585,6 +588,7 @@ impl SettingsModel {
             Field::WindowHeight => Value::Integer(i64::from(c.window.height)),
             Field::Padding => Value::Float(f64::from(c.window.padding)),
             Field::BackgroundOpacity => Value::Float(f64::from(c.window.background_opacity)),
+            Field::WindowProgress => Value::Bool(c.window.progress),
             Field::ScrollbackLines => Value::Integer(c.scrollback_lines as i64),
             Field::CursorShape => text(name_of(&CursorShape::VALUES, c.cursor.shape)),
             Field::CursorBlinking => Value::Bool(c.cursor.blinking),
@@ -975,6 +979,7 @@ width = 1200
 height = 700
 padding = 4.0
 background_opacity = 0.9
+progress = false
 [scrollback]
 lines = 500
 [cursor]
@@ -1018,6 +1023,7 @@ bell = true
         assert!((m.number(Field::BackgroundOpacity) - 0.9).abs() < 1e-6);
         assert!(m.on(Field::CursorBlinking));
         assert!(!m.on(Field::UpdatesCheck));
+        assert!(!m.on(Field::WindowProgress));
         assert!(!m.on(Field::ThemeFollow));
         assert!(!m.on(Field::NotificationsProgram));
         assert!(!m.on(Field::NotificationsCommandFinished));
@@ -1033,6 +1039,7 @@ bell = true
         assert_eq!(m.text(Field::Language), "auto");
         assert_eq!(m.text(Field::UpdatesInterval), "auto");
         assert!(m.on(Field::UpdatesCheck));
+        assert!(m.on(Field::WindowProgress));
         assert!(m.on(Field::NotificationsProgram));
         assert!(m.on(Field::NotificationsCommandFinished));
         assert_eq!(m.text(Field::NotificationsCommandThreshold), "10");
@@ -1182,6 +1189,10 @@ bell = true
         assert_eq!(
             m.edit(Field::UpdatesCheck, Input::Toggle(false)),
             Ok(set(&["updates", "check"], Value::Bool(false)))
+        );
+        assert_eq!(
+            m.edit(Field::WindowProgress, Input::Toggle(false)),
+            Ok(set(&["window", "progress"], Value::Bool(false)))
         );
         assert_eq!(
             m.edit(Field::WordSeparators, Input::Text(" ;".into())),

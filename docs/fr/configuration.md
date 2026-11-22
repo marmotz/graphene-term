@@ -142,6 +142,7 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 | `height`             | `600`       | Hauteur d'une nouvelle fenêtre, en pixels logiques (supérieure à zéro).                    |
 | `padding`            | `8`         | Espace minimal autour du texte, en pixels logiques (zéro ou plus).                         |
 | `background_opacity` | `1.0`       | De `0.0` (transparent) à `1.0` (opaque). Voir [Thèmes](themes.md#fond-translucide).        |
+| `progress`           | `true`      | Affiche la progression signalée par les programmes (OSC 9;4) dans les onglets, les barres de pane, les blocs et la barre des tâches. `false` la masque partout. |
 
 ### `[scrollback]`
 

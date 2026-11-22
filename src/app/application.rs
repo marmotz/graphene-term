@@ -884,6 +884,7 @@ mod tests {
             height: 600,
             padding: 8.0,
             background_opacity: 1.0,
+            progress: true,
         }
     }
 

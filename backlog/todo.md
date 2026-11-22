@@ -86,12 +86,12 @@ _tâches créées — voir [technical.md](features/multiplexing/technical.md)_ �
 
 ## Indicateur de progression OSC 9;4  ·  [overview](features/osc-progress-indicator/overview.md)
 
-_tâches créées, voir [technical.md](features/osc-progress-indicator/technical.md)_ — 1/6 tasks done
+_tâches créées, voir [technical.md](features/osc-progress-indicator/technical.md)_ — 2/6 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#174](https://github.com/marmotz/graphene-term/issues/174) | [Terminal] Captation OSC 9;4 et état de progression | — |
-| [ ]  | [#176](https://github.com/marmotz/graphene-term/issues/176) | [Config] Réglage [window] progress | — |
+| [x]  | [#176](https://github.com/marmotz/graphene-term/issues/176) | [Config] Réglage [window] progress | — |
 | [ ]  | [#178](https://github.com/marmotz/graphene-term/issues/178) | [Interface] Synchronisation, expiration et animation de la progression | #174, #176 |
 | [ ]  | [#179](https://github.com/marmotz/graphene-term/issues/179) | [Interface] Barres de progression dans l'onglet, le pane et le bloc | #178 |
 | [ ]  | [#180](https://github.com/marmotz/graphene-term/issues/180) | [Système] Progression dans la barre des tâches Linux (Unity LauncherEntry) | #178 |
