@@ -5,13 +5,14 @@
 //! maximized state with a client message, which window managers ignore before the
 //! window is mapped, so a hidden window would open at its configured size. Writing the
 //! `_NET_WM_STATE` property instead makes the window manager map it maximized at once.
-//! The quick terminal sets its own states the same way.
+//! The quick terminal sets its own states the same way, and is given the keyboard focus
+//! by hand: it is a dock window, which window managers do not focus.
 
 use anyhow::Context;
 use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, PropMode};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, InputFocus, PropMode};
 use x11rb::wrapper::ConnectionExt as _;
 
 /// Atoms of the maximized state, both directions.
@@ -38,6 +39,26 @@ pub fn preset_states(window: &Window, states: &[&str]) -> anyhow::Result<bool> {
     let (connection, _) = x11rb::connect(None)?;
     preset_states_on(&connection, id, states)?;
     Ok(true)
+}
+
+/// Gives the mapped `window` the keyboard focus. `Ok(false)` means the window is not
+/// an X11 window.
+pub fn focus(window: &Window) -> anyhow::Result<bool> {
+    let Some(id) = window_id(window)? else {
+        return Ok(false);
+    };
+    let (connection, _) = x11rb::connect(None)?;
+    focus_on(&connection, id)?;
+    Ok(true)
+}
+
+/// Gives `window` the keyboard focus through `connection`; fails while the window is not
+/// viewable.
+fn focus_on(connection: &impl Connection, window: u32) -> anyhow::Result<()> {
+    connection
+        .set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)?
+        .check()?;
+    Ok(())
 }
 
 /// Position of the mouse cursor on the X11 root window, in physical pixels.
@@ -96,6 +117,47 @@ mod tests {
         for states in [&MAXIMIZED[..], &QUICK[..]] {
             preset_states_writes(states);
         }
+    }
+
+    #[test]
+    fn focus_needs_a_viewable_window_and_gives_it_the_focus() {
+        let Ok((connection, screen)) = x11rb::connect(None) else {
+            eprintln!("skipped: no X11 display");
+            return;
+        };
+        let root = connection.setup().roots[screen].root;
+        let previous = connection.get_input_focus().unwrap().reply().unwrap().focus;
+        let window = connection.generate_id().unwrap();
+        // Out of the window manager's hands and off screen, so the test window is
+        // neither decorated nor seen.
+        connection
+            .create_window(
+                0,
+                window,
+                root,
+                -100,
+                -100,
+                10,
+                10,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new().override_redirect(1),
+            )
+            .unwrap();
+        assert!(focus_on(&connection, window).is_err(), "unmapped window");
+
+        connection.map_window(window).unwrap();
+        connection.sync().unwrap();
+        focus_on(&connection, window).unwrap();
+        let focused = connection.get_input_focus().unwrap().reply().unwrap().focus;
+        assert_eq!(focused, window);
+
+        connection
+            .set_input_focus(InputFocus::PARENT, previous, x11rb::CURRENT_TIME)
+            .unwrap();
+        connection.destroy_window(window).unwrap();
+        connection.flush().unwrap();
     }
 
     #[test]

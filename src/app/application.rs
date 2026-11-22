@@ -197,6 +197,14 @@ impl App {
             attributes = attributes
                 .with_decorations(false)
                 .with_window_level(winit::window::WindowLevel::AlwaysOnTop);
+            // A dock window: window managers neither play their opening effect on it
+            // nor keep it inside the screen, which would stop its slide. They do not
+            // focus it either: the quick terminal takes the focus itself.
+            #[cfg(target_os = "linux")]
+            {
+                use winit::platform::x11::{WindowAttributesExtX11, WindowType};
+                attributes = attributes.with_x11_window_type(vec![WindowType::Dock]);
+            }
             if let Some(placement) = quick::placement(event_loop, &self.config.quick_terminal) {
                 initial_size = placement.logical;
                 attributes = attributes
@@ -588,6 +596,13 @@ impl ApplicationHandler<UserEvent> for App {
             Route::Session => {
                 if let WindowEvent::Focused(focused) = event {
                     self.quick_focus_changed(focused);
+                }
+                if let WindowEvent::MouseInput {
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                } = event
+                {
+                    self.quick_clicked();
                 }
                 self.session_window_event(event_loop, event);
                 self.open_requested_settings(event_loop);

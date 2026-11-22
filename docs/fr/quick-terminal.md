@@ -89,8 +89,9 @@ macOS.
 - **macOS** : le quick terminal apparaît sur l'espace (Space) courant, au-dessus des
   applications en plein écran, sous la barre des menus.
 - **Linux sous X11** : le quick terminal couvre tout le bord de l'écran, au-dessus des
-  panneaux du bureau. Certains gestionnaires de fenêtres (Mutter, Muffin) gardent toute
-  fenêtre dans l'écran : le quick terminal y apparaît et se masque alors sans glisser.
+  panneaux du bureau. C'est une fenêtre de type dock : le gestionnaire de fenêtres ne
+  joue pas d'effet d'ouverture dessus et le laisse glisser depuis l'extérieur de
+  l'écran.
 - **Linux sous Wayland** : non disponible. `graphene --quick-toggle` affiche
   `the quick terminal is not available under Wayland` et sort avec le code 1. Une
   session Wayland qui lance Graphene par X11 (avec `WAYLAND_DISPLAY` vide) utilise le

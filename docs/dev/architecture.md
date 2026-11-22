@@ -74,7 +74,8 @@ src/
                    --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
   x11_window.rs    X11 _NET_WM_STATE (maximized, quick terminal) written on the hidden window before
-                   it is mapped, cursor position (QueryPointer)
+                   it is mapped, cursor position (QueryPointer), keyboard focus of the quick
+                   terminal dock window (SetInputFocus)
   quick_terminal/
     mod.rs         QuickCommand, placement of the quick terminal: pick_monitor, frame, slide
                    (hidden_origin, slide_position, Slide) (pure)

@@ -10,6 +10,10 @@ use crate::quick_terminal::{
     self, BLUR_DELAY, Monitor, PixelRect, Point, QuickCommand, SLIDE_FRAME, Slide,
 };
 
+/// How long the quick terminal window is given the keyboard focus at each tick until it
+/// has it.
+const FOCUS_WAIT: Duration = Duration::from_secs(1);
+
 /// Whether the process holds an ordinary terminal window or the quick terminal.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum WindowMode {
@@ -34,6 +38,11 @@ pub(super) struct QuickState {
     /// When the slide last moved the window: each move wakes the event loop again, so
     /// moves are spaced by [`SLIDE_FRAME`].
     pub moved_at: Option<Instant>,
+    /// Whether the window has the keyboard focus.
+    pub focused: bool,
+    /// Until when the window is given the keyboard focus at each tick, see
+    /// [`QuickState::ask_focus`].
+    pub focus_until: Option<Instant>,
 }
 
 /// The two ends of the slides of the window on its current screen.
@@ -54,6 +63,33 @@ impl QuickState {
             blur_deadline: None,
             placed: None,
             moved_at: None,
+            focused: false,
+            focus_until: None,
+        }
+    }
+
+    /// The window is given the keyboard focus at each tick from `now` until it has it,
+    /// for at most [`FOCUS_WAIT`]: on X11 it is a dock window, which window managers
+    /// focus neither when it is mapped nor when it is clicked.
+    pub(super) fn ask_focus(&mut self, now: Instant) {
+        self.focus_until = Some(now + FOCUS_WAIT);
+    }
+
+    /// Whether the window is given the keyboard focus at `now`; past [`FOCUS_WAIT`],
+    /// the request is dropped.
+    pub(super) fn focus_due(&mut self, now: Instant) -> bool {
+        let due = self.focus_until.is_some_and(|until| now < until);
+        if !due {
+            self.focus_until = None;
+        }
+        due
+    }
+
+    /// A mouse button is pressed in the window at `now`: a shown window without the
+    /// focus asks for it.
+    pub(super) fn clicked(&mut self, now: Instant) {
+        if self.shown && !self.focused {
+            self.ask_focus(now);
         }
     }
 
@@ -61,6 +97,10 @@ impl QuickState {
     /// after [`BLUR_DELAY`] when `hide_on_focus_loss` is set; gaining it back cancels
     /// that.
     pub(super) fn focus_changed(&mut self, focused: bool, now: Instant, hide_on_focus_loss: bool) {
+        self.focused = focused;
+        if focused {
+            self.focus_until = None;
+        }
         self.blur_deadline =
             (!focused && hide_on_focus_loss && self.shown).then(|| now + BLUR_DELAY);
     }
@@ -283,6 +323,17 @@ pub(super) fn prepare_window(window: &Window) {
     let _ = window;
 }
 
+/// Gives `window` the keyboard focus; it may not be mapped yet, and the next tick tries
+/// again.
+fn give_focus(window: &Window) {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = crate::x11_window::focus(window) {
+        log::debug!("cannot focus the quick terminal yet: {error:#}");
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
+}
+
 impl App {
     /// The quick terminal state, `None` for an ordinary window.
     pub(super) fn quick_state(&mut self) -> Option<&mut QuickState> {
@@ -354,6 +405,8 @@ impl App {
         window.request_redraw();
         state.shown = true;
         state.blur_deadline = None;
+        #[cfg(target_os = "linux")]
+        state.ask_focus(now);
     }
 
     /// Slides the quick terminal out to its edge, from where it is, then hides it.
@@ -365,6 +418,7 @@ impl App {
         };
         state.shown = false;
         state.blur_deadline = None;
+        state.focus_until = None;
         let slide = state.placed.map(|placed| {
             let from = state
                 .slide
@@ -416,10 +470,16 @@ impl App {
             self.hide_quick(event_loop);
         }
         let state = state_of(&mut self.mode)?;
+        let focus = state.focus_due(now);
         let scale = state.placed.map_or(1.0, |placed| placed.scale);
+        if focus && let Some(session) = self.session.as_ref() {
+            give_focus(&session.window);
+        }
+        let focus_next = focus.then(|| now + SLIDE_FRAME);
+        let state = state_of(&mut self.mode)?;
         match state.slide_step(now) {
             SlideStep::Idle => {}
-            SlideStep::Wait(next) => return Some(next),
+            SlideStep::Wait(next) => return earliest(Some(next), focus_next),
             SlideStep::Move { to, over, hiding } => {
                 if let Some(session) = self.session.as_ref() {
                     session
@@ -434,7 +494,14 @@ impl App {
                 }
             }
         }
-        state_of(&mut self.mode)?.blur_deadline
+        earliest(state_of(&mut self.mode)?.blur_deadline, focus_next)
+    }
+
+    /// A mouse button is pressed in the quick terminal window.
+    pub(super) fn quick_clicked(&mut self) {
+        if let Some(state) = state_of(&mut self.mode) {
+            state.clicked(Instant::now());
+        }
     }
 
     /// A focus change of the quick terminal window.
@@ -586,6 +653,42 @@ mod tests {
         state.focus_changed(true, now + BLUR_DELAY / 3, true);
         assert_eq!(state.blur_deadline, None);
         assert!(!state.blur_due(now + BLUR_DELAY * 2));
+    }
+
+    #[test]
+    fn focus_is_asked_until_the_window_has_it_or_for_the_wait_at_most() {
+        let now = Instant::now();
+        let mut state = shown();
+        state.ask_focus(now);
+        assert!(state.focus_due(now));
+        assert!(state.focus_due(now + FOCUS_WAIT / 2));
+        state.focus_changed(true, now + FOCUS_WAIT / 2, true);
+        assert!(state.focused);
+        assert!(!state.focus_due(now + FOCUS_WAIT / 2));
+
+        let mut state = shown();
+        state.ask_focus(now);
+        assert!(!state.focus_due(now + FOCUS_WAIT));
+        // Dropped once past the wait.
+        assert_eq!(state.focus_until, None);
+    }
+
+    #[test]
+    fn a_click_asks_the_focus_only_for_a_shown_window_without_it() {
+        let now = Instant::now();
+        let mut state = shown();
+        state.focus_changed(false, now, false);
+        state.clicked(now);
+        assert!(state.focus_due(now));
+
+        let mut state = shown();
+        state.focus_changed(true, now, false);
+        state.clicked(now);
+        assert!(!state.focus_due(now));
+
+        let mut state = QuickState::new(false);
+        state.clicked(now);
+        assert!(!state.focus_due(now));
     }
 
     #[test]
