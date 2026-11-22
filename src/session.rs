@@ -27,6 +27,15 @@ pub const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(2);
 /// Longest time the file of a live instance goes without its modification date being
 /// updated, so that the date tells when an instance that crashed died.
 pub const HEARTBEAT: Duration = Duration::from_secs(10);
+/// Longest time between the end of a window and the end of the last one for both to
+/// be reopened: windows closed together (logout, shutdown) come back, a window closed
+/// while others stayed open does not.
+pub const GRACE: Duration = Duration::from_secs(15);
+/// Lock held while a launch picks the snapshot it reopens, so that two launches at
+/// once never reopen the same window.
+pub const RESTORE_LOCK: &str = ".restore.lock";
+/// Prefix of the snapshots kept for another process to reopen; never picked here.
+const PENDING_PREFIX: &str = "pending-";
 
 /// Kind of window a snapshot belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -92,10 +101,6 @@ pub enum NodeSnapshot {
 }
 
 /// The leading field of a session file, read before the rest to tell a known format.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read at launch by the restoration, issue #214")
-)]
 #[derive(Deserialize)]
 struct Versioned {
     version: u32,
@@ -104,10 +109,6 @@ struct Versioned {
 impl WindowSnapshot {
     /// Reads `file`. A missing file gives `None`; an unreadable, corrupt or unknown
     /// version one gives `None`, is logged and removed.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read at launch by the restoration, issue #214")
-    )]
     pub fn load(file: &Path) -> Option<WindowSnapshot> {
         let text = match fs::read_to_string(file) {
             Ok(text) => text,
@@ -143,11 +144,162 @@ impl WindowSnapshot {
     }
 }
 
+/// The `kind` field of a session file, read without the rest.
+#[derive(Deserialize)]
+struct Kinded {
+    #[serde(default)]
+    kind: WindowKind,
+}
+
+/// Kind of the live instance whose session file is `file`: [`WindowKind::Normal`] when
+/// the file is missing or unreadable, as at the very start of an instance, before its
+/// first write. Never removes the file: it belongs to a running instance.
+fn live_kind(file: &Path) -> WindowKind {
+    fs::read_to_string(file)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Kinded>(&text).ok())
+        .map_or(WindowKind::Normal, |kinded| kinded.kind)
+}
+
+/// When the window of `snapshot`, saved in a file last modified at `modified`, ended:
+/// its clean exit, else the last write or heartbeat (a crash).
+fn ended_at(snapshot: &WindowSnapshot, modified: SystemTime) -> SystemTime {
+    snapshot.closed_at.map_or(modified, |seconds| {
+        UNIX_EPOCH + Duration::from_secs(seconds)
+    })
+}
+
+/// Splits `candidates`, each with its end, into the ones ended less than [`GRACE`]
+/// before the last end, latest first, and the others.
+fn select<T>(mut candidates: Vec<(T, SystemTime)>) -> (Vec<T>, Vec<T>) {
+    candidates.sort_by_key(|&(_, end)| std::cmp::Reverse(end));
+    let Some(&(_, latest)) = candidates.first() else {
+        return (Vec::new(), Vec::new());
+    };
+    let (kept, dropped): (Vec<_>, Vec<_>) = candidates
+        .into_iter()
+        .partition(|(_, end)| latest.duration_since(*end).unwrap_or_default() < GRACE);
+    (
+        kept.into_iter().map(|(item, _)| item).collect(),
+        dropped.into_iter().map(|(item, _)| item).collect(),
+    )
+}
+
+/// Takes the place of this process in the session folder `dir`, as a window of
+/// `kind`, and picks the snapshot it reopens:
+///
+/// - none while an instance of the same kind runs: the window opens fresh;
+/// - else the latest of the snapshots of `kind` ended within [`GRACE`] of each other,
+///   renamed to the file of this instance. The older ones are removed, the other kept
+///   ones stay on disk. Unreadable files are removed.
+///
+/// Holds [`RESTORE_LOCK`] meanwhile, until the instance is claimed: a launch that
+/// follows sees it alive.
+pub fn start(dir: &Path, kind: WindowKind) -> io::Result<(Instance, Option<WindowSnapshot>)> {
+    fs::create_dir_all(dir)?;
+    let _restoring = lock(&dir.join(RESTORE_LOCK))?;
+    let mut live = Vec::new();
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name == RESTORE_LOCK || name.starts_with(PENDING_PREFIX) {
+            continue;
+        }
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("lock") if is_alive(&path) => live.push(live_kind(&path.with_extension("json"))),
+            // The lock of an instance that died: its snapshot, if any, is read below.
+            Some("lock") => remove(&path),
+            Some("json") => files.push(path),
+            _ => {}
+        }
+    }
+    if live.contains(&kind) {
+        // An instance of the same kind runs: this window opens fresh and leaves the
+        // snapshots alone.
+        files.clear();
+    }
+    let mut candidates = Vec::new();
+    for file in files {
+        if is_alive(&file.with_extension("lock")) {
+            continue;
+        }
+        let Ok(modified) = fs::metadata(&file).and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        let Some(snapshot) = WindowSnapshot::load(&file) else {
+            continue;
+        };
+        if snapshot.kind == kind {
+            let end = ended_at(&snapshot, modified);
+            candidates.push(((file, snapshot), end));
+        }
+    }
+    let (kept, dropped) = select(candidates);
+    for (file, _) in &dropped {
+        remove(file);
+    }
+    let instance = Instance::claim(dir)?;
+    let restored = match kept.into_iter().next() {
+        Some((file, snapshot)) => match fs::rename(&file, instance.file()) {
+            Ok(()) => Some(snapshot),
+            Err(error) => {
+                log::warn!("cannot reopen {}: {error}", file.display());
+                None
+            }
+        },
+        None => None,
+    };
+    Ok((instance, restored))
+}
+
+/// Opens `path` and waits for an exclusive `flock` on it, held as long as the file is
+/// open.
+fn lock(path: &Path) -> io::Result<File> {
+    use std::os::fd::AsRawFd;
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    loop {
+        // SAFETY: the descriptor belongs to `file`, open for the whole call.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(file);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+/// The directory a restored shell starts in: `path` when it still exists, else its
+/// nearest parent that does, else `home`.
+pub fn nearest_existing_dir(path: &Path, home: Option<PathBuf>) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|dir| !dir.as_os_str().is_empty() && dir.is_dir())
+        .map(Path::to_path_buf)
+        .or(home)
+}
+
+/// Where a restored window is put: at its saved place, only when the screen it was on
+/// is among `monitors` (the names of the screens plugged in). Elsewhere, or without a
+/// saved place (Wayland), the window manager places it.
+pub fn restored_position<'a>(
+    placement: Option<&Placement>,
+    mut monitors: impl Iterator<Item = &'a str>,
+) -> Option<(i32, i32)> {
+    let placement = placement?;
+    let monitor = placement.monitor.as_deref()?;
+    monitors
+        .any(|name| name == monitor)
+        .then_some((placement.x, placement.y))
+}
+
 /// Removes `file`, logging a failure.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read at launch by the restoration, issue #214")
-)]
 fn remove(file: &Path) {
     if let Err(error) = fs::remove_file(file)
         && error.kind() != io::ErrorKind::NotFound
@@ -176,10 +328,6 @@ pub fn participates(
 
 /// Whether the instance whose lock file is `lock` is alive: its lock is held by an
 /// open file. A missing lock file is a dead instance.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read at launch by the restoration, issue #214")
-)]
 pub fn is_alive(lock: &Path) -> bool {
     if !lock.exists() {
         return false;
@@ -516,6 +664,214 @@ mod tests {
             WindowSnapshot::load(saver.file()).unwrap().closed_at,
             Some(1_700_000_000)
         );
+    }
+
+    fn at(seconds: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(seconds)
+    }
+
+    #[test]
+    fn select_keeps_the_ends_within_grace_of_the_last_latest_first() {
+        let (kept, dropped) = select(vec![
+            ("early", at(1_000)),
+            ("last", at(2_000)),
+            ("close", at(2_000 - 14)),
+            ("edge", at(2_000 - 15)),
+        ]);
+        assert_eq!(kept, vec!["last", "close"]);
+        assert_eq!(dropped, vec!["edge", "early"]);
+        assert_eq!(select::<()>(Vec::new()), (Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn a_window_ends_at_its_clean_exit_else_at_its_last_write() {
+        let mut saved = snapshot();
+        assert_eq!(ended_at(&saved, at(5)), at(1_700_000_000));
+        saved.closed_at = None;
+        assert_eq!(ended_at(&saved, at(5)), at(5));
+    }
+
+    /// Writes in `dir` the snapshot `name` of `kind`, closed at `closed_at` or, without
+    /// it, last modified at `modified`.
+    fn saved(
+        dir: &Path,
+        name: &str,
+        kind: WindowKind,
+        closed_at: Option<u64>,
+        modified: SystemTime,
+    ) -> PathBuf {
+        let file = dir.join(format!("{name}.json"));
+        let mut snapshot = snapshot();
+        snapshot.kind = kind;
+        snapshot.closed_at = closed_at;
+        snapshot.active_tab = name.len();
+        atomic_file::write_json(&file, &snapshot).unwrap();
+        File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        file
+    }
+
+    fn now_seconds() -> u64 {
+        unix_seconds(SystemTime::now())
+    }
+
+    #[test]
+    fn start_reopens_the_last_window_and_drops_the_ones_closed_long_before() {
+        let dir = TempDir::new("start");
+        fs::create_dir_all(&dir.0).unwrap();
+        let now = now_seconds();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        let last = saved(&dir.0, "1-1", WindowKind::Normal, Some(now), old);
+        let close = saved(&dir.0, "2-22", WindowKind::Normal, Some(now - 5), old);
+        let early = saved(&dir.0, "3-333", WindowKind::Normal, Some(now - 60), old);
+        fs::write(dir.0.join("4-4.json"), "{ corrupt").unwrap();
+        // The lock of an instance that died.
+        fs::write(dir.0.join("1-1.lock"), "").unwrap();
+
+        let (instance, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        let restored = restored.expect("a window to reopen");
+        assert_eq!(restored.active_tab, 3);
+        // Adopted: the file now belongs to this instance.
+        assert!(!last.exists());
+        assert_eq!(WindowSnapshot::load(instance.file()), Some(restored));
+        // Kept for another window, the others removed.
+        assert!(close.exists());
+        assert!(!early.exists());
+        assert!(!dir.0.join("4-4.json").exists());
+        assert!(!dir.0.join("1-1.lock").exists());
+        assert!(dir.0.join(RESTORE_LOCK).exists());
+    }
+
+    #[test]
+    fn a_crashed_window_ends_at_its_last_write() {
+        let dir = TempDir::new("crash");
+        fs::create_dir_all(&dir.0).unwrap();
+        let now = now_seconds();
+        let closed = saved(
+            &dir.0,
+            "1-1",
+            WindowKind::Normal,
+            Some(now - 60),
+            SystemTime::now(),
+        );
+        saved(&dir.0, "2-22", WindowKind::Normal, None, SystemTime::now());
+
+        let (_instance, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        assert_eq!(restored.unwrap().active_tab, 4);
+        assert!(!closed.exists());
+    }
+
+    #[test]
+    fn a_launch_only_reopens_a_window_of_its_kind() {
+        let dir = TempDir::new("kind");
+        fs::create_dir_all(&dir.0).unwrap();
+        let quick = saved(
+            &dir.0,
+            "1-1",
+            WindowKind::Quick,
+            Some(now_seconds()),
+            SystemTime::now(),
+        );
+        saved(
+            &dir.0,
+            "2-22",
+            WindowKind::Normal,
+            Some(now_seconds() - 60),
+            SystemTime::now(),
+        );
+
+        let (_instance, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        // The quick terminal, closed later, neither wins nor drops the normal window.
+        assert_eq!(restored.unwrap().active_tab, 4);
+        assert!(quick.exists());
+
+        let (_instance, restored) = start(&dir.0, WindowKind::Quick).unwrap();
+        assert_eq!(restored.unwrap().kind, WindowKind::Quick);
+    }
+
+    #[test]
+    fn a_live_instance_of_the_same_kind_stops_the_restoration() {
+        let dir = TempDir::new("live");
+        fs::create_dir_all(&dir.0).unwrap();
+        let file = saved(
+            &dir.0,
+            "1-1",
+            WindowKind::Normal,
+            Some(now_seconds()),
+            SystemTime::now(),
+        );
+
+        // A live quick terminal does not stop it.
+        let quick = Instance::claim(&dir.0).unwrap();
+        let mut running = snapshot();
+        running.kind = WindowKind::Quick;
+        atomic_file::write_json(quick.file(), &running).unwrap();
+        // Restored, then put back for the next launches.
+        let (first, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        assert!(restored.is_some());
+        fs::rename(first.file(), &file).unwrap();
+
+        // A live normal window does, and leaves the snapshot alone.
+        let (second, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        assert_eq!(restored, None);
+        assert!(file.exists());
+        assert!(!second.file().exists());
+
+        // A live instance without a file yet counts as a normal window.
+        drop((first, second));
+        let _starting = Instance::claim(&dir.0).unwrap();
+        let (_third, restored) = start(&dir.0, WindowKind::Normal).unwrap();
+        assert_eq!(restored, None);
+        assert!(file.exists());
+        drop(quick);
+    }
+
+    #[test]
+    fn nearest_existing_dir_climbs_to_a_parent_still_there() {
+        let dir = TempDir::new("nearest");
+        let inner = dir.0.join("a");
+        fs::create_dir_all(&inner).unwrap();
+        let home = Some(PathBuf::from("/home/someone"));
+        assert_eq!(
+            nearest_existing_dir(&inner, home.clone()),
+            Some(inner.clone())
+        );
+        assert_eq!(
+            nearest_existing_dir(&inner.join("gone/deeper"), home.clone()),
+            Some(inner)
+        );
+        assert_eq!(
+            nearest_existing_dir(Path::new("gone/relative"), home.clone()),
+            home
+        );
+    }
+
+    #[test]
+    fn a_window_goes_back_to_its_place_only_on_a_screen_still_there() {
+        let placement = Placement {
+            x: 20,
+            y: -5,
+            monitor: Some("HDMI-1".to_owned()),
+        };
+        let screens = || ["eDP-1", "HDMI-1"].into_iter();
+        assert_eq!(
+            restored_position(Some(&placement), screens()),
+            Some((20, -5))
+        );
+        assert_eq!(
+            restored_position(Some(&placement), ["eDP-1"].into_iter()),
+            None
+        );
+        assert_eq!(restored_position(None, screens()), None);
+        let unnamed = Placement {
+            monitor: None,
+            ..placement
+        };
+        assert_eq!(restored_position(Some(&unnamed), screens()), None);
     }
 
     #[test]

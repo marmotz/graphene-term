@@ -74,7 +74,8 @@ src/
                    --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
   session.rs       saved session (window.restore_session): WindowSnapshot format, per-instance
-                   sessions/<pid>-<start ns>.json and its flock .lock, SessionSaver (periodic save, heartbeat)
+                   sessions/<pid>-<start ns>.json and its flock .lock, SessionSaver (periodic save, heartbeat),
+                   start (pick and adopt the snapshot to reopen, GRACE)
   x11_window.rs    X11 _NET_WM_STATE (maximized, quick terminal) written on the hidden window before
                    it is mapped, cursor position (QueryPointer), keyboard focus of the quick
                    terminal dock window (SetInputFocus)
@@ -433,7 +434,7 @@ Renderer::render(pane frames, interface rects)
   `default`). `window.json` is only read in `remember` mode.
 - The window is created hidden and shown once the renderer is ready, so it never shows
   empty. `Gpu::new` runs on its own thread (`gpu_alongside`, in sequence on macOS) while
-  `spawn_first_pane` loads the glyphs and spawns the shell. winit asks for the maximized
+  `spawn_workspace` loads the glyphs and spawns the shells. winit asks for the maximized
   state with a client message that X11 window managers ignore before mapping, so
   `x11_window::preset_states` writes `_NET_WM_STATE` on the hidden window instead.
   The window manager still sends the maximized size just after mapping: `MaximizeHold`
@@ -457,6 +458,22 @@ Renderer::render(pane frames, interface rects)
   `closed_at`; a window whose last shell exited saves no tab. The quick terminal and
   launches with `-e`, `--columns`/`--lines` or `--no-restore` take no part
   (`session::participates`): no file, no lock.
+- Restoration (`session::start`, from `run_app`): under the blocking
+  `sessions/.restore.lock`, an alive instance of the same `WindowKind` (read from its
+  JSON, `Normal` when missing or unreadable) means a fresh window. Else the dead
+  snapshots of that kind are dated by `closed_at`, else their modification date (a
+  crash), and `select` keeps those ended within `GRACE` (15 s) of the latest: the
+  latest is renamed to the new instance's file and handed to `App.restored`, older ones
+  are removed, other kept ones stay on disk, `pending-*` files are skipped. The global
+  lock is released once the instance is claimed, so the next launch sees it alive.
+  `create_session` then takes the saved size whatever `startup_mode` (`launch_window`),
+  the saved position only when its screen is in `available_monitors()`
+  (`session::restored_position`), and `spawn_workspace` rebuilds the tabs with
+  `Workspace::restore` inside the `gpu_alongside` closure, each shell in
+  `session::nearest_existing_dir` of its saved directory. A shell that fails is left
+  out, and an empty tab with it; no pane at all (a snapshot with no tab included) falls
+  back to the fresh single pane. The restored panes are laid out once the session is
+  built (`Session::relayout`).
 - The window is always created transparent (`with_transparent(true)`: winit only
   honours it at creation on X11). `Renderer::new` picks the `PreMultiplied` surface
   alpha mode, else `Inherit`, else the first one with a warning (the opacity is then
