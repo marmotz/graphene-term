@@ -78,8 +78,15 @@ src/
   quick_terminal/
     mod.rs         QuickCommand, placement of the quick terminal: pick_monitor, frame, slide
                    (hidden_origin, slide_position, Slide) (pure)
-    control.rs     quick.lock single instance (flock), quick.sock command thread, --quick-toggle client
+    control.rs     quick.lock single instance (flock), quick.sock command thread, --quick-toggle client,
+                   hidden start for the hotkey
     macos.rs       macOS: cursor (NSEvent), visible screen area (NSScreen), Spaces behavior (NSWindow)
+  hotkey/
+    mod.rs         Hotkey: quick_terminal.hotkey registration; Shortcut to X11 keysym / keycode and
+                   macOS kVK code and modifiers (pure)
+    x11.rs         GrabKey on the root window (with and without Lock, Mod2), own x11rb connection
+                   read by a thread; BadAccess = taken
+    macos.rs       Carbon RegisterEventHotKey and InstallEventHandler (FFI), on the main thread
   watcher.rs       config-watcher thread: notify on the config directory and themes/, debounced
   appearance.rs    appearance thread: system light/dark from the XDG desktop portal (zbus)
   terminal.rs      PTY spawn, live Term, timeline and session token, event proxy to the UI thread

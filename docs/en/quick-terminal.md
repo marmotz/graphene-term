@@ -20,6 +20,35 @@ manager or in the keyboard shortcuts of your system (for example `F12`).
 There is only ever one quick terminal per user: running the command several times at
 once never opens a second one.
 
+## Global shortcut
+
+Instead of binding the command in your system, you can give the quick terminal a global
+shortcut of its own with the `hotkey` key of the
+[`[quick_terminal]`](configuration.md#quick_terminal) section, written like a
+[keyboard shortcut](configuration.md#keyboard-shortcuts):
+
+```toml
+[quick_terminal]
+hotkey = "Ctrl+`"
+```
+
+The shortcut works from any application. While it is set, the first Graphene window you
+open also starts the quick terminal in the background, hidden, so that the shortcut
+works at once, before any `graphene --quick-toggle`. Setting the shortcut in a running
+Graphene, from the configuration file or the settings window, starts it the same way.
+Changing it replaces the previous one without a restart.
+
+When the shortcut cannot be registered, because another application already uses it or
+because the key has no equivalent on your system, the error is logged and shown in the
+configuration banner the next time the quick terminal appears. The quick terminal keeps
+working with `graphene --quick-toggle`.
+
+- **Linux under X11**: the key is matched by the character it types on your layout
+  (`Alt` with a digit by the physical key of the digit row).
+- **macOS**: the key is matched on its position on a US keyboard. `Super` is the Command
+  key. `F21` to `F24`, `PrintScreen`, `Pause`, `ScrollLock` and the `Copy`, `Paste` and
+  `Cut` keys have no equivalent.
+
 ## Slide, focus and closing
 
 The quick terminal slides in from its edge when shown and slides back out when hidden,

@@ -22,6 +22,36 @@ système (par exemple `F12`).
 Il n'y a jamais qu'un quick terminal par utilisateur : lancer la commande plusieurs fois
 en même temps n'en ouvre jamais un second.
 
+## Raccourci global
+
+Au lieu d'associer la commande dans votre système, vous pouvez donner au quick terminal
+son propre raccourci global avec la clé `hotkey` de la section
+[`[quick_terminal]`](configuration.md#quick_terminal), écrite comme un
+[raccourci clavier](configuration.md#raccourcis-clavier) :
+
+```toml
+[quick_terminal]
+hotkey = "Ctrl+`"
+```
+
+Le raccourci fonctionne depuis n'importe quelle application. Tant qu'il est défini, la
+première fenêtre Graphene que vous ouvrez lance aussi le quick terminal en arrière-plan,
+masqué, pour que le raccourci fonctionne tout de suite, avant tout
+`graphene --quick-toggle`. Définir le raccourci dans un Graphene déjà lancé, depuis le
+fichier de configuration ou la fenêtre de réglages, le lance de la même façon. Le
+changer remplace le précédent sans redémarrage.
+
+Quand le raccourci ne peut pas être enregistré, parce qu'une autre application l'utilise
+déjà ou que la touche n'a pas d'équivalent sur votre système, l'erreur est journalisée et
+affichée dans le bandeau de configuration à la prochaine apparition du quick terminal.
+Le quick terminal reste utilisable avec `graphene --quick-toggle`.
+
+- **Linux sous X11** : la touche est reconnue par le caractère qu'elle tape dans votre
+  disposition (`Alt` avec un chiffre par la touche physique de la rangée des chiffres).
+- **macOS** : la touche est reconnue par sa position sur un clavier américain. `Super`
+  est la touche Commande. `F21` à `F24`, `PrintScreen`, `Pause`, `ScrollLock` et les
+  touches `Copy`, `Paste` et `Cut` n'ont pas d'équivalent.
+
 ## Glissement, focus et fermeture
 
 Le quick terminal glisse depuis son bord quand il s'affiche et y repart quand il se
