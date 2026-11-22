@@ -130,6 +130,8 @@ pub enum SettingsField {
     Language,
     FontFamily,
     FontSize,
+    FontLigatures,
+    FontFeatures,
     StartupMode,
     WindowWidth,
     WindowHeight,
@@ -155,10 +157,12 @@ pub enum SettingsField {
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 23] = [
+    pub const ALL: [SettingsField; 25] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
+        SettingsField::FontLigatures,
+        SettingsField::FontFeatures,
         SettingsField::StartupMode,
         SettingsField::WindowWidth,
         SettingsField::WindowHeight,
@@ -440,6 +444,8 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::Language => "Language",
             SettingsField::FontFamily => "Family",
             SettingsField::FontSize => "Size",
+            SettingsField::FontLigatures => "Ligatures",
+            SettingsField::FontFeatures => "OpenType features",
             SettingsField::StartupMode => "Startup mode",
             SettingsField::WindowWidth => "Width",
             SettingsField::WindowHeight => "Height",
@@ -626,6 +632,8 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsField::Language => "Langue",
             SettingsField::FontFamily => "Famille",
             SettingsField::FontSize => "Taille",
+            SettingsField::FontLigatures => "Ligatures",
+            SettingsField::FontFeatures => "Fonctionnalités OpenType",
             SettingsField::StartupMode => "Mode au démarrage",
             SettingsField::WindowWidth => "Largeur",
             SettingsField::WindowHeight => "Hauteur",
@@ -1083,6 +1091,7 @@ mod tests {
         let same = [
             Msg::SecretGraphene,
             Msg::Section(SettingsSection::Notifications),
+            Msg::Field(SettingsField::FontLigatures),
         ];
         for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {
             assert_ne!(text(Lang::En, &msg), text(Lang::Fr, &msg), "{msg:?}");
