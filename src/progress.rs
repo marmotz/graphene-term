@@ -22,6 +22,12 @@ use std::time::{Duration, Instant};
 /// A progress with no new sequence for this long is dropped.
 pub const PROGRESS_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Time between two frames of the indeterminate animation (about 30 fps).
+pub const INDETERMINATE_FRAME: Duration = Duration::from_millis(33);
+
+/// Time the indeterminate segment takes to cross the bar once.
+pub const INDETERMINATE_PERIOD: Duration = Duration::from_millis(1500);
+
 /// How a progress is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressState {
@@ -82,6 +88,56 @@ impl Progress {
     pub fn live(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.updated) < PROGRESS_TIMEOUT
     }
+
+    /// When the progress stops being [`live`](Self::live) without a new sequence.
+    pub fn expires_at(&self) -> Instant {
+        self.updated + PROGRESS_TIMEOUT
+    }
+}
+
+/// Drops the progress `seen` by the window, and the `timeline`'s if it is the same,
+/// once it expired at `now`; whether it did. A newer progress the timeline received
+/// meanwhile is kept for the next read.
+pub fn expire(seen: &mut Option<Progress>, timeline: &mut Option<Progress>, now: Instant) -> bool {
+    let Some(progress) = seen.filter(|progress| !progress.live(now)) else {
+        return false;
+    };
+    *seen = None;
+    if *timeline == Some(progress) {
+        *timeline = None;
+    }
+    true
+}
+
+/// A progress as drawn in one frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgressView {
+    pub state: ProgressState,
+    /// 0 to 100; meaningless for [`ProgressState::Indeterminate`].
+    pub value: u8,
+    /// Start of the animated segment along the bar, from 0 to 1; only meaningful for
+    /// [`ProgressState::Indeterminate`] (see [`indeterminate_offset`]).
+    pub offset: f32,
+}
+
+impl ProgressView {
+    /// `progress` drawn `elapsed` after the animation's origin.
+    pub fn new(progress: Progress, elapsed: Duration) -> Self {
+        Self {
+            state: progress.state,
+            value: progress.value,
+            offset: indeterminate_offset(elapsed),
+        }
+    }
+}
+
+/// Start of the indeterminate segment, from 0 to 1, `elapsed` after the animation's
+/// origin: it crosses the bar once per [`INDETERMINATE_PERIOD`], then starts over.
+pub fn indeterminate_offset(elapsed: Duration) -> f32 {
+    let period = INDETERMINATE_PERIOD.as_nanos();
+    let offset = (elapsed.as_nanos() % period) as f64 / period as f64;
+    // Just before the end of a period, the rounding to `f32` would reach 1.
+    (offset as f32).min(1.0 - f32::EPSILON)
 }
 
 /// Parses an OSC payload (what follows `ESC ]`, terminator excluded) as a progress
@@ -281,5 +337,65 @@ mod tests {
         assert!(!progress.live(start + PROGRESS_TIMEOUT));
         // A clock earlier than the update keeps it live.
         assert!(progress.live(start.checked_sub(Duration::from_secs(1)).unwrap_or(start)));
+        assert_eq!(progress.expires_at(), start + PROGRESS_TIMEOUT);
+        assert!(!progress.live(progress.expires_at()));
+    }
+
+    #[test]
+    fn indeterminate_offset_loops_over_the_period() {
+        assert_eq!(indeterminate_offset(Duration::ZERO), 0.0);
+        assert_eq!(indeterminate_offset(INDETERMINATE_PERIOD / 2), 0.5);
+        assert_eq!(indeterminate_offset(INDETERMINATE_PERIOD), 0.0);
+        let later = indeterminate_offset(INDETERMINATE_PERIOD * 3 + INDETERMINATE_PERIOD / 4);
+        assert_eq!(later, 0.25);
+        let offset = indeterminate_offset(INDETERMINATE_PERIOD - Duration::from_nanos(1));
+        assert!((0.0..1.0).contains(&offset));
+    }
+
+    #[test]
+    fn view_keeps_the_state_and_value_and_adds_the_offset() {
+        let progress = Progress {
+            state: ProgressState::Paused,
+            value: 40,
+            updated: Instant::now(),
+        };
+        let view = ProgressView::new(progress, INDETERMINATE_PERIOD / 2);
+        assert_eq!(
+            view,
+            ProgressView {
+                state: ProgressState::Paused,
+                value: 40,
+                offset: 0.5,
+            }
+        );
+    }
+
+    #[test]
+    fn expire_drops_an_expired_progress_from_both_sides() {
+        let start = Instant::now();
+        let progress =
+            Progress::apply(None, report(ProgressState::Normal, Some(5)), start).unwrap();
+        let (mut seen, mut timeline) = (Some(progress), Some(progress));
+        assert!(!expire(&mut seen, &mut timeline, start));
+        assert_eq!((seen, timeline), (Some(progress), Some(progress)));
+        assert!(expire(&mut seen, &mut timeline, progress.expires_at()));
+        assert_eq!((seen, timeline), (None, None));
+        // Nothing left to expire.
+        assert!(!expire(&mut seen, &mut timeline, progress.expires_at()));
+    }
+
+    #[test]
+    fn expire_keeps_a_newer_timeline_progress() {
+        let start = Instant::now();
+        let old = Progress::apply(None, report(ProgressState::Normal, Some(5)), start).unwrap();
+        let newer = Progress::apply(
+            Some(old),
+            report(ProgressState::Normal, Some(6)),
+            old.expires_at(),
+        )
+        .unwrap();
+        let (mut seen, mut timeline) = (Some(old), Some(newer));
+        assert!(expire(&mut seen, &mut timeline, old.expires_at()));
+        assert_eq!((seen, timeline), (None, Some(newer)));
     }
 }

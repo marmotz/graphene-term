@@ -34,9 +34,13 @@ impl Session {
                 }
                 pane.validate_selection();
                 pane.finish_extend();
+                let progress = pane.sync_progress();
                 // Without OSC title, the title follows the shell's directory.
                 let title = active && pane.title_refresh_due(Instant::now());
-                if visible {
+                if progress {
+                    self.workspace.touch(id);
+                }
+                if visible || progress && self.workspace.progress_on_screen(id, bar_shown) {
                     self.window.request_redraw();
                 }
                 let hovered = self.hovered_cell.is_some_and(|(pane, ..)| pane == id);

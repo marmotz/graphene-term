@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use crate::config::TabPosition;
 use crate::i18n::Direction;
 use crate::layout::Rect;
+use crate::progress::Progress;
 use crate::terminal::PaneId;
 use tree::{Axis, Branch, Geometry, Layout, Node};
 
@@ -144,6 +145,12 @@ pub trait TitleSource {
     fn shell_name(&self) -> Option<String>;
 }
 
+/// What a progress indicator reads from a pane.
+pub trait ProgressSource {
+    /// The progress reported by the pane's programs, `None` without one.
+    fn progress(&self) -> Option<Progress>;
+}
+
 /// The tabs of the window and the panes they hold.
 pub struct Workspace<P> {
     tabs: Vec<Tab>,
@@ -156,6 +163,8 @@ pub struct Workspace<P> {
     last_revision: u64,
     /// Next pane id to hand out.
     next_id: u64,
+    /// Whether the progress of the panes is shown (`window.progress`).
+    progress_shown: bool,
 }
 
 impl<P> Default for Workspace<P> {
@@ -167,6 +176,7 @@ impl<P> Default for Workspace<P> {
             revisions: HashMap::new(),
             last_revision: 0,
             next_id: 0,
+            progress_shown: true,
         }
     }
 }
@@ -254,6 +264,20 @@ impl<P> Workspace<P> {
     /// Index of the tab holding the pane `id`.
     pub fn tab_of(&self, id: PaneId) -> Option<usize> {
         self.tabs.iter().position(|tab| tab.tree.contains(id))
+    }
+
+    /// Shows or hides the progress of every pane (`window.progress`): hidden, every
+    /// progress read returns `None`, while the panes keep following theirs.
+    pub fn set_progress_shown(&mut self, shown: bool) {
+        self.progress_shown = shown;
+    }
+
+    /// Whether a progress of the pane `id` is drawn: on the pane when it is on screen,
+    /// on its tab when the tab bar is shown and the pane is the active one of its tab.
+    pub fn progress_on_screen(&self, id: PaneId, tab_bar_shown: bool) -> bool {
+        self.progress_shown
+            && (self.is_visible(id)
+                || tab_bar_shown && self.tabs.iter().any(|tab| tab.active == id))
     }
 
     /// Whether the pane `id` is on screen: in the shown tab, and not hidden by a zoom.
@@ -725,6 +749,22 @@ impl<P> Workspace<P> {
     }
 }
 
+// Read by the progress bars of issue #179 and the taskbar of issue #180.
+#[allow(dead_code)]
+impl<P: ProgressSource> Workspace<P> {
+    /// Progress of the pane `id`, `None` without one or when progress is hidden.
+    pub fn pane_progress(&self, id: PaneId) -> Option<Progress> {
+        self.progress_shown
+            .then(|| self.pane(id)?.progress())
+            .flatten()
+    }
+
+    /// Progress shown on the tab `index`: the one of its active pane.
+    pub fn tab_progress(&self, index: usize) -> Option<Progress> {
+        self.pane_progress(self.tabs.get(index)?.active)
+    }
+}
+
 impl<P: TitleSource> Workspace<P> {
     /// Title of tab `index`, from its active pane (see [`title_for`]).
     pub fn tab_title(&self, index: usize) -> Option<String> {
@@ -822,6 +862,13 @@ mod tests {
         title: Option<String>,
         cwd: Option<PathBuf>,
         shell: Option<String>,
+        progress: Option<Progress>,
+    }
+
+    impl ProgressSource for Fake {
+        fn progress(&self) -> Option<Progress> {
+            self.progress
+        }
     }
 
     impl TitleSource for Fake {
@@ -1456,6 +1503,61 @@ mod tests {
         ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
         assert_eq!(ws.tab_title(0).as_deref(), Some("htop"));
         assert_eq!(ws.tab_title(5), None);
+    }
+
+    fn progress(value: u8) -> Progress {
+        Progress {
+            state: crate::progress::ProgressState::Normal,
+            value,
+            updated: std::time::Instant::now(),
+        }
+    }
+
+    #[test]
+    fn tab_progress_follows_the_active_pane() {
+        let mut ws = workspace(&[2, 1]);
+        let panes = ws.tabs()[0].tree.leaves();
+        let reported = progress(10);
+        ws.pane_mut(panes[0]).unwrap().progress = Some(reported);
+        // The active pane, the last one split off, has none.
+        assert_eq!(ws.tab_progress(0), None);
+        assert_eq!(ws.pane_progress(panes[0]), Some(reported));
+        assert!(ws.focus(panes[0]));
+        assert_eq!(ws.tab_progress(0), Some(reported));
+        assert_eq!(ws.tab_progress(1), None);
+        assert_eq!(ws.tab_progress(5), None);
+    }
+
+    #[test]
+    fn hidden_progress_reads_none() {
+        let mut ws = workspace(&[1]);
+        let id = ws.active_pane_id().unwrap();
+        ws.pane_mut(id).unwrap().progress = Some(progress(30));
+        ws.set_progress_shown(false);
+        assert_eq!(ws.tab_progress(0), None);
+        assert_eq!(ws.pane_progress(id), None);
+        assert!(!ws.progress_on_screen(id, true));
+        // Shown again, the pane's current progress is back.
+        ws.set_progress_shown(true);
+        assert_eq!(ws.tab_progress(0).map(|p| p.value), Some(30));
+    }
+
+    #[test]
+    fn progress_is_on_screen_on_the_pane_or_its_tab() {
+        let mut ws = workspace(&[2, 2]);
+        let first = ws.tabs()[0].tree.leaves();
+        let second = ws.tabs()[1].tree.leaves();
+        // Both panes of the shown tab are on screen.
+        assert!(ws.progress_on_screen(first[0], false));
+        assert!(ws.progress_on_screen(first[1], false));
+        // In a hidden tab, only the active pane shows on its tab, with the bar.
+        assert!(!ws.progress_on_screen(second[1], false));
+        assert!(ws.progress_on_screen(second[1], true));
+        assert!(!ws.progress_on_screen(second[0], true));
+        // A pane hidden by a zoom still shows on its tab when active.
+        assert!(ws.focus(first[0]));
+        assert!(ws.toggle_zoom());
+        assert!(!ws.progress_on_screen(first[1], true));
     }
 
     #[test]

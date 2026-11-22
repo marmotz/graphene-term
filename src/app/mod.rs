@@ -78,6 +78,7 @@ use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
+use crate::progress::{self, Progress, ProgressState, ProgressView};
 use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
 use crate::settings::{self, LoadErrors, SettingsWindow};
@@ -89,7 +90,9 @@ use crate::watcher;
 use crate::window_state::{self, WindowState};
 use crate::workspace::drop::{self, DropTarget};
 use crate::workspace::tree::{Axis, Geometry, Layout, NodePath};
-use crate::workspace::{self, DIVIDER_THICKNESS, RESIZE_STEP_CELLS, TabBarPosition, Workspace};
+use crate::workspace::{
+    self, DIVIDER_THICKNESS, ProgressSource, RESIZE_STEP_CELLS, TabBarPosition, Workspace,
+};
 
 const DEFAULT_TITLE: &str = "Graphene Term";
 
@@ -292,6 +295,8 @@ struct Session {
     notifier: Notifier,
     /// Unseen notices shown on the window's icon.
     badge: Badge,
+    /// Origin of the indeterminate progress animation (see [`ProgressView::new`]).
+    progress_epoch: Instant,
 }
 
 impl Session {}
