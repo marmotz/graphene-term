@@ -86,6 +86,9 @@ use crate::perf;
 use crate::progress::{self, Progress, ProgressColors, ProgressState, ProgressView};
 use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
+use crate::session::{
+    Instance, Placement, SESSION_VERSION, SessionSaver, WindowKind, WindowSnapshot,
+};
 use crate::settings::{self, LoadErrors, SettingsWindow};
 use crate::taskbar::Taskbar;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};

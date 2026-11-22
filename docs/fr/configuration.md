@@ -143,6 +143,7 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 | `padding`            | `8`         | Espace minimal autour du texte, en pixels logiques (zéro ou plus).                         |
 | `background_opacity` | `1.0`       | De `0.0` (transparent) à `1.0` (opaque). Voir [Thèmes](themes.md#fond-translucide).        |
 | `progress`           | `true`      | Affiche la progression signalée par les programmes (OSC 9;4) dans les onglets, les barres de pane, les blocs et la barre des tâches. `false` la masque partout. |
+| `restore_session`    | `false`     | `true` : sauvegarde la fenêtre ouverte au fil de l'eau (ses onglets, leurs noms, la disposition des panes et le répertoire de chaque shell) et la rouvre au lancement suivant. Chaque pane démarre un shell neuf. Lu au lancement seulement. Les fenêtres lancées avec `-e`, `--columns`, `--lines` ou `--no-restore` en sont exclues. |
 
 ### `[scrollback]`
 
@@ -266,7 +267,9 @@ haut de la fenêtre propose :
 
 Graphene conserve quelques fichiers d'un lancement à l'autre : la taille de la dernière
 fenêtre (pour `startup_mode = "remember"`), le résultat de la dernière recherche de mise
-à jour, et les actions récemment lancées depuis la palette de commandes.
+à jour, et les actions récemment lancées depuis la palette de commandes. Avec
+`window.restore_session = true`, le sous-dossier `sessions/` contient un fichier par
+fenêtre ouverte, réécrit pendant qu'elle tourne.
 
 | Système | Dossier d'état                              |
 |---------|---------------------------------------------|

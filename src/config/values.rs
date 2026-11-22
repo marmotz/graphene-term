@@ -197,6 +197,9 @@ pub struct WindowConfig {
     /// Shows the progress reported by programs (OSC 9;4) in the tabs, panes, blocks and
     /// taskbar.
     pub progress: bool,
+    /// Saves the windows, their tabs and panes, and reopens them at the next launch.
+    /// Read at launch only.
+    pub restore_session: bool,
 }
 
 /// `quick_terminal.edge`: the screen edge the quick terminal is attached to.

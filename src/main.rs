@@ -35,11 +35,15 @@ fn main() -> anyhow::Result<()> {
                 code => std::process::exit(code),
             }
         }
-        Command::Run { program, grid } => {
+        Command::Run {
+            program,
+            grid,
+            no_restore,
+        } => {
             graphene::start_perf_clock();
             env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
                 .init();
-            graphene::run(program, grid)
+            graphene::run(program, grid, no_restore)
         }
     }
 }
@@ -58,10 +62,12 @@ enum Command {
         hidden: bool,
     },
     /// Opens the window; its first pane runs `program` instead of the shell when given,
-    /// and the window is sized to `grid` when it sets a dimension.
+    /// and the window is sized to `grid` when it sets a dimension. With `no_restore`
+    /// (`--no-restore`), the window stays out of the saved session.
     Run {
         program: Option<Vec<String>>,
         grid: GridSize,
+        no_restore: bool,
     },
 }
 
@@ -97,6 +103,7 @@ fn command(args: &[String]) -> Result<Command, &'static str> {
                 columns: count(options, "--columns")?,
                 lines: count(options, "--lines")?,
             },
+            no_restore: options.iter().any(|arg| arg == "--no-restore"),
         }
     })
 }
@@ -155,7 +162,8 @@ mod tests {
             command(&args(&["--hidden"])),
             Ok(Command::Run {
                 program: None,
-                grid: GridSize::default()
+                grid: GridSize::default(),
+                no_restore: false
             })
         );
     }
@@ -166,7 +174,8 @@ mod tests {
             command(&[]),
             Ok(Command::Run {
                 program: None,
-                grid: GridSize::default()
+                grid: GridSize::default(),
+                no_restore: false
             })
         );
     }
@@ -177,7 +186,8 @@ mod tests {
             command(&args(&["-e", "cat", "file.txt"])),
             Ok(Command::Run {
                 program: Some(args(&["cat", "file.txt"])),
-                grid: GridSize::default()
+                grid: GridSize::default(),
+                no_restore: false
             })
         );
     }
@@ -193,7 +203,8 @@ mod tests {
             command(&args(&["-e", "vim", "--version", "--prune-config"])),
             Ok(Command::Run {
                 program: Some(args(&["vim", "--version", "--prune-config"])),
-                grid: GridSize::default()
+                grid: GridSize::default(),
+                no_restore: false
             })
         );
     }
@@ -219,7 +230,8 @@ mod tests {
                 grid: GridSize {
                     columns: Some(120),
                     lines: Some(36)
-                }
+                },
+                no_restore: false
             })
         );
         assert_eq!(
@@ -229,7 +241,29 @@ mod tests {
                 grid: GridSize {
                     columns: None,
                     lines: Some(40)
-                }
+                },
+                no_restore: false
+            })
+        );
+    }
+
+    #[test]
+    fn no_restore_keeps_the_window_out_of_the_session() {
+        assert_eq!(
+            command(&args(&["--no-restore"])),
+            Ok(Command::Run {
+                program: None,
+                grid: GridSize::default(),
+                no_restore: true
+            })
+        );
+        // After `-e`, it belongs to the program.
+        assert_eq!(
+            command(&args(&["-e", "tool", "--no-restore"])),
+            Ok(Command::Run {
+                program: Some(args(&["tool", "--no-restore"])),
+                grid: GridSize::default(),
+                no_restore: false
             })
         );
     }
@@ -254,7 +288,8 @@ mod tests {
             command(&args(&["-e", "less", "--lines", "5"])),
             Ok(Command::Run {
                 program: Some(args(&["less", "--lines", "5"])),
-                grid: GridSize::default()
+                grid: GridSize::default(),
+                no_restore: false
             })
         );
     }

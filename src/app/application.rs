@@ -134,6 +134,9 @@ pub struct App {
     /// Whether the session supports the quick terminal (not Wayland), known once the
     /// event loop resumed.
     pub(super) quick_supported: bool,
+    /// Saves the window to the session while it runs, when this launch takes part in it
+    /// (see [`crate::session::participates`]).
+    pub(super) session_saver: Option<SessionSaver>,
 }
 
 /// Whether the window is created transparent for a background `opacity`. Elsewhere
@@ -534,6 +537,12 @@ impl ApplicationHandler<UserEvent> for App {
         {
             session.save_window_state();
         }
+        if let Some(session) = &self.session
+            && let Some(saver) = self.session_saver.as_mut()
+        {
+            let closed_at = crate::session::unix_seconds(std::time::SystemTime::now());
+            saver.finish(&session.window_snapshot(Some(closed_at)));
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -553,6 +562,13 @@ impl ApplicationHandler<UserEvent> for App {
             deadline
         });
         let deadline = earliest(deadline, self.quick_tick(event_loop, now));
+        let deadline = earliest(
+            deadline,
+            self.session
+                .as_ref()
+                .zip(self.session_saver.as_mut())
+                .map(|(session, saver)| saver.tick(now, || session.window_snapshot(None))),
+        );
         let deadline = earliest(
             deadline,
             self.settings.as_mut().and_then(|settings| {
@@ -756,9 +772,20 @@ pub(super) fn with_theme(
     (config, palette, Banner::config_errors(&all), load_errors)
 }
 
-pub fn run(first_program: Option<Vec<String>>, grid: GridSize) -> anyhow::Result<()> {
+pub fn run(
+    first_program: Option<Vec<String>>,
+    grid: GridSize,
+    no_restore: bool,
+) -> anyhow::Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
-    run_app(event_loop, WindowMode::Normal, first_program, grid).map(|_| ())
+    run_app(
+        event_loop,
+        WindowMode::Normal,
+        first_program,
+        grid,
+        no_restore,
+    )
+    .map(|_| ())
 }
 
 /// Runs the quick terminal process: see [`crate::run_quick`].
@@ -776,7 +803,7 @@ pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
     }
     let event_loop = builder.build()?;
     let mode = WindowMode::Quick(QuickState::new(hidden));
-    let code = run_app(event_loop, mode, None, GridSize::default());
+    let code = run_app(event_loop, mode, None, GridSize::default(), false);
     drop(lock);
     code
 }
@@ -796,14 +823,25 @@ impl App {
 }
 
 /// Runs `event_loop` with the application in `mode`, and returns the exit code.
+/// `no_restore` keeps the window out of the session.
 fn run_app(
     event_loop: EventLoop<UserEvent>,
     mode: WindowMode,
     first_program: Option<Vec<String>>,
     grid: GridSize,
+    no_restore: bool,
 ) -> anyhow::Result<i32> {
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner, load_errors) = load_config();
+    let session_saver = crate::session::participates(
+        config.window.restore_session,
+        mode == WindowMode::Normal,
+        first_program.is_some(),
+        grid.is_set(),
+        no_restore,
+    )
+    .then(session_saver)
+    .flatten();
     if let Some(dir) = config::config_dir() {
         let proxy = event_loop.create_proxy();
         watcher::spawn(dir, move || {
@@ -834,6 +872,7 @@ fn run_app(
         hotkey: None,
         hotkey_error: None,
         quick_supported: false,
+        session_saver,
     };
     if let Some(first) = app.watch_appearance()
         && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)
@@ -844,6 +883,22 @@ fn run_app(
     match app.error {
         Some(error) => Err(error),
         None => Ok(app.exit_code),
+    }
+}
+
+/// A saver for a new instance in the session folder; `None`, logged, when the folder
+/// cannot be found or the instance cannot be claimed.
+fn session_saver() -> Option<SessionSaver> {
+    let Some(dir) = crate::session::sessions_dir() else {
+        log::warn!("neither XDG_STATE_HOME nor HOME is set: the session is not saved");
+        return None;
+    };
+    match Instance::claim(&dir) {
+        Ok(instance) => Some(SessionSaver::new(instance, Instant::now())),
+        Err(error) => {
+            log::warn!("cannot save the session in {}: {error}", dir.display());
+            None
+        }
     }
 }
 
@@ -1031,6 +1086,7 @@ mod tests {
             padding: 8.0,
             background_opacity: 1.0,
             progress: true,
+            restore_session: false,
         }
     }
 

@@ -13,6 +13,7 @@ use crate::config::TabPosition;
 use crate::i18n::Direction;
 use crate::layout::Rect;
 use crate::progress::Progress;
+use crate::session::{NodeSnapshot, TabSnapshot};
 use crate::terminal::PaneId;
 use tree::{Axis, Branch, Geometry, Layout, Node};
 
@@ -801,6 +802,47 @@ impl<P: TitleSource> Workspace<P> {
         }
     }
 
+    /// What the session saves of the tabs: each split tree with its ratios and the
+    /// current directory of each pane, the custom title, the active pane by its rank
+    /// among the leaves, the zoom; and the index of the shown tab.
+    pub fn snapshot(&self) -> (Vec<TabSnapshot>, usize) {
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|tab| TabSnapshot {
+                title: tab.custom_title.clone(),
+                tree: self.node_snapshot(&tab.tree),
+                active: tab
+                    .tree
+                    .leaves()
+                    .iter()
+                    .position(|&id| id == tab.active)
+                    .unwrap_or(0),
+                zoomed: tab.zoomed,
+            })
+            .collect();
+        (tabs, self.active)
+    }
+
+    fn node_snapshot(&self, node: &Node) -> NodeSnapshot {
+        match node {
+            Node::Leaf(id) => NodeSnapshot::Pane {
+                cwd: self.pane(*id).and_then(TitleSource::current_dir),
+            },
+            Node::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => NodeSnapshot::Split {
+                axis: *axis,
+                ratio: *ratio,
+                first: Box::new(self.node_snapshot(first)),
+                second: Box::new(self.node_snapshot(second)),
+            },
+        }
+    }
+
     /// Title of the pane `id` (see [`title_for`]).
     pub fn pane_title(&self, id: PaneId) -> Option<String> {
         let pane = self.pane(id)?;
@@ -1548,6 +1590,68 @@ mod tests {
         ws.pane_mut(active).unwrap().title = Some("htop".to_owned());
         assert_eq!(ws.tab_title(0).as_deref(), Some("htop"));
         assert_eq!(ws.tab_title(5), None);
+    }
+
+    #[test]
+    fn snapshot_keeps_trees_titles_focus_and_directories() {
+        let mut ws = workspace(&[3, 1]);
+        let first = ws.tabs()[0].tree.leaves();
+        for (index, id) in first.iter().enumerate() {
+            ws.pane_mut(*id).unwrap().cwd = Some(PathBuf::from(format!("/p{index}")));
+        }
+        assert!(ws.focus(first[1]));
+        assert!(ws.toggle_zoom());
+        assert!(ws.rename_tab(0, "build"));
+        ws.select(1);
+
+        let (tabs, active_tab) = ws.snapshot();
+        assert_eq!(active_tab, 1);
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[0].title.as_deref(), Some("build"));
+        assert_eq!((tabs[0].active, tabs[0].zoomed), (1, true));
+        let pane = |dir: &str| NodeSnapshot::Pane {
+            cwd: Some(PathBuf::from(dir)),
+        };
+        let Node::Split {
+            ratio: outer,
+            second: inner,
+            ..
+        } = &ws.tabs()[0].tree
+        else {
+            panic!("split tab");
+        };
+        let Node::Split { ratio: inner, .. } = **inner else {
+            panic!("nested split");
+        };
+        assert_eq!(
+            tabs[0].tree,
+            NodeSnapshot::Split {
+                axis: Axis::Horizontal,
+                ratio: *outer,
+                first: Box::new(pane("/p0")),
+                second: Box::new(NodeSnapshot::Split {
+                    axis: Axis::Horizontal,
+                    ratio: inner,
+                    first: Box::new(pane("/p1")),
+                    second: Box::new(pane("/p2")),
+                }),
+            }
+        );
+        assert_eq!(
+            tabs[1],
+            TabSnapshot {
+                title: None,
+                tree: NodeSnapshot::Pane { cwd: None },
+                active: 0,
+                zoomed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn snapshot_of_an_empty_workspace_has_no_tab() {
+        let ws: Workspace<Fake> = Workspace::new();
+        assert_eq!(ws.snapshot(), (Vec::new(), 0));
     }
 
     #[test]

@@ -53,7 +53,8 @@ pub fn claim(dir: &Path, hidden: bool) -> io::Result<Option<File>> {
 }
 
 /// Opens and locks `path` exclusively, `None` when another open file holds the lock.
-fn try_lock(path: &Path) -> io::Result<Option<File>> {
+/// The lock lasts as long as the returned file is open.
+pub(crate) fn try_lock(path: &Path) -> io::Result<Option<File>> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)

@@ -140,6 +140,7 @@ pub enum SettingsField {
     Padding,
     BackgroundOpacity,
     WindowProgress,
+    RestoreSession,
     ScrollbackLines,
     CursorShape,
     CursorBlinking,
@@ -166,7 +167,7 @@ pub enum SettingsField {
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 32] = [
+    pub const ALL: [SettingsField; 33] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -178,6 +179,7 @@ impl SettingsField {
         SettingsField::Padding,
         SettingsField::BackgroundOpacity,
         SettingsField::WindowProgress,
+        SettingsField::RestoreSession,
         SettingsField::ScrollbackLines,
         SettingsField::CursorShape,
         SettingsField::CursorBlinking,
@@ -475,6 +477,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::Padding => "Padding",
             SettingsField::BackgroundOpacity => "Background opacity",
             SettingsField::WindowProgress => "Show program progress",
+            SettingsField::RestoreSession => "Restore the session at launch",
             SettingsField::ScrollbackLines => "Lines kept",
             SettingsField::CursorShape => "Shape",
             SettingsField::CursorBlinking => "Blinking",
@@ -674,6 +677,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsField::Padding => "Marge intérieure",
             SettingsField::BackgroundOpacity => "Opacité du fond",
             SettingsField::WindowProgress => "Afficher la progression des programmes",
+            SettingsField::RestoreSession => "Restaurer la session au lancement",
             SettingsField::ScrollbackLines => "Lignes conservées",
             SettingsField::CursorShape => "Forme",
             SettingsField::CursorBlinking => "Clignotement",

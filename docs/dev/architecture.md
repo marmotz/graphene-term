@@ -73,6 +73,8 @@ src/
   config_edit.rs   text-preserving config.toml edits (toml_edit): completion of missing options,
                    --prune of unknown keys, ConfigEdit set / remove of one key and atomic write
   window_state.rs  window.json state file: last window size and maximized state (window.startup_mode)
+  session.rs       saved session (window.restore_session): WindowSnapshot format, per-instance
+                   sessions/<pid>-<start ns>.json and its flock .lock, SessionSaver (periodic save, heartbeat)
   x11_window.rs    X11 _NET_WM_STATE (maximized, quick terminal) written on the hidden window before
                    it is mapped, cursor position (QueryPointer), keyboard focus of the quick
                    terminal dock window (SetInputFocus)
@@ -445,6 +447,16 @@ Renderer::render(pane frames, interface rects)
   of a maximized window is the screen. `ApplicationHandler::exiting` saves it with
   `window.is_maximized()` to `window.json` whatever the mode, so every exit path (window
   closed, last shell exited) is covered. The position is not saved.
+- With `window.restore_session` (read at launch), `run_app` claims an `Instance` in
+  `<state_dir>/sessions/`: a `flock(LOCK_EX | LOCK_NB)` on `<pid>-<start ns>.lock` held
+  for the life of the process, so an instance is alive while its lock cannot be taken
+  (`session::is_alive`). `about_to_wait` hands `Session::window_snapshot` to
+  `SessionSaver::tick`: checked every `SESSION_SAVE_INTERVAL` (2 s; `cd` sends no event),
+  rewritten only when its JSON changed, else its modification date is touched every
+  `HEARTBEAT` (10 s) to date a crash. `exiting` writes the final snapshot with
+  `closed_at`; a window whose last shell exited saves no tab. The quick terminal and
+  launches with `-e`, `--columns`/`--lines` or `--no-restore` take no part
+  (`session::participates`): no file, no lock.
 - The window is always created transparent (`with_transparent(true)`: winit only
   honours it at creation on X11). `Renderer::new` picks the `PreMultiplied` surface
   alpha mode, else `Inherit`, else the first one with a warning (the opacity is then

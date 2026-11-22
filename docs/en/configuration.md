@@ -138,6 +138,7 @@ This is the complete list. Values shown are the defaults.
 | `padding`            | `8`         | Minimum space around the text, in logical pixels (zero or more).                           |
 | `background_opacity` | `1.0`       | From `0.0` (transparent) to `1.0` (opaque). See [Themes](themes.md#translucent-background). |
 | `progress`           | `true`      | Shows the progress reported by programs (OSC 9;4) in tabs, pane bars, blocks and the taskbar. `false` hides it everywhere. |
+| `restore_session`    | `false`     | `true`: saves the open window while it runs (its tabs, their names, the layout of the panes and the directory of each shell) and reopens it at the next launch. Each pane starts a new shell. Read at launch only. Windows started with `-e`, `--columns`, `--lines` or `--no-restore` are left out. |
 
 ### `[scrollback]`
 
@@ -255,7 +256,8 @@ Graphene makes. When a newer release exists, a banner at the top of the window o
 
 Graphene keeps a few files between launches: the last window size (for
 `startup_mode = "remember"`), the result of the last update check, and the actions
-recently run from the command palette.
+recently run from the command palette. With `window.restore_session = true`, the
+`sessions/` subfolder holds one file per open window, rewritten while it runs.
 
 | System | State folder                                |
 |--------|---------------------------------------------|
