@@ -72,19 +72,20 @@ pub fn feed<L: EventListener>(processor: &mut Processor, term: &mut Term<L>, byt
 
 /// Parses `bytes` into `term` and applies the block signals and screen clears found in
 /// them to `timeline`, each one right after the bytes of its sequence, so the live grid
-/// holds everything the shell wrote before it.
+/// holds everything the shell wrote before it. `now` is the time of the read.
 pub fn process<L: EventListener>(
     scanner: &mut Scanner,
     processor: &mut Processor,
     timeline: &mut Timeline,
     term: &mut Term<L>,
     bytes: &[u8],
+    now: Instant,
 ) {
     for chunk in scanner.split(bytes) {
         match chunk {
             Chunk::Bytes(bytes) => {
                 feed(processor, term, bytes);
-                timeline.apply(term, Chunk::Bytes(bytes));
+                timeline.apply(term, Chunk::Bytes(bytes), now);
             }
             chunk => {
                 // A synchronized update holds bytes back: flush them so the live grid is
@@ -92,7 +93,7 @@ pub fn process<L: EventListener>(
                 if processor.sync_bytes_count() > 0 {
                     processor.stop_sync(term);
                 }
-                timeline.apply(term, chunk);
+                timeline.apply(term, chunk, now);
             }
         }
     }
@@ -101,7 +102,11 @@ pub fn process<L: EventListener>(
 /// Read path of the PTY output: cuts the image sequences out of `bytes` first, so an
 /// image payload is never seen by the block signal scanner; the VT bytes go through
 /// [`process`], and each image sequence or full reset reaches `graphics` right after the
-/// bytes before it are applied to `term`.
+/// bytes before it are applied to `term`. `now` is the time of the read.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the read path state, borrowed piecewise"
+)]
 pub fn handle_output<L: EventListener>(
     splitter: &mut Splitter,
     scanner: &mut Scanner,
@@ -110,20 +115,23 @@ pub fn handle_output<L: EventListener>(
     graphics: &mut impl Handler,
     term: &mut Term<L>,
     bytes: &[u8],
+    now: Instant,
 ) {
     for chunk in splitter.feed(bytes) {
         match chunk {
-            sequence::Chunk::Vt(bytes) => process(scanner, processor, timeline, term, &bytes),
+            sequence::Chunk::Vt(bytes) => {
+                process(scanner, processor, timeline, term, &bytes, now);
+            }
             sequence::Chunk::Kitty(payload) => {
-                flush_sync(processor, timeline, term);
+                flush_sync(processor, timeline, term, now);
                 graphics.image(term, Image::Kitty(payload));
             }
             sequence::Chunk::Sixel(body) => {
-                flush_sync(processor, timeline, term);
+                flush_sync(processor, timeline, term, now);
                 graphics.image(term, Image::Sixel(body));
             }
             sequence::Chunk::Reset => {
-                flush_sync(processor, timeline, term);
+                flush_sync(processor, timeline, term, now);
                 graphics.reset(term);
             }
         }
@@ -136,12 +144,13 @@ fn flush_sync<L: EventListener>(
     processor: &mut Processor,
     timeline: &mut Timeline,
     term: &mut Term<L>,
+    now: Instant,
 ) {
     if processor.sync_bytes_count() > 0 {
         processor.stop_sync(term);
         // The flushed bytes may leave the alternate screen: release the signals held
         // meanwhile.
-        timeline.apply(term, Chunk::Bytes(&[]));
+        timeline.apply(term, Chunk::Bytes(&[]), now);
     }
 }
 
@@ -304,7 +313,8 @@ where
                     state.processor.stop_sync(&mut *term);
                     // The flushed bytes may leave the alternate screen: release the
                     // signals held meanwhile.
-                    self.lock_timeline().apply(&mut *term, Chunk::Bytes(&[]));
+                    self.lock_timeline()
+                        .apply(&mut *term, Chunk::Bytes(&[]), Instant::now());
                     drop(term);
                     self.event_proxy.send_event(Event::Wakeup);
                     continue;
@@ -441,6 +451,7 @@ where
                 &mut state.graphics,
                 term,
                 &buf[..unprocessed],
+                Instant::now(),
             );
             // Kitty graphics replies, written once the poller says the PTY is writable.
             if let Some(replies) = state.graphics.take_replies() {
@@ -525,7 +536,15 @@ mod tests {
         let mut scanner = Scanner::new(TOKEN);
         let mut processor = Processor::new();
         for read in bytes.as_bytes().chunks(split) {
-            process(&mut scanner, &mut processor, &mut timeline, &mut term, read);
+            let now = Instant::now();
+            process(
+                &mut scanner,
+                &mut processor,
+                &mut timeline,
+                &mut term,
+                read,
+                now,
+            );
         }
         (term, timeline)
     }
@@ -603,6 +622,7 @@ mod tests {
                 &mut recorder,
                 &mut term,
                 read,
+                Instant::now(),
             );
         }
         (term, timeline, recorder)

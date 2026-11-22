@@ -108,7 +108,14 @@ fn feed(session: &mut Session, bytes: &[u8]) {
     let mut parser: Processor = Processor::new();
     let mut scanner = Scanner::new(TOKEN);
     let Session { term, timeline } = session;
-    process(&mut scanner, &mut parser, timeline, term, bytes);
+    process(
+        &mut scanner,
+        &mut parser,
+        timeline,
+        term,
+        bytes,
+        Instant::now(),
+    );
 }
 
 /// The bytes of `fixture`, split into its commands at line ends, each one wrapped in a
