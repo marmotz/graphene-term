@@ -113,6 +113,18 @@ capture la souris.
 La barre de titre d'un panneau de la diffusion prend la couleur de thème `ui.pane_broadcast`
 et commence par `»` suivi du nombre de panneaux.
 
+## Progression
+
+Les programmes qui signalent leur progression avec la séquence `OSC 9;4` (comme
+`winget`, `systemd`, certains outils de build et gestionnaires de paquets, ou tout script
+qui écrit `\e]9;4;1;50\a`) ont une fine barre de progression sur le bord inférieur de la
+barre de titre du panneau et, quand la barre d'onglets est affichée, de leur onglet
+(l'onglet suit son panneau actif). La barre prend la couleur d'accent, rouge après une
+erreur, jaune pendant une pause ; une progression inconnue affiche un segment qui
+glisse le long de la barre. Elle disparaît quand le programme l'efface, à la fin de la
+commande, ou après 15 secondes sans nouvelles. `[window] progress = false` (voir
+[Configuration](configuration.md)) masque toutes les barres de progression.
+
 ## Palette de commandes
 
 `Ctrl+Shift+P` ouvre la palette de commandes : toutes les actions avec leur raccourci,

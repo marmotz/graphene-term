@@ -14,6 +14,8 @@ use super::tooltip::TooltipLayout;
 use crate::easter_eggs::art::ArtLayout;
 use crate::layout::Rect;
 use crate::palette::UiColors;
+use crate::progress::{ProgressBar, ProgressColors};
+use crate::renderer::progress_bar::progress_rects;
 use crate::renderer::scene::gpu_color;
 use crate::renderer::{RectInstance, UiFont, UiLayer, UiTextItem};
 use crate::terminal::PaneId;
@@ -424,6 +426,9 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
             let (fill, label) = badge_colors(colors, colors.palette_match);
             badge(pill, fill, label, srgb_target, ui);
         }
+        if let Some(bar) = &tab.progress {
+            progress_bar(bar, bar.colors, srgb_target, ui);
+        }
         ui.texts.push(UiTextItem {
             text: tab.title.clone(),
             x: tab.title_x,
@@ -506,6 +511,14 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         let (fill, label) = badge_colors(colors, pane_badge_fill(colors, background, text_rgb));
         badge(pill, fill, label, srgb_target, ui);
     }
+    if let Some(progress) = &bar.progress {
+        progress_bar(
+            progress,
+            pane_progress_colors(progress.colors, background, text_rgb),
+            srgb_target,
+            ui,
+        );
+    }
     ui.texts.push(UiTextItem {
         text: pane_bar_text(bar),
         x: bar.title_x,
@@ -523,6 +536,26 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         max_width: bar.close.width,
         font: UiFont::Chrome,
     });
+}
+
+/// Colors of the progress bar of a pane bar: the accent of a percentage or of an
+/// indeterminate progress takes the bar's text color on a bar already filled with it
+/// (the active pane's bar), where it would not show.
+pub fn pane_progress_colors(colors: ProgressColors, background: Rgb, text: Rgb) -> ProgressColors {
+    if colors.normal == background {
+        ProgressColors {
+            normal: text,
+            ..colors
+        }
+    } else {
+        colors
+    }
+}
+
+/// A progress bar of the interface, in `colors`.
+fn progress_bar(bar: &ProgressBar, colors: ProgressColors, srgb_target: bool, ui: &mut UiLayer) {
+    ui.rects
+        .extend(progress_rects(bar.rect, bar.view, &colors, srgb_target));
 }
 
 /// Fill of the badge of a pane bar: the accent color, unless the bar is already
@@ -594,6 +627,7 @@ mod tests {
 
     use super::*;
     use crate::chrome::tab_bar::UiMetrics;
+    use crate::progress::{ProgressState, ProgressView};
     use crate::workspace::TabBarPosition;
     use crate::workspace::tree::{Axis, Branch, Divider};
 
@@ -1050,6 +1084,115 @@ mod tests {
         let fixed = readable_on(pale, light);
         assert!(contrast_ratio(fixed, light) >= BAR_TEXT_CONTRAST);
         assert!(luminance(fixed) < luminance(pale));
+    }
+
+    const RED: Rgb = Rgb { r: 200, g: 0, b: 0 };
+
+    fn progress_colors() -> ProgressColors {
+        ProgressColors {
+            normal: ACCENT,
+            error: RED,
+            paused: WARM,
+            track: INACTIVE_TEXT,
+        }
+    }
+
+    fn progress_view(state: ProgressState, value: u8) -> ProgressView {
+        ProgressView {
+            state,
+            value,
+            offset: 0.0,
+        }
+    }
+
+    /// Color of the filled part of the progress bar drawn on `band`.
+    fn progress_fill(ui: &UiLayer, band: Rect) -> [f32; 4] {
+        let pair = ui
+            .rects
+            .windows(2)
+            .find(|pair| pair[0].position == [band.x, band.y] && pair[0].size[1] == band.height)
+            .expect("a progress bar");
+        pair[1].color
+    }
+
+    #[test]
+    fn a_tab_shows_its_progress_on_its_bottom_edge() {
+        let mut tabs = bar();
+        tabs.set_progress(
+            &[Some(progress_view(ProgressState::Paused, 50)), None],
+            progress_colors(),
+        );
+        let band = tabs.tabs[0].progress.unwrap().rect;
+        let ui = build(
+            &two_columns(),
+            None,
+            &[],
+            Some(&tabs),
+            None,
+            &tab_colors(),
+            false,
+        );
+        let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
+        let track = ui
+            .rects
+            .iter()
+            .find(|rect| rect.position == [band.x, band.y])
+            .expect("the track");
+        assert_eq!(track.size, [band.width, band.height]);
+        assert_eq!(
+            track.color,
+            [r, g, b, crate::progress::PROGRESS_TRACK_OPACITY]
+        );
+        assert_eq!(progress_fill(&ui, band), gpu_color(WARM, false));
+        let bars = ui
+            .rects
+            .iter()
+            .filter(|rect| rect.size[1] == band.height && rect.position[1] == band.y)
+            .count();
+        assert_eq!(bars, 2, "only the first tab has a progress bar");
+    }
+
+    #[test]
+    fn a_pane_bar_shows_its_progress_readable_on_the_accent() {
+        let layout = two_columns();
+        let colors = UiColors {
+            palette_background: LABEL,
+            ..tab_colors()
+        };
+        let metrics = pane_bar_metrics();
+        let bars: Vec<_> = pane_bars_of(&layout, Some(PaneId(2)))
+            .into_iter()
+            .map(|bar| {
+                bar.with_progress(
+                    Some(progress_view(ProgressState::Normal, 30)),
+                    progress_colors(),
+                    metrics,
+                )
+            })
+            .collect();
+        let ui = build(&layout, Some(PaneId(2)), &bars, None, None, &colors, false);
+        let inactive = bars[0].progress.unwrap().rect;
+        let active = bars[1].progress.unwrap().rect;
+        assert_eq!(
+            inactive.y + inactive.height,
+            bars[0].rect.y + bars[0].rect.height
+        );
+        // The inactive bar is barely tinted: the accent shows on it.
+        assert_eq!(progress_fill(&ui, inactive), gpu_color(ACCENT, false));
+        // The active bar is filled with the accent: its label color instead.
+        assert_eq!(progress_fill(&ui, active), gpu_color(LABEL, false));
+    }
+
+    #[test]
+    fn an_error_keeps_its_color_on_the_active_pane_bar() {
+        let colors = pane_progress_colors(progress_colors(), ACCENT, LABEL);
+        assert_eq!(colors.bar(ProgressState::Error), RED);
+        assert_eq!(colors.bar(ProgressState::Normal), LABEL);
+        assert_eq!(colors.bar(ProgressState::Indeterminate), LABEL);
+        assert_eq!(
+            pane_progress_colors(progress_colors(), BAR, LABEL),
+            progress_colors()
+        );
     }
 
     #[test]

@@ -166,7 +166,6 @@ impl Session {
     }
 
     /// `progress` as drawn in the frame at `now`.
-    #[allow(dead_code)] // Used by the progress bars of issue #179.
     pub(super) fn progress_view(&self, progress: Progress, now: Instant) -> ProgressView {
         ProgressView::new(progress, now.saturating_duration_since(self.progress_epoch))
     }

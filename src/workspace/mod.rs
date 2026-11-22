@@ -749,8 +749,6 @@ impl<P> Workspace<P> {
     }
 }
 
-// Read by the progress bars of issue #179 and the taskbar of issue #180.
-#[allow(dead_code)]
 impl<P: ProgressSource> Workspace<P> {
     /// Progress of the pane `id`, `None` without one or when progress is hidden.
     pub fn pane_progress(&self, id: PaneId) -> Option<Progress> {

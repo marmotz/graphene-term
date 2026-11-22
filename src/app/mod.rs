@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::index::Point;
+use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config as TermConfig, TermMode};
 #[cfg(target_os = "linux")]
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
@@ -78,7 +79,7 @@ use crate::opener;
 use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
-use crate::progress::{self, Progress, ProgressState, ProgressView};
+use crate::progress::{self, Progress, ProgressColors, ProgressState, ProgressView};
 use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
 use crate::settings::{self, LoadErrors, SettingsWindow};

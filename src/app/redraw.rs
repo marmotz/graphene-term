@@ -20,6 +20,9 @@ pub(super) struct FrameKey {
     lang: Lang,
     banner: Option<FrameBanner>,
     link: Option<(RowSource, RangeInclusive<Point>)>,
+    /// Progress of the pane drawn on the card of its running block, with the bar's
+    /// thickness: an indeterminate one changes at each frame of its animation.
+    progress: Option<(ProgressView, f32)>,
 }
 
 /// Longest wait for the window manager to maximize a window shown maximized, before
@@ -113,6 +116,7 @@ impl Session {
             .active_link()
             .map(|hovered| (hovered.pane, hovered.source, hovered.link.range.clone()));
         let now = Instant::now();
+        let progress_thickness = progress::bar_thickness(self.ui_metrics(UiFont::Chrome).scale);
         let shown: Vec<PaneId> = layout.panes.iter().map(|&(id, _)| id).collect();
         self.frames.retain(|id| shown.contains(&id));
         // A pane that changed through a shared reference, not seen by its revision yet.
@@ -137,6 +141,10 @@ impl Session {
                 .as_ref()
                 .filter(|(pane, ..)| *pane == id)
                 .map(|(_, source, range)| (*source, range.clone()));
+            let progress = self
+                .workspace
+                .pane_progress(id)
+                .map(|progress| (self.progress_view(progress, now), progress_thickness));
             // A running fold animation changes the frame at each redraw.
             let animated = pane.fold_animations.borrow().deadline(now).is_some();
             let key = (!animated).then(|| FrameKey {
@@ -149,6 +157,7 @@ impl Session {
                 lang: self.lang,
                 banner: banner.clone(),
                 link: link.clone(),
+                progress,
             });
             let palette = &self.palette;
             let lang = self.lang;
@@ -163,6 +172,9 @@ impl Session {
                     pane.selected_block,
                 );
                 frame.attach_images(&graphics::lock(&pane.terminal.images));
+                if let Some((view, thickness)) = progress {
+                    frame.show_progress(view, thickness);
+                }
                 pane.fold_animations
                     .borrow_mut()
                     .apply(&mut frame.cards, &rows, now);

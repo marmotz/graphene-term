@@ -5,12 +5,14 @@ use std::sync::Arc;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use super::glyphs::GlyphKey;
+use super::progress_bar::progress_rects;
 use super::rects::RectInstance;
 use crate::fold_animation;
 use crate::frame::{self, Card, Frame, FrameImage, ScrollBar};
 use crate::graphics::{ImageCell, Pixels};
 use crate::i18n::{self, Msg};
-use crate::layout::GridLayout;
+use crate::layout::{GridLayout, Rect};
+use crate::progress;
 use crate::timeline::Status;
 
 fn plain(c: char) -> GlyphKey {
@@ -173,6 +175,24 @@ fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<Rec
         }
         if let Some(bar) = &card.scroll {
             rects.push(scroll_thumb(frame, layout, bar, stripe, srgb_target));
+        }
+        if let Some(view) = card.progress {
+            // Along the bottom edge, between the rounded corners.
+            let band = progress::bottom_band(
+                Rect {
+                    x: left + radius,
+                    y: top,
+                    width: (width - 2.0 * radius).max(0.0),
+                    height: bottom - top,
+                },
+                frame.progress_thickness,
+            );
+            rects.extend(progress_rects(
+                band,
+                view,
+                &frame.progress_colors,
+                srgb_target,
+            ));
         }
     }
     rects
@@ -606,7 +626,8 @@ mod tests {
     use crate::frame::{
         BlockColors, Card, Fold, FrameBanner, FrameCell, FrameCursor, RowDecoration, ScrollBar,
     };
-    use crate::layout::{CellSize, Rect};
+    use crate::layout::CellSize;
+    use crate::progress::{PROGRESS_TRACK_OPACITY, ProgressColors, ProgressState, ProgressView};
     use crate::renderer::rects::Shape;
     use crate::timeline::Status;
 
@@ -678,6 +699,17 @@ mod tests {
         g: 36,
         b: 36,
     };
+    const ACCENT: Rgb = Rgb {
+        r: 0,
+        g: 100,
+        b: 255,
+    };
+    const PROGRESS_COLORS: ProgressColors = ProgressColors {
+        normal: ACCENT,
+        error: RED,
+        paused: YELLOW,
+        track: FG,
+    };
 
     fn card(rows: std::ops::Range<usize>, status: Option<Status>) -> Card {
         Card {
@@ -688,6 +720,7 @@ mod tests {
             fold_progress: 1.0,
             selected: false,
             scroll: None,
+            progress: None,
         }
     }
 
@@ -711,6 +744,8 @@ mod tests {
             banner: None,
             lang: crate::i18n::Lang::En,
             images: Vec::new(),
+            progress_colors: PROGRESS_COLORS,
+            progress_thickness: 2.0,
         }
     }
 
@@ -1095,6 +1130,52 @@ mod tests {
                 gpu_color(YELLOW, false)
             ]
         );
+    }
+
+    #[test]
+    fn running_card_shows_its_progress_on_its_bottom_edge() {
+        let mut f = frame(vec![vec![cell('a')]; 2]);
+        f.cards = vec![Card {
+            progress: Some(ProgressView {
+                state: ProgressState::Error,
+                value: 50,
+                offset: 0.0,
+            }),
+            ..card(0..2, Some(Status::Running))
+        }];
+        let l = margin_layout();
+        let scene = build(&f, &l, false, false);
+        // Card, stripe, then the 2 px track and bar on the card's bottom edge (40 px),
+        // between its 5 px rounded corners.
+        let inner = l.grid_right() + 22.0 - 5.0 - 10.0;
+        let [r, g, b, _] = gpu_color(FG, false);
+        assert_eq!(
+            shapes(&scene.under[2..]),
+            vec![
+                (
+                    [10.0, 38.0],
+                    [inner, 2.0],
+                    [r, g, b, PROGRESS_TRACK_OPACITY],
+                    0.0,
+                    0
+                ),
+                (
+                    [10.0, 38.0],
+                    [inner / 2.0, 2.0],
+                    gpu_color(RED, false),
+                    0.0,
+                    0
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn card_without_progress_draws_no_bar() {
+        let mut f = frame(vec![vec![cell('a')]; 2]);
+        f.cards = vec![card(0..2, Some(Status::Running))];
+        let scene = build(&f, &margin_layout(), false, false);
+        assert_eq!(scene.under.len(), 2);
     }
 
     #[test]

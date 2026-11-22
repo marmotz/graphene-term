@@ -138,6 +138,7 @@ src/
   renderer/
     mod.rs         Gpu context (shared), per-window surface, frame orchestration, headless renderer (benches)
     scene.rs       Frame -> rects + glyph instances (pure, no GPU)
+    progress_bar.rs  progress bar track and fill rects, shared by tabs, pane bars and cards (pure)
     glyphs.rs      font system, cell metrics, glyph cache (char, bold, italic, ui) -> atlas slot,
                    interface font shaping
     ui_text.rs     interface text: truncation with an ellipsis, shaped line cache, glyph instances

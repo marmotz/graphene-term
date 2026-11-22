@@ -19,6 +19,12 @@
 
 use std::time::{Duration, Instant};
 
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+
+use crate::layout::Rect;
+use crate::palette::Palette;
+
 /// A progress with no new sequence for this long is dropped.
 pub const PROGRESS_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -121,13 +127,135 @@ pub struct ProgressView {
 }
 
 impl ProgressView {
-    /// `progress` drawn `elapsed` after the animation's origin.
+    /// `progress` drawn `elapsed` after the animation's origin. The offset is 0 outside
+    /// [`ProgressState::Indeterminate`], so that a still bar compares equal from one
+    /// frame to the next.
     pub fn new(progress: Progress, elapsed: Duration) -> Self {
+        let offset = if progress.state == ProgressState::Indeterminate {
+            indeterminate_offset(elapsed)
+        } else {
+            0.0
+        };
         Self {
             state: progress.state,
             value: progress.value,
-            offset: indeterminate_offset(elapsed),
+            offset,
         }
+    }
+}
+
+/// Thickness of a progress bar, in logical pixels.
+pub const PROGRESS_THICKNESS: f32 = 2.0;
+
+/// Opacity of the track drawn under a progress bar.
+pub const PROGRESS_TRACK_OPACITY: f32 = 0.3;
+
+/// Share of the bar covered by the animated segment of an indeterminate progress.
+pub const INDETERMINATE_SEGMENT: f32 = 0.25;
+
+/// Thickness of a progress bar at `scale` physical pixels per logical one, in whole
+/// physical pixels, never under one.
+pub fn bar_thickness(scale: f32) -> f32 {
+    (PROGRESS_THICKNESS * scale).round().max(1.0)
+}
+
+/// The band `thickness` pixels high along the bottom edge of `area`, where its
+/// progress bar is drawn.
+pub fn bottom_band(area: Rect, thickness: f32) -> Rect {
+    let height = thickness.min(area.height).max(0.0);
+    Rect {
+        x: area.x,
+        y: area.y + area.height - height,
+        width: area.width,
+        height,
+    }
+}
+
+/// A progress bar of the interface laid out: the band it fills, what it shows and its
+/// colors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgressBar {
+    pub rect: Rect,
+    pub view: ProgressView,
+    pub colors: ProgressColors,
+}
+
+impl ProgressBar {
+    /// The bar showing `view` along the bottom edge of `area`, `thickness` pixels thick.
+    pub fn along_bottom(
+        area: Rect,
+        thickness: f32,
+        view: ProgressView,
+        colors: ProgressColors,
+    ) -> Self {
+        Self {
+            rect: bottom_band(area, thickness),
+            view,
+            colors,
+        }
+    }
+}
+
+/// Colors of the progress bars, taken from the theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgressColors {
+    /// Percentage and indeterminate: the interface accent.
+    pub normal: Rgb,
+    /// Error: the terminal red.
+    pub error: Rgb,
+    /// Pause: the terminal yellow.
+    pub paused: Rgb,
+    /// The track under the bar, drawn translucent.
+    pub track: Rgb,
+}
+
+impl ProgressColors {
+    /// The colors of `palette`: its accent, its red and yellow (with the terminal's
+    /// `overrides`), and its inactive tab text for the track.
+    pub fn resolve(palette: &Palette, overrides: &Colors) -> Self {
+        let named = |color| palette.resolve(Color::Named(color), overrides);
+        Self {
+            normal: palette.ui.palette_match,
+            error: named(NamedColor::Red),
+            paused: named(NamedColor::Yellow),
+            track: palette.ui.tab_inactive_text,
+        }
+    }
+
+    /// Color of the bar of a progress in `state`.
+    pub fn bar(&self, state: ProgressState) -> Rgb {
+        match state {
+            ProgressState::Normal | ProgressState::Indeterminate => self.normal,
+            ProgressState::Error => self.error,
+            ProgressState::Paused => self.paused,
+        }
+    }
+
+    /// The same colors with `map` applied to each.
+    pub fn map(self, map: impl Fn(Rgb) -> Rgb) -> Self {
+        Self {
+            normal: map(self.normal),
+            error: map(self.error),
+            paused: map(self.paused),
+            track: map(self.track),
+        }
+    }
+}
+
+/// Left edge and width of the filled part of a bar spanning `x` to `x + width`: from
+/// the left up to the value for a percentage, error or pause, the animated segment
+/// for an indeterminate progress, entering on the left and leaving on the right.
+pub fn filled_span(x: f32, width: f32, view: ProgressView) -> (f32, f32) {
+    match view.state {
+        ProgressState::Indeterminate => {
+            let segment = width * INDETERMINATE_SEGMENT;
+            // The segment travels from fully left of the bar to fully right of it.
+            let start = x - segment + view.offset * (width + segment);
+            let left = start.max(x);
+            let right = (start + segment).min(x + width);
+            (left, (right - left).max(0.0))
+        }
+        _ => (x, width * f32::from(view.value.min(100)) / 100.0),
     }
 }
 
@@ -353,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn view_keeps_the_state_and_value_and_adds_the_offset() {
+    fn view_keeps_the_state_and_value_without_offset_when_still() {
         let progress = Progress {
             state: ProgressState::Paused,
             value: 40,
@@ -365,9 +493,112 @@ mod tests {
             ProgressView {
                 state: ProgressState::Paused,
                 value: 40,
-                offset: 0.5,
+                offset: 0.0,
             }
         );
+    }
+
+    #[test]
+    fn view_of_an_indeterminate_progress_has_the_animated_offset() {
+        let progress = Progress {
+            state: ProgressState::Indeterminate,
+            value: 0,
+            updated: Instant::now(),
+        };
+        assert_eq!(
+            ProgressView::new(progress, INDETERMINATE_PERIOD / 2).offset,
+            0.5
+        );
+    }
+
+    fn view(state: ProgressState, value: u8, offset: f32) -> ProgressView {
+        ProgressView {
+            state,
+            value,
+            offset,
+        }
+    }
+
+    #[test]
+    fn bar_thickness_is_two_logical_pixels_rounded() {
+        assert_eq!(bar_thickness(1.0), 2.0);
+        assert_eq!(bar_thickness(1.5), 3.0);
+        assert_eq!(bar_thickness(2.0), 4.0);
+        assert_eq!(bar_thickness(0.2), 1.0);
+    }
+
+    #[test]
+    fn bottom_band_sits_on_the_bottom_edge() {
+        let area = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 30.0,
+        };
+        assert_eq!(
+            bottom_band(area, 2.0),
+            Rect {
+                x: 10.0,
+                y: 48.0,
+                width: 100.0,
+                height: 2.0,
+            }
+        );
+        assert_eq!(bottom_band(area, 50.0).height, 30.0);
+    }
+
+    #[test]
+    fn filled_span_follows_the_value() {
+        for state in [
+            ProgressState::Normal,
+            ProgressState::Error,
+            ProgressState::Paused,
+        ] {
+            assert_eq!(filled_span(10.0, 200.0, view(state, 0, 0.0)), (10.0, 0.0));
+            assert_eq!(filled_span(10.0, 200.0, view(state, 25, 0.0)), (10.0, 50.0));
+            assert_eq!(
+                filled_span(10.0, 200.0, view(state, 100, 0.0)),
+                (10.0, 200.0)
+            );
+        }
+    }
+
+    #[test]
+    fn indeterminate_segment_crosses_the_bar() {
+        let indeterminate = |offset| view(ProgressState::Indeterminate, 0, offset);
+        // Entering: nothing shown yet.
+        assert_eq!(filled_span(0.0, 100.0, indeterminate(0.0)), (0.0, 0.0));
+        // Halfway: a full segment centered on the bar.
+        assert_eq!(filled_span(0.0, 100.0, indeterminate(0.5)), (37.5, 25.0));
+        // Cut by the left edge while it enters.
+        assert_eq!(filled_span(0.0, 100.0, indeterminate(0.1)), (0.0, 12.5));
+        // Cut by the right edge while it leaves.
+        let (left, width) = filled_span(0.0, 100.0, indeterminate(0.9));
+        assert_eq!(left, 87.5);
+        assert_eq!(left + width, 100.0);
+    }
+
+    #[test]
+    fn colors_follow_the_state() {
+        let palette = Palette::default();
+        let colors = ProgressColors::resolve(&palette, &Colors::default());
+        assert_eq!(colors.bar(ProgressState::Normal), palette.ui.palette_match);
+        assert_eq!(
+            colors.bar(ProgressState::Indeterminate),
+            palette.ui.palette_match
+        );
+        assert_eq!(colors.bar(ProgressState::Error), palette.indexed[1]);
+        assert_eq!(colors.bar(ProgressState::Paused), palette.indexed[3]);
+        assert_eq!(colors.track, palette.ui.tab_inactive_text);
+    }
+
+    #[test]
+    fn colors_honor_the_terminal_overrides() {
+        let palette = Palette::default();
+        let mut overrides = Colors::default();
+        let red = Rgb { r: 200, g: 1, b: 2 };
+        overrides[NamedColor::Red] = Some(red);
+        assert_eq!(ProgressColors::resolve(&palette, &overrides).error, red);
     }
 
     #[test]
