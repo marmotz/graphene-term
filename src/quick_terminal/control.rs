@@ -112,9 +112,19 @@ pub fn serve(
         })
 }
 
+/// The result of setting the read timeout of a connection. macOS refuses it with
+/// `EINVAL` once the peer has closed its end, which [`send`] does right after writing:
+/// the line is then already there and reading it cannot block.
+fn timeout_set(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(error) if error.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        result => result,
+    }
+}
+
 /// The command line of one connection; `None` for an empty or unknown one.
 fn read_command(stream: UnixStream) -> io::Result<Option<QuickCommand>> {
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    timeout_set(stream.set_read_timeout(Some(READ_TIMEOUT)))?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     let command = QuickCommand::parse(&line);
@@ -277,6 +287,12 @@ mod tests {
         receiver
     }
 
+    /// Leaves a file nothing listens on at the socket path of `dir`.
+    fn leave_dead_socket(dir: &Path) {
+        std::fs::write(socket_path(dir), b"").unwrap();
+        assert!(UnixStream::connect(socket_path(dir)).is_err());
+    }
+
     fn shell(script: &str) -> io::Result<Child> {
         Command::new("sh").args(["-c", script]).spawn()
     }
@@ -300,8 +316,10 @@ mod tests {
     #[test]
     fn toggle_starts_the_quick_terminal_when_nothing_listens() {
         let dir = runtime("start");
-        // A socket file left by a process that died.
-        drop(bind(&dir).unwrap());
+        // A socket file left by a process that died. A plain file stands for it: a
+        // socket bound here could live on in a child another test forks meanwhile,
+        // where the close-on-exec flag is set after the socket is created (macOS).
+        leave_dead_socket(&dir);
         let socket = socket_path(&dir);
         let mut started = None;
         let spawn = || {
@@ -395,9 +413,34 @@ mod tests {
     #[test]
     fn hidden_start_spawns_and_waits_when_nothing_listens() {
         let dir = runtime("hidden-start");
-        // A socket file left by a process that died.
-        drop(bind(&dir).unwrap());
+        // A socket file left by a process that died. A plain file stands for it: a
+        // socket bound here could live on in a child another test forks meanwhile,
+        // where the close-on-exec flag is set after the socket is created (macOS).
+        leave_dead_socket(&dir);
         assert!(start_hidden_with(&socket_path(&dir), || shell("exit 0")).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_timeout_refused_after_the_peer_closed_is_ignored() {
+        assert!(timeout_set(Ok(())).is_ok());
+        assert!(timeout_set(Err(io::Error::from_raw_os_error(libc::EINVAL))).is_ok());
+        let refused = timeout_set(Err(io::Error::from_raw_os_error(libc::EBADF)));
+        assert_eq!(refused.unwrap_err().raw_os_error(), Some(libc::EBADF));
+    }
+
+    #[test]
+    fn a_command_sent_and_closed_before_it_is_read_still_arrives() {
+        let dir = runtime("closed");
+        let listener = bind(&dir).unwrap();
+        // Sent and closed before the server accepts it.
+        send(&socket_path(&dir), QuickCommand::Show).unwrap();
+        let (sender, received) = mpsc::channel();
+        serve(listener, move |command| sender.send(command).is_ok()).unwrap();
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(5)),
+            Ok(QuickCommand::Show)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
