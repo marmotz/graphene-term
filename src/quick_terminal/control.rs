@@ -164,7 +164,26 @@ impl fmt::Display for ToggleError {
 /// `graphene --quick-toggle`: toggles the resident quick terminal of the runtime folder
 /// `dir`, or starts it, shown, when there is none.
 pub fn toggle(dir: &Path) -> Result<(), ToggleError> {
-    toggle_with(&socket_path(dir), spawn_quick, STARTUP_WAIT)
+    toggle_with(&socket_path(dir), || spawn_quick(false), STARTUP_WAIT)
+}
+
+/// Starts the quick terminal of the runtime folder `dir` hidden, for its global hotkey,
+/// unless one already listens. Returns whether it started one; the call waits for that
+/// process to end, so it runs in a thread of its own.
+pub fn start_hidden(dir: &Path) -> io::Result<bool> {
+    start_hidden_with(&socket_path(dir), || spawn_quick(true))
+}
+
+/// Starts `spawn` unless a process listens on `socket`, and waits for it to end: a
+/// second process exits at once, the resident one at the end of the session.
+fn start_hidden_with(socket: &Path, spawn: impl FnOnce() -> io::Result<Child>) -> io::Result<bool> {
+    // A connection without a command line is dropped by the socket thread.
+    if UnixStream::connect(socket).is_ok() {
+        return Ok(false);
+    }
+    let mut child = spawn()?;
+    child.wait()?;
+    Ok(true)
 }
 
 /// Sends `toggle` on `socket`; when nothing listens, starts the quick terminal with
@@ -209,13 +228,16 @@ fn toggle_with(
     }
 }
 
-/// Starts `graphene --quick` in a session of its own, detached from the terminal of the
-/// caller, so that it outlives it.
-fn spawn_quick() -> io::Result<Child> {
+/// Starts `graphene --quick`, with `--hidden` when `hidden`, in a session of its own,
+/// detached from the terminal of the caller, so that it outlives it.
+fn spawn_quick(hidden: bool) -> io::Result<Child> {
     use std::os::unix::process::CommandExt;
     let mut command = Command::new(std::env::current_exe()?);
+    command.arg("--quick");
+    if hidden {
+        command.arg("--hidden");
+    }
     command
-        .arg("--quick")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -356,6 +378,26 @@ mod tests {
         // The lock is free once the first process is gone.
         drop(first);
         assert!(claim(&dir, true).unwrap().is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn hidden_start_is_skipped_when_the_quick_terminal_listens() {
+        let dir = runtime("hidden-running");
+        let received = server(&dir);
+        let spawned = || -> io::Result<Child> { panic!("nothing to start") };
+        assert!(!start_hidden_with(&socket_path(&dir), spawned).unwrap());
+        // The probe sends no command: the window stays as it is.
+        assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn hidden_start_spawns_and_waits_when_nothing_listens() {
+        let dir = runtime("hidden-start");
+        // A socket file left by a process that died.
+        drop(bind(&dir).unwrap());
+        assert!(start_hidden_with(&socket_path(&dir), || shell("exit 0")).unwrap());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

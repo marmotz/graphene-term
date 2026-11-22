@@ -20,7 +20,7 @@ pub const NONE_ACTION: &str = "none";
 
 /// The key part of a shortcut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum KeyId {
+pub(crate) enum KeyId {
     /// A character, lowercased when it is a letter.
     Char(char),
     Named(NamedKey),
@@ -159,6 +159,16 @@ pub(crate) fn defaults() -> impl Iterator<Item = (&'static str, Action)> + Clone
 }
 
 impl Shortcut {
+    /// The key of the shortcut, translated by the global hotkey of the quick terminal.
+    pub(crate) fn key(&self) -> KeyId {
+        self.key
+    }
+
+    /// The modifiers held with the key.
+    pub(crate) fn mods(&self) -> ModifiersState {
+        self.mods
+    }
+
     /// Parses a shortcut written as in the configuration file (`Ctrl+Shift+C`).
     pub fn parse(text: &str) -> Result<Shortcut, String> {
         // `+` is both the separator and a key: `Ctrl++`, `+`.

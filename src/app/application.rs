@@ -127,6 +127,13 @@ pub struct App {
     pub(super) mode: WindowMode,
     /// Exit code of the process once the event loop ends.
     pub(super) exit_code: i32,
+    /// Global hotkey of the quick terminal process, created at its first registration.
+    pub(super) hotkey: Option<crate::hotkey::Hotkey>,
+    /// Why the hotkey could not be registered, shown by the configuration banner.
+    pub(super) hotkey_error: Option<ConfigError>,
+    /// Whether the session supports the quick terminal (not Wayland), known once the
+    /// event loop resumed.
+    pub(super) quick_supported: bool,
 }
 
 /// Whether the window is created transparent for a background `opacity`. Elsewhere
@@ -367,12 +374,20 @@ impl App {
     /// them to the open window.
     pub(super) fn reload_config(&mut self) {
         let (config, errors) = config::reload(&self.config);
-        let (config, palette, banner, load_errors) = with_theme(config, errors, self.appearance);
+        let (config, palette, _, load_errors) = with_theme(config, errors, self.appearance);
         let old = std::mem::replace(&mut self.config, config);
         self.watch_appearance();
         self.palette = palette;
-        self.config_banner = banner.clone();
         self.load_errors = load_errors;
+        self.register_hotkey();
+        if hotkey::hotkey_turned_on(
+            &old.quick_terminal.hotkey,
+            &self.config.quick_terminal.hotkey,
+        ) {
+            self.start_hidden_quick();
+        }
+        let banner = hotkey::config_banner(&self.load_errors, self.hotkey_error.as_ref());
+        self.config_banner = banner.clone();
         if let Some(settings) = self.settings.as_mut() {
             settings.apply(
                 &self.palette,
@@ -473,7 +488,8 @@ impl ApplicationHandler<UserEvent> for App {
         if self.session.is_some() {
             return;
         }
-        if self.quick_state().is_some() && !quick::quick_supported(event_loop) {
+        self.quick_supported = quick::quick_supported(event_loop);
+        if self.quick_state().is_some() && !self.quick_supported {
             self.exit_code = crate::quick_terminal::control::WAYLAND_EXIT_CODE;
             return event_loop.exit();
         }
@@ -486,10 +502,15 @@ impl ApplicationHandler<UserEvent> for App {
             Err(error) => return self.fail(event_loop, error),
         }
         self.update_checker.apply(&self.config.updates);
+        // The window is shown: a hidden quick terminal starts for the hotkey.
+        self.start_hidden_quick();
         if let Some(state) = self.quick_state() {
             let start_hidden = state.start_hidden;
             if let Err(error) = self.listen_quick() {
                 return self.fail(event_loop, error);
+            }
+            if self.register_hotkey() {
+                self.refresh_config_banner();
             }
             if !start_hidden {
                 self.show_quick(event_loop);
@@ -794,6 +815,9 @@ fn run_app(
         grid,
         mode,
         exit_code: 0,
+        hotkey: None,
+        hotkey_error: None,
+        quick_supported: false,
     };
     if let Some(first) = app.watch_appearance()
         && let Ok(appearance) = first.recv_timeout(APPEARANCE_STARTUP_WAIT)

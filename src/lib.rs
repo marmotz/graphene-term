@@ -18,6 +18,7 @@ mod fold_animation;
 mod frame;
 mod frame_cache;
 mod graphics;
+mod hotkey;
 mod i18n;
 mod input;
 mod input_editor;

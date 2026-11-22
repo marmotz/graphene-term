@@ -2,6 +2,7 @@
 
 mod application;
 mod geometry;
+mod hotkey;
 mod notices;
 mod panes;
 mod quick;
