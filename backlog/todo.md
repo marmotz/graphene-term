@@ -72,12 +72,12 @@ _tâches créées — voir [technical.md](features/quick-terminal/technical.md)_
 
 ## Quick terminal autostart  ·  [overview](features/quick-terminal-autostart/overview.md)
 
-_tâches créées — voir [technical.md](features/quick-terminal-autostart/technical.md)_ — 1/3 tasks done
+_tâches créées — voir [technical.md](features/quick-terminal-autostart/technical.md)_ — 2/3 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
 | [x]  | [#250](https://github.com/marmotz/graphene-term/issues/250) | feat(quick-terminal-autostart): autostart configuration key and setting | — |
-| [ ]  | [#251](https://github.com/marmotz/graphene-term/issues/251) | feat(quick-terminal-autostart): session autostart entry module | — |
+| [x]  | [#251](https://github.com/marmotz/graphene-term/issues/251) | feat(quick-terminal-autostart): session autostart entry module | — |
 | [ ]  | [#252](https://github.com/marmotz/graphene-term/issues/252) | feat(quick-terminal-autostart): apply the setting and document it | #250, #251 |
 
 ## Recherche dans l'historique  ·  [overview](features/scrollback-search/overview.md)

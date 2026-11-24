@@ -1,10 +1,12 @@
 //! The quick terminal: a window attached to a screen edge, shown and hidden by
 //! `graphene --quick-toggle`, held by a single resident `graphene --quick` process.
 //!
+//! - [`autostart`]: the session autostart entry that starts the resident process.
 //! - [`control`]: single instance lock, command socket and the `--quick-toggle` client.
 //! - This module: the commands of the socket and the placement of the window, computed
 //!   without a window so that it is tested everywhere.
 
+pub mod autostart;
 pub mod control;
 #[cfg(target_os = "macos")]
 pub mod macos;
