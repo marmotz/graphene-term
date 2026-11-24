@@ -22,8 +22,6 @@ const DESKTOP_FILE: &str = "graphene-quick-terminal.desktop";
 const LAUNCH_AGENT_LABEL: &str = "dev.marmotz.graphene.quick-terminal";
 
 /// Makes the session autostart entry follow `enabled`.
-// Wired to the configuration when the setting is applied.
-#[allow(dead_code)]
 pub fn sync(enabled: bool) -> io::Result<()> {
     let path = entry_path().ok_or_else(|| {
         io::Error::new(

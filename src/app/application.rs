@@ -470,6 +470,7 @@ impl App {
         ) {
             self.start_hidden_quick();
         }
+        self.sync_autostart(Some(old.quick_terminal.autostart));
         let banner = hotkey::config_banner(&self.load_errors, self.hotkey_error.as_ref());
         self.config_banner = banner.clone();
         if let Some(settings) = self.settings.as_mut() {
@@ -588,6 +589,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.update_checker.apply(&self.config.updates);
         // The window is shown: a hidden quick terminal starts for the hotkey.
         self.start_hidden_quick();
+        self.sync_autostart(None);
         if let Some(state) = self.quick_state() {
             let start_hidden = state.start_hidden;
             if let Err(error) = self.listen_quick() {
