@@ -16,6 +16,7 @@ use crate::atomic_file::write_atomic;
 const ARGUMENTS: [&str; 2] = ["--quick", "--hidden"];
 
 /// File name of the XDG autostart entry.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const DESKTOP_FILE: &str = "graphene-quick-terminal.desktop";
 
 /// `Label` of the LaunchAgent, also its file name without extension.
