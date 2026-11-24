@@ -1,46 +1,20 @@
-<!-- backlog-sync 2026-11-21T21:40Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-24T09:29Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
-## Notifications de bureau  ·  [overview](features/desktop-notifications/overview.md)
+## Internationalisation (i18n)  ·  [overview](features/i18n/overview.md)
 
-_terminé — voir [technical.md](features/desktop-notifications/technical.md)_ — 7/7 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [x]  | [#175](https://github.com/marmotz/graphene-term/issues/175) | [Notifications] Détecter OSC 9 et OSC 777 dans le flux PTY | — |
-| [x]  | [#177](https://github.com/marmotz/graphene-term/issues/177) | [Notifications] Section de configuration [notifications] | — |
-| [x]  | [#183](https://github.com/marmotz/graphene-term/issues/183) | [Notifications] Mesurer la durée des commandes et signaler leur fin | #175 |
-| [x]  | [#184](https://github.com/marmotz/graphene-term/issues/184) | [Notifications] Décider, compter et effacer les notifications | #175, #183, #177 |
-| [x]  | [#187](https://github.com/marmotz/graphene-term/issues/187) | [Notifications] Badges compteurs sur les onglets et les barres de pane | #184 |
-| [x]  | [#188](https://github.com/marmotz/graphene-term/issues/188) | [Notifications] Backend Linux : D-Bus et badge LauncherEntry | #184 |
-| [x]  | [#189](https://github.com/marmotz/graphene-term/issues/189) | [Notifications] Backend macOS : UNUserNotificationCenter et badge du Dock | #184 |
-
-## Easter eggs  ·  [overview](features/easter-eggs/overview.md)
-
-_terminé — voir [technical.md](features/easter-eggs/technical.md)_ — 8/8 tasks done
+_tâches créées — voir [technical.md](features/i18n/technical.md)_ — 0/7 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [x]  | [#219](https://github.com/marmotz/graphene-term/issues/219) | [Easter eggs] Afficher la version de Graphene dans les réglages | — |
-| [x]  | [#220](https://github.com/marmotz/graphene-term/issues/220) | [Easter eggs] Entrées cachées 42 et marmotz dans la palette de commandes | — |
-| [x]  | [#221](https://github.com/marmotz/graphene-term/issues/221) | [Easter eggs] Fenêtre du dessin ASCII du graphène et police UI à chasse fixe | #220 |
-| [x]  | [#222](https://github.com/marmotz/graphene-term/issues/222) | [Easter eggs] Thème caché phosphor-crt et clé theme.unlocked | — |
-| [x]  | [#223](https://github.com/marmotz/graphene-term/issues/223) | [Easter eggs] Débloquer le thème caché par 7 clics sur la version | #219, #222 |
-| [x]  | [#224](https://github.com/marmotz/graphene-term/issues/224) | [Easter eggs] Effet scanlines du thème phosphor-crt | #222 |
-| [x]  | [#225](https://github.com/marmotz/graphene-term/issues/225) | [Easter eggs] Konami code et animation en nid d'abeille | — |
-| [x]  | [#226](https://github.com/marmotz/graphene-term/issues/226) | [Easter eggs] Décorer le titre de la fenêtre les jours spéciaux | — |
-
-## Ligatures de police  ·  [overview](features/font-ligatures/overview.md)
-
-_terminé — voir [technical.md](features/font-ligatures/technical.md)_ — 4/4 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [x]  | [#182](https://github.com/marmotz/graphene-term/issues/182) | [Config] Options [font] ligatures et features, appliquées à la police de la grille | — |
-| [x]  | [#185](https://github.com/marmotz/graphene-term/issues/185) | [Réglages] Interrupteur des ligatures et features OpenType | #182 |
-| [x]  | [#186](https://github.com/marmotz/graphene-term/issues/186) | [Rendu] Mise en forme de la grille par runs, avec cache | #182 |
-| [x]  | [#190](https://github.com/marmotz/graphene-term/issues/190) | [Rendu] Ligature sous le curseur affichée en caractères isolés | #186 |
+| [ ]  | [#243](https://github.com/marmotz/graphene-term/issues/243) | feat(i18n): move UI texts to Fluent files | — |
+| [ ]  | [#244](https://github.com/marmotz/graphene-term/issues/244) | feat(i18n): regional variants en-US, en-GB, fr-CA with fallback | #243 |
+| [ ]  | [#245](https://github.com/marmotz/graphene-term/issues/245) | feat(i18n): locale-aware numbers, durations and dates | #244 |
+| [ ]  | [#246](https://github.com/marmotz/graphene-term/issues/246) | feat(i18n): translate configuration errors | #243 |
+| [ ]  | [#247](https://github.com/marmotz/graphene-term/issues/247) | feat(i18n): translated labels in settings choice lists | #244 |
+| [ ]  | [#248](https://github.com/marmotz/graphene-term/issues/248) | feat(i18n): UiText type and clippy guard against hardcoded texts | #245, #246, #247 |
+| [ ]  | [#249](https://github.com/marmotz/graphene-term/issues/249) | feat(i18n): Spanish, German and Italian | #245, #246, #247 |
 
 ## Saisie IME  ·  [overview](features/ime-input/overview.md)
 
@@ -84,30 +58,27 @@ _tâches créées — voir [technical.md](features/multiplexing/technical.md)_ �
 | [ ]  | [#213](https://github.com/marmotz/graphene-term/issues/213) | Multiplexage : icône de barre de menus sous macOS | #206 |
 | [ ]  | [#215](https://github.com/marmotz/graphene-term/issues/215) | Multiplexage : images kitty par fichier temporaire ou mémoire partagée | #205, #208 |
 
-## Indicateur de progression OSC 9;4  ·  [overview](features/osc-progress-indicator/overview.md)
-
-_terminé — voir [technical.md](features/osc-progress-indicator/technical.md)_ — 6/6 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [x]  | [#174](https://github.com/marmotz/graphene-term/issues/174) | [Terminal] Captation OSC 9;4 et état de progression | — |
-| [x]  | [#176](https://github.com/marmotz/graphene-term/issues/176) | [Config] Réglage [window] progress | — |
-| [x]  | [#178](https://github.com/marmotz/graphene-term/issues/178) | [Interface] Synchronisation, expiration et animation de la progression | #174, #176 |
-| [x]  | [#179](https://github.com/marmotz/graphene-term/issues/179) | [Interface] Barres de progression dans l'onglet, le pane et le bloc | #178 |
-| [x]  | [#180](https://github.com/marmotz/graphene-term/issues/180) | [Système] Progression dans la barre des tâches Linux (Unity LauncherEntry) | #178 |
-| [x]  | [#181](https://github.com/marmotz/graphene-term/issues/181) | [Système] Progression dans le Dock macOS | #180 |
-
 ## Quick terminal (mode Quake)  ·  [overview](features/quick-terminal/overview.md)
 
 _tâches créées — voir [technical.md](features/quick-terminal/technical.md)_ — 4/5 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
+| [ ]  | [#233](https://github.com/marmotz/graphene-term/issues/233) | feat(quick-terminal): restore the quick terminal with the session | #230, #231, #214 |
 | [x]  | [#229](https://github.com/marmotz/graphene-term/issues/229) | feat(quick-terminal): quick_terminal configuration and settings section | — |
 | [x]  | [#230](https://github.com/marmotz/graphene-term/issues/230) | feat(quick-terminal): quick process, toggle command and window placement | #229 |
 | [x]  | [#231](https://github.com/marmotz/graphene-term/issues/231) | feat(quick-terminal): slide animation, hide on focus loss and reset on close | #230 |
 | [x]  | [#232](https://github.com/marmotz/graphene-term/issues/232) | feat(quick-terminal): native global hotkey and hidden startup | #229, #230 |
-| [ ]  | [#233](https://github.com/marmotz/graphene-term/issues/233) | feat(quick-terminal): restore the quick terminal with the session | #230, #231, #214 |
+
+## Quick terminal autostart  ·  [overview](features/quick-terminal-autostart/overview.md)
+
+_tâches créées — voir [technical.md](features/quick-terminal-autostart/technical.md)_ — 1/3 tasks done
+
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [x]  | [#250](https://github.com/marmotz/graphene-term/issues/250) | feat(quick-terminal-autostart): autostart configuration key and setting | — |
+| [ ]  | [#251](https://github.com/marmotz/graphene-term/issues/251) | feat(quick-terminal-autostart): session autostart entry module | — |
+| [ ]  | [#252](https://github.com/marmotz/graphene-term/issues/252) | feat(quick-terminal-autostart): apply the setting and document it | #250, #251 |
 
 ## Recherche dans l'historique  ·  [overview](features/scrollback-search/overview.md)
 
@@ -122,24 +93,3 @@ _tâches créées — voir [technical.md](features/scrollback-search/technical.m
 | [ ]  | [#212](https://github.com/marmotz/graphene-term/issues/212) | [Recherche] Barre de recherche du pane | #200, #202, #203 |
 | [ ]  | [#216](https://github.com/marmotz/graphene-term/issues/216) | [Recherche] Surlignage des occurrences | #201, #202, #212 |
 | [ ]  | [#218](https://github.com/marmotz/graphene-term/issues/218) | [Recherche] Documentation | #212, #216 |
-
-## Restauration de session  ·  [overview](features/session-restore/overview.md)
-
-_terminé — voir [technical.md](features/session-restore/technical.md)_ — 5/5 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [x]  | [#198](https://github.com/marmotz/graphene-term/issues/198) | feat(session-restore): read the shell working directory on macOS | — |
-| [x]  | [#199](https://github.com/marmotz/graphene-term/issues/199) | feat(session-restore): rename a tab | — |
-| [x]  | [#204](https://github.com/marmotz/graphene-term/issues/204) | feat(session-restore): save the session continuously | #199 |
-| [x]  | [#214](https://github.com/marmotz/graphene-term/issues/214) | feat(session-restore): restore the last window at launch | #204 |
-| [x]  | [#217](https://github.com/marmotz/graphene-term/issues/217) | feat(session-restore): restore every saved window | #214 |
-
-## Recherche dans les réglages des raccourcis  ·  [overview](features/shortcuts-settings-search/overview.md)
-
-_terminé — voir [technical.md](features/shortcuts-settings-search/technical.md)_ — 2/2 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [x]  | [#227](https://github.com/marmotz/graphene-term/issues/227) | [Recherche raccourcis] Filtrer les actions par texte | — |
-| [x]  | [#228](https://github.com/marmotz/graphene-term/issues/228) | [Recherche raccourcis] Retrouver une action en tapant son raccourci | #227 |

@@ -276,6 +276,8 @@ pub struct QuickTerminalConfig {
     pub animation_ms: u32,
     /// Hides the quick terminal when it loses the focus.
     pub hide_on_focus_loss: bool,
+    /// Starts the hidden quick terminal with the graphical session.
+    pub autostart: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

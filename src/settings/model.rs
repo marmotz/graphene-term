@@ -192,6 +192,7 @@ pub fn section_fields(section: Section) -> &'static [Field] {
             Field::QuickTerminalScreen,
             Field::QuickTerminalAnimation,
             Field::QuickTerminalHideOnFocusLoss,
+            Field::QuickTerminalAutostart,
         ],
         Section::Updates => &[Field::UpdatesCheck, Field::UpdatesInterval],
     }
@@ -233,6 +234,7 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::QuickTerminalScreen => &["quick_terminal", "screen"],
         Field::QuickTerminalAnimation => &["quick_terminal", "animation_ms"],
         Field::QuickTerminalHideOnFocusLoss => &["quick_terminal", "hide_on_focus_loss"],
+        Field::QuickTerminalAutostart => &["quick_terminal", "autostart"],
     })
 }
 
@@ -304,7 +306,8 @@ pub fn widget(field: Field) -> Widget {
         | Field::NotificationsProgram
         | Field::NotificationsCommandFinished
         | Field::NotificationsBell
-        | Field::QuickTerminalHideOnFocusLoss => Widget::Toggle,
+        | Field::QuickTerminalHideOnFocusLoss
+        | Field::QuickTerminalAutostart => Widget::Toggle,
         Field::WordSeparators | Field::FontFeatures => Widget::Text,
         Field::QuickTerminalHotkey => Widget::Shortcut,
     }
@@ -687,6 +690,7 @@ impl SettingsModel {
                 Value::Integer(i64::from(c.quick_terminal.animation_ms))
             }
             Field::QuickTerminalHideOnFocusLoss => Value::Bool(c.quick_terminal.hide_on_focus_loss),
+            Field::QuickTerminalAutostart => Value::Bool(c.quick_terminal.autostart),
         }
     }
 
@@ -1266,7 +1270,7 @@ bell = true
     #[test]
     fn quick_terminal_fields_show_and_write_their_key() {
         let m = model(
-            "[quick_terminal]\nhotkey = \"Ctrl+F12\"\nedge = \"left\"\nsize = 60\nscreen = \"HDMI-1\"\nanimation_ms = 0\nhide_on_focus_loss = false\n",
+            "[quick_terminal]\nhotkey = \"Ctrl+F12\"\nedge = \"left\"\nsize = 60\nscreen = \"HDMI-1\"\nanimation_ms = 0\nhide_on_focus_loss = false\nautostart = true\n",
         );
         assert_eq!(m.text(Field::QuickTerminalHotkey), "Ctrl+F12");
         assert_eq!(m.text(Field::QuickTerminalEdge), "left");
@@ -1274,6 +1278,7 @@ bell = true
         assert_eq!(m.text(Field::QuickTerminalScreen), "HDMI-1");
         assert_eq!(m.text(Field::QuickTerminalAnimation), "0");
         assert!(!m.on(Field::QuickTerminalHideOnFocusLoss));
+        assert!(m.on(Field::QuickTerminalAutostart));
         let values: Vec<_> = m
             .choices(Field::QuickTerminalEdge)
             .into_iter()
@@ -1301,6 +1306,11 @@ bell = true
                 &["quick_terminal", "hide_on_focus_loss"],
                 Value::Bool(false)
             ))
+        );
+        assert!(!m.on(Field::QuickTerminalAutostart));
+        assert_eq!(
+            m.edit(Field::QuickTerminalAutostart, Input::Toggle(true)),
+            Ok(set(&["quick_terminal", "autostart"], Value::Bool(true)))
         );
         assert_eq!(
             m.edit(Field::QuickTerminalSize, Input::Text("100".into())),
@@ -1363,6 +1373,10 @@ bell = true
             assert_eq!(m.unavailable(section), None, "{section:?}");
         }
         assert!(m.locked(Section::QuickTerminal).is_none());
+        assert_eq!(
+            section_fields(Section::QuickTerminal).last(),
+            Some(&Field::QuickTerminalAutostart)
+        );
     }
 
     #[test]
