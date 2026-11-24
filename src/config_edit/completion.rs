@@ -528,7 +528,7 @@ pub(super) fn normalize_legacy_documentation(text: &str) -> Option<String> {
                 Some("Minimum space around the grid, in logical pixels (zero or greater).")
             }
             "Opacity of the default background, from 0.0 (transparent) to 1.0 (opaque)." => Some(
-                "Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.",
+                "Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque; block cards are translucent.",
             ),
             "Explicit cell backgrounds, the selection and the cursor stay opaque. Needs a"
             | "compositor; ignored when the GPU surface does not support transparency." => {
@@ -846,7 +846,7 @@ mod tests {
         );
         let updated = complete_defaults(active).unwrap().unwrap();
         assert!(updated.contains(
-            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.\nbackground_opacity = 0.9\n"
+            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque; block cards are translucent.\nbackground_opacity = 0.9\n"
         ));
         assert!(updated.contains(
             "## Cursor blinking: true or false. Applications can still change this (DECSCUSR).\nblinking = true\n"
@@ -863,7 +863,7 @@ mod tests {
         );
         let updated = complete_defaults(commented).unwrap().unwrap();
         assert!(updated.contains(
-            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.\n# background_opacity = 1.0\n"
+            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque; block cards are translucent.\n# background_opacity = 1.0\n"
         ));
         assert!(updated.contains(
             "## Cursor blinking: true or false. Applications can still change this (DECSCUSR).\n# blinking = false\n"
@@ -897,7 +897,7 @@ mod tests {
         let original = "window = { background_opacity = 0.9 }\n";
         let updated = complete_defaults(original).unwrap().unwrap();
 
-        assert!(updated.starts_with("## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.\nwindow = { background_opacity = 0.9 }\n"));
+        assert!(updated.starts_with("## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque; block cards are translucent.\nwindow = { background_opacity = 0.9 }\n"));
         assert_eq!(updated.matches("background_opacity = 0.9").count(), 1);
         assert!(updated.parse::<DocumentMut>().is_ok());
     }

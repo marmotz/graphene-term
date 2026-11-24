@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(updated.matches("[cursor]").count(), 1);
         assert_eq!(updated.matches("# shape = \"block\"").count(), 1);
         assert!(updated.contains(
-            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.\nbackground_opacity = 0.9\n"
+            "## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque; block cards are translucent.\nbackground_opacity = 0.9\n"
         ));
         assert!(updated.contains(
             "## Cursor blinking: true or false. Applications can still change this (DECSCUSR).\nblinking = true\n"
