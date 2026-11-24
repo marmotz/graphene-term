@@ -247,6 +247,7 @@ pour la commande qui l'affiche.
 | `screen`             | `"active"` | `"active"` (l'écran sous le curseur de la souris), `"primary"`, ou le nom d'un écran. Un nom qui ne correspond à aucun écran revient à `"active"`. |
 | `animation_ms`       | `150`      | Durée du glissement en millisecondes, `0` pour aucun, au plus 1000.                        |
 | `hide_on_focus_loss` | `true`     | `true` ou `false`. Masquer le quick terminal quand il perd le focus.                       |
+| `autostart`          | `false`    | `true` ou `false`. Démarrer le quick terminal masqué à l'ouverture de session. Voir [Démarrer avec la session](quick-terminal.md#démarrer-avec-la-session). |
 
 `edge`, `size`, `screen` et `animation_ms` s'appliquent au prochain affichage du quick
 terminal.

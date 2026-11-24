@@ -163,11 +163,12 @@ pub enum SettingsField {
     QuickTerminalScreen,
     QuickTerminalAnimation,
     QuickTerminalHideOnFocusLoss,
+    QuickTerminalAutostart,
 }
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 33] = [
+    pub const ALL: [SettingsField; 34] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -201,6 +202,7 @@ impl SettingsField {
         SettingsField::QuickTerminalScreen,
         SettingsField::QuickTerminalAnimation,
         SettingsField::QuickTerminalHideOnFocusLoss,
+        SettingsField::QuickTerminalAutostart,
     ];
 }
 
@@ -503,6 +505,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::QuickTerminalScreen => "Screen",
             SettingsField::QuickTerminalAnimation => "Slide duration (ms)",
             SettingsField::QuickTerminalHideOnFocusLoss => "Hide when the focus is lost",
+            SettingsField::QuickTerminalAutostart => "Start with the session",
         },
         Msg::SystemMonospace => "System monospace",
         Msg::ActiveScreen => "Screen under the mouse cursor",
@@ -707,6 +710,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             SettingsField::QuickTerminalScreen => "Écran",
             SettingsField::QuickTerminalAnimation => "Durée du glissement (ms)",
             SettingsField::QuickTerminalHideOnFocusLoss => "Masquer à la perte du focus",
+            SettingsField::QuickTerminalAutostart => "Démarrer avec la session",
         },
         Msg::SystemMonospace => "Monospace du système",
         Msg::ActiveScreen => "Écran sous le pointeur de la souris",

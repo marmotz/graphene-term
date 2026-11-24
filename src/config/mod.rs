@@ -130,6 +130,7 @@ impl Default for Config {
                 screen: QuickTerminalScreen::Active,
                 animation_ms: 150,
                 hide_on_focus_loss: true,
+                autostart: false,
             },
         }
     }
@@ -499,6 +500,7 @@ size = 60
 screen = "HDMI-1"
 animation_ms = 0
 hide_on_focus_loss = false
+autostart = true
 "#;
         let (config, errors) = parse(text);
         assert_eq!(errors, Vec::new());
@@ -556,6 +558,7 @@ hide_on_focus_loss = false
                     screen: QuickTerminalScreen::Named("HDMI-1".to_owned()),
                     animation_ms: 0,
                     hide_on_focus_loss: false,
+                    autostart: true,
                 },
             }
         );
@@ -570,6 +573,28 @@ hide_on_focus_loss = false
         assert_eq!(quick.screen, QuickTerminalScreen::Active);
         assert_eq!(quick.animation_ms, 150);
         assert!(quick.hide_on_focus_loss);
+        assert!(!quick.autostart);
+    }
+
+    #[test]
+    fn quick_terminal_autostart_is_read() {
+        let (config, errors) = parse("[quick_terminal]\nautostart = true\n");
+        assert!(errors.is_empty());
+        assert!(config.quick_terminal.autostart);
+    }
+
+    #[test]
+    fn invalid_quick_terminal_autostart_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.quick_terminal.autostart = true;
+        let (config, errors) = Config::parse(
+            "[quick_terminal]\nautostart = \"yes\"\n",
+            &previous,
+            &file(),
+        );
+        assert!(config.quick_terminal.autostart);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].key.as_deref(), Some("quick_terminal.autostart"));
     }
 
     #[test]

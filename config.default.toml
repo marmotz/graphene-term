@@ -86,3 +86,5 @@
 # animation_ms = 150
 ## Hide the quick terminal when it loses the focus.
 # hide_on_focus_loss = true
+## Start the hidden quick terminal when your graphical session opens, so the global shortcut works at once.
+# autostart = false

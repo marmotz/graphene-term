@@ -230,6 +230,7 @@ impl Reader<'_> {
                 }
             }),
             ("quick_terminal", "hide_on_focus_loss") => self.set(value, key_segments, path, &mut config.quick_terminal.hide_on_focus_loss, &previous.quick_terminal.hide_on_focus_loss, Checked::Valid),
+            ("quick_terminal", "autostart") => self.set(value, key_segments, path, &mut config.quick_terminal.autostart, &previous.quick_terminal.autostart, Checked::Valid),
             ("keybindings", keys) => {
                 let previous_action = previous.keybindings.get(keys).cloned();
                 let mut action = previous_action.clone();

@@ -1,9 +1,9 @@
-//! The global hotkey of the quick terminal process, and the hidden start of that
-//! process by an ordinary window when a hotkey is configured.
+//! The global hotkey of the quick terminal process, the hidden start of that process
+//! by an ordinary window when a hotkey is configured, and its session autostart entry.
 
 use super::*;
 use crate::hotkey::{Hotkey, HotkeyError};
-use crate::quick_terminal::{QuickCommand, control};
+use crate::quick_terminal::{QuickCommand, autostart, control};
 
 /// Whether an ordinary window starts the quick terminal hidden for `hotkey`, the quick
 /// terminal being `supported` by the session.
@@ -14,6 +14,13 @@ pub(super) fn wants_hidden_quick(hotkey: &str, supported: bool) -> bool {
 /// Whether a reload from the hotkey `old` to `new` asks for the hidden start again.
 pub(super) fn hotkey_turned_on(old: &str, new: &str) -> bool {
     old.is_empty() && !new.is_empty()
+}
+
+/// Whether the session autostart entry is synchronised with the setting `current`, the
+/// quick terminal being `supported` by the session: at start (`previous` is `None`) to
+/// catch up with outside changes, then on a reload only when the setting changed.
+pub(super) fn wants_autostart_sync(previous: Option<bool>, current: bool, supported: bool) -> bool {
+    supported && previous != Some(current)
 }
 
 /// The configuration error the banner shows for `error`.
@@ -98,6 +105,26 @@ impl App {
             log::warn!("cannot start the quick terminal: {error}");
         }
     }
+
+    /// Makes the session autostart entry follow the setting, `previous` being its value
+    /// before a reload (`None` at start). Nothing is created or removed where the quick
+    /// terminal is unsupported; a failure is logged.
+    pub(super) fn sync_autostart(&self, previous: Option<bool>) {
+        let enabled = self.config.quick_terminal.autostart;
+        if !wants_autostart_sync(previous, enabled, self.quick_supported) {
+            return;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("quick-terminal-autostart".into())
+            .spawn(move || {
+                if let Err(error) = autostart::sync(enabled) {
+                    log::warn!("cannot update the session autostart entry: {error}");
+                }
+            });
+        if let Err(error) = spawned {
+            log::warn!("cannot update the session autostart entry: {error}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +144,23 @@ mod tests {
         assert!(!hotkey_turned_on("Ctrl+`", "Ctrl+F12"));
         assert!(!hotkey_turned_on("Ctrl+`", ""));
         assert!(!hotkey_turned_on("", ""));
+    }
+
+    #[test]
+    fn autostart_syncs_at_start_and_when_a_reload_changes_it() {
+        assert!(wants_autostart_sync(None, true, true));
+        assert!(wants_autostart_sync(None, false, true));
+        assert!(wants_autostart_sync(Some(false), true, true));
+        assert!(wants_autostart_sync(Some(true), false, true));
+        assert!(!wants_autostart_sync(Some(true), true, true));
+        assert!(!wants_autostart_sync(Some(false), false, true));
+    }
+
+    #[test]
+    fn no_autostart_sync_where_unsupported() {
+        assert!(!wants_autostart_sync(None, true, false));
+        assert!(!wants_autostart_sync(None, false, false));
+        assert!(!wants_autostart_sync(Some(false), true, false));
     }
 
     #[test]
