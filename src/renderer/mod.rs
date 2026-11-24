@@ -1202,8 +1202,7 @@ mod tests {
                 failure: WHITE,
                 running: WHITE,
                 dim: WHITE,
-                card: WHITE,
-                card_selected: WHITE,
+                card_tint: WHITE,
             },
             cursor: None,
             ligature_break: None,
@@ -1250,8 +1249,7 @@ mod tests {
                 failure: WHITE,
                 running: WHITE,
                 dim: WHITE,
-                card: WHITE,
-                card_selected: WHITE,
+                card_tint: WHITE,
             },
             cursor: None,
             ligature_break: None,
@@ -1302,8 +1300,7 @@ mod tests {
                 failure: WHITE,
                 running: WHITE,
                 dim: WHITE,
-                card: WHITE,
-                card_selected: WHITE,
+                card_tint: WHITE,
             },
             cursor: None,
             ligature_break: None,
@@ -1365,8 +1362,7 @@ mod tests {
                 failure: WHITE,
                 running: WHITE,
                 dim: WHITE,
-                card: WHITE,
-                card_selected: WHITE,
+                card_tint: WHITE,
             },
             cursor: None,
             ligature_break: None,
@@ -1387,9 +1383,10 @@ mod tests {
         let red = |x: f32, y: f32| pixels[((y as u32 * SIZE + x as u32) * 4) as usize];
         let left = layout.grid_left() - layout.card_pad;
         // The top-left corner pixel is outside the rounded corner; the card middle is
-        // fully covered.
+        // covered by the translucent tint: lighter than the background, not opaque.
         assert_eq!(red(left, 0.0), 0);
-        assert_eq!(red(left + 6.0, cell_size.height / 2.0), 255);
+        let middle = red(left + 6.0, cell_size.height / 2.0);
+        assert!((1..255).contains(&middle), "card middle: {middle}");
     }
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
@@ -1434,8 +1431,7 @@ mod tests {
                 failure: WHITE,
                 running: WHITE,
                 dim: WHITE,
-                card: WHITE,
-                card_selected: WHITE,
+                card_tint: WHITE,
             },
             cursor: None,
             ligature_break: None,

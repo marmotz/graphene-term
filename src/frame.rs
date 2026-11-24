@@ -143,16 +143,16 @@ pub struct BlockColors {
     pub running: Rgb,
     /// `Unknown` status, neutral chevrons and fold summaries.
     pub dim: Rgb,
-    /// Card background: the terminal background blended 6 % toward the foreground.
-    pub card: Rgb,
-    /// Background of the selected block's card: blended 14 %.
-    pub card_selected: Rgb,
+    /// Tint of the card backgrounds: the foreground, drawn over the terminal background
+    /// at [`CARD_ALPHA`] (or [`CARD_SELECTED_ALPHA`] for the selected block), so a
+    /// translucent window background shows through the cards.
+    pub card_tint: Rgb,
 }
 
-/// Share of the foreground in a card background.
-const CARD_BLEND: f32 = 0.06;
-/// Share of the foreground in the selected card background.
-const CARD_SELECTED_BLEND: f32 = 0.14;
+/// Opacity of the card tint over the background.
+pub const CARD_ALPHA: f32 = 0.02;
+/// Opacity of the tint of the selected block's card.
+pub const CARD_SELECTED_ALPHA: f32 = 0.06;
 
 /// `from` moved toward `to` by `amount` (0 to 1), per sRGB channel.
 pub fn blend(from: Rgb, to: Rgb, amount: f32) -> Rgb {
@@ -167,15 +167,13 @@ pub fn blend(from: Rgb, to: Rgb, amount: f32) -> Rgb {
 impl BlockColors {
     fn resolve(palette: &Palette, overrides: &Colors) -> Self {
         let named = |color| palette.resolve(Color::Named(color), overrides);
-        let background = named(NamedColor::Background);
         let foreground = named(NamedColor::Foreground);
         Self {
             success: named(NamedColor::Green),
             failure: named(NamedColor::Red),
             running: named(NamedColor::Yellow),
             dim: named(NamedColor::DimForeground),
-            card: blend(background, foreground, CARD_BLEND),
-            card_selected: blend(background, foreground, CARD_SELECTED_BLEND),
+            card_tint: foreground,
         }
     }
 
@@ -643,8 +641,7 @@ impl Frame {
             &mut colors.failure,
             &mut colors.running,
             &mut colors.dim,
-            &mut colors.card,
-            &mut colors.card_selected,
+            &mut colors.card_tint,
         ] {
             *color = dim(*color);
         }
@@ -825,7 +822,10 @@ mod tests {
         // Default-background cells keep the background, so they still draw no rect.
         assert_eq!(dimmed.rows[0][5].bg, background);
         assert_eq!(dimmed.background, background);
-        assert_eq!(dimmed.block_colors.card, toward(frame.block_colors.card));
+        assert_eq!(
+            dimmed.block_colors.card_tint,
+            toward(frame.block_colors.card_tint)
+        );
         assert_eq!(
             dimmed.block_colors.failure,
             toward(frame.block_colors.failure)
@@ -1174,14 +1174,7 @@ mod tests {
         assert_eq!(frame.block_colors.failure, p.indexed[1]);
         assert_eq!(frame.block_colors.running, p.indexed[3]);
         assert_eq!(frame.block_colors.dim, p.named(NamedColor::DimForeground));
-        assert_eq!(
-            frame.block_colors.card,
-            blend(p.background, p.foreground, 0.06)
-        );
-        assert_eq!(
-            frame.block_colors.card_selected,
-            blend(p.background, p.foreground, 0.14)
-        );
+        assert_eq!(frame.block_colors.card_tint, p.foreground);
     }
 
     #[test]

@@ -26,7 +26,7 @@
 # height = 600
 ## Minimum space around the grid, in logical pixels (zero or greater).
 # padding = 8
-## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque.
+## Default background opacity: 0.0 transparent to 1.0 opaque; needs a compositor. Explicit cell backgrounds, selection and cursor stay opaque; block cards are translucent.
 # background_opacity = 1.0
 ## Show the progress reported by programs (OSC 9;4) in tabs, pane bars, blocks and the taskbar (true or false).
 # progress = true

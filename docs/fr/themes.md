@@ -198,5 +198,5 @@ background_opacity = 0.9
 ```
 
 Seul le fond par défaut devient translucide : les fonds colorés dessinés par les
-programmes, la sélection et le curseur restent opaques. Sous Linux, cela nécessite un
+programmes, la sélection et le curseur restent opaques ; les cartes de blocs sont teintées de façon translucide, le bureau les traverse. Sous Linux, cela nécessite un
 compositeur (intégré à la plupart des bureaux).
