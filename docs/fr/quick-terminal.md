@@ -52,6 +52,25 @@ Le quick terminal reste utilisable avec `graphene --quick-toggle`.
   est la touche Commande. `F21` à `F24`, `PrintScreen`, `Pause`, `ScrollLock` et les
   touches `Copy`, `Paste` et `Cut` n'ont pas d'équivalent.
 
+## Démarrer avec la session
+
+Avec `autostart = true` dans la section
+[`[quick_terminal]`](configuration.md#quick_terminal), ou **Démarrer avec la session**
+coché dans la fenêtre de réglages, le quick terminal démarre masqué à l'ouverture de
+votre session, sans ouvrir de fenêtre Graphene. Graphene crée l'entrée aussitôt et la
+supprime quand le réglage est désactivé, et la remet en place à chaque démarrage si elle
+a été supprimée ou si l'exécutable de Graphene a été déplacé :
+
+- **Linux sous X11** : `graphene-quick-terminal.desktop` dans
+  `$XDG_CONFIG_HOME/autostart/` (`~/.config/autostart/` par défaut). Pour une AppImage,
+  il lance le fichier AppImage.
+- **macOS** : `dev.marmotz.graphene.quick-terminal.plist` dans `~/Library/LaunchAgents/`.
+
+Le quick terminal résident ne s'atteint que par un raccourci : définissez un
+[raccourci global](#raccourci-global) ou associez `graphene --quick-toggle` dans votre
+système. Sous Wayland, où le quick terminal n'est pas disponible, le réglage n'a aucun
+effet.
+
 ## Glissement, focus et fermeture
 
 Le quick terminal glisse depuis son bord quand il s'affiche et y repart quand il se

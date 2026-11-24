@@ -49,6 +49,22 @@ working with `graphene --quick-toggle`.
   key. `F21` to `F24`, `PrintScreen`, `Pause`, `ScrollLock` and the `Copy`, `Paste` and
   `Cut` keys have no equivalent.
 
+## Start with the session
+
+With `autostart = true` in the [`[quick_terminal]`](configuration.md#quick_terminal)
+section, or **Start with the session** checked in the settings window, the quick terminal
+starts hidden when you log in, without opening any Graphene window. Graphene creates the
+entry at once and removes it when the setting is turned off, and puts it back at each
+start if it was deleted or if the Graphene executable moved:
+
+- **Linux under X11**: `graphene-quick-terminal.desktop` in `$XDG_CONFIG_HOME/autostart/`
+  (`~/.config/autostart/` by default). For an AppImage, it starts the AppImage file.
+- **macOS**: `dev.marmotz.graphene.quick-terminal.plist` in `~/Library/LaunchAgents/`.
+
+The resident quick terminal is only reached through a shortcut: set a
+[global shortcut](#global-shortcut) or bind `graphene --quick-toggle` in your system.
+Under Wayland, where the quick terminal is not available, the setting does nothing.
+
 ## Slide, focus and closing
 
 The quick terminal slides in from its edge when shown and slides back out when hidden,

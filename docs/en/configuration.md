@@ -238,6 +238,7 @@ it.
 | `screen`             | `"active"` | `"active"` (the screen under the mouse cursor), `"primary"`, or the name of a screen. A name that matches no screen falls back to `"active"`. |
 | `animation_ms`       | `150`      | Duration of the slide in milliseconds, `0` for none, at most 1000.                         |
 | `hide_on_focus_loss` | `true`     | `true` or `false`. Hide the quick terminal when it loses the focus.                        |
+| `autostart`          | `false`    | `true` or `false`. Start the quick terminal hidden when you log in. See [Start with the session](quick-terminal.md#start-with-the-session). |
 
 `edge`, `size`, `screen` and `animation_ms` apply the next time the quick terminal is
 shown.
