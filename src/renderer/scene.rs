@@ -8,7 +8,7 @@ use super::glyphs::GlyphKey;
 use super::progress_bar::progress_rects;
 use super::rects::RectInstance;
 use crate::fold_animation;
-use crate::frame::{self, Card, Frame, FrameImage, ScrollBar};
+use crate::frame::{self, CARD_ALPHA, CARD_SELECTED_ALPHA, Card, Frame, FrameImage, ScrollBar};
 use crate::graphics::{ImageCell, Pixels};
 use crate::i18n::{self, Msg};
 use crate::layout::{GridLayout, Rect};
@@ -120,7 +120,7 @@ pub fn gpu_color(rgb: Rgb, srgb_target: bool) -> [f32; 4] {
 
 /// `color` (already converted by [`gpu_color`]) with `opacity`, premultiplied as the
 /// surface expects: `[r * a, g * a, b * a, a]`. Only the clear color carries the
-/// window's background opacity; every rect stays opaque.
+/// window's background opacity; rects are drawn over it with their own alpha (opaque, except the block cards).
 pub fn premultiplied(color: [f32; 4], opacity: f32) -> [f32; 4] {
     let [r, g, b, a] = color;
     let a = a * opacity;
@@ -148,19 +148,17 @@ fn cards_under(frame: &Frame, layout: &GridLayout, srgb_target: bool) -> Vec<Rec
         if card.clipped_top {
             top -= radius;
         }
-        let color = if card.selected {
-            frame.block_colors.card_selected
+        // The foreground over the background, not an opaque mix: a translucent window
+        // background shows through the card.
+        let alpha = if card.selected {
+            CARD_SELECTED_ALPHA
         } else {
-            frame.block_colors.card
+            CARD_ALPHA
         };
-        rects.push(
-            RectInstance::new(
-                [left, top],
-                [width, bottom - top],
-                gpu_color(color, srgb_target),
-            )
-            .with_radius(radius),
-        );
+        let mut color = gpu_color(frame.block_colors.card_tint, srgb_target);
+        color[3] = alpha;
+        rects
+            .push(RectInstance::new([left, top], [width, bottom - top], color).with_radius(radius));
         if let Some(status) = card.status {
             // Centered in the margin, with round ends.
             let x = layout.content_left() + ((layout.margin - stripe) / 2.0).max(0.0).round();
@@ -689,16 +687,17 @@ mod tests {
         g: 128,
         b: 128,
     };
-    const CARD: Rgb = Rgb {
-        r: 15,
-        g: 15,
-        b: 15,
+    const CARD_TINT: Rgb = Rgb {
+        r: 200,
+        g: 210,
+        b: 220,
     };
-    const CARD_SELECTED: Rgb = Rgb {
-        r: 36,
-        g: 36,
-        b: 36,
-    };
+    /// The card color as drawn: the tint at the card opacity.
+    fn card_color(alpha: f32) -> [f32; 4] {
+        let mut color = gpu_color(CARD_TINT, false);
+        color[3] = alpha;
+        color
+    }
     const ACCENT: Rgb = Rgb {
         r: 0,
         g: 100,
@@ -734,8 +733,7 @@ mod tests {
                 failure: RED,
                 running: YELLOW,
                 dim: GREY,
-                card: CARD,
-                card_selected: CARD_SELECTED,
+                card_tint: CARD_TINT,
             },
             rows,
             cursor: None,
@@ -1055,9 +1053,9 @@ mod tests {
         assert_eq!(
             shapes(&scene.under),
             vec![
-                ([5.0, 0.0], [width, 40.0], rgb(CARD), 5.0, 0),
+                ([5.0, 0.0], [width, 40.0], card_color(CARD_ALPHA), 5.0, 0),
                 ([2.0, 0.0], [2.0, 40.0], rgb(GREEN), 1.0, 0),
-                ([5.0, 50.0], [width, 60.0], rgb(CARD), 5.0, 0),
+                ([5.0, 50.0], [width, 60.0], card_color(CARD_ALPHA), 5.0, 0),
                 ([2.0, 50.0], [2.0, 60.0], rgb(RED), 1.0, 0),
                 // The cell background comes after the cards.
                 ([10.0, 70.0], [10.0, 20.0], rgb(RED), 0.0, 0),
@@ -1125,8 +1123,8 @@ mod tests {
         assert_eq!(
             colors,
             [
-                gpu_color(CARD, false),
-                gpu_color(CARD_SELECTED, false),
+                card_color(CARD_ALPHA),
+                card_color(CARD_SELECTED_ALPHA),
                 gpu_color(YELLOW, false)
             ]
         );

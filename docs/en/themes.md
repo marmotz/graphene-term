@@ -185,5 +185,5 @@ background_opacity = 0.9
 ```
 
 Only the default background becomes translucent: colored backgrounds drawn by
-programs, the selection and the cursor stay opaque. On Linux, it needs a compositor
+programs, the selection and the cursor stay opaque; block cards are tinted translucently, so the desktop shows through them. On Linux, it needs a compositor
 (built into most desktops).
