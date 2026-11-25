@@ -267,20 +267,25 @@ fn cursor_position(monitors: &[MonitorHandle]) -> Option<(i32, i32)> {
     }
 }
 
-/// The rectangle of `monitor` the quick terminal may cover: the whole screen on Linux
-/// (`_NET_WORKAREA` spans every screen, and the window is above the panels), the part
-/// the menu bar and the Dock leave on macOS.
-fn usable_rect(monitor: &MonitorHandle) -> PixelRect {
+/// The whole rectangle of `monitor`, in physical pixels.
+fn monitor_rect(monitor: &MonitorHandle) -> PixelRect {
     let position = monitor.position();
     let size = monitor.size();
-    let rect = PixelRect {
+    PixelRect {
         x: position.x,
         y: position.y,
         width: size.width,
         height: size.height,
-    };
+    }
+}
+
+/// The part of `monitor` (whose whole rectangle is `rect`) the quick terminal may cover:
+/// the part the menu bar and the Dock leave on macOS, the whole screen elsewhere.
+fn usable_rect(monitor: &MonitorHandle, rect: PixelRect) -> PixelRect {
     #[cfg(target_os = "macos")]
     let rect = rect.inset(quick_terminal::macos::insets(monitor));
+    #[cfg(not(target_os = "macos"))]
+    let _ = monitor;
     rect
 }
 
@@ -296,9 +301,13 @@ pub(super) fn placement(
         .and_then(|primary| handles.iter().position(|handle| *handle == primary));
     let monitors: Vec<Monitor> = handles
         .iter()
-        .map(|handle| Monitor {
-            name: handle.name(),
-            rect: usable_rect(handle),
+        .map(|handle| {
+            let rect = monitor_rect(handle);
+            Monitor {
+                name: handle.name(),
+                rect,
+                work_area: usable_rect(handle, rect),
+            }
         })
         .collect();
     let index = quick_terminal::pick_monitor(
@@ -307,7 +316,7 @@ pub(super) fn placement(
         primary,
         cursor_position(&handles),
     )?;
-    let frame = quick_terminal::frame(monitors[index].rect, config.edge, config.size);
+    let frame = quick_terminal::frame(monitors[index].work_area, config.edge, config.size);
     Some(Placement::new(frame, handles[index].scale_factor()))
 }
 

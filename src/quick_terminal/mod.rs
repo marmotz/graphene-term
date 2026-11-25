@@ -63,15 +63,13 @@ pub struct PixelRect {
 
 impl PixelRect {
     fn contains(self, (x, y): (i32, i32)) -> bool {
-        let right = i64::from(self.x) + i64::from(self.width);
-        let bottom = i64::from(self.y) + i64::from(self.height);
-        x >= self.x && y >= self.y && i64::from(x) < right && i64::from(y) < bottom
+        x >= self.x && y >= self.y && i64::from(x) < self.right() && i64::from(y) < self.bottom()
     }
 
     /// The rectangle without `insets` on its sides, never smaller than one pixel.
     #[cfg_attr(
-        not(target_os = "macos"),
-        allow(dead_code, reason = "only macOS screens have a menu bar and a Dock")
+        all(not(target_os = "macos"), not(test)),
+        allow(dead_code, reason = "used on X11 by the work area, wired in #261")
     )]
     pub fn inset(self, insets: Insets) -> Self {
         let width = self.width.saturating_sub(insets.left + insets.right).max(1);
@@ -86,13 +84,40 @@ impl PixelRect {
             height,
         }
     }
+
+    fn right(self) -> i64 {
+        i64::from(self.x) + i64::from(self.width)
+    }
+
+    fn bottom(self) -> i64 {
+        i64::from(self.y) + i64::from(self.height)
+    }
+
+    /// The part of the desktop both rectangles cover, `None` when they do not overlap.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "read by the X11 work area, wired in #261")
+    )]
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = self.right().min(other.right());
+        let bottom = self.bottom().min(other.bottom());
+        (right > i64::from(x) && bottom > i64::from(y)).then(|| Self {
+            x,
+            y,
+            width: (right - i64::from(x)) as u32,
+            height: (bottom - i64::from(y)) as u32,
+        })
+    }
+
+    fn area(self) -> u64 {
+        u64::from(self.width) * u64::from(self.height)
+    }
 }
 
-/// Space taken on each side of a screen by the desktop (menu bar, Dock), in pixels.
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "only macOS screens have a menu bar and a Dock")
-)]
+/// Space taken on each side of a screen by the desktop (menu bar, Dock, panels), in
+/// pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Insets {
     pub top: u32,
@@ -105,7 +130,204 @@ pub struct Insets {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Monitor {
     pub name: Option<String>,
+    /// The whole screen: the cursor over a panel is still on it.
     pub rect: PixelRect,
+    /// The part of the screen the desktop panels leave, where the window goes.
+    pub work_area: PixelRect,
+}
+
+/// Rectangles from an X11 list of `x, y, width, height` cardinals, such as
+/// `_GTK_WORKAREAS_D<n>`; an incomplete trailing group is ignored.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+)]
+pub fn rects_from_cardinals(values: &[u32]) -> Vec<PixelRect> {
+    let (groups, _) = values.as_chunks::<4>();
+    groups
+        .iter()
+        .map(|&[x, y, width, height]| PixelRect {
+            // X11 coordinates are signed 32-bit values carried as cardinals.
+            x: x as i32,
+            y: y as i32,
+            width,
+            height,
+        })
+        .collect()
+}
+
+/// The work area of `monitor` among the per-screen `areas` of `_GTK_WORKAREAS_D<n>`: the
+/// one that overlaps it most, clipped to it. `None` when none overlaps it.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+)]
+pub fn gtk_work_area(monitor: PixelRect, areas: &[PixelRect]) -> Option<PixelRect> {
+    areas
+        .iter()
+        .filter_map(|area| monitor.intersection(*area))
+        .max_by_key(|clipped| clipped.area())
+}
+
+/// Space a window reserves against the edges of the root window (`_NET_WM_STRUT_PARTIAL`):
+/// the thickness of each band, and the range it spans along its edge, ends included.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Strut {
+    pub left: u32,
+    pub right: u32,
+    pub top: u32,
+    pub bottom: u32,
+    pub left_start_y: u32,
+    pub left_end_y: u32,
+    pub right_start_y: u32,
+    pub right_end_y: u32,
+    pub top_start_x: u32,
+    pub top_end_x: u32,
+    pub bottom_start_x: u32,
+    pub bottom_end_x: u32,
+}
+
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+)]
+impl Strut {
+    /// The 12 cardinals of `_NET_WM_STRUT_PARTIAL`, in their order.
+    pub fn from_partial(values: &[u32; 12]) -> Self {
+        let [
+            left,
+            right,
+            top,
+            bottom,
+            left_start_y,
+            left_end_y,
+            right_start_y,
+            right_end_y,
+            top_start_x,
+            top_end_x,
+            bottom_start_x,
+            bottom_end_x,
+        ] = *values;
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+            left_start_y,
+            left_end_y,
+            right_start_y,
+            right_end_y,
+            top_start_x,
+            top_end_x,
+            bottom_start_x,
+            bottom_end_x,
+        }
+    }
+
+    /// The 4 cardinals of `_NET_WM_STRUT`: each band spans the whole edge of the root
+    /// window of size `root`.
+    pub fn from_full(values: &[u32; 4], (width, height): (u32, u32)) -> Self {
+        let [left, right, top, bottom] = *values;
+        let last_y = height.saturating_sub(1);
+        let last_x = width.saturating_sub(1);
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+            left_start_y: 0,
+            left_end_y: last_y,
+            right_start_y: 0,
+            right_end_y: last_y,
+            top_start_x: 0,
+            top_end_x: last_x,
+            bottom_start_x: 0,
+            bottom_end_x: last_x,
+        }
+    }
+}
+
+/// How deep a band reserved against one edge of the root window enters a screen from its
+/// matching side. `band` is the band across that axis as `[start, end)`, `screen` the
+/// screen as `[start, end)` on the same axis; `range` the band along the edge, ends
+/// included, and `along` the screen on that axis. A band that misses the screen, does
+/// not reach its matching side, or crosses it whole (the screen lies between the panel
+/// and the root edge) gives nothing.
+fn band_inset(
+    band: (i64, i64),
+    screen: (i64, i64),
+    range: (u32, u32),
+    along: (i64, i64),
+    from_start: bool,
+) -> u32 {
+    let (start, end) = band;
+    let overlaps_along = i64::from(range.0) < along.1 && i64::from(range.1) >= along.0;
+    if start >= end || !overlaps_along {
+        return 0;
+    }
+    let depth = if from_start {
+        if start > screen.0 || end <= screen.0 {
+            return 0;
+        }
+        end - screen.0
+    } else {
+        if end < screen.1 || start >= screen.1 {
+            return 0;
+        }
+        screen.1 - start
+    };
+    if depth >= screen.1 - screen.0 {
+        return 0;
+    }
+    depth as u32
+}
+
+/// The space the `struts` of the client windows take on `monitor`, the root window being
+/// of size `root`: per side, the deepest band that enters the screen from that side.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+)]
+pub fn strut_insets(monitor: PixelRect, root: (u32, u32), struts: &[Strut]) -> Insets {
+    let (root_width, root_height) = (i64::from(root.0), i64::from(root.1));
+    let xs = (i64::from(monitor.x), monitor.right());
+    let ys = (i64::from(monitor.y), monitor.bottom());
+    struts
+        .iter()
+        .fold(Insets::default(), |insets, strut| Insets {
+            left: insets.left.max(band_inset(
+                (0, i64::from(strut.left)),
+                xs,
+                (strut.left_start_y, strut.left_end_y),
+                ys,
+                true,
+            )),
+            right: insets.right.max(band_inset(
+                (root_width - i64::from(strut.right), root_width),
+                xs,
+                (strut.right_start_y, strut.right_end_y),
+                ys,
+                false,
+            )),
+            top: insets.top.max(band_inset(
+                (0, i64::from(strut.top)),
+                ys,
+                (strut.top_start_x, strut.top_end_x),
+                xs,
+                true,
+            )),
+            bottom: insets.bottom.max(band_inset(
+                (root_height - i64::from(strut.bottom), root_height),
+                ys,
+                (strut.bottom_start_x, strut.bottom_end_x),
+                xs,
+                false,
+            )),
+        })
 }
 
 /// Index in `monitors` of the screen `screen` designates. `primary` is the index of the
@@ -141,8 +363,9 @@ pub fn pick_monitor(
         .or_else(active)
 }
 
-/// The window frame on `monitor`: against `edge`, `size_percent` of the screen across
-/// it (rounded, at least one pixel), the whole screen along it.
+/// The window frame on `monitor` (the work area of a screen): against `edge`,
+/// `size_percent` of it across that edge (rounded, at least one pixel), all of it along
+/// the edge.
 pub fn frame(monitor: PixelRect, edge: QuickTerminalEdge, size_percent: u32) -> PixelRect {
     let share = |length: u32| {
         let part = (u64::from(length) * u64::from(size_percent.min(100)) + 50) / 100;
@@ -301,10 +524,12 @@ mod tests {
             Monitor {
                 name: Some("DP-1".to_owned()),
                 rect: rect(0, 0, 1920, 1080),
+                work_area: rect(0, 0, 1920, 1040),
             },
             Monitor {
                 name: Some("HDMI-1".to_owned()),
                 rect: rect(1920, 0, 2560, 1440),
+                work_area: rect(1920, 0, 2560, 1400),
             },
         ]
     }
@@ -440,6 +665,191 @@ mod tests {
             ..Insets::default()
         };
         assert_eq!(screen.inset(huge).height, 1);
+    }
+
+    #[test]
+    fn active_screen_under_a_panel_is_still_that_screen() {
+        let monitors = monitors();
+        let active = QuickTerminalScreen::Active;
+        // The cursor over the bottom panel, outside the work areas.
+        assert_eq!(
+            pick_monitor(&active, &monitors, Some(1), Some((100, 1060))),
+            Some(0)
+        );
+        assert_eq!(
+            pick_monitor(&active, &monitors, Some(0), Some((3000, 1430))),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn frame_at_full_size_fills_the_work_area_for_each_edge() {
+        let work_area = rect(2560, 32, 2560, 1368);
+        for edge in [
+            QuickTerminalEdge::Top,
+            QuickTerminalEdge::Bottom,
+            QuickTerminalEdge::Left,
+            QuickTerminalEdge::Right,
+        ] {
+            assert_eq!(frame(work_area, edge, 100), work_area, "{edge:?}");
+        }
+    }
+
+    #[test]
+    fn intersection_of_rectangles() {
+        let screen = rect(2560, 0, 2560, 1440);
+        assert_eq!(
+            screen.intersection(rect(0, 0, 5120, 1400)),
+            Some(rect(2560, 0, 2560, 1400))
+        );
+        assert_eq!(screen.intersection(screen), Some(screen));
+        // Touching is not overlapping.
+        assert_eq!(screen.intersection(rect(0, 0, 2560, 1440)), None);
+        assert_eq!(screen.intersection(rect(6000, 0, 10, 10)), None);
+    }
+
+    #[test]
+    fn rects_are_read_from_groups_of_four_cardinals() {
+        assert_eq!(rects_from_cardinals(&[]), Vec::new());
+        assert_eq!(
+            rects_from_cardinals(&[0, 0, 2560, 1400]),
+            vec![rect(0, 0, 2560, 1400)]
+        );
+        assert_eq!(
+            rects_from_cardinals(&[0, 0, 2560, 1400, 2560, 0, 2560, 1400]),
+            vec![rect(0, 0, 2560, 1400), rect(2560, 0, 2560, 1400)]
+        );
+        // An incomplete trailing group is ignored.
+        assert_eq!(
+            rects_from_cardinals(&[0, 0, 2560, 1400, 2560, 0]),
+            vec![rect(0, 0, 2560, 1400)]
+        );
+        // Negative coordinates come as their two's complement.
+        assert_eq!(
+            rects_from_cardinals(&[(-1920_i32) as u32, 0, 1920, 1080]),
+            vec![rect(-1920, 0, 1920, 1080)]
+        );
+    }
+
+    const LEFT: PixelRect = PixelRect {
+        x: 0,
+        y: 0,
+        width: 2560,
+        height: 1440,
+    };
+    const RIGHT: PixelRect = PixelRect {
+        x: 2560,
+        y: 0,
+        width: 2560,
+        height: 1440,
+    };
+    const ROOT: (u32, u32) = (5120, 1440);
+
+    #[test]
+    fn gtk_work_area_is_the_one_of_the_screen_clipped_to_it() {
+        let areas = [rect(0, 0, 2560, 1400), rect(2560, 0, 2560, 1400)];
+        assert_eq!(gtk_work_area(LEFT, &areas), Some(rect(0, 0, 2560, 1400)));
+        assert_eq!(
+            gtk_work_area(RIGHT, &areas),
+            Some(rect(2560, 0, 2560, 1400))
+        );
+        // An area wider than the screen is clipped to it.
+        assert_eq!(
+            gtk_work_area(RIGHT, &[rect(0, 0, 5120, 1400)]),
+            Some(rect(2560, 0, 2560, 1400))
+        );
+        assert_eq!(gtk_work_area(rect(6000, 0, 800, 600), &areas), None);
+        assert_eq!(gtk_work_area(LEFT, &[]), None);
+    }
+
+    #[test]
+    fn bottom_panel_of_one_screen_insets_only_that_screen() {
+        let panel = Strut {
+            bottom: 40,
+            bottom_start_x: 2560,
+            bottom_end_x: 5119,
+            ..Strut::default()
+        };
+        assert_eq!(strut_insets(LEFT, ROOT, &[panel]), Insets::default());
+        assert_eq!(
+            strut_insets(RIGHT, ROOT, &[panel]),
+            Insets {
+                bottom: 40,
+                ..Insets::default()
+            }
+        );
+    }
+
+    #[test]
+    fn strut_whose_range_misses_the_screen_gives_nothing() {
+        let panel = Strut::from_partial(&[0, 0, 30, 0, 0, 0, 0, 0, 0, 2559, 0, 0]);
+        assert_eq!(panel.top, 30);
+        assert_eq!(panel.top_end_x, 2559);
+        assert_eq!(strut_insets(RIGHT, ROOT, &[panel]), Insets::default());
+        assert_eq!(
+            strut_insets(LEFT, ROOT, &[panel]),
+            Insets {
+                top: 30,
+                ..Insets::default()
+            }
+        );
+    }
+
+    #[test]
+    fn panel_on_an_inner_edge_insets_its_screen_only() {
+        // A 40 px panel on the left side of the right screen reserves 2600 px from the
+        // left edge of the root window: it crosses the whole left screen.
+        let panel = Strut {
+            left: 2600,
+            left_start_y: 0,
+            left_end_y: 1439,
+            ..Strut::default()
+        };
+        assert_eq!(strut_insets(LEFT, ROOT, &[panel]), Insets::default());
+        assert_eq!(
+            strut_insets(RIGHT, ROOT, &[panel]),
+            Insets {
+                left: 40,
+                ..Insets::default()
+            }
+        );
+    }
+
+    #[test]
+    fn full_strut_spans_the_whole_edge() {
+        let panel = Strut::from_full(&[0, 0, 0, 50], ROOT);
+        assert_eq!(panel.bottom_end_x, 5119);
+        let expected = Insets {
+            bottom: 50,
+            ..Insets::default()
+        };
+        assert_eq!(strut_insets(LEFT, ROOT, &[panel]), expected);
+        assert_eq!(strut_insets(RIGHT, ROOT, &[panel]), expected);
+        assert_eq!(RIGHT.inset(expected), rect(2560, 0, 2560, 1390));
+    }
+
+    #[test]
+    fn largest_strut_wins_per_side() {
+        let struts = [
+            Strut::from_full(&[0, 0, 0, 30], ROOT),
+            Strut::from_full(&[0, 0, 0, 50], ROOT),
+            Strut::from_full(&[0, 24, 0, 10], ROOT),
+        ];
+        assert_eq!(
+            strut_insets(RIGHT, ROOT, &struts),
+            Insets {
+                bottom: 50,
+                right: 24,
+                ..Insets::default()
+            }
+        );
+        assert_eq!(
+            strut_insets(LEFT, ROOT, &struts),
+            Insets {
+                bottom: 50,
+                ..Insets::default()
+            }
+        );
     }
 
     #[test]
