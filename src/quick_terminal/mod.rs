@@ -68,8 +68,8 @@ impl PixelRect {
 
     /// The rectangle without `insets` on its sides, never smaller than one pixel.
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "used on X11 by the work area, wired in #261")
+        not(any(target_os = "linux", target_os = "macos", test)),
+        allow(dead_code, reason = "used by the macOS and X11 work areas")
     )]
     pub fn inset(self, insets: Insets) -> Self {
         let width = self.width.saturating_sub(insets.left + insets.right).max(1);
@@ -95,8 +95,8 @@ impl PixelRect {
 
     /// The part of the desktop both rectangles cover, `None` when they do not overlap.
     #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "read by the X11 work area, wired in #261")
+        not(any(target_os = "linux", test)),
+        allow(dead_code, reason = "read by the X11 work area")
     )]
     pub fn intersection(self, other: Self) -> Option<Self> {
         let x = self.x.max(other.x);
@@ -139,8 +139,8 @@ pub struct Monitor {
 /// Rectangles from an X11 list of `x, y, width, height` cardinals, such as
 /// `_GTK_WORKAREAS_D<n>`; an incomplete trailing group is ignored.
 #[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+    not(any(target_os = "linux", test)),
+    allow(dead_code, reason = "read by the X11 work area")
 )]
 pub fn rects_from_cardinals(values: &[u32]) -> Vec<PixelRect> {
     let (groups, _) = values.as_chunks::<4>();
@@ -159,8 +159,8 @@ pub fn rects_from_cardinals(values: &[u32]) -> Vec<PixelRect> {
 /// The work area of `monitor` among the per-screen `areas` of `_GTK_WORKAREAS_D<n>`: the
 /// one that overlaps it most, clipped to it. `None` when none overlaps it.
 #[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+    not(any(target_os = "linux", test)),
+    allow(dead_code, reason = "read by the X11 work area")
 )]
 pub fn gtk_work_area(monitor: PixelRect, areas: &[PixelRect]) -> Option<PixelRect> {
     areas
@@ -172,8 +172,8 @@ pub fn gtk_work_area(monitor: PixelRect, areas: &[PixelRect]) -> Option<PixelRec
 /// Space a window reserves against the edges of the root window (`_NET_WM_STRUT_PARTIAL`):
 /// the thickness of each band, and the range it spans along its edge, ends included.
 #[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+    not(any(target_os = "linux", test)),
+    allow(dead_code, reason = "read by the X11 work area")
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Strut {
@@ -192,8 +192,8 @@ pub struct Strut {
 }
 
 #[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+    not(any(target_os = "linux", test)),
+    allow(dead_code, reason = "read by the X11 work area")
 )]
 impl Strut {
     /// The 12 cardinals of `_NET_WM_STRUT_PARTIAL`, in their order.
@@ -289,8 +289,8 @@ fn band_inset(
 /// The space the `struts` of the client windows take on `monitor`, the root window being
 /// of size `root`: per side, the deepest band that enters the screen from that side.
 #[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "read by the X11 work area, wired in #261")
+    not(any(target_os = "linux", test)),
+    allow(dead_code, reason = "read by the X11 work area")
 )]
 pub fn strut_insets(monitor: PixelRect, root: (u32, u32), struts: &[Strut]) -> Insets {
     let (root_width, root_height) = (i64::from(root.0), i64::from(root.1));
