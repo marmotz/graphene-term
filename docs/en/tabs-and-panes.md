@@ -28,7 +28,9 @@ them.
 | Rename the tab                         | Double click on the tab, **Rename the tab** in its menu or in the command palette |
 | Tab menu (new tab, close, rename, settings, themes) | Right click on a tab                |
 
-The tab bar appears once there are two tabs. Its edge is set by `position` in the
+The tab bar is always shown. Its first slot, a sliders icon, is the
+[settings tab](configuration.md#settings-tab): it is never closed and the tab shortcuts
+(`Alt+1` to `Alt+9`, next, previous) only count the other tabs. Its edge is set by `position` in the
 `[tabs]` section of the [configuration](configuration.md#tabs): `"top"` (default),
 `"bottom"`, `"left"` or `"right"`. On the left or right, the tabs are stacked.
 
@@ -91,8 +93,7 @@ Drag a pane by its title bar and drop it:
   drop it precisely);
 - on `+` or the empty part of the tab bar: it moves to a new tab.
 
-The tab bar shows during the drag even with a single tab, and a translucent highlight
-shows where the pane will land. `Escape` cancels the drag.
+A translucent highlight shows where the pane will land. `Escape` cancels the drag.
 
 ## Zoom
 
@@ -118,8 +119,8 @@ starts with `»` and the number of panes in the set.
 
 Programs that report their progress with the `OSC 9;4` sequence (as `winget`,
 `systemd`, some build tools and package managers do, or any script printing
-`\e]9;4;1;50\a`) get a thin progress bar on the bottom edge of the pane title bar and,
-while the tab bar is shown, of their tab (the tab follows its active pane). The bar is
+`\e]9;4;1;50\a`) get a thin progress bar on the bottom edge of the pane title bar and
+of their tab (the tab follows its active pane). The bar is
 drawn in the accent color, red after an error, yellow while paused; an unknown progress
 shows a segment sliding along the bar. It disappears when the program clears it, when
 the command ends, or after 15 seconds without news. `[window] progress = false` (see

@@ -1,5 +1,5 @@
 //! Edits of the user theme files (`<config_dir>/themes/<name>.toml`) made by the theme
-//! editor of the settings window. Every write goes through [`ConfigEdit`], so comments,
+//! editor of the settings tab. Every write goes through [`ConfigEdit`], so comments,
 //! whitespace and the keys left alone are kept, and lands atomically, so the watcher sees
 //! one change.
 //!

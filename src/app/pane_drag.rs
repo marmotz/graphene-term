@@ -59,7 +59,7 @@ impl Session {
         let layout = self.shown_layout();
         let bar = self.tab_bar();
         let geometry = self.geometry();
-        let found = drop::target(&layout, bar.as_ref(), pane, x, y, |target, side| {
+        let found = drop::target(&layout, Some(&bar), pane, x, y, |target, side| {
             self.workspace.can_move_pane(pane, target, side, geometry)
         });
         let over = match found {

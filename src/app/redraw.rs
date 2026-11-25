@@ -199,18 +199,20 @@ impl Session {
                 Some(PaneFrame { frame, layout })
             })
             .collect();
-        if panes.is_empty() {
+        // A frame without its panes waits for them, unless it shows the settings tab.
+        if panes.is_empty() && !self.settings_shown() {
             return;
         }
         let mut bar = self.tab_bar();
-        if let (Some(bar), Some(Drag::Tab { index, grab_offset })) = (bar.as_mut(), &self.drag) {
+        if let Some(Drag::Tab { index, grab_offset }) = &self.drag {
             let (x, y) = self.mouse_pixel();
             bar.dragged(*index, bar.along(x, y) - grab_offset);
         }
         let mut pane_bars = self.pane_bars(&layout, active);
         match self.hovered_button {
+            Some(chrome::ChromeButton::Settings) => bar.settings_hovered = true,
             Some(chrome::ChromeButton::TabClose(index)) => {
-                if let Some(tab) = bar.as_mut().and_then(|bar| bar.tabs.get_mut(index)) {
+                if let Some(tab) = bar.tabs.get_mut(index) {
                     tab.close_hovered = true;
                 }
             }
@@ -219,11 +221,7 @@ impl Session {
                     pane_bar.close_hovered = true;
                 }
             }
-            Some(chrome::ChromeButton::NewTab) => {
-                if let Some(bar) = bar.as_mut() {
-                    bar.new_tab_hovered = true;
-                }
-            }
+            Some(chrome::ChromeButton::NewTab) => bar.new_tab_hovered = true,
             None => {}
         }
         let highlight = match &self.drag {
@@ -231,14 +229,14 @@ impl Session {
                 started: true,
                 target: Some(target),
                 ..
-            }) => drop::highlight(*target, &layout, bar.as_ref()),
+            }) => drop::highlight(*target, &layout, Some(&bar)),
             _ => None,
         };
         let mut ui = chrome::scene::build(
             &layout,
             active,
             &pane_bars,
-            bar.as_ref(),
+            Some(&bar),
             overlay,
             &self.palette.ui,
             self.renderer.is_srgb(),
@@ -259,7 +257,20 @@ impl Session {
         if let Some(tooltip) = &tooltip {
             chrome::scene::tooltip(tooltip, &self.palette.ui, self.renderer.is_srgb(), &mut ui);
         }
-        match self.renderer.render(&panes, &ui) {
+        let area = self.settings_area();
+        let gpu = self.renderer.gpu().clone();
+        let size = self.window.inner_size();
+        let rendered = match self.settings.as_mut() {
+            Some(settings) => {
+                settings.prepare(&gpu, area);
+                let mut paint = |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView| {
+                    settings.paint(&gpu, encoder, view, (size.width, size.height));
+                };
+                self.renderer.render_with(&panes, &ui, Some(&mut paint))
+            }
+            None => self.renderer.render(&panes, &ui),
+        };
+        match rendered {
             Ok(true) if self.first_frame.frame_drawn() => {
                 perf::mark("first frame drawn after PTY output");
             }

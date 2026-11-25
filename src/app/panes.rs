@@ -78,6 +78,7 @@ impl Session {
 
     /// Opens a tab after the last one and shows it.
     pub(super) fn new_tab(&mut self) {
+        self.leave_settings();
         let Some((cwd, layout)) = self.new_pane_start() else {
             return;
         };
@@ -89,8 +90,10 @@ impl Session {
         }
     }
 
-    /// Shows the tab chosen by `select` on the workspace, when it changes the shown tab.
+    /// Shows the tab chosen by `select` on the workspace, when it changes the shown tab;
+    /// the settings tab is left for it in any case.
     pub(super) fn change_tab(&mut self, select: impl FnOnce(&mut Workspace<Pane>) -> bool) {
+        self.leave_settings();
         let (old, index) = (
             self.workspace.active_pane_id(),
             self.workspace.active_index(),

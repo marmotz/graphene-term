@@ -37,10 +37,6 @@ pub const QUICK: [&str; 4] = [
     "_NET_WM_STATE_STICKY",
 ];
 
-/// Atom of a window kept above the others: the settings window opened from the quick
-/// terminal, so it shows in front of it.
-pub const ABOVE: [&str; 1] = ["_NET_WM_STATE_ABOVE"];
-
 /// Gives the hidden `window` the `_NET_WM_STATE` atoms `states` for its first mapping.
 /// `Ok(false)` means the window is not an X11 window.
 pub fn preset_states(window: &Window, states: &[&str]) -> anyhow::Result<bool> {
@@ -223,8 +219,8 @@ mod tests {
     use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
 
     #[test]
-    fn preset_states_writes_the_maximized_quick_and_above_states_before_mapping() {
-        for states in [&MAXIMIZED[..], &QUICK[..], &ABOVE[..]] {
+    fn preset_states_writes_the_maximized_and_quick_states_before_mapping() {
+        for states in [&MAXIMIZED[..], &QUICK[..]] {
             preset_states_writes(states);
         }
     }

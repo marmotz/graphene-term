@@ -22,7 +22,7 @@ Chacun de ces moyens change le thème aussitôt :
   les flèches) l'affiche en aperçu dans le terminal, et fermer le menu sans en choisir
   un rétablit les couleurs. Quand les thèmes ne tiennent pas tous dans la hauteur de la
   fenêtre, la dernière ligne, **Plus...**, ouvre les suivants ;
-- la section **Thème** de la fenêtre des paramètres (`Ctrl+,`) ;
+- la section **Thème** de l'onglet des paramètres (`Ctrl+,`) ;
 - `name` dans la section `[theme]` du [fichier de configuration](configuration.md) :
 
   ```toml
@@ -30,7 +30,7 @@ Chacun de ces moyens change le thème aussitôt :
   name = "gruvbox-dark"
   ```
 
-Le menu et la fenêtre des paramètres écrivent ce même paramètre dans le fichier de
+Le menu et l'onglet des paramètres écrivent ce même paramètre dans le fichier de
 configuration.
 
 ## Thèmes intégrés
@@ -79,8 +79,8 @@ de configuration :
 | macOS   | `~/Library/Application Support/graphene/themes/`      |
 
 Le nom du fichier, sans `.toml`, est le nom du thème : `themes/mon-theme.toml`
-s'utilise avec `name = "mon-theme"`, et il apparaît dans le menu des thèmes et dans la
-fenêtre des paramètres.
+s'utilise avec `name = "mon-theme"`, et il apparaît dans le menu des thèmes et dans
+l'onglet des paramètres.
 
 - Un fichier de thème qui porte le nom d'un thème intégré le remplace.
 - Un fichier de thème n'a besoin que des couleurs qu'il change : chaque couleur absente

@@ -1,4 +1,4 @@
-//! Text of the settings window: the command palette's sans-serif font, at the
+//! Text of the settings tab: the command palette's sans-serif font, at the
 //! palette's size, so both read alike.
 
 use std::collections::BTreeMap;

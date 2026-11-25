@@ -89,7 +89,7 @@ pub enum CloseTarget {
     Window,
 }
 
-/// A section of the settings window, in sidebar order.
+/// A section of the settings tab, in sidebar order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SettingsSection {
     #[default]
@@ -125,7 +125,7 @@ impl SettingsSection {
     ];
 }
 
-/// A field of the settings window, one per setting of the file but the keyboard
+/// A field of the settings tab, one per setting of the file but the keyboard
 /// shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SettingsField {
@@ -263,10 +263,10 @@ pub enum Msg {
     DetachPane,
     /// The rename action, the tab menu entry and the heading of the rename box.
     RenameTab,
-    /// The settings action, and the settings window's title.
+    /// The settings action.
     OpenSettings,
     Quit,
-    /// Sidebar entry of the settings window.
+    /// Sidebar entry of the settings tab.
     Section(SettingsSection),
     /// Label of a settings field.
     Field(SettingsField),
@@ -316,7 +316,7 @@ pub enum Msg {
     SearchShortcut,
     /// No action is bound to the shortcut searched for.
     NoActionForShortcut,
-    // Theme editor of the settings window.
+    // Theme editor of the settings tab.
     /// Heading of the theme editor block.
     ThemeEditor,
     /// What the theme editor is for, under its heading.

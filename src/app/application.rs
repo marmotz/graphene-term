@@ -115,17 +115,12 @@ pub struct App {
     /// Palette of the configured theme.
     pub(super) palette: Palette,
     pub(super) session: Option<Session>,
-    /// GPU context created with the terminal window, on which other windows create
-    /// their surface.
-    pub(super) gpu: Option<Arc<Gpu>>,
-    /// The settings window, while open.
-    pub(super) settings: Option<SettingsWindow>,
     pub(super) update_checker: Checker,
     pub(super) error: Option<anyhow::Error>,
     /// Banner reporting the errors of the configuration and theme files.
     pub(super) config_banner: Option<Banner>,
     /// Errors of the last load of the configuration and theme files, shown by the
-    /// settings window.
+    /// settings tab.
     pub(super) load_errors: LoadErrors,
     /// System appearance, which picks the `light` or `dark` theme.
     pub(super) appearance: Appearance,
@@ -337,6 +332,7 @@ impl App {
             frames: FrameCache::default(),
             restore_size: initial_size,
             settings_requested: false,
+            settings: None,
             sized_by_grid: self.grid.is_set(),
             konami: KonamiDetector::default(),
             honeycomb: None,
@@ -473,7 +469,7 @@ impl App {
         self.sync_autostart(Some(old.quick_terminal.autostart));
         let banner = hotkey::config_banner(&self.load_errors, self.hotkey_error.as_ref());
         self.config_banner = banner.clone();
-        if let Some(settings) = self.settings.as_mut() {
+        if let Some(settings) = self.session.as_mut().and_then(|s| s.settings.as_mut()) {
             settings.apply(
                 &self.palette,
                 self.config.language.resolve(Lang::detect),
@@ -523,37 +519,35 @@ impl App {
         }
     }
 
-    /// Opens the settings window, or brings it to the front when already open.
+    /// Shows the settings tab of the window; it does nothing more when already shown.
     pub(super) fn open_settings(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(settings) = &self.settings {
-            return settings.focus();
-        }
-        let Some(gpu) = self.gpu.clone() else {
+        let Some(session) = self.session.as_mut() else {
             return;
         };
+        if session.settings.is_some() {
+            return;
+        }
         let Some(dir) = config::config_dir() else {
-            log::warn!("neither XDG_CONFIG_HOME nor HOME is set: no settings window");
+            log::warn!("neither XDG_CONFIG_HOME nor HOME is set: no settings tab");
             return;
         };
         let lang = self.config.language.resolve(Lang::detect);
-        let above = self.quick_state().is_some();
-        match SettingsWindow::open(
+        let settings = SettingsTab::open(
             event_loop,
-            gpu,
+            session.renderer.gpu(),
+            session.renderer.format(),
+            session.window.clone(),
             &self.palette,
             lang,
             &self.config,
             &self.load_errors,
             self.appearance,
             dir,
-            above,
-        ) {
-            Ok(settings) => self.settings = Some(settings),
-            Err(error) => log::error!("cannot open the settings window: {error:#}"),
-        }
+        );
+        session.show_settings(settings);
     }
 
-    /// Opens the settings window when the last event asked for it.
+    /// Shows the settings tab when the last event asked for it.
     pub(super) fn open_requested_settings(&mut self, event_loop: &ActiveEventLoop) {
         let requested = self
             .session
@@ -583,7 +577,6 @@ impl ApplicationHandler<UserEvent> for App {
         match self.create_session(event_loop) {
             Ok(mut session) => {
                 session.update_pointer();
-                self.gpu = Some(session.renderer.gpu().clone());
                 self.session = Some(session);
             }
             Err(error) => return self.fail(event_loop, error),
@@ -647,10 +640,13 @@ impl ApplicationHandler<UserEvent> for App {
         );
         let deadline = earliest(
             deadline,
-            self.settings.as_mut().and_then(|settings| {
-                settings.wake(now);
-                settings.deadline()
-            }),
+            self.session
+                .as_mut()
+                .and_then(|session| session.settings.as_mut())
+                .and_then(|settings| {
+                    settings.wake(now);
+                    settings.deadline()
+                }),
         );
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
@@ -684,8 +680,7 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let session_window = self.session.as_ref().map(|session| session.window.id());
-        let settings_window = self.settings.as_ref().map(SettingsWindow::id);
-        match route(id, session_window, settings_window) {
+        match route(id, session_window) {
             Route::Session => {
                 if let WindowEvent::Focused(focused) = event {
                     self.quick_focus_changed(focused);
@@ -701,28 +696,6 @@ impl ApplicationHandler<UserEvent> for App {
                 self.open_requested_settings(event_loop);
                 self.reset_closed_quick(event_loop);
             }
-            Route::Settings => {
-                if matches!(event, WindowEvent::Focused(true))
-                    && let Some(state) = self.quick_state()
-                {
-                    state.other_window_focused();
-                }
-                let Some(settings) = self.settings.as_mut() else {
-                    return;
-                };
-                let outcome = settings.window_event(event_loop, &event);
-                if let Some(palette) = settings.take_preview()
-                    && let Some(session) = self.session.as_mut()
-                {
-                    session.preview_palette(&palette);
-                }
-                if outcome == settings::Outcome::Close {
-                    self.settings = None;
-                    if let Some(state) = self.quick_state() {
-                        state.settings_closed(Instant::now());
-                    }
-                }
-            }
             Route::Unknown => {}
         }
     }
@@ -733,19 +706,14 @@ impl ApplicationHandler<UserEvent> for App {
 pub(super) enum Route {
     /// The terminal window.
     Session,
-    /// The settings window.
-    Settings,
     /// A window `App` does not know (already closed): the event is dropped.
     Unknown,
 }
 
-/// Routes an event of window `id`; `session` is the terminal window and `settings` the
-/// settings window, when open.
-pub(super) fn route(id: WindowId, session: Option<WindowId>, settings: Option<WindowId>) -> Route {
+/// Routes an event of window `id`; `session` is the terminal window.
+pub(super) fn route(id: WindowId, session: Option<WindowId>) -> Route {
     if session == Some(id) {
         Route::Session
-    } else if settings == Some(id) {
-        Route::Settings
     } else {
         Route::Unknown
     }
@@ -766,6 +734,10 @@ impl App {
         let Some(session) = self.session.as_mut() else {
             return;
         };
+        if !session.settings_window_event(&event) {
+            session.flush_panes();
+            return;
+        }
 
         match event {
             WindowEvent::CloseRequested => session.request_close(Target::Window, event_loop),
@@ -960,8 +932,6 @@ fn run_app(
         config,
         palette,
         session: None,
-        gpu: None,
-        settings: None,
         error: None,
         config_banner,
         load_errors,
@@ -1109,39 +1079,14 @@ mod tests {
     #[test]
     fn events_of_the_terminal_window_go_to_the_session() {
         let terminal = WindowId::from(1);
-        assert_eq!(route(terminal, Some(terminal), None), Route::Session);
-        let settings = WindowId::from(2);
-        assert_eq!(
-            route(terminal, Some(terminal), Some(settings)),
-            Route::Session
-        );
-    }
-
-    #[test]
-    fn events_of_the_settings_window_go_to_it() {
-        let terminal = WindowId::from(1);
-        let settings = WindowId::from(2);
-        assert_eq!(
-            route(settings, Some(terminal), Some(settings)),
-            Route::Settings
-        );
-        // Still routed once the terminal window is gone, until the app exits.
-        assert_eq!(route(settings, None, Some(settings)), Route::Settings);
+        assert_eq!(route(terminal, Some(terminal)), Route::Session);
     }
 
     #[test]
     fn events_of_an_unknown_window_are_dropped() {
         let terminal = WindowId::from(1);
-        assert_eq!(
-            route(WindowId::from(2), Some(terminal), None),
-            Route::Unknown
-        );
-        assert_eq!(route(terminal, None, None), Route::Unknown);
-        // A closed settings window.
-        assert_eq!(
-            route(WindowId::from(3), Some(terminal), Some(WindowId::from(2))),
-            Route::Unknown
-        );
+        assert_eq!(route(WindowId::from(2), Some(terminal)), Route::Unknown);
+        assert_eq!(route(terminal, None), Route::Unknown);
     }
 
     #[test]

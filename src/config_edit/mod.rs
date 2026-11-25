@@ -1,5 +1,5 @@
 //! Text-preserving edits of `config.toml`: completion of missing options, cleanup of
-//! unknown keys, and single-key writes from the settings window ([`ConfigEdit`]).
+//! unknown keys, and single-key writes from the settings tab ([`ConfigEdit`]).
 
 use std::collections::HashSet;
 use std::fs;

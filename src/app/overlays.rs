@@ -489,6 +489,7 @@ impl Session {
         event_loop: &ActiveEventLoop,
     ) {
         match (button, hit) {
+            (mouse::Button::Left, TabBarHit::Settings) => self.settings_requested = true,
             (mouse::Button::Left, TabBarHit::Tab(index)) => {
                 self.change_tab(|workspace| workspace.select(index));
                 if tab_bar::opens_rename(self.tab_bar_clicks.click(index, Instant::now())) {

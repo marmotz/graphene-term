@@ -16,10 +16,11 @@ use crate::layout::Rect;
 use crate::terminal::PaneId;
 use tab_bar::{TabBarHit, TabBarLayout, UiMetrics};
 
-/// A button of the chrome drawn hovered under the mouse: the close button of a tab,
-/// by index, or of a pane bar, or the `+` button of the tab bar.
+/// A button of the chrome drawn hovered under the mouse: the settings tab, the close
+/// button of a tab, by index, or of a pane bar, or the `+` button of the tab bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChromeButton {
+    Settings,
     TabClose(usize),
     PaneClose(PaneId),
     NewTab,
@@ -37,6 +38,7 @@ pub fn button_at(
     match tab_bar.and_then(|bar| bar.hit(x, y)) {
         Some(TabBarHit::Close(index)) => return Some(ChromeButton::TabClose(index)),
         Some(TabBarHit::NewTab) => return Some(ChromeButton::NewTab),
+        Some(TabBarHit::Settings) => return Some(ChromeButton::Settings),
         _ => {}
     }
     match pane_bar::hit_at(panes, x, y, metrics) {

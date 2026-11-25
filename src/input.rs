@@ -54,7 +54,7 @@ pub enum Action {
     GoToTab(u8),
     /// Opens the command palette.
     CommandPalette,
-    /// Opens the settings window, or focuses it when already open.
+    /// Shows the settings tab.
     OpenSettings,
     Quit,
 }

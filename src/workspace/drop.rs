@@ -113,10 +113,12 @@ pub fn target(
     can_insert: impl Fn(PaneId, Direction) -> bool,
 ) -> Option<DropTarget> {
     if let Some(bar) = tab_bar.filter(|bar| bar.rect.contains(x, y)) {
-        return Some(match bar.hit(x, y) {
-            Some(TabBarHit::Tab(index) | TabBarHit::Close(index)) => DropTarget::Tab(index),
-            Some(TabBarHit::NewTab) | None => DropTarget::NewTab,
-        });
+        return match bar.hit(x, y) {
+            Some(TabBarHit::Tab(index) | TabBarHit::Close(index)) => Some(DropTarget::Tab(index)),
+            Some(TabBarHit::NewTab) | None => Some(DropTarget::NewTab),
+            // A pane has no place in the settings tab.
+            Some(TabBarHit::Settings) => None,
+        };
     }
     let (pane, rect) = panes
         .panes
@@ -344,6 +346,13 @@ mod tests {
             target(&layout, Some(&bar), PaneId(0), empty, y, any),
             Some(DropTarget::NewTab)
         );
+    }
+
+    #[test]
+    fn no_target_over_the_settings_tab() {
+        let bar = bar(2);
+        let (x, y) = center(bar.settings);
+        assert_eq!(target(&panes(), Some(&bar), PaneId(0), x, y, any), None);
     }
 
     #[test]

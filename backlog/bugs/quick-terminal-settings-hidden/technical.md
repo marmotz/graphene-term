@@ -4,61 +4,102 @@ Voir [overview.md](overview.md).
 
 ## Cause
 
-Le quick terminal est créé au premier plan et en fenêtre « dock » :
+Le quick terminal est une fenêtre « dock » au premier plan
+([src/app/application.rs](../../../src/app/application.rs) : `WindowLevel::AlwaysOnTop`
+et, sous Linux, `WindowType::Dock` ; [src/app/quick.rs](../../../src/app/quick.rs)
+`prepare_window` écrit `x11_window::QUICK`). Les réglages étaient une seconde fenêtre
+winit, ordinaire, rangée dessous.
 
-- [src/app/application.rs:229](../../../src/app/application.rs) : `with_window_level(WindowLevel::AlwaysOnTop)` et, sous Linux, `with_x11_window_type(vec![WindowType::Dock])` ;
-- [src/app/quick.rs:315](../../../src/app/quick.rs) `prepare_window` écrit avant le premier affichage les états `_NET_WM_STATE` de [`x11_window::QUICK`](../../../src/x11_window.rs) (dont `_NET_WM_STATE_ABOVE`).
+## Contournements X11 abandonnés
 
-La fenêtre des réglages est une fenêtre ordinaire, créée visible ([src/settings/mod.rs:81](../../../src/settings/mod.rs)) :
+Essayés puis abandonnés sous Cinnamon X11 :
 
-```rust
-let attributes = Window::default_attributes()
-    .with_title(i18n::text(lang, &Msg::OpenSettings))
-    .with_inner_size(INITIAL_SIZE)
-    .with_min_inner_size(MIN_SIZE);
-```
+- réglages au même niveau (`_NET_WM_STATE_ABOVE` écrit avant l'affichage) : à la
+  première ouverture, la protection contre le vol de focus les place juste sous la
+  fenêtre focalisée, le quick terminal ;
+- activation par `_NET_ACTIVE_WINDOW` (source « pager ») une fois la fenêtre affichée :
+  corrige l'ouverture, mais Cinnamon remonte les fenêtres dock quand le pointeur entre
+  dedans ;
+- réglages rattachés au quick terminal (`WM_TRANSIENT_FOR`) : Cinnamon oublie le lien à
+  chaque masquage du quick terminal, qui est retiré de l'écran, et ne le relit pas,
+  même réécrit à son retour.
 
-Le gestionnaire de fenêtres la range dans la couche normale, sous la couche « au-dessus » du quick terminal.
+Tant que les réglages sont une seconde fenêtre, leur ordre dépend du gestionnaire de
+fenêtres. Ils deviennent donc un onglet de la fenêtre du terminal.
 
-Le processus du quick terminal n'a qu'une fenêtre de session (`App::session`) : une fenêtre de réglages ouverte dans ce processus l'est toujours depuis le quick terminal ([src/app/application.rs:527](../../../src/app/application.rs) `open_settings`).
+## Approche retenue : un onglet des réglages
 
-Le quick terminal ne se masque déjà pas quand les réglages prennent le focus ([src/app/application.rs:702](../../../src/app/application.rs) → `QuickState::other_window_focused`, [src/app/quick.rs:110](../../../src/app/quick.rs)). En revanche, rien ne lui rend le focus à la fermeture des réglages. Comme les gestionnaires de fenêtres ne donnent jamais le focus à une fenêtre dock, le quick terminal reste affiché sans focus clavier.
+### Barre d'onglets
 
-## Approche retenue : réglages au premier plan en mode quick terminal
+- [src/chrome/tab_bar.rs](../../../src/chrome/tab_bar.rs) : la barre est toujours
+  affichée (`tab_bar::shown` disparaît). `TabBarLayout` gagne `settings` (case carrée
+  avant les onglets, de la taille du bouton `+`), `settings_active`, `settings_hovered`,
+  `set_settings_active` (aucun onglet actif quand les réglages sont affichés) et
+  `TabBarHit::Settings`. Les onglets commencent après cette case : glisser un onglet ne
+  peut jamais l'amener devant.
+- [src/chrome/scene.rs](../../../src/chrome/scene.rs) `settings_tab` : une icône de
+  curseurs (trois traits et leurs boutons, en rectangles), sur le fond de l'onglet
+  actif quand les réglages sont affichés, survolée comme le bouton `+`.
+- [src/workspace/drop.rs](../../../src/workspace/drop.rs) : un panneau lâché sur
+  l'onglet des réglages n'a pas de cible.
+- `Workspace::progress_on_screen` perd son paramètre `tab_bar_shown`.
 
-En mode quick terminal, la fenêtre des réglages reçoit le même niveau que le quick terminal :
+### État
 
-1. `SettingsWindow::open` prend un paramètre `above: bool`. `App::open_settings` le passe à `self.quick_state().is_some()`.
-2. Si `above` est vrai :
-   - les attributs reçoivent `with_window_level(WindowLevel::AlwaysOnTop)` (repris par winit sous macOS, et sous X11 pour une fenêtre déjà affichée) ;
-   - sous Linux, la fenêtre est créée masquée (`with_visible(false)`). Une nouvelle constante `x11_window::ABOVE = ["_NET_WM_STATE_ABOVE"]` est écrite par `x11_window::preset_states` avant le premier affichage, puis `window.set_visible(true)`. Le quick terminal applique déjà ce schéma : les gestionnaires de fenêtres ignorent un message client envoyé avant l'affichage, alors que la propriété écrite avant l'affichage est appliquée dès l'affichage ([src/x11_window.rs](../../../src/x11_window.rs), commentaire du module).
-3. Le quick terminal et les réglages sont alors dans la même couche. La dernière fenêtre ouverte ou focalisée passe devant : les réglages s'affichent donc devant le quick terminal à leur ouverture, et `SettingsWindow::focus` ([src/settings/mod.rs:166](../../../src/settings/mod.rs)) les ramène devant si on les rouvre alors qu'ils sont déjà ouverts.
+- `Session.settings: Option<SettingsTab>` : présent tant que l'onglet des réglages est
+  affiché. L'onglet actif de l'espace de travail reste l'onglet de terminal
+  précédent : c'est lui qui revient quand on quitte les réglages.
+- `App::open_settings` crée le `SettingsTab` (l'`App` détient la configuration) et le
+  donne à `Session::show_settings` ; rien de plus s'il est déjà affiché.
+  `Action::OpenSettings`, le menu contextuel et `TabBarHit::Settings` passent par
+  `Session.settings_requested`.
+- `Session::leave_settings` ([src/app/settings_tab.rs](../../../src/app/settings_tab.rs)) :
+  écrit une couleur en cours de choix (`SettingsTab::leave`), rend au terminal les
+  couleurs du thème et libère l'onglet. Appelé sur `Escape` seul
+  (`settings::Outcome::Leave`), par `Session::change_tab` et `Session::new_tab`. Fermer
+  le dernier onglet de terminal ferme la fenêtre comme avant.
 
-Hors mode quick terminal, rien ne change : `above` vaut faux et la fenêtre garde ses attributs actuels.
+### Dessin
 
-## Retour du focus à la fermeture
+- [src/settings/mod.rs](../../../src/settings/mod.rs) : `SettingsWindow` devient
+  `SettingsTab`, sans fenêtre ni surface. `prepare(gpu, content)` lance la frame egui
+  dans la zone de contenu (`RawInput::screen_rect`, en points), écrit ses changements et
+  envoie ses textures ; `paint(gpu, encoder, view, size)` la dessine par-dessus le
+  terminal (`LoadOp::Load`).
+- [src/renderer/mod.rs](../../../src/renderer/mod.rs) : `Renderer::render_with` prend un
+  `ContentPainter`, appelé par `Layers::draw` après l'interface et le bandeau, dans une
+  passe à lui, puis l'overlay (dialogue, menu) est dessiné dans une dernière passe.
+  Même chemin sur la surface GPU et sur la cible hors écran de la présentation X11.
+  `Renderer::format` donne le format dans lequel egui dessine.
+- `Session::shown_layout` n'a aucun panneau tant que les réglages sont affichés :
+  survol, clics et dessin des panneaux sont neutralisés sans autre cas particulier.
 
-`QuickState` gagne une méthode `settings_closed(now)` : si le quick terminal est affiché, elle appelle `ask_focus(now)` ([src/app/quick.rs:74](../../../src/app/quick.rs)). Le quick terminal reprend alors le focus à chaque tick, pendant au plus `FOCUS_WAIT`, comme à son affichage.
+### Événements
 
-Elle est appelée dans [src/app/application.rs:717](../../../src/app/application.rs) quand `outcome == settings::Outcome::Close`, juste après `self.settings = None`.
+`Session::settings_window_event` route chaque événement avec `settings_route` (pur,
+testé) : le clavier va aux réglages (à la fenêtre si un overlay est ouvert) ; un clic ou
+la molette au-dessus de la barre d'onglets ou d'un overlay va à la fenêtre, sinon aux
+réglages ; déplacements, relâchements, focus, taille et modificateurs vont aux deux ;
+le dessin et la fermeture à la fenêtre seule.
 
-## Alternatives écartées
+### Retiré
 
-- **Rattacher les réglages au quick terminal (`WM_TRANSIENT_FOR`)** : le gestionnaire de fenêtres garde une fenêtre rattachée au-dessus de sa fenêtre parente, même après un clic sur le quick terminal. Écartée par choix produit en faveur de la solution la plus simple. Conséquence acceptée : un clic sur le quick terminal peut le repasser devant les réglages ; rouvrir les réglages les ramène devant.
-- **Masquer le quick terminal pendant les réglages** : écartée dans l'overview (le quick terminal doit rester affiché).
-
-## Conséquences vérifiées
-
-- Les réglages restent au-dessus des autres applications tant qu'ils sont ouverts depuis le quick terminal. C'est cohérent avec le quick terminal, lui-même au premier plan.
-- Sous Wayland, il n'y a pas de quick terminal ([src/app/application.rs:576](../../../src/app/application.rs) `quick_supported`) : le chemin n'est jamais emprunté.
-- macOS : `WindowLevel::AlwaysOnTop` place les réglages au même niveau flottant que le quick terminal. À vérifier sur macOS pendant le correctif, comme prévu dans l'overview ; aucun code propre à macOS n'est prévu.
+`SettingsWindow::open(…, above)`, `x11_window::ABOVE`, `QuickState::settings_closed` et
+`QuickState::other_window_focused` (le focus ne quitte plus la fenêtre), la route
+`Route::Settings` et le champ `App.gpu`.
 
 ## Tests
 
-- `x11_window` : le test `preset_states_writes_the_maximized_and_quick_states_before_mapping` couvre aussi `ABOVE` (skippé sans affichage X11, comme les tests existants).
-- `quick.rs` : `settings_closed` demande le focus quand le quick terminal est affiché (`focus_due` vrai), et ne fait rien quand il est masqué.
-- Vérification manuelle sous Cinnamon X11 : ouvrir les réglages depuis le quick terminal, puis les fermer ; le quick terminal reprend le focus clavier.
+- `tab_bar` : case des réglages carrée avant les onglets, barre avec un seul onglet,
+  aucun onglet actif quand les réglages sont affichés, positions et glisser décalés.
+- `scene` : icône dans sa case, fond de l'onglet actif, survol.
+- `drop` : pas de cible sur l'onglet des réglages.
+- `settings_tab` : routage des événements.
+- `settings` : zone de contenu en points ; `Escape` seul quitte l'onglet.
+- Vérification manuelle (Cinnamon X11, quick terminal et fenêtre normale) : clic sur
+  l'icône, `Ctrl+,`, menu contextuel ; `Escape` et clic sur un onglet ramènent
+  l'onglet précédent ; choix de couleur, capture de raccourci, champs texte.
 
 ## Découpage en tâches d'implémentation
 
-1. Réglages au premier plan en mode quick terminal et retour du focus à leur fermeture : [#255](https://github.com/marmotz/graphene-term/issues/255)
+1. Réglages dans un onglet de la fenêtre : [#255](https://github.com/marmotz/graphene-term/issues/255)

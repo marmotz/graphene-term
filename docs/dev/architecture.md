@@ -10,7 +10,7 @@ choices are in [decisions.md](decisions.md).
 - [Session and panes](#session-and-panes)
 - [Context menus](#context-menus)
 - [Command palette](#command-palette)
-- [Settings window](#settings-window)
+- [Settings tab](#settings-tab)
 - [Threads](#threads)
 - [Window startup](#window-startup)
 - [Command blocks](#command-blocks)
@@ -37,7 +37,7 @@ choices are in [decisions.md](decisions.md).
 | Update check (HTTP, JSON, tags)   | `ureq` (rustls) + `serde_json` + `semver`                | 3, 1, 1 |
 | Command palette fuzzy search      | `nucleo-matcher`                                         | 0.3     |
 | Kitty graphics: PNG, zlib, base64 | `png` + `flate2` + `base64`                              | 0.18, 1, 0.22 |
-| Settings window widgets           | `egui` + `egui-winit` + `egui-wgpu`                      | 0.37    |
+| Settings tab widgets              | `egui` + `egui-winit` + `egui-wgpu`                      | 0.37    |
 | PTY thread polling                | `polling`                                                | 3       |
 | Config directory watcher          | `notify`                                                 | 8       |
 | System appearance (XDG portal)    | `zbus`                                                   | 6       |
@@ -53,7 +53,7 @@ src/
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
   perf.rs          startup and redraw timing logs (`graphene::perf` target)
   app.rs           winit ApplicationHandler, Session (the window, its workspace and overlay),
-                   window event routing (terminal or settings window), key and paste fan-out to the broadcast targets
+                   window event routing, key and paste fan-out to the broadcast targets
   settings/
     mod.rs         SettingsWindow: winit window, surface on the shared Gpu, egui_winit::State,
                    egui_wgpu::Renderer, redraw on demand
@@ -267,23 +267,39 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   title, all selected. It knows the tab by its active pane, so a tab closing meanwhile
   does not shift it. `Enter` renames, `Escape` or a press outside the box cancels.
 
-## Settings window
+## Settings tab
 
-- `Ctrl+,` (`Action::OpenSettings`, also in the palette) opens it. Not `Ctrl+Shift+,`:
-  Shift is dropped for a symbol (`Shortcut::character`), so it would never match.
-- `Session::run_action` cannot create a window, which `App` owns: the action sets
-  `Session.settings_requested`, read by `App` after each terminal window event and user
-  event (`App::open_settings`). A second request focuses the open window
-  (`Window::focus_window`).
-- Same process, second winit window: its surface is created on the shared
-  `renderer::Gpu`, in the format egui prefers (`egui_wgpu::preferred_framebuffer_format`,
-  gamma-space), opaque. `egui_winit::State` takes its window events and applies the
-  platform output (cursor, clipboard, IME); `egui_wgpu::Renderer` paints the tessellated
-  frame. It is drawn only on demand: when egui says an event needs a repaint, or after
-  the delay egui asks for (`repaint_delay`, folded into `about_to_wait`'s deadline).
-- `App::window_event` routes by `WindowId`: the settings window's events go to
-  `SettingsWindow::window_event`; `CloseRequested` drops it. Closing the terminal window
-  exits the event loop as before, which closes the settings window too.
+- The tab bar is always shown, even for a single tab: its first slot, a sliders icon
+  (`TabBarLayout::settings`, `TabBarHit::Settings`), is the settings tab. It is never
+  closed, takes no split, and the tab shortcuts (next, previous, tab N) only count the
+  terminal tabs. A dragged tab or pane never lands on it.
+- `Ctrl+,` (`Action::OpenSettings`, also in the palette and the context menu) and a
+  click on the icon show it. Not `Ctrl+Shift+,`: Shift is dropped for a symbol
+  (`Shortcut::character`), so it would never match. The action sets
+  `Session.settings_requested`, read by `App` after each window and user event
+  (`App::open_settings`): `App` holds the configuration the tab is opened with. Shown,
+  it lives in `Session.settings` (`settings::SettingsTab`); the workspace keeps its
+  active tab, the one shown again when the settings tab is left.
+- Left by `Escape` alone (unless egui uses it), a click on a terminal tab, a new tab
+  (`Session::change_tab`, `Session::new_tab`): `Session::leave_settings` writes a color
+  being picked, gives the terminal the theme's colors back and drops the tab, rebuilt
+  when shown again. Closing the last terminal tab closes the window as before.
+- Drawn in the terminal window's frame: `Session::shown_layout` has no pane while it is
+  shown, and `Renderer::render_with` paints the egui frame (`SettingsTab::prepare`, then
+  `SettingsTab::paint`) after the interface and the banner, before the overlay, in a
+  pass of its own, on the GPU surface as on the X11 offscreen target. egui lays it out
+  in the content area (`RawInput::screen_rect`); `egui_wgpu::Renderer` draws in the
+  renderer's format and picks its shader for an sRGB one. It is drawn on demand: when
+  egui says an event needs a repaint, or after the delay egui asks for
+  (`repaint_delay`, folded into `about_to_wait`'s deadline).
+- Events (`Session::settings_window_event`, `settings_tab::settings_route`): while it is
+  shown, the keyboard goes to the tab (to the window while an overlay is open); presses
+  and the wheel over the tab bar or an overlay go to the window, the others to the tab;
+  moves, releases, focus, size and modifiers go to both. `egui_winit::State` applies the
+  platform output (cursor, clipboard, IME).
+- Why not a second window: under Cinnamon X11 a settings window stayed under the quick
+  terminal, a dock window: the window manager raises docks when the pointer enters
+  them, and forgets `WM_TRANSIENT_FOR` when the quick terminal is unmapped at each hide.
 - Layout (`settings/view.rs`): a sidebar with the ten sections (`i18n::SettingsSection`:
   Language, Font, Window, Scrollback, Cursor, Selection, Tabs, Theme, Keyboard shortcuts,
   Updates) and the selected section's fields (label, widget, errors under it); labels
@@ -297,25 +313,24 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   `StartupMode::VALUES`, `CursorShape::VALUES`, `TabPosition::VALUES`,
   `UpdateInterval::VALUES`, `MIN_FONT_SIZE`...). Font families: "System monospace"
   (empty) then the monospaced families of the system font database, loaded when the
-  window opens. Themes: the `themes/*.toml` stems, then the `theme::BUILT_IN` names they
+  tab opens. Themes: the `themes/*.toml` stems, then the `theme::BUILT_IN` names they
   do not shadow. The "Follow the system appearance" toggle shows `name`, or `light` and
   `dark`; turning it on sets both (to the current theme when unset), off removes both.
 - Writes: combo and toggle on change, text and number on `Enter` or focus loss (a
   number out of range is shown under its field, not written), slider when the drag ends
   and on each click or keyboard step. Each edit is one `config_edit::write`; the file
-  read back is parsed at once so the window shows the result before the reload. The
+  read back is parsed at once so the tab shows the result before the reload. The
   watcher sees the rename and `UserEvent::ConfigChanged` applies it to the terminal
-  window and refreshes the settings window (`SettingsWindow::apply`), as for a hand
-  edit.
+  and refreshes the settings tab (`SettingsTab::apply`), as for a hand edit.
 - Keyboard shortcuts section: one row per action (`Action::ALL`, the palette, tabs 1 to
   9, then any other action the file binds), with its effective shortcuts
   (`Keybindings::shortcuts`: its defaults, then the configured ones; the ones added in
-  the window come last, in the order added). Labels, shortcut slots of equal width and
+  the tab come last, in the order added). Labels, shortcut slots of equal width and
   the right-aligned "Add" button line up across rows; the row under the pointer, or
   being captured or in conflict, is highlighted. Removing a configured shortcut
   deletes its `[keybindings]` entries (every spelling that parses to it); removing a
   default one writes `"<keys>" = "none"`. "Add" captures the next key press: the winit
-  `KeyEvent` is taken by `SettingsWindow::window_event` before egui sees it and turned
+  `KeyEvent` is taken by `SettingsTab::window_event` before egui sees it and turned
   into a shortcut by `Shortcut::from_event`, the inverse of `Keybindings::action`; its
   label is the key written (`"<label>" = "<action id>"`, or the `none` entry removed
   when it restores a default). `Escape` alone cancels, a modifier alone keeps waiting. A
@@ -324,7 +339,7 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 - Errors (`App.load_errors`: the configuration's and the theme's, kept apart): a value
   error under its field (by `ConfigError.key`), a key of a section with no field
   (`font = 3`, a keybinding) at the top of its section, theme errors in the Theme
-  section, unknown keys and a failed write at the top of the window. A syntax or read
+  section, unknown keys and a failed write at the top of the tab. A syntax or read
   error shows the error, the file path and a "fix it by hand" note, and disables every
   field until a reload reads the file again.
 - Look: egui's bundled fonts; `settings::visuals` maps the active palette to egui
@@ -655,8 +670,8 @@ Renderer::render(pane frames, interface rects)
    pane, with `INACTIVE_PANE_BAR` of it mixed into `ui.tab_bar_background` otherwise; a pane
    of the broadcast set uses `ui.pane_broadcast` instead of `ui.palette_match` and its text starts with `»<count>`),
    then the dividers (`ui.pane_border`) and a 2 px border inside the active pane (`ui.palette_match`, the accent color) when
-   the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`) when
-   there are several tabs, on the edge of `tabs.position` (`TabBarPosition`): side by
+   the tab shows several panes, and the tab bar (`chrome::tab_bar::TabBarLayout`), always
+   shown with the settings tab first, on the edge of `tabs.position` (`TabBarPosition`): side by
    side along the top or bottom edge, stacked in a bar `TAB_MAX_WIDTH` wide (at most a
    third of the window) on the left or right. The panes area is the window minus the
    bar (`TabBarPosition::content_area`); each grid is centred in its pane under its
@@ -667,8 +682,8 @@ Renderer::render(pane frames, interface rects)
    a right click opens the pane menu, a click on the title focuses the pane and a double
    click (a `ClickTracker<PaneId>`) toggles the zoom. A left press on the title also arms
    a `Drag::Pane` gesture, started once the pointer moves `pane_bar::PANE_DRAG_THRESHOLD`
-   (4 logical pixels) away: the tab is unzoomed (`was_zoomed` remembered), the tab bar is
-   shown even for a single tab (`Session::tab_bar_shown`) and the panes laid out again,
+   (4 logical pixels) away: the tab is unzoomed (`was_zoomed` remembered), the panes are
+   laid out again,
    the pointer is `Grabbing`. Each move looks the target up with
    `workspace::drop::target` (a move `Workspace::can_move_pane` refuses is no target, nor
    the pane's own tab), and `chrome::scene::drop_highlight` draws its

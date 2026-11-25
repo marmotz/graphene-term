@@ -63,31 +63,19 @@ impl Session {
         matches!(self.drag, Some(Drag::Pane { started: true, .. }))
     }
 
-    /// Whether the tab bar is shown: with several tabs, or while a pane is dragged so
-    /// it can be dropped into a new tab.
-    pub(super) fn tab_bar_shown(&self) -> bool {
-        tab_bar::shown(self.workspace.tabs().len()) || self.pane_dragging()
-    }
-
-    /// Size of the tab bar across its edge, 0 while it is hidden.
+    /// Size of the tab bar across its edge: it is always shown, holding the settings
+    /// tab.
     pub(super) fn tab_bar_thickness(&self) -> f32 {
-        if self.tab_bar_shown() {
-            tab_bar::thickness(
-                self.tab_position,
-                self.window.inner_size().width as f32,
-                self.ui_metrics(UiFont::Chrome),
-            )
-        } else {
-            0.0
-        }
+        tab_bar::thickness(
+            self.tab_position,
+            self.window.inner_size().width as f32,
+            self.ui_metrics(UiFont::Chrome),
+        )
     }
 
-    /// The tab bar, `None` while it is hidden.
-    pub(super) fn tab_bar(&self) -> Option<TabBarLayout> {
+    /// The tab bar, the settings tab first.
+    pub(super) fn tab_bar(&self) -> TabBarLayout {
         let count = self.workspace.tabs().len();
-        if !self.tab_bar_shown() {
-            return None;
-        }
         let titles: Vec<String> = (0..count)
             .map(|index| {
                 self.workspace
@@ -125,7 +113,8 @@ impl Session {
             })
             .collect();
         bar.set_progress(&progress, self.progress_colors());
-        Some(bar)
+        bar.set_settings_active(self.settings_shown());
+        bar
     }
 
     /// Colors of the progress bars of the interface, from the theme.
@@ -177,8 +166,11 @@ impl Session {
             .collect()
     }
 
-    /// Layout of the shown tab.
+    /// Layout of the shown tab: no pane while the settings tab is shown.
     pub(super) fn shown_layout(&self) -> Layout {
+        if self.settings_shown() {
+            return Layout::default();
+        }
         self.workspace
             .layout(self.workspace.active_index(), self.geometry())
     }

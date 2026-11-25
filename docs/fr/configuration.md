@@ -3,14 +3,14 @@
 # Configuration
 
 Graphene fonctionne sans aucune configuration. Pour la modifier, utilisez la
-[fenêtre des paramètres](#fenêtre-des-paramètres) (`Ctrl+,`) ou modifiez le fichier de
+[onglet des paramètres](#onglet-des-paramètres) (`Ctrl+,`) ou modifiez le fichier de
 configuration à la main : les deux écrivent le même fichier, et chaque changement
 s'applique aussitôt à la fenêtre ouverte.
 
 - [Emplacement des fichiers](#emplacement-des-fichiers)
 - [Le fichier de configuration](#le-fichier-de-configuration)
 - [Rechargement à chaud et erreurs](#rechargement-à-chaud-et-erreurs)
-- [Fenêtre des paramètres](#fenêtre-des-paramètres)
+- [Onglet des paramètres](#onglet-des-paramètres)
 - [Retirer les paramètres inconnus](#retirer-les-paramètres-inconnus)
 - [Liste des paramètres](#liste-des-paramètres)
 - [Recherche de mises à jour](#recherche-de-mises-à-jour)
@@ -72,11 +72,13 @@ décrit chaque problème (cliquez dessus pour le masquer) :
 - un paramètre inconnu est ignoré ;
 - une erreur de syntaxe TOML fait ignorer tout le fichier jusqu'à sa correction.
 
-## Fenêtre des paramètres
+## Onglet des paramètres
 
-Ouvrez-la avec `Ctrl+,`, avec **Paramètres** dans la
-[palette de commandes](tabs-and-panes.md#palette-de-commandes), ou depuis le menu du
-clic droit. Elle présente les mêmes sections que le fichier (**Langue**, **Police**,
+Les paramètres sont le premier onglet de la fenêtre, l'icône de réglages au début de la
+barre d'onglets. Affichez-le d'un clic sur l'icône, avec `Ctrl+,`, avec **Paramètres**
+dans la [palette de commandes](tabs-and-panes.md#palette-de-commandes), ou depuis le
+menu du clic droit ; quittez-le d'un clic sur un autre onglet ou avec `Échap`. Il ne se
+ferme jamais. Il présente les mêmes sections que le fichier (**Langue**, **Police**,
 **Fenêtre**, **Historique**, **Curseur**, **Sélection**, **Onglets**, **Thème**,
 **Raccourcis clavier**, **Notifications**, **Quick terminal**, **Mises à jour**), et
 chaque changement est écrit aussitôt dans `config.toml`, ou dans `keybindings.toml` pour
@@ -87,7 +89,7 @@ une modification à la main.
   en l'appuyant (`Échap` annule), ou supprimez-en un.
 - Les problèmes du fichier s'affichent sous le paramètre concerné ; les paramètres
   inconnus sont listés en haut.
-- Tant qu'un fichier contient une erreur de syntaxe, la fenêtre l'affiche et verrouille
+- Tant qu'un fichier contient une erreur de syntaxe, l'onglet l'affiche et verrouille
   ce qui en dépend (les raccourcis clavier pour `keybindings.toml`, les autres sections
   pour `config.toml`) jusqu'à ce que vous corrigiez le fichier à la main.
 

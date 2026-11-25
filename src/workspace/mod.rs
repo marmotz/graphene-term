@@ -278,11 +278,10 @@ impl<P> Workspace<P> {
     }
 
     /// Whether a progress of the pane `id` is drawn: on the pane when it is on screen,
-    /// on its tab when the tab bar is shown and the pane is the active one of its tab.
-    pub fn progress_on_screen(&self, id: PaneId, tab_bar_shown: bool) -> bool {
-        self.progress_shown
-            && (self.is_visible(id)
-                || tab_bar_shown && self.tabs.iter().any(|tab| tab.active == id))
+    /// on its tab, in the tab bar always shown, when the pane is the active one of its
+    /// tab.
+    pub fn progress_on_screen(&self, id: PaneId) -> bool {
+        self.progress_shown && (self.is_visible(id) || self.tabs.iter().any(|tab| tab.active == id))
     }
 
     /// Whether the pane `id` is on screen: in the shown tab, and not hidden by a zoom.
@@ -1892,7 +1891,7 @@ mod tests {
         ws.set_progress_shown(false);
         assert_eq!(ws.tab_progress(0), None);
         assert_eq!(ws.pane_progress(id), None);
-        assert!(!ws.progress_on_screen(id, true));
+        assert!(!ws.progress_on_screen(id));
         // Shown again, the pane's current progress is back.
         ws.set_progress_shown(true);
         assert_eq!(ws.tab_progress(0).map(|p| p.value), Some(30));
@@ -1904,16 +1903,15 @@ mod tests {
         let first = ws.tabs()[0].tree.leaves();
         let second = ws.tabs()[1].tree.leaves();
         // Both panes of the shown tab are on screen.
-        assert!(ws.progress_on_screen(first[0], false));
-        assert!(ws.progress_on_screen(first[1], false));
-        // In a hidden tab, only the active pane shows on its tab, with the bar.
-        assert!(!ws.progress_on_screen(second[1], false));
-        assert!(ws.progress_on_screen(second[1], true));
-        assert!(!ws.progress_on_screen(second[0], true));
+        assert!(ws.progress_on_screen(first[0]));
+        assert!(ws.progress_on_screen(first[1]));
+        // In a hidden tab, only the active pane shows, on its tab.
+        assert!(ws.progress_on_screen(second[1]));
+        assert!(!ws.progress_on_screen(second[0]));
         // A pane hidden by a zoom still shows on its tab when active.
         assert!(ws.focus(first[0]));
         assert!(ws.toggle_zoom());
-        assert!(!ws.progress_on_screen(first[1], true));
+        assert!(!ws.progress_on_screen(first[1]));
     }
 
     #[test]

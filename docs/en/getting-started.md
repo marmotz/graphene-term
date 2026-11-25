@@ -28,11 +28,11 @@ not modified.
 3. **Split the window.** Press `Ctrl+Shift+E` to split right, `Ctrl+Shift+O` to split
    down. Click a pane or use `Ctrl+Shift+Arrow` to move between them, and drag a
    pane's title bar to move it. See [Tabs and panes](tabs-and-panes.md).
-4. **The settings window.** Press `Ctrl+,` to change the font, the cursor, the
+4. **The settings tab.** Press `Ctrl+,` to change the font, the cursor, the
    keyboard shortcuts and more. Changes apply at once. See
-   [Configuration](configuration.md#settings-window).
+   [Configuration](configuration.md#settings-tab).
 5. **A theme.** Right click in the window, open **Themes** and pick one; or set it in
-   the settings window. See [Themes](themes.md).
+   the settings tab. See [Themes](themes.md).
 
 At the prompt, you can also click in your command line to move the cursor, and select
 text with `Shift+Arrow` like in an editor: see [Input editor](input-editor.md).
