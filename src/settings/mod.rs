@@ -17,7 +17,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowId, WindowLevel};
 
 use crate::appearance::Appearance;
 use crate::config::{self, Config, ConfigError};
@@ -66,7 +66,8 @@ pub struct SettingsWindow {
 impl SettingsWindow {
     /// Opens the window on `gpu`, colored by `palette` and labelled in `lang`, showing
     /// `config` and the `errors` of its last load under the system `appearance`; changes
-    /// are written to the files of `dir`.
+    /// are written to the files of `dir`. `above` keeps the window above the others, so
+    /// it opens in front of the quick terminal, which is kept above them too.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         event_loop: &ActiveEventLoop,
@@ -77,12 +78,30 @@ impl SettingsWindow {
         errors: &LoadErrors,
         appearance: Appearance,
         dir: PathBuf,
+        above: bool,
     ) -> anyhow::Result<Self> {
-        let attributes = Window::default_attributes()
+        let mut attributes = Window::default_attributes()
             .with_title(i18n::text(lang, &Msg::OpenSettings))
             .with_inner_size(INITIAL_SIZE)
             .with_min_inner_size(MIN_SIZE);
+        if above {
+            attributes = attributes.with_window_level(WindowLevel::AlwaysOnTop);
+            // Window managers ignore the level winit asks for before the window is
+            // mapped: the state is written while it is hidden, see `x11_window`.
+            #[cfg(target_os = "linux")]
+            {
+                attributes = attributes.with_visible(false);
+            }
+        }
         let window = Arc::new(event_loop.create_window(attributes)?);
+        #[cfg(target_os = "linux")]
+        if above {
+            if let Err(error) = crate::x11_window::preset_states(&window, &crate::x11_window::ABOVE)
+            {
+                log::warn!("cannot keep the settings window above the others: {error:#}");
+            }
+            window.set_visible(true);
+        }
 
         let surface = gpu.create_surface(window.clone())?;
         let caps = surface.get_capabilities(&gpu.adapter);

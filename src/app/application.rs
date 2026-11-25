@@ -536,6 +536,7 @@ impl App {
             return;
         };
         let lang = self.config.language.resolve(Lang::detect);
+        let above = self.quick_state().is_some();
         match SettingsWindow::open(
             event_loop,
             gpu,
@@ -545,6 +546,7 @@ impl App {
             &self.load_errors,
             self.appearance,
             dir,
+            above,
         ) {
             Ok(settings) => self.settings = Some(settings),
             Err(error) => log::error!("cannot open the settings window: {error:#}"),
@@ -716,6 +718,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if outcome == settings::Outcome::Close {
                     self.settings = None;
+                    if let Some(state) = self.quick_state() {
+                        state.settings_closed(Instant::now());
+                    }
                 }
             }
             Route::Unknown => {}
