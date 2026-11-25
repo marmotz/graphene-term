@@ -267,20 +267,27 @@ fn cursor_position(monitors: &[MonitorHandle]) -> Option<(i32, i32)> {
     }
 }
 
-/// The rectangle of `monitor` the quick terminal may cover: the whole screen on Linux
-/// (`_NET_WORKAREA` spans every screen, and the window is above the panels), the part
-/// the menu bar and the Dock leave on macOS.
-fn usable_rect(monitor: &MonitorHandle) -> PixelRect {
+/// The whole rectangle of `monitor`, in physical pixels.
+fn monitor_rect(monitor: &MonitorHandle) -> PixelRect {
     let position = monitor.position();
     let size = monitor.size();
-    let rect = PixelRect {
+    PixelRect {
         x: position.x,
         y: position.y,
         width: size.width,
         height: size.height,
-    };
+    }
+}
+
+/// The part of `monitor` (whose whole rectangle is `rect`) the quick terminal may cover,
+/// as the platform reports it per screen: the part the menu bar and the Dock leave on
+/// macOS, the whole screen elsewhere. On Linux, [`placement`] then reads the work areas
+/// of every screen from the X server at once.
+fn usable_rect(monitor: &MonitorHandle, rect: PixelRect) -> PixelRect {
     #[cfg(target_os = "macos")]
     let rect = rect.inset(quick_terminal::macos::insets(monitor));
+    #[cfg(not(target_os = "macos"))]
+    let _ = monitor;
     rect
 }
 
@@ -294,21 +301,47 @@ pub(super) fn placement(
     let primary = event_loop
         .primary_monitor()
         .and_then(|primary| handles.iter().position(|handle| *handle == primary));
-    let monitors: Vec<Monitor> = handles
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(unused_mut, reason = "X11 work areas")
+    )]
+    let mut monitors: Vec<Monitor> = handles
         .iter()
-        .map(|handle| Monitor {
-            name: handle.name(),
-            rect: usable_rect(handle),
+        .map(|handle| {
+            let rect = monitor_rect(handle);
+            Monitor {
+                name: handle.name(),
+                rect,
+                work_area: usable_rect(handle, rect),
+            }
         })
         .collect();
+    #[cfg(target_os = "linux")]
+    x11_work_areas(&mut monitors);
     let index = quick_terminal::pick_monitor(
         &config.screen,
         &monitors,
         primary,
         cursor_position(&handles),
     )?;
-    let frame = quick_terminal::frame(monitors[index].rect, config.edge, config.size);
+    let frame = quick_terminal::frame(monitors[index].work_area, config.edge, config.size);
     Some(Placement::new(frame, handles[index].scale_factor()))
+}
+
+/// Replaces the work area of `monitors` with the one the X server publishes, so the
+/// quick terminal fits beside the desktop panels; keeps the whole screens when it cannot
+/// be read.
+#[cfg(target_os = "linux")]
+fn x11_work_areas(monitors: &mut [Monitor]) {
+    let rects: Vec<PixelRect> = monitors.iter().map(|monitor| monitor.rect).collect();
+    match crate::x11_window::work_areas(&rects) {
+        Ok(areas) => {
+            for (monitor, area) in monitors.iter_mut().zip(areas) {
+                monitor.work_area = area;
+            }
+        }
+        Err(error) => log::debug!("cannot read the X11 work areas: {error:#}"),
+    }
 }
 
 /// Gives the hidden quick terminal `window` its platform states before it is shown.

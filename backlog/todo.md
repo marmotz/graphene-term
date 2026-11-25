@@ -1,4 +1,4 @@
-<!-- backlog-sync 2026-11-24T09:29Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-25T16:58Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
@@ -58,6 +58,17 @@ _tâches créées — voir [technical.md](features/multiplexing/technical.md)_ �
 | [ ]  | [#213](https://github.com/marmotz/graphene-term/issues/213) | Multiplexage : icône de barre de menus sous macOS | #206 |
 | [ ]  | [#215](https://github.com/marmotz/graphene-term/issues/215) | Multiplexage : images kitty par fichier temporaire ou mémoire partagée | #205, #208 |
 
+## Per-pane font size  ·  [overview](features/pane-font-size/overview.md)
+
+_tâches créées — voir [technical.md](features/pane-font-size/technical.md)_ — 0/4 tasks done
+
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [ ]  | [#256](https://github.com/marmotz/graphene-term/issues/256) | feat(pane-font-size): glyph cache keyed by font size | — |
+| [ ]  | [#257](https://github.com/marmotz/graphene-term/issues/257) | feat(pane-font-size): per-pane font offset and keyboard actions | #256 |
+| [ ]  | [#258](https://github.com/marmotz/graphene-term/issues/258) | feat(pane-font-size): Ctrl+wheel changes the hovered pane's font size | #257 |
+| [ ]  | [#259](https://github.com/marmotz/graphene-term/issues/259) | feat(pane-font-size): restore each pane's font size with the session | #257 |
+
 ## Quick terminal (mode Quake)  ·  [overview](features/quick-terminal/overview.md)
 
 _tâches créées — voir [technical.md](features/quick-terminal/technical.md)_ — 4/5 tasks done
@@ -69,16 +80,6 @@ _tâches créées — voir [technical.md](features/quick-terminal/technical.md)_
 | [x]  | [#230](https://github.com/marmotz/graphene-term/issues/230) | feat(quick-terminal): quick process, toggle command and window placement | #229 |
 | [x]  | [#231](https://github.com/marmotz/graphene-term/issues/231) | feat(quick-terminal): slide animation, hide on focus loss and reset on close | #230 |
 | [x]  | [#232](https://github.com/marmotz/graphene-term/issues/232) | feat(quick-terminal): native global hotkey and hidden startup | #229, #230 |
-
-## Quick terminal autostart  ·  [overview](features/quick-terminal-autostart/overview.md)
-
-_terminé — voir [technical.md](features/quick-terminal-autostart/technical.md)_ — 3/3 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [x]  | [#250](https://github.com/marmotz/graphene-term/issues/250) | feat(quick-terminal-autostart): autostart configuration key and setting | — |
-| [x]  | [#251](https://github.com/marmotz/graphene-term/issues/251) | feat(quick-terminal-autostart): session autostart entry module | — |
-| [x]  | [#252](https://github.com/marmotz/graphene-term/issues/252) | feat(quick-terminal-autostart): apply the setting and document it | #250, #251 |
 
 ## Recherche dans l'historique  ·  [overview](features/scrollback-search/overview.md)
 
@@ -93,3 +94,22 @@ _tâches créées — voir [technical.md](features/scrollback-search/technical.m
 | [ ]  | [#212](https://github.com/marmotz/graphene-term/issues/212) | [Recherche] Barre de recherche du pane | #200, #202, #203 |
 | [ ]  | [#216](https://github.com/marmotz/graphene-term/issues/216) | [Recherche] Surlignage des occurrences | #201, #202, #212 |
 | [ ]  | [#218](https://github.com/marmotz/graphene-term/issues/218) | [Recherche] Documentation | #212, #216 |
+
+## Bugs
+
+### Quick terminal at full height goes under the desktop panel  ·  [overview](bugs/quick-terminal-full-height-under-panel/overview.md)
+
+_terminé — voir [technical.md](bugs/quick-terminal-full-height-under-panel/technical.md)_ — 2/2 tasks done
+
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [x]  | [#260](https://github.com/marmotz/graphene-term/issues/260) | Quick terminal: work area geometry and screen selection on the physical screen | — |
+| [x]  | [#261](https://github.com/marmotz/graphene-term/issues/261) | Quick terminal: read the X11 work area so it fits beside the desktop panels | #260 |
+
+### Les réglages s'ouvrent sous le quick terminal  ·  [overview](bugs/quick-terminal-settings-hidden/overview.md)
+
+_tâches créées : voir [technical.md](bugs/quick-terminal-settings-hidden/technical.md)_ — 0/1 tasks done
+
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [ ]  | [#255](https://github.com/marmotz/graphene-term/issues/255) | fix(quick-terminal): open the settings in front of the quick terminal | — |
