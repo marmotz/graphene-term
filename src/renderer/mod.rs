@@ -43,6 +43,11 @@ pub struct UiLayer {
     pub overlay_texts: Vec<UiTextItem>,
 }
 
+/// Records drawing over the window into the encoder and texture view of a frame, after
+/// the interface and the banner and before the overlay: the settings tab, drawn with
+/// egui.
+pub type ContentPainter<'a> = &'a mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView);
+
 /// One pane to draw: its frame and the layout placing its grid in the window.
 #[derive(Clone, Copy)]
 pub struct PaneFrame<'a> {
@@ -223,29 +228,21 @@ impl Layers {
     /// clear, then each pane clipped to its rectangle (`under` rects, images, grid
     /// glyphs, `over` rects), then over the whole window the interface rects and text, the
     /// banner rects and glyphs, and the overlay rects and text.
+    /// With `content`, it paints between the banner and the overlay, in a pass of its
+    /// own: the overlay is drawn in a last pass.
     fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &Prepared,
+        content: Option<ContentPainter<'_>>,
     ) {
         let [r, g, b, a] = prepared.clear.map(f64::from);
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("terminal pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = begin_pass(
+            encoder,
+            view,
+            wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
+        );
         for (index, pane) in prepared.panes.iter().enumerate() {
             let Some([x, y, width, height]) = pane.scissor else {
                 continue;
@@ -262,9 +259,38 @@ impl Layers {
         self.cells.render(&mut pass, prepared.panes.len());
         self.rects.render(&mut pass, prepared.banner.clone());
         self.cells.render(&mut pass, prepared.panes.len() + 1);
+        if let Some(content) = content {
+            drop(pass);
+            content(encoder, view);
+            pass = begin_pass(encoder, view, wgpu::LoadOp::Load);
+        }
         self.rects.render(&mut pass, prepared.overlay.clone());
         self.cells.render(&mut pass, prepared.panes.len() + 2);
     }
+}
+
+/// Starts the render pass drawing into `view`, which it first clears or keeps (`load`).
+fn begin_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("terminal pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
 }
 
 /// How often a frame read back from the GPU is checked for, until it can be sent to
@@ -462,6 +488,8 @@ pub struct Renderer {
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
     layers: Layers,
+    /// Format the layers draw in, see [`Self::format`].
+    format: wgpu::TextureFormat,
     alpha_mode: SurfaceAlphaMode,
     size: (u32, u32),
     #[cfg(target_os = "linux")]
@@ -590,6 +618,7 @@ impl Renderer {
             surface: Some(surface),
             config,
             layers,
+            format,
             alpha_mode,
             size: (size.width.max(1), size.height.max(1)),
             #[cfg(target_os = "linux")]
@@ -743,6 +772,16 @@ impl Renderer {
     /// screen (`false` when the surface was not ready and a new redraw was requested or
     /// will come).
     pub fn render(&mut self, panes: &[PaneFrame<'_>], ui: &UiLayer) -> anyhow::Result<bool> {
+        self.render_with(panes, ui, None)
+    }
+
+    /// [`Self::render`], with `content` painted over the interface, under the overlay.
+    pub fn render_with(
+        &mut self,
+        panes: &[PaneFrame<'_>],
+        ui: &UiLayer,
+        content: Option<ContentPainter<'_>>,
+    ) -> anyhow::Result<bool> {
         let screen = self.size;
         let prepared = self
             .layers
@@ -750,10 +789,15 @@ impl Renderer {
 
         #[cfg(target_os = "linux")]
         if self.x11_presenter.is_some() && !self.direct {
-            return self.render_x11(&prepared);
+            return self.render_x11(&prepared, content);
         }
 
-        self.render_surface(&prepared)
+        self.render_surface(&prepared, content)
+    }
+
+    /// Format of the textures frames are drawn into.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
     }
 
     /// Configures the surface again and asks for a new frame, after it became outdated
@@ -770,7 +814,11 @@ impl Renderer {
         Ok(())
     }
 
-    fn render_surface(&mut self, prepared: &Prepared) -> anyhow::Result<bool> {
+    fn render_surface(
+        &mut self,
+        prepared: &Prepared,
+        content: Option<ContentPainter<'_>>,
+    ) -> anyhow::Result<bool> {
         let output = self
             .surface
             .as_ref()
@@ -801,7 +849,7 @@ impl Renderer {
             .gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.layers.draw(&mut encoder, &view, prepared);
+        self.layers.draw(&mut encoder, &view, prepared, content);
 
         self.gpu.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();
@@ -812,7 +860,11 @@ impl Renderer {
     /// Draws the frame into the offscreen target and starts reading it back, without
     /// waiting for the GPU: [`Self::finish_presentation`] sends it to the X server.
     #[cfg(target_os = "linux")]
-    fn render_x11(&mut self, prepared: &Prepared) -> anyhow::Result<bool> {
+    fn render_x11(
+        &mut self,
+        prepared: &Prepared,
+        content: Option<ContentPainter<'_>>,
+    ) -> anyhow::Result<bool> {
         self.last_x11_frame = Some(Instant::now());
         // The previous frame reaches the window first.
         self.finish_x11(true)?;
@@ -824,7 +876,8 @@ impl Renderer {
             .gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.layers.draw(&mut encoder, &target.view, prepared);
+        self.layers
+            .draw(&mut encoder, &target.view, prepared, content);
         target.start_read(&self.gpu.queue, encoder)?;
         Ok(true)
     }
@@ -936,7 +989,8 @@ impl Headless {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.layers.draw(&mut encoder, &self.target.view, &prepared);
+        self.layers
+            .draw(&mut encoder, &self.target.view, &prepared, None);
         encoder
     }
 
