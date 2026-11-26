@@ -550,13 +550,19 @@ impl App {
             return;
         }
         self.hide_quick(event_loop);
-        if let Some(session) = self.session.as_mut()
-            && !session.reset_workspace()
-        {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if !session.reset_workspace() {
             self.fail(
                 event_loop,
                 anyhow::anyhow!("cannot start a shell for the quick terminal"),
             );
+            return;
+        }
+        // Saved at once: a restart never brings the closed tabs back.
+        if let Some(saver) = self.session_saver.as_mut() {
+            saver.save(&session.window_snapshot(None));
         }
     }
 }
@@ -752,6 +758,42 @@ mod tests {
         // A shell that cannot start leaves no pane.
         assert!(!reset_workspace(&mut workspace, |_| None));
         assert!(workspace.tabs().is_empty());
+    }
+
+    /// A pane of a test workspace, in the directory it was opened in.
+    struct InDir(PathBuf);
+
+    impl crate::workspace::TitleSource for InDir {
+        fn osc_title(&self) -> Option<&str> {
+            None
+        }
+        fn current_dir(&self) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+        fn shell_name(&self) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn the_session_saved_after_a_reset_has_a_single_tab() {
+        let mut workspace = Workspace::<InDir>::new();
+        for dir in ["/one", "/two", "/three"] {
+            let id = workspace.allocate_id();
+            workspace.new_tab(id, InDir(PathBuf::from(dir)));
+        }
+        assert!(reset_workspace(&mut workspace, |_| Some(InDir(
+            PathBuf::from("/home")
+        ))));
+        let (tabs, active) = workspace.snapshot();
+        assert_eq!(active, 0);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(
+            tabs[0].tree,
+            crate::session::NodeSnapshot::Pane {
+                cwd: Some(PathBuf::from("/home"))
+            }
+        );
     }
 
     #[test]

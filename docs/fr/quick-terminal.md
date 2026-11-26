@@ -87,6 +87,21 @@ fois suivante avec un seul onglet neuf, son shell dans votre dossier personnel. 
 confirmation demandée quand un programme tourne encore est la même que pour une fenêtre
 ordinaire.
 
+## Restauration de session
+
+Avec [`window.restore_session`](configuration.md#window) activé, le quick terminal
+sauvegarde ses onglets comme une fenêtre ordinaire, et les rouvre au prochain démarrage
+de son processus, par `graphene --quick-toggle`, par le raccourci global ou à
+l'ouverture de session. Chaque panneau démarre un shell neuf dans son répertoire
+sauvegardé. Sa place et sa taille viennent toujours de la section
+[`[quick_terminal]`](configuration.md#quick_terminal).
+
+Le quick terminal et les fenêtres ordinaires sont restaurés séparément : démarrer le
+quick terminal ne rouvre jamais une fenêtre ordinaire, et un quick terminal résident
+n'empêche pas les fenêtres ordinaires d'être rouvertes au lancement suivant. Après sa
+fermeture, l'onglet neuf unique avec lequel il repart est sauvegardé aussitôt : un
+redémarrage ne fait pas revenir les onglets fermés.
+
 ## Où il apparaît
 
 Le quick terminal couvre une part de l'écran contre l'un de ses bords, réglée dans la
