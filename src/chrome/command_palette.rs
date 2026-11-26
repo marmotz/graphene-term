@@ -156,6 +156,8 @@ pub struct Context {
     pub paste: bool,
     pub font_size: f32,
     pub default_font_size: f32,
+    /// A pane, in any tab, is not at the configured font size.
+    pub any_pane_font_changed: bool,
 }
 
 /// Whether `action` would do something now, in `workspace` laid out in `geometry`.
@@ -197,6 +199,7 @@ pub fn available<P>(
                     .default_font_size
                     .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)
         }
+        Action::FontSizeResetAll => context.any_pane_font_changed,
         Action::Paste => context.paste && context.pane.is_some(),
         Action::Copy => pane.copy,
         Action::CopyCommand => pane.copy_command,
@@ -1031,6 +1034,7 @@ mod tests {
             paste: false,
             font_size: 12.0,
             default_font_size: 12.0,
+            any_pane_font_changed: false,
         }
     }
 
@@ -1158,6 +1162,17 @@ mod tests {
     }
 
     #[test]
+    fn reset_all_font_sizes_is_shown_when_a_pane_was_resized() {
+        let ws = single_pane();
+        assert!(!actions(&ws, &context()).contains(&Action::FontSizeResetAll));
+        let resized = Context {
+            any_pane_font_changed: true,
+            ..context()
+        };
+        assert!(actions(&ws, &resized).contains(&Action::FontSizeResetAll));
+    }
+
+    #[test]
     fn pane_and_clipboard_actions_follow_the_context() {
         let ws = single_pane();
         let everything = PaneContext {
@@ -1193,6 +1208,7 @@ mod tests {
                     | Action::EqualisePanes
                     | Action::DetachPane
                     | Action::FontSizeReset
+                    | Action::FontSizeResetAll
             );
             assert_eq!(shown.contains(&action), expected, "{action:?}");
         }

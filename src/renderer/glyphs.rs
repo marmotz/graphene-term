@@ -67,23 +67,57 @@ fn line_height(font_size: f32) -> f32 {
     (font_size * 1.3).ceil()
 }
 
+/// Size of a grid font, in physical pixels. Stored as the bits of the `f32`, so that it
+/// can key the caches: each size has its own metrics and glyphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GridSize(u32);
+
+impl GridSize {
+    /// Size of the keys of interface glyphs, whose size comes from their [`UiFont`].
+    const UI: Self = Self(0);
+
+    pub const fn new(pixels: f32) -> Self {
+        Self(pixels.to_bits())
+    }
+
+    /// The size, in physical pixels.
+    pub fn pixels(self) -> f32 {
+        f32::from_bits(self.0)
+    }
+}
+
 /// What a cell asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
     pub c: char,
     pub bold: bool,
     pub italic: bool,
+    /// Size of the grid font; ignored, and normalized by [`Self::ui`], for the
+    /// interface font.
+    pub size: GridSize,
     /// Interface font (sans-serif) instead of the grid font.
     pub ui: Option<UiFont>,
 }
 
 impl GlyphKey {
+    /// A character of the grid font at `size`, in bold and/or italic.
+    pub fn grid(c: char, size: GridSize, bold: bool, italic: bool) -> Self {
+        Self {
+            c,
+            bold,
+            italic,
+            size,
+            ui: None,
+        }
+    }
+
     /// A character of the interface font `font`, regular.
     pub fn ui(font: UiFont, c: char) -> Self {
         Self {
             c,
             bold: false,
             italic: false,
+            size: GridSize::UI,
             ui: Some(font),
         }
     }
@@ -134,7 +168,7 @@ pub struct RunGlyph {
     pub ligated: bool,
 }
 
-/// Shaped runs of one `(bold, italic)` style, by text.
+/// Shaped runs of one `(size, bold, italic)` style, by text.
 type RunCache = HashMap<Box<str>, Rc<[RunGlyph]>>;
 
 /// A character shaped alone: the glyph to rasterize and the pen offset from the cell
@@ -183,14 +217,17 @@ pub struct Glyphs {
     ligatures: bool,
     /// OpenType features of the grid text, see [`Self::grid_attrs`].
     features: FontFeatures,
-    metrics: Metrics,
-    cell: CellSize,
+    /// Size of the grid font everything but the panes uses (banner, geometry), see
+    /// [`Self::cell_size`]. Always in `grids`.
+    base: GridSize,
+    /// Metrics and cell of each grid font size used so far, measured on demand.
+    grids: HashMap<GridSize, (Metrics, CellSize)>,
     /// Scale factor of the window, applied to the interface fonts.
     ui_scale: f32,
     /// Characters shaped alone; `None` when no font has a glyph for them.
     chars: HashMap<GlyphKey, Option<Shaped>>,
-    /// Shaped runs of the grid, by `(bold, italic)` then text.
-    runs: HashMap<(bool, bool), RunCache>,
+    /// Shaped runs of the grid, by `(size, bold, italic)` then text.
+    runs: HashMap<(GridSize, bool, bool), RunCache>,
     /// Number of entries of `runs`.
     cached_runs: usize,
     /// Rasterized glyphs, shared by characters and runs; `None` for glyphs with nothing
@@ -283,15 +320,16 @@ impl Glyphs {
     ) -> Self {
         let mut font_system = font_system;
         let family = resolve_family(font_system.db(), font.family.clone());
-        let (metrics, cell) = Self::measure(&mut font_system, &family, font_size);
+        let base = GridSize::new(font_size);
+        let grid = Self::measure(&mut font_system, &family, font_size);
         Self {
             font_system,
             swash_cache: SwashCache::new(),
             family,
             ligatures: font.ligatures,
             features: font.features.clone(),
-            metrics,
-            cell,
+            base,
+            grids: HashMap::from([(base, grid)]),
             ui_scale: 1.0,
             chars: HashMap::new(),
             runs: HashMap::new(),
@@ -335,28 +373,52 @@ impl Glyphs {
         )
     }
 
+    /// Cell of the base size, see [`Self::font_size`].
     pub fn cell_size(&self) -> CellSize {
-        self.cell
+        self.grids[&self.base].1
     }
 
+    /// Metrics of the base size, see [`Self::font_size`].
     pub fn metrics(&self) -> Metrics {
-        self.metrics
+        self.grids[&self.base].0
     }
 
-    /// Changes the font size: new metrics, and every cached glyph is dropped.
+    /// Base size of the grid font: the size of everything drawn with the grid font
+    /// outside the panes, and of the panes that do not change it.
+    pub fn font_size(&self) -> GridSize {
+        self.base
+    }
+
+    /// Cell of the grid font at `size`, measured on first use.
+    pub fn cell_size_at(&mut self, size: GridSize) -> CellSize {
+        self.grid(size).1
+    }
+
+    /// Metrics and cell of the grid font at `size`, measured on first use.
+    fn grid(&mut self, size: GridSize) -> (Metrics, CellSize) {
+        if let Some(&grid) = self.grids.get(&size) {
+            return grid;
+        }
+        let grid = Self::measure(&mut self.font_system, &self.family, size.pixels());
+        self.grids.insert(size, grid);
+        grid
+    }
+
+    /// Changes the base font size, see [`Self::font_size`]. The glyphs of every size
+    /// stay cached: they do not depend on the base size.
     pub fn set_font_size(&mut self, font_size: f32) {
-        let (metrics, cell) = Self::measure(&mut self.font_system, &self.family, font_size);
-        self.metrics = metrics;
-        self.cell = cell;
-        self.clear();
+        self.base = GridSize::new(font_size);
+        self.grid(self.base);
     }
 
-    /// Changes the font (family, ligatures, features) and size: new metrics, and every
-    /// cached glyph is dropped.
+    /// Changes the font (family, ligatures, features) and base size: new metrics, and
+    /// every cached glyph is dropped.
     pub fn set_font(&mut self, font: &FontOptions, font_size: f32) {
         self.family = resolve_family(self.font_system.db(), font.family.clone());
         self.ligatures = font.ligatures;
         self.features = font.features.clone();
+        self.grids.clear();
+        self.clear();
         self.set_font_size(font_size);
     }
 
@@ -504,7 +566,7 @@ impl Glyphs {
                     self.ui_metrics(font),
                 )
             }
-            None => (self.grid_attrs(key.bold, key.italic), self.metrics),
+            None => (self.grid_attrs(key.bold, key.italic), self.grid(key.size).0),
         };
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         let mut text = [0; 4];
@@ -525,33 +587,43 @@ impl Glyphs {
         })
     }
 
-    /// The glyphs of `text`, a run of grid cells of one column each, shaped together so
-    /// that the font can form its ligatures. Shaped once per `(text, bold, italic)`, then
-    /// served from a cache dropped by [`Self::clear`].
-    pub fn shape_run(&mut self, text: &str, bold: bool, italic: bool) -> Rc<[RunGlyph]> {
-        if let Some(run) = self
-            .runs
-            .get(&(bold, italic))
-            .and_then(|runs| runs.get(text))
-        {
+    /// The glyphs of `text`, a run of grid cells of one column each at the font size
+    /// `size`, shaped together so that the font can form its ligatures. Shaped once per
+    /// `(text, size, bold, italic)`, then served from a cache dropped by [`Self::clear`].
+    pub fn shape_run(
+        &mut self,
+        text: &str,
+        size: GridSize,
+        bold: bool,
+        italic: bool,
+    ) -> Rc<[RunGlyph]> {
+        let style = (size, bold, italic);
+        if let Some(run) = self.runs.get(&style).and_then(|runs| runs.get(text)) {
             return run.clone();
         }
-        let run: Rc<[RunGlyph]> = self.shape_text(text, bold, italic).into();
+        let run: Rc<[RunGlyph]> = self.shape_text(text, size, bold, italic).into();
         if self.cached_runs >= MAX_CACHED_RUNS {
             self.runs.clear();
             self.cached_runs = 0;
         }
         self.runs
-            .entry((bold, italic))
+            .entry(style)
             .or_default()
             .insert(text.into(), run.clone());
         self.cached_runs += 1;
         run
     }
 
-    fn shape_text(&mut self, text: &str, bold: bool, italic: bool) -> Vec<RunGlyph> {
+    fn shape_text(
+        &mut self,
+        text: &str,
+        size: GridSize,
+        bold: bool,
+        italic: bool,
+    ) -> Vec<RunGlyph> {
         let attrs = self.grid_attrs(bold, italic);
-        let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
+        let metrics = self.grid(size).0;
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_text(text, &attrs.as_attrs(), Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
         let Some(line) = buffer.layout_runs().next() else {
@@ -574,12 +646,7 @@ impl Glyphs {
                 continue;
             };
             let physical = glyph.physical((-cluster.1, 0.0), 1.0);
-            let alone = self.shaped(GlyphKey {
-                c,
-                bold,
-                italic,
-                ui: None,
-            });
+            let alone = self.shaped(GlyphKey::grid(c, size, bold, italic));
             let same_glyph = alone.is_some_and(|alone| {
                 (alone.raster.font_id, alone.raster.glyph_id)
                     == (physical.cache_key.font_id, physical.cache_key.glyph_id)
@@ -654,14 +721,10 @@ mod tests {
     use super::*;
 
     const FONT_SIZE: f32 = 14.0;
+    const SIZE: GridSize = GridSize::new(FONT_SIZE);
 
     fn key(c: char) -> GlyphKey {
-        GlyphKey {
-            c,
-            bold: false,
-            italic: false,
-            ui: None,
-        }
+        GlyphKey::grid(c, SIZE, false, false)
     }
 
     #[test]
@@ -792,16 +855,86 @@ mod tests {
     }
 
     #[test]
-    fn font_size_change_updates_metrics_and_clears_the_cache() {
+    fn font_size_change_updates_the_base_metrics_and_keeps_the_other_sizes() {
         let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
         let small = glyphs.get(key('a')).unwrap();
+        glyphs.take_uploads();
         let generation = glyphs.generation();
         glyphs.set_font_size(FONT_SIZE * 2.0);
+        assert_eq!(glyphs.font_size(), GridSize::new(FONT_SIZE * 2.0));
         assert_eq!(glyphs.cell_size().height, (FONT_SIZE * 2.0 * 1.3).ceil());
-        assert!(glyphs.generation() > generation);
-        let large = glyphs.get(key('a')).unwrap();
+        assert_eq!(
+            glyphs.metrics(),
+            Metrics::new(FONT_SIZE * 2.0, (FONT_SIZE * 2.0 * 1.3).ceil())
+        );
+        // The glyphs of the former base size are still cached.
+        assert_eq!(glyphs.generation(), generation);
+        assert_eq!(glyphs.get(key('a')), Some(small));
+        assert!(glyphs.take_uploads().is_empty());
+        let large = glyphs
+            .get(GlyphKey::grid('a', glyphs.font_size(), false, false))
+            .unwrap();
         assert!(large.region.height > small.region.height);
         assert_eq!(glyphs.take_uploads().len(), 1);
+    }
+
+    #[test]
+    fn each_size_has_its_own_cell() {
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
+        let base = glyphs.cell_size();
+        assert_eq!(glyphs.cell_size_at(SIZE), base);
+        let large = glyphs.cell_size_at(GridSize::new(FONT_SIZE * 2.0));
+        assert_eq!(large.height, (FONT_SIZE * 2.0 * 1.3).ceil());
+        assert!(large.width > base.width);
+        // Measuring another size keeps the base one.
+        assert_eq!(glyphs.cell_size(), base);
+        assert_eq!(glyphs.font_size(), SIZE);
+    }
+
+    #[test]
+    fn a_character_at_two_sizes_gives_two_glyphs() {
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
+        let small = glyphs.get(key('a')).unwrap();
+        let large = glyphs
+            .get(GlyphKey::grid(
+                'a',
+                GridSize::new(FONT_SIZE * 2.0),
+                false,
+                false,
+            ))
+            .unwrap();
+        assert_ne!(small.region, large.region);
+        assert!(large.region.height > small.region.height);
+        assert_eq!(glyphs.take_uploads().len(), 2);
+    }
+
+    #[test]
+    fn shaped_runs_are_cached_per_size() {
+        let mut glyphs = test_font();
+        let large = GridSize::new(FONT_SIZE * 2.0);
+        let small_run = glyphs.shape_run("->", SIZE, false, false);
+        let large_run = glyphs.shape_run("->", large, false, false);
+        assert!(!Rc::ptr_eq(&small_run, &large_run));
+        assert_ne!(small_run[1].raster, large_run[1].raster);
+        assert!(Rc::ptr_eq(
+            &large_run,
+            &glyphs.shape_run("->", large, false, false)
+        ));
+        assert_eq!(glyphs.cached_runs, 2);
+    }
+
+    #[test]
+    fn interface_keys_ignore_the_grid_size() {
+        assert_eq!(GlyphKey::ui(UiFont::Chrome, 'a').size, GridSize::UI);
+    }
+
+    #[test]
+    fn font_change_measures_the_sizes_again() {
+        let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
+        glyphs.cell_size_at(GridSize::new(FONT_SIZE * 2.0));
+        glyphs.set_font(&FontOptions::default(), FONT_SIZE);
+        assert_eq!(glyphs.grids.len(), 1);
+        assert_eq!(glyphs.cell_size_at(SIZE), glyphs.cell_size());
     }
 
     #[test]
@@ -977,7 +1110,9 @@ mod tests {
     #[test]
     fn ui_glyphs_are_distinct_from_grid_glyphs() {
         let mut glyphs = Glyphs::new(&FontOptions::default(), 30.0);
-        let grid = glyphs.get(key('a')).unwrap();
+        let grid = glyphs
+            .get(GlyphKey::grid('a', glyphs.font_size(), false, false))
+            .unwrap();
         let ui = glyphs.get(GlyphKey::ui(UiFont::Chrome, 'a')).unwrap();
         assert_ne!(grid.region, ui.region);
         // The interface font is smaller than this grid font.
@@ -1011,11 +1146,11 @@ mod tests {
     fn programming_ligatures_are_ligated() {
         let mut glyphs = test_font();
         assert_eq!(
-            ligated(&glyphs.shape_run("->", false, false)),
+            ligated(&glyphs.shape_run("->", SIZE, false, false)),
             [(0, true), (1, true)]
         );
         assert_eq!(
-            ligated(&glyphs.shape_run("===", false, false)),
+            ligated(&glyphs.shape_run("===", SIZE, false, false)),
             [(0, true), (1, true), (2, true)]
         );
     }
@@ -1023,7 +1158,7 @@ mod tests {
     #[test]
     fn plain_text_is_not_ligated_and_keeps_the_glyphs_of_its_characters() {
         let mut glyphs = test_font();
-        let run = glyphs.shape_run("ab", false, false);
+        let run = glyphs.shape_run("ab", SIZE, false, false);
         assert_eq!(ligated(&run), [(0, false), (1, false)]);
         for (glyph, c) in run.iter().zip(['a', 'b']) {
             let alone = glyphs.get(key(c));
@@ -1034,7 +1169,7 @@ mod tests {
     #[test]
     fn ligature_glyphs_differ_from_the_characters_alone() {
         let mut glyphs = test_font();
-        let run = glyphs.shape_run("->", false, false);
+        let run = glyphs.shape_run("->", SIZE, false, false);
         let arrow: Vec<_> = run.iter().map(|g| glyphs.run_glyph(g)).collect();
         let alone = [glyphs.get(key('-')), glyphs.get(key('>'))];
         assert_ne!(arrow, alone);
@@ -1043,34 +1178,49 @@ mod tests {
     #[test]
     fn shaped_runs_are_served_from_the_cache() {
         let mut glyphs = test_font();
-        let first = glyphs.shape_run("->", false, false);
-        assert!(Rc::ptr_eq(&first, &glyphs.shape_run("->", false, false)));
+        let first = glyphs.shape_run("->", SIZE, false, false);
+        assert!(Rc::ptr_eq(
+            &first,
+            &glyphs.shape_run("->", SIZE, false, false)
+        ));
         // The style is part of the key.
-        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("->", true, false)));
+        assert!(!Rc::ptr_eq(
+            &first,
+            &glyphs.shape_run("->", SIZE, true, false)
+        ));
         assert_eq!(glyphs.cached_runs, 2);
         glyphs.clear();
         assert_eq!(glyphs.cached_runs, 0);
-        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("->", false, false)));
+        assert!(!Rc::ptr_eq(
+            &first,
+            &glyphs.shape_run("->", SIZE, false, false)
+        ));
     }
 
     #[test]
     fn run_cache_is_dropped_past_its_limit() {
         let mut glyphs = test_font();
-        let first = glyphs.shape_run("a0", false, false);
+        let first = glyphs.shape_run("a0", SIZE, false, false);
         for index in 1..MAX_CACHED_RUNS {
-            glyphs.shape_run(&format!("a{index}"), false, false);
+            glyphs.shape_run(&format!("a{index}"), SIZE, false, false);
         }
         assert_eq!(glyphs.cached_runs, MAX_CACHED_RUNS);
-        assert!(Rc::ptr_eq(&first, &glyphs.shape_run("a0", false, false)));
-        glyphs.shape_run("full", false, false);
+        assert!(Rc::ptr_eq(
+            &first,
+            &glyphs.shape_run("a0", SIZE, false, false)
+        ));
+        glyphs.shape_run("full", SIZE, false, false);
         assert_eq!(glyphs.cached_runs, 1);
-        assert!(!Rc::ptr_eq(&first, &glyphs.shape_run("a0", false, false)));
+        assert!(!Rc::ptr_eq(
+            &first,
+            &glyphs.shape_run("a0", SIZE, false, false)
+        ));
     }
 
     #[test]
     fn features_change_drops_the_shaped_runs() {
         let mut glyphs = test_font();
-        assert!(glyphs.shape_run("->", false, false)[0].ligated);
+        assert!(glyphs.shape_run("->", SIZE, false, false)[0].ligated);
         let mut font = FontOptions {
             family: Some(TEST_FONT_FAMILY.to_owned()),
             ..FontOptions::default()
@@ -1078,7 +1228,7 @@ mod tests {
         font.features.disable(cosmic_text::FeatureTag::new(b"calt"));
         glyphs.set_font(&font, FONT_SIZE);
         assert_eq!(
-            ligated(&glyphs.shape_run("->", false, false)),
+            ligated(&glyphs.shape_run("->", SIZE, false, false)),
             [(0, false), (1, false)]
         );
     }
@@ -1086,14 +1236,17 @@ mod tests {
     #[test]
     fn atlas_reset_keeps_the_shaping_and_rasterizes_again() {
         let mut glyphs = test_font();
-        let run = glyphs.shape_run("->", false, false);
+        let run = glyphs.shape_run("->", SIZE, false, false);
         // JetBrains Mono draws the arrow from its last cell.
         glyphs.run_glyph(&run[1]).expect("ligature has pixels");
         glyphs.take_uploads();
         let generation = glyphs.generation();
         glyphs.reset_atlas();
         assert!(glyphs.generation() > generation);
-        assert!(Rc::ptr_eq(&run, &glyphs.shape_run("->", false, false)));
+        assert!(Rc::ptr_eq(
+            &run,
+            &glyphs.shape_run("->", SIZE, false, false)
+        ));
         glyphs.run_glyph(&run[1]).expect("ligature has pixels");
         assert_eq!(glyphs.take_uploads().len(), 1);
     }

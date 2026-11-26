@@ -18,6 +18,8 @@ pub enum Action {
     FontSizeIncrease,
     FontSizeDecrease,
     FontSizeReset,
+    /// Gives every pane the configured font size.
+    FontSizeResetAll,
     PreviousBlock,
     NextBlock,
     CopyCommand,
@@ -62,7 +64,7 @@ pub enum Action {
 impl Action {
     /// Every action the command palette lists, in its default order. The tabs are
     /// listed by the palette itself, so `GoToTab` is left out, and so is the palette.
-    pub const ALL: [Action; 39] = [
+    pub const ALL: [Action; 40] = [
         Action::NewTab,
         Action::CloseTab,
         Action::RenameTab,
@@ -100,6 +102,7 @@ impl Action {
         Action::FontSizeIncrease,
         Action::FontSizeDecrease,
         Action::FontSizeReset,
+        Action::FontSizeResetAll,
         Action::OpenSettings,
         Action::Quit,
     ];
@@ -124,6 +127,7 @@ impl Action {
             Action::FontSizeIncrease => "font_size_increase",
             Action::FontSizeDecrease => "font_size_decrease",
             Action::FontSizeReset => "font_size_reset",
+            Action::FontSizeResetAll => "font_size_reset_all",
             Action::PreviousBlock => "previous_block",
             Action::NextBlock => "next_block",
             Action::CopyCommand => "copy_command",
@@ -182,6 +186,7 @@ impl Action {
             Action::FontSizeIncrease => Msg::FontSizeIncrease,
             Action::FontSizeDecrease => Msg::FontSizeDecrease,
             Action::FontSizeReset => Msg::FontSizeReset,
+            Action::FontSizeResetAll => Msg::FontSizeResetAll,
             Action::PreviousBlock => Msg::PreviousBlock,
             Action::NextBlock => Msg::NextBlock,
             Action::CopyCommand => Msg::CopyCommand,
@@ -493,6 +498,7 @@ mod tests {
         assert_eq!(Action::FocusPane(Direction::Left).id(), "focus_pane_left");
         assert_eq!(Action::GoToTab(3).id(), "go_to_tab_3");
         assert_eq!(Action::FontSizeReset.id(), "font_size_reset");
+        assert_eq!(Action::FontSizeResetAll.id(), "font_size_reset_all");
         assert_eq!(Action::OpenSettings.id(), "open_settings");
         assert_eq!(Action::from_id("open_settings"), Some(Action::OpenSettings));
         assert_eq!(Action::CloseTab.id(), "close_tab");

@@ -32,21 +32,27 @@ impl Session {
         self.clear_watched();
     }
 
-    /// What a new pane is spawned from: the directory its shell starts in (the active
-    /// pane's, else the home directory) and a first layout, the active pane's (the new
-    /// pane is laid out for real by `relayout`). `None` without active pane.
-    pub(super) fn new_pane_start(&self) -> Option<(Option<PathBuf>, GridLayout)> {
+    /// What a new pane placed at `place` is spawned from: the directory its shell starts
+    /// in (the active pane's, else the home directory), a first layout, the active
+    /// pane's (the new pane is laid out for real by `relayout`), and its font offset.
+    /// `None` without active pane.
+    pub(super) fn new_pane_start(
+        &self,
+        place: NewPane,
+    ) -> Option<(Option<PathBuf>, GridLayout, f32)> {
         let active = self.workspace.active_pane()?;
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let cwd = workspace::start_dir(active.terminal.current_dir(), home);
-        Some((cwd, active.layout))
+        Some((cwd, active.layout, place.font_offset(active.font_offset)))
     }
 
-    /// A closure spawning the pane of a given id, starting in `cwd` with `layout`.
+    /// A closure spawning the pane of a given id, starting in `cwd` with `layout`, its
+    /// font `font_offset` points away from the configured size.
     pub(super) fn pane_spawner(
         &self,
         cwd: Option<PathBuf>,
         layout: GridLayout,
+        font_offset: f32,
     ) -> impl FnOnce(PaneId) -> Option<Pane> + use<> {
         let (proxy, config) = (self.proxy.clone(), self.term_config.clone());
         move |id| match Terminal::spawn(
@@ -56,7 +62,7 @@ impl Session {
             cwd,
             None,
         ) {
-            Ok(terminal) => Some(Pane::new(id, terminal, layout)),
+            Ok(terminal) => Some(Pane::new(id, terminal, layout, font_offset)),
             Err(error) => {
                 log::error!("cannot start a shell for the new pane: {error:#}");
                 None
@@ -66,11 +72,11 @@ impl Session {
 
     /// Splits the active pane along `axis`; the new pane takes the focus.
     pub(super) fn split(&mut self, axis: Axis) {
-        let Some((cwd, layout)) = self.new_pane_start() else {
+        let Some((cwd, layout, font_offset)) = self.new_pane_start(NewPane::Split) else {
             return;
         };
         let old = self.workspace.active_pane_id();
-        let spawn = self.pane_spawner(cwd, layout);
+        let spawn = self.pane_spawner(cwd, layout, font_offset);
         if self.workspace.split(axis, self.geometry(), spawn).is_some() {
             self.focus_changed(old);
         }
@@ -79,12 +85,12 @@ impl Session {
     /// Opens a tab after the last one and shows it.
     pub(super) fn new_tab(&mut self) {
         self.leave_settings();
-        let Some((cwd, layout)) = self.new_pane_start() else {
+        let Some((cwd, layout, font_offset)) = self.new_pane_start(NewPane::Tab) else {
             return;
         };
         let old = self.workspace.active_pane_id();
         let id = self.workspace.allocate_id();
-        if let Some(pane) = self.pane_spawner(cwd, layout)(id) {
+        if let Some(pane) = self.pane_spawner(cwd, layout, font_offset)(id) {
             self.workspace.new_tab(id, pane);
             self.focus_changed(old);
         }
@@ -227,5 +233,42 @@ impl Session {
         }
         // The new active pane gets the focus-in; the closed one is gone.
         self.focus_changed(old);
+    }
+}
+
+/// Where a new pane goes, which decides the font size it starts with.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum NewPane {
+    /// Next to the active pane, in its tab.
+    Split,
+    /// Alone in a new tab.
+    Tab,
+}
+
+impl NewPane {
+    /// Font offset of the new pane, the active one being `active` points away from the
+    /// configured size: a split keeps the active pane's size, a new tab starts at the
+    /// configured size.
+    fn font_offset(self, active: f32) -> f32 {
+        match self {
+            Self::Split => active,
+            Self::Tab => 0.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_inherits_the_font_offset_of_the_active_pane() {
+        assert_eq!(NewPane::Split.font_offset(3.0), 3.0);
+        assert_eq!(NewPane::Split.font_offset(-2.0), -2.0);
+    }
+
+    #[test]
+    fn new_tab_starts_at_the_configured_size() {
+        assert_eq!(NewPane::Tab.font_offset(3.0), 0.0);
     }
 }

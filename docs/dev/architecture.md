@@ -198,7 +198,8 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   its own surface, configuration and layers, and recreates a lost surface on the
   shared instance.
 - `Session` owns the window and what is shared by every pane: the renderer, the
-  clipboard, the modifiers, the font size, the banners, the mouse gesture in progress
+  clipboard, the modifiers, the configured font size (each pane draws at its own
+  `font_offset` from it), the banners, the mouse gesture in progress
   (`Drag`) and the open overlay. Its `Workspace<Pane>` holds the tabs; each tab is a
   binary split tree (`workspace::tree::Node`) whose leaves are `PaneId`s, with its
   active pane and zoom flag.
@@ -426,8 +427,8 @@ Renderer::render(pane frames, interface rects)
   `previous` (an invalid value keeps its previous value, a syntax error the whole
   previous configuration), loads its theme, replaces the banner, then
   `Session::apply_config` updates every pane (`Term::set_options`, the timeline
-  scrollback), the font (`Renderer::set_font` when the family changed; a changed
-  `font.size` resets the zoom, see `reloaded_font_size`), the padding, the background
+  scrollback), the font (`Renderer::set_font` when the family changed; each pane
+  keeps its `Pane::font_offset` from the new `font.size`), the padding, the background
   opacity, the palette and the keybindings, then lays the panes out again. `width`,
   `height` and `startup_mode` only affect windows created afterwards.
 - The `appearance` thread (`src/appearance.rs`) follows the system light/dark

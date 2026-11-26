@@ -27,8 +27,8 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use graphene::bench::{
-    CellSize, FontOptions, Frame, FrameCache, GlyphKey, Glyphs, GridLayout, Headless, Palette,
-    Rect, Scanner, Timeline, pack_argb32, process, scene, scroll_block, view_rows,
+    CellSize, FontOptions, Frame, FrameCache, GlyphKey, Glyphs, GridLayout, GridSize, Headless,
+    Palette, Rect, Scanner, Timeline, pack_argb32, process, scene, scroll_block, view_rows,
 };
 
 /// Terminal size of the recordings.
@@ -206,7 +206,8 @@ fn frame(c: &mut Criterion) {
         group.bench_function(fixture.name, |b| {
             b.iter(|| {
                 let frame = capture(black_box(&session), &palette);
-                scene::build(&frame, &layout, true, true)
+                let size = GridSize::new(14.0);
+                scene::build(&frame, &layout, size, size, true, true)
             })
         });
     }
@@ -221,12 +222,8 @@ fn resolve_glyphs(glyphs: &mut Glyphs, frame: &Frame) -> usize {
         .flatten()
         .filter(|cell| !cell.spacer && cell.c != ' ')
         .filter_map(|cell| {
-            glyphs.get(GlyphKey {
-                c: cell.c,
-                bold: cell.bold,
-                italic: cell.italic,
-                ui: None,
-            })
+            let size = glyphs.font_size();
+            glyphs.get(GlyphKey::grid(cell.c, size, cell.bold, cell.italic))
         })
         .count()
 }

@@ -601,7 +601,7 @@ impl Session {
         let padding = self.padding * self.window.scale_factor() as f32;
         let layout = GridLayout::new(geometry.area, geometry.cell, padding);
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let spawn = self.pane_spawner(home, layout);
+        let spawn = self.pane_spawner(home, layout, 0.0);
         if !reset_workspace(&mut self.workspace, spawn) {
             return false;
         }
@@ -775,6 +775,12 @@ mod tests {
         }
     }
 
+    impl crate::workspace::FontOffsetSource for InDir {
+        fn font_offset(&self) -> f32 {
+            0.0
+        }
+    }
+
     #[test]
     fn the_session_saved_after_a_reset_has_a_single_tab() {
         let mut workspace = Workspace::<InDir>::new();
@@ -791,7 +797,8 @@ mod tests {
         assert_eq!(
             tabs[0].tree,
             crate::session::NodeSnapshot::Pane {
-                cwd: Some(PathBuf::from("/home"))
+                cwd: Some(PathBuf::from("/home")),
+                font_offset: 0.0,
             }
         );
     }

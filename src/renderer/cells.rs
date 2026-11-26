@@ -125,7 +125,7 @@ pub fn resolve_runs(
     for run in runs {
         text.clear();
         text.extend(run.cells.iter().map(|cell| cell.c));
-        let shaped = glyphs.shape_run(text, run.bold, run.italic);
+        let shaped = glyphs.shape_run(text, run.size, run.bold, run.italic);
         let broken = run.cursor.map_or(0..0, |cursor| {
             ligature_break(&shaped, run.cells.len(), cursor)
         });
@@ -145,12 +145,7 @@ pub fn resolve_runs(
         }
         for index in broken {
             let cell = &run.cells[index];
-            let key = GlyphKey {
-                c: cell.c,
-                bold: run.bold,
-                italic: run.italic,
-                ui: None,
-            };
+            let key = GlyphKey::grid(cell.c, run.size, run.bold, run.italic);
             if let Some(glyph) = glyphs.get(key) {
                 out.push(quad(glyph, origin(index), cell.color));
             }
@@ -399,21 +394,17 @@ impl CellRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::glyphs::{FontOptions, GlyphKey};
+    use crate::renderer::glyphs::{FontOptions, GlyphKey, GridSize};
     use crate::renderer::scene::RunCell;
 
     const FONT_SIZE: f32 = 14.0;
+    const SIZE: GridSize = GridSize::new(FONT_SIZE);
     const WHITE: [f32; 4] = [1.0; 4];
 
     fn item(c: char, origin: [f32; 2]) -> GlyphInstance {
         GlyphInstance {
             origin,
-            key: GlyphKey {
-                c,
-                bold: false,
-                italic: false,
-                ui: None,
-            },
+            key: GlyphKey::grid(c, SIZE, false, false),
             color: WHITE,
         }
     }
@@ -421,14 +412,7 @@ mod tests {
     #[test]
     fn quad_is_the_cell_origin_plus_the_glyph_placement() {
         let mut glyphs = Glyphs::new(&FontOptions::default(), FONT_SIZE);
-        let glyph = glyphs
-            .get(GlyphKey {
-                c: 'M',
-                bold: false,
-                italic: false,
-                ui: None,
-            })
-            .unwrap();
+        let glyph = glyphs.get(GlyphKey::grid('M', SIZE, false, false)).unwrap();
         let mut out = Vec::new();
         resolve(&mut glyphs, &[item('M', [16.4, 40.0])], &mut out);
         assert_eq!(
@@ -466,14 +450,7 @@ mod tests {
         let ranges = resolve_groups(&mut glyphs, &groups, &mut out);
         assert_eq!(ranges, [0..2, 2..2, 2..3]);
         assert_eq!(out.len(), 3);
-        let x = glyphs
-            .get(GlyphKey {
-                c: 'x',
-                bold: false,
-                italic: false,
-                ui: None,
-            })
-            .unwrap();
+        let x = glyphs.get(GlyphKey::grid('x', SIZE, false, false)).unwrap();
         assert_eq!(out[2].uv, [x.region.x as f32, x.region.y as f32]);
     }
 
@@ -481,12 +458,7 @@ mod tests {
     fn frame_is_resolved_again_after_an_atlas_reset() {
         const ATLAS: u32 = 64;
         let chars: Vec<char> = ('A'..='Z').chain('0'..='9').collect();
-        let key = |c: char| GlyphKey {
-            c,
-            bold: false,
-            italic: false,
-            ui: None,
-        };
+        let key = |c: char| GlyphKey::grid(c, SIZE, false, false);
         // How many of `chars` fit a fresh atlas before it resets.
         let mut probe = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, ATLAS);
         let capacity = chars
@@ -526,6 +498,7 @@ mod tests {
             origin,
             advance,
             cells: text.chars().map(|c| RunCell { c, color: WHITE }).collect(),
+            size: SIZE,
             bold: false,
             italic: false,
             cursor: None,
@@ -553,12 +526,37 @@ mod tests {
     }
 
     #[test]
+    fn run_is_drawn_at_its_size() {
+        let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
+        let large = GridSize::new(FONT_SIZE * 2.0);
+        let advance = glyphs.cell_size_at(large).width;
+        let mut runs = [run("ab", [0.0, 0.0], advance)];
+        runs[0].size = large;
+        let mut cells = Vec::new();
+        let items = [
+            GlyphInstance {
+                key: GlyphKey::grid('a', large, false, false),
+                ..item('a', [0.0, 0.0])
+            },
+            GlyphInstance {
+                key: GlyphKey::grid('b', large, false, false),
+                ..item('b', [advance, 0.0])
+            },
+        ];
+        resolve(&mut glyphs, &items, &mut cells);
+        let quads = resolved_runs(&mut glyphs, &runs);
+        assert_eq!(quads, cells);
+        runs[0].size = SIZE;
+        assert_ne!(resolved_runs(&mut glyphs, &runs), quads);
+    }
+
+    #[test]
     fn ligature_is_drawn_from_its_cells_in_their_colors() {
         let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
         let mut arrow = run("->", [0.0, 0.0], 10.0);
         arrow.cells[1].color = RED;
         let quads = resolved_runs(&mut glyphs, &[arrow]);
-        let shaped = glyphs.shape_run("->", false, false);
+        let shaped = glyphs.shape_run("->", SIZE, false, false);
         let expected: Vec<_> = shaped
             .iter()
             .filter_map(|run_glyph| {
@@ -603,12 +601,7 @@ mod tests {
     fn runs_are_resolved_again_after_an_atlas_reset() {
         const ATLAS: u32 = 64;
         let chars: String = ('A'..='Z').chain('0'..='9').collect();
-        let key = |c: char| GlyphKey {
-            c,
-            bold: false,
-            italic: false,
-            ui: None,
-        };
+        let key = |c: char| GlyphKey::grid(c, SIZE, false, false);
         let mut probe = Glyphs::with_atlas_size(&FontOptions::default(), FONT_SIZE, ATLAS);
         let capacity = chars
             .chars()
@@ -667,7 +660,7 @@ mod tests {
         cells: Range<usize>,
         advance: f32,
     ) -> Vec<CellInstance> {
-        let shaped = glyphs.shape_run(text, false, false);
+        let shaped = glyphs.shape_run(text, SIZE, false, false);
         shaped
             .iter()
             .filter(|run_glyph| cells.contains(&usize::from(run_glyph.cell)))
@@ -684,7 +677,7 @@ mod tests {
         let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
         assert!(
             glyphs
-                .shape_run("-->", false, false)
+                .shape_run("-->", SIZE, false, false)
                 .iter()
                 .all(|g| g.ligated)
         );
@@ -698,7 +691,7 @@ mod tests {
     #[test]
     fn cells_out_of_the_broken_ligature_are_unchanged() {
         let mut glyphs = Glyphs::with_test_font(&FontOptions::default(), FONT_SIZE);
-        let shaped = glyphs.shape_run("->a->", false, false);
+        let shaped = glyphs.shape_run("->a->", SIZE, false, false);
         let ligated: Vec<_> = shaped.iter().map(|g| (g.cell, g.ligated)).collect();
         assert!(ligated.contains(&(0, true)) && ligated.contains(&(3, true)));
         assert!(ligated.contains(&(2, false)));

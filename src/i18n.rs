@@ -219,6 +219,7 @@ pub enum Msg {
     FontSizeIncrease,
     FontSizeDecrease,
     FontSizeReset,
+    FontSizeResetAll,
     // Command blocks actions.
     PreviousBlock,
     NextBlock,
@@ -416,6 +417,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::FontSizeIncrease => "Increase font size",
         Msg::FontSizeDecrease => "Decrease font size",
         Msg::FontSizeReset => "Reset font size",
+        Msg::FontSizeResetAll => "Reset font size in all panes",
         Msg::PreviousBlock => "Previous command block",
         Msg::NextBlock => "Next command block",
         Msg::CopyCommand => "Copy block command",
@@ -619,6 +621,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::FontSizeIncrease => "Agrandir la police",
         Msg::FontSizeDecrease => "Réduire la police",
         Msg::FontSizeReset => "Taille de police par défaut",
+        Msg::FontSizeResetAll => "Taille de police par défaut dans tous les panes",
         Msg::PreviousBlock => "Bloc de commande précédent",
         Msg::NextBlock => "Bloc de commande suivant",
         Msg::CopyCommand => "Copier la commande du bloc",
@@ -920,6 +923,7 @@ mod tests {
             Msg::FontSizeIncrease => 6,
             Msg::FontSizeDecrease => 7,
             Msg::FontSizeReset => 8,
+            Msg::FontSizeResetAll => 103,
             Msg::PreviousBlock => 9,
             Msg::NextBlock => 10,
             Msg::CopyCommand => 11,
@@ -1016,7 +1020,7 @@ mod tests {
             Msg::PrimaryScreen => 102,
         }
     }
-    const VARIANT_COUNT: usize = 103;
+    const VARIANT_COUNT: usize = 104;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1030,6 +1034,7 @@ mod tests {
             Msg::FontSizeIncrease,
             Msg::FontSizeDecrease,
             Msg::FontSizeReset,
+            Msg::FontSizeResetAll,
             Msg::PreviousBlock,
             Msg::NextBlock,
             Msg::CopyCommand,

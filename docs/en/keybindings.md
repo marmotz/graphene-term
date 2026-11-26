@@ -29,9 +29,14 @@ Shortcuts that only work while editing the command line are on the
 |-------------------------------------|------------------------------------------------------------|
 | `Shift+PageUp` / `Shift+PageDown`   | Scroll up / down a page (the selected block, or the history) |
 | `Shift+Home` / `Shift+End`          | Top / bottom of the history                                |
-| `Ctrl+=` or `Ctrl++`                | Bigger font                                                |
-| `Ctrl+-` or `Ctrl+_`                | Smaller font                                               |
-| `Ctrl+0`                            | Back to the configured font size                           |
+| `Ctrl+=` or `Ctrl++`                | Bigger font in the active pane                             |
+| `Ctrl+-` or `Ctrl+_`                | Smaller font in the active pane                            |
+| `Ctrl+0`                            | Active pane back to the configured font size               |
+| `Ctrl+Shift+0`                      | Every pane back to the configured font size                |
+| `Ctrl` + mouse wheel                | Bigger / smaller font in the pane under the mouse          |
+
+Each pane has its own font size. A split starts at the size of the pane it comes from, a
+new tab at the configured size.
 
 At the prompt, `Shift+Home` and `Shift+End` select in the command line instead (see
 [Input editor](input-editor.md)).
@@ -78,7 +83,8 @@ See [Tabs and panes](tabs-and-panes.md).
 | `Alt+1` ... `Alt+9`                     | Go to tab 1 to 9      |
 
 `Alt+1` to `Alt+9` use the digit row of the keyboard on any layout (on AZERTY too,
-without `Shift`).
+without `Shift`). So do `Ctrl+0` and `Ctrl+Shift+0`; with `Ctrl+Shift`, the keypad digits
+are the same shortcuts as the digit row.
 
 ### Application
 
@@ -147,7 +153,7 @@ Rules:
 | `paste`                                  | Paste from the clipboard                          |
 | `scroll_page_up`, `scroll_page_down`     | Scroll a page                                     |
 | `scroll_to_top`, `scroll_to_bottom`      | Top / bottom of the history                       |
-| `font_size_increase`, `font_size_decrease`, `font_size_reset` | Font size                    |
+| `font_size_increase`, `font_size_decrease`, `font_size_reset`, `font_size_reset_all` | Font size |
 | `previous_block`, `next_block`           | Select the previous / next command block          |
 | `copy_command`, `copy_output`            | Copy a block's command / output                   |
 | `toggle_fold`, `toggle_fold_all`         | Fold a block / all blocks                         |

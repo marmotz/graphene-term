@@ -20,6 +20,7 @@ use winit::keyboard::ModifiersState;
 use crate::block_actions::{self, Direction, Part};
 use crate::chrome::command_palette::PaneContext;
 use crate::clipboard::{self, Content};
+use crate::config::{MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::fold_animation::FoldAnimations;
 use crate::frame;
 use crate::graphics;
@@ -35,7 +36,7 @@ use crate::terminal::{EventProxy, PaneId, Terminal};
 use crate::timeline::{BlockId, Timeline};
 use crate::timeline_selection::{self, End, TimelineSelection};
 use crate::view::{self, Anchor, RowSource, ScrollTarget, ViewRow};
-use crate::workspace::{ProgressSource, TitleSource};
+use crate::workspace::{FontOffsetSource, ProgressSource, TitleSource};
 
 /// How often a pane without OSC title has its fallback title (its directory) read
 /// again from `/proc`.
@@ -47,6 +48,9 @@ pub struct Pane {
     pub layout: GridLayout,
     /// Last title set by the shell or a program (OSC 0/2), `None` after a reset.
     pub title: Option<String>,
+    /// Gap, in logical points, between the pane's font size and the configured one:
+    /// `0.0` while the pane follows the configuration (see [`pane_font_size`]).
+    pub font_offset: f32,
     /// Fractional lines accumulated from touchpad scrolling.
     scroll_accumulator: f64,
     click_tracker: ClickTracker,
@@ -99,13 +103,20 @@ impl TitleSource for Pane {
     }
 }
 
+impl FontOffsetSource for Pane {
+    fn font_offset(&self) -> f32 {
+        self.font_offset
+    }
+}
+
 impl Pane {
-    pub fn new(id: PaneId, terminal: Terminal, layout: GridLayout) -> Self {
+    pub fn new(id: PaneId, terminal: Terminal, layout: GridLayout, font_offset: f32) -> Self {
         Self {
             id,
             terminal,
             layout,
             title: None,
+            font_offset,
             scroll_accumulator: 0.0,
             click_tracker: ClickTracker::default(),
             app_mouse: mouse::Reporter::default(),
@@ -893,10 +904,31 @@ fn refresh_due(checked: Option<Instant>, now: Instant) -> bool {
     checked.is_none_or(|checked| now.saturating_duration_since(checked) >= TITLE_REFRESH)
 }
 
-/// Whether going from `old` to `new` changes the grid's cell count, so the shell must
-/// be resized.
+/// Whether going from `old` to `new` changes the grid's cell count or cell size, so the
+/// shell (and its images) must be resized.
 fn cells_changed(old: &GridLayout, new: &GridLayout) -> bool {
-    (old.columns, old.lines) != (new.columns, new.lines)
+    let size = |layout: &GridLayout| {
+        let size = layout.window_size();
+        (
+            size.num_cols,
+            size.num_lines,
+            size.cell_width,
+            size.cell_height,
+        )
+    };
+    size(old) != size(new)
+}
+
+/// Font size, in logical points, of a pane `offset` points away from the configured
+/// size `base`, kept within the allowed sizes.
+pub fn pane_font_size(base: f32, offset: f32) -> f32 {
+    (base + offset).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)
+}
+
+/// Offset of a pane at `offset` from `base` once its size moved by `steps` points: the
+/// size stays within the allowed ones, so a step past a bound changes nothing.
+pub fn stepped_font_offset(base: f32, offset: f32, steps: f32) -> f32 {
+    pane_font_size(base, offset + steps) - base
 }
 
 /// Locks the timeline. Only while the terminal is locked, or without it: lock order
@@ -957,6 +989,52 @@ mod tests {
     fn other_cell_count_needs_a_shell_resize() {
         assert!(cells_changed(&layout(800, 600), &layout(900, 600)));
         assert!(cells_changed(&layout(800, 600), &layout(800, 700)));
+    }
+
+    #[test]
+    fn other_cell_size_needs_a_shell_resize() {
+        let bigger = GridLayout::new(
+            Rect::from_size(800, 600),
+            CellSize {
+                width: 12.0,
+                height: 24.0,
+            },
+            8.0,
+        );
+        assert!(cells_changed(&layout(800, 600), &bigger));
+    }
+
+    #[test]
+    fn pane_font_size_adds_the_offset_within_the_allowed_sizes() {
+        assert_eq!(pane_font_size(14.0, 0.0), 14.0);
+        assert_eq!(pane_font_size(14.0, 3.0), 17.0);
+        assert_eq!(pane_font_size(14.0, -2.0), 12.0);
+        assert_eq!(pane_font_size(70.0, 5.0), MAX_FONT_SIZE);
+        assert_eq!(pane_font_size(8.0, -5.0), MIN_FONT_SIZE);
+    }
+
+    #[test]
+    fn a_step_moves_the_offset_by_one_point() {
+        assert_eq!(stepped_font_offset(14.0, 0.0, 1.0), 1.0);
+        assert_eq!(stepped_font_offset(14.0, 1.0, -1.0), 0.0);
+        assert_eq!(stepped_font_offset(14.0, 0.0, -3.0), -3.0);
+    }
+
+    #[test]
+    fn a_step_past_a_bound_keeps_the_offset_in_the_bounds() {
+        // At the largest size, a larger step changes nothing.
+        assert_eq!(stepped_font_offset(70.0, 2.0, 1.0), 2.0);
+        assert_eq!(stepped_font_offset(MAX_FONT_SIZE, 0.0, 1.0), 0.0);
+        assert_eq!(stepped_font_offset(7.0, -1.0, -1.0), -1.0);
+    }
+
+    #[test]
+    fn offset_is_kept_when_the_configured_size_changes() {
+        // The pane stays 2 points above the configuration.
+        assert_eq!(pane_font_size(14.0, 2.0), 16.0);
+        assert_eq!(pane_font_size(12.0, 2.0), 14.0);
+        // A pane following the configuration takes the new size.
+        assert_eq!(pane_font_size(12.0, 0.0), 12.0);
     }
 
     #[test]

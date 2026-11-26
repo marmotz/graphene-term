@@ -150,6 +150,12 @@ pub trait TitleSource {
     fn shell_name(&self) -> Option<String>;
 }
 
+/// What the session saves of a pane besides its directory.
+pub trait FontOffsetSource {
+    /// Points added by the user to the configured font size in the pane.
+    fn font_offset(&self) -> f32;
+}
+
 /// What a progress indicator reads from a pane.
 pub trait ProgressSource {
     /// The progress reported by the pane's programs, `None` without one.
@@ -299,14 +305,14 @@ impl<P> Workspace<P> {
 
     /// Rebuilds the saved `tabs`, showing the one of index `active_tab`: each split tree
     /// with its axes and ratios, the custom titles, the active panes and the zoom.
-    /// `spawn` creates the pane of an id starting in a directory; a pane it cannot
-    /// create is left out (its sibling takes its place), and a tab left without any
-    /// pane too. An active pane left out gives the focus to the first pane of its tab,
+    /// `spawn` creates the pane of an id starting in a directory with a font offset; a
+    /// pane it cannot create is left out (its sibling takes its place), and a tab left
+    /// without any pane too. An active pane left out gives the focus to the first pane of its tab,
     /// without zoom. The workspace has no tab when no pane could be created.
     pub fn restore(
         tabs: &[TabSnapshot],
         active_tab: usize,
-        mut spawn: impl FnMut(PaneId, Option<PathBuf>) -> Option<P>,
+        mut spawn: impl FnMut(PaneId, Option<PathBuf>, f32) -> Option<P>,
     ) -> Self {
         let mut workspace = Self::new();
         let mut shown = None;
@@ -342,13 +348,13 @@ impl<P> Workspace<P> {
     fn restore_node(
         &mut self,
         saved: &NodeSnapshot,
-        spawn: &mut impl FnMut(PaneId, Option<PathBuf>) -> Option<P>,
+        spawn: &mut impl FnMut(PaneId, Option<PathBuf>, f32) -> Option<P>,
         ranks: &mut Vec<Option<PaneId>>,
     ) -> Option<Node> {
         match saved {
-            NodeSnapshot::Pane { cwd } => {
+            NodeSnapshot::Pane { cwd, font_offset } => {
                 let id = self.allocate_id();
-                let pane = spawn(id, cwd.clone());
+                let pane = spawn(id, cwd.clone(), *font_offset);
                 ranks.push(pane.is_some().then_some(id));
                 self.panes.insert(id, pane?);
                 Some(Node::Leaf(id))
@@ -878,8 +884,22 @@ impl<P: TitleSource> Workspace<P> {
         }
     }
 
+    /// Title of the pane `id` (see [`title_for`]).
+    pub fn pane_title(&self, id: PaneId) -> Option<String> {
+        let pane = self.pane(id)?;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        title_for(
+            pane.osc_title(),
+            pane.current_dir().as_deref(),
+            home.as_deref(),
+            pane.shell_name().as_deref(),
+        )
+    }
+}
+
+impl<P: TitleSource + FontOffsetSource> Workspace<P> {
     /// What the session saves of the tabs: each split tree with its ratios and the
-    /// current directory of each pane, the custom title, the active pane by its rank
+    /// current directory and font offset of each pane, the custom title, the active pane by its rank
     /// among the leaves, the zoom; and the index of the shown tab.
     pub fn snapshot(&self) -> (Vec<TabSnapshot>, usize) {
         let tabs = self
@@ -904,6 +924,7 @@ impl<P: TitleSource> Workspace<P> {
         match node {
             Node::Leaf(id) => NodeSnapshot::Pane {
                 cwd: self.pane(*id).and_then(TitleSource::current_dir),
+                font_offset: self.pane(*id).map_or(0.0, FontOffsetSource::font_offset),
             },
             Node::Split {
                 axis,
@@ -917,18 +938,6 @@ impl<P: TitleSource> Workspace<P> {
                 second: Box::new(self.node_snapshot(second)),
             },
         }
-    }
-
-    /// Title of the pane `id` (see [`title_for`]).
-    pub fn pane_title(&self, id: PaneId) -> Option<String> {
-        let pane = self.pane(id)?;
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        title_for(
-            pane.osc_title(),
-            pane.current_dir().as_deref(),
-            home.as_deref(),
-            pane.shell_name().as_deref(),
-        )
     }
 }
 
@@ -1011,11 +1020,18 @@ mod tests {
         cwd: Option<PathBuf>,
         shell: Option<String>,
         progress: Option<Progress>,
+        font_offset: f32,
     }
 
     impl ProgressSource for Fake {
         fn progress(&self) -> Option<Progress> {
             self.progress
+        }
+    }
+
+    impl FontOffsetSource for Fake {
+        fn font_offset(&self) -> f32 {
+            self.font_offset
         }
     }
 
@@ -1687,6 +1703,7 @@ mod tests {
         assert_eq!((tabs[0].active, tabs[0].zoomed), (1, true));
         let pane = |dir: &str| NodeSnapshot::Pane {
             cwd: Some(PathBuf::from(dir)),
+            font_offset: 0.0,
         };
         let Node::Split {
             ratio: outer,
@@ -1717,7 +1734,10 @@ mod tests {
             tabs[1],
             TabSnapshot {
                 title: None,
-                tree: NodeSnapshot::Pane { cwd: None },
+                tree: NodeSnapshot::Pane {
+                    cwd: None,
+                    font_offset: 0.0,
+                },
                 active: 0,
                 zoomed: false,
             }
@@ -1732,10 +1752,11 @@ mod tests {
         failing: &[usize],
     ) -> Workspace<Fake> {
         let mut rank = 0;
-        Workspace::restore(tabs, active_tab, |_, cwd| {
+        Workspace::restore(tabs, active_tab, |_, cwd, font_offset| {
             rank += 1;
             (!failing.contains(&(rank - 1))).then(|| Fake {
                 cwd,
+                font_offset,
                 ..Fake::default()
             })
         })
@@ -1748,6 +1769,7 @@ mod tests {
             pane.cwd = Some(PathBuf::from(format!("/p{index}")));
         }
         let leaves = ws.tabs()[0].tree.leaves();
+        ws.pane_mut(leaves[1]).unwrap().font_offset = 4.0;
         assert!(ws.focus(leaves[2]));
         assert!(ws.toggle_zoom());
         assert!(ws.rename_tab(0, "build"));
@@ -1763,6 +1785,28 @@ mod tests {
         assert!(tab.zoomed);
         assert_eq!(tab.active, tab.tree.leaves()[2]);
         assert_eq!(restored.panes().count(), 6);
+        let offsets: Vec<f32> = tab
+            .tree
+            .leaves()
+            .iter()
+            .map(|&id| restored.pane(id).unwrap().font_offset)
+            .collect();
+        assert_eq!(offsets, [0.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn snapshot_saves_the_font_offset_of_each_pane() {
+        let mut ws = workspace(&[1]);
+        let id = ws.tabs()[0].active;
+        ws.pane_mut(id).unwrap().font_offset = -3.0;
+        let (tabs, _) = ws.snapshot();
+        assert_eq!(
+            tabs[0].tree,
+            NodeSnapshot::Pane {
+                cwd: None,
+                font_offset: -3.0,
+            }
+        );
     }
 
     #[test]

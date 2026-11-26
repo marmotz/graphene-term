@@ -24,7 +24,7 @@ use crate::frame::Frame;
 use crate::layout::{CellSize, GridLayout, Rect};
 use crate::perf;
 use cells::{CellRenderer, GlyphGroup};
-pub use glyphs::{FontOptions, GlyphKey, Glyphs, UiFont};
+pub use glyphs::{FontOptions, GlyphKey, Glyphs, GridSize, UiFont};
 use images::ImageRenderer;
 pub use rects::RectInstance;
 use rects::RectRenderer;
@@ -50,11 +50,13 @@ pub struct UiLayer {
 pub type ContentPainter<'a> =
     &'a mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView, (u32, u32));
 
-/// One pane to draw: its frame and the layout placing its grid in the window.
+/// One pane to draw: its frame, the layout placing its grid in the window and the size
+/// of its grid font, whose cell is the layout's.
 #[derive(Clone, Copy)]
 pub struct PaneFrame<'a> {
     pub frame: &'a Frame,
     pub layout: &'a GridLayout,
+    pub font_size: GridSize,
 }
 
 /// Clear color when there is no pane to take it from.
@@ -157,9 +159,19 @@ impl Layers {
         ui: &UiLayer,
     ) -> Prepared {
         let ligatures = self.glyphs.ligatures();
+        let base_size = self.glyphs.font_size();
         let scenes: Vec<_> = panes
             .iter()
-            .map(|pane| scene::build(pane.frame, pane.layout, self.srgb, ligatures))
+            .map(|pane| {
+                scene::build(
+                    pane.frame,
+                    pane.layout,
+                    pane.font_size,
+                    base_size,
+                    self.srgb,
+                    ligatures,
+                )
+            })
             .collect();
 
         let mut rects = Vec::new();
@@ -707,8 +719,14 @@ impl Renderer {
         self.direct = direct;
     }
 
+    /// Cell of the base font size, see [`Glyphs::font_size`].
     pub fn cell_size(&self) -> CellSize {
         self.layers.glyphs.cell_size()
+    }
+
+    /// Cell of the grid font at `size`, measured on first use.
+    pub fn cell_size_at(&mut self, size: GridSize) -> CellSize {
+        self.layers.glyphs.cell_size_at(size)
     }
 
     /// Whether the surface is sRGB, so colors must be linearized for it (see
@@ -728,6 +746,7 @@ impl Renderer {
         self.layers.scanlines
     }
 
+    /// Changes the base size of the grid font, see [`Glyphs::set_font_size`].
     pub fn set_font_size(&mut self, font_size: f32) {
         self.layers.glyphs.set_font_size(font_size);
     }
@@ -980,7 +999,13 @@ impl Headless {
 
     /// Prepares, draws and submits `frame` alone, without waiting for the GPU.
     pub fn render(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<()> {
-        self.render_panes(&[PaneFrame { frame, layout }], &UiLayer::default())
+        let font_size = self.layers.glyphs.font_size();
+        let pane = PaneFrame {
+            frame,
+            layout,
+            font_size,
+        };
+        self.render_panes(&[pane], &UiLayer::default())
     }
 
     /// Prepares, draws and submits `panes` and the interface `ui`, without waiting for
@@ -1021,7 +1046,13 @@ impl Headless {
     /// Draws `frame` and starts reading it back, without waiting for the GPU: the
     /// part of an X11 presentation a redraw runs.
     pub fn start_x11(&mut self, frame: &Frame, layout: &GridLayout) -> anyhow::Result<()> {
-        let encoder = self.encode(&[PaneFrame { frame, layout }], &UiLayer::default());
+        let font_size = self.layers.glyphs.font_size();
+        let pane = PaneFrame {
+            frame,
+            layout,
+            font_size,
+        };
+        let encoder = self.encode(&[pane], &UiLayer::default());
         self.target.start_read(&self.queue, encoder)
     }
 
@@ -1658,10 +1689,12 @@ mod tests {
                     PaneFrame {
                         frame: &left_frame,
                         layout: &left,
+                        font_size: renderer.layers.glyphs.font_size(),
                     },
                     PaneFrame {
                         frame: &right_frame,
                         layout: &right,
+                        font_size: renderer.layers.glyphs.font_size(),
                     },
                 ],
                 &ui,
@@ -1714,6 +1747,7 @@ mod tests {
                 &[PaneFrame {
                     frame: &frame,
                     layout: &layout,
+                    font_size: renderer.layers.glyphs.font_size(),
                 }],
                 &ui,
             )
@@ -1768,6 +1802,7 @@ mod tests {
                 &[PaneFrame {
                     frame: &frame,
                     layout: &layout,
+                    font_size: renderer.layers.glyphs.font_size(),
                 }],
                 &ui,
             )

@@ -108,7 +108,7 @@ pub mod bench {
     pub use crate::palette::Palette;
     pub use crate::pty::process;
     pub use crate::renderer::scene;
-    pub use crate::renderer::{FontOptions, GlyphKey, Glyphs, Headless, pack_argb32};
+    pub use crate::renderer::{FontOptions, GlyphKey, Glyphs, GridSize, Headless, pack_argb32};
     pub use crate::signals::Scanner;
     pub use crate::timeline::Timeline;
     pub use crate::view::{rows as view_rows, scroll_block};

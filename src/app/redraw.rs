@@ -191,12 +191,17 @@ impl Session {
                 frame
             });
         }
+        let (base, scale) = (self.font_size, self.window.scale_factor() as f32);
         let panes: Vec<_> = shown
             .iter()
             .filter_map(|&id| {
                 let frame = self.frames.get(id)?;
-                let layout = &self.workspace.pane(id)?.layout;
-                Some(PaneFrame { frame, layout })
+                let pane = self.workspace.pane(id)?;
+                Some(PaneFrame {
+                    frame,
+                    layout: &pane.layout,
+                    font_size: refresh::grid_size(base, pane.font_offset, scale),
+                })
             })
             .collect();
         // A frame without its panes waits for them, unless it shows the settings tab.

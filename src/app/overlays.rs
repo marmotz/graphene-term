@@ -34,7 +34,7 @@ impl Session {
 
     /// Opens the command palette over the window, its recent actions read from the
     /// recent file.
-    pub(super) fn open_palette(&mut self, default_font_size: f32) {
+    pub(super) fn open_palette(&mut self) {
         let recent = command_palette::recent_path()
             .map(|path| command_palette::load_recent(&path))
             .unwrap_or_default();
@@ -45,8 +45,14 @@ impl Session {
                 .as_mut()
                 .and_then(|clipboard| clipboard.get_text().ok())
                 .is_some_and(|text| !text.is_empty()),
-            font_size: self.font_size,
-            default_font_size,
+            font_size: self.workspace.active_pane().map_or(self.font_size, |pane| {
+                pane::pane_font_size(self.font_size, pane.font_offset)
+            }),
+            default_font_size: self.font_size,
+            any_pane_font_changed: self
+                .workspace
+                .panes()
+                .any(|(_, pane)| pane.font_offset != 0.0),
         };
         let entries = command_palette::entries(
             &self.workspace,
@@ -275,7 +281,6 @@ impl Session {
     pub(super) fn menu_outcome(
         &mut self,
         outcome: context_menu::Outcome,
-        default_font_size: f32,
         event_loop: &ActiveEventLoop,
     ) {
         if !matches!(self.overlay, Some(Overlay::Menu(_))) {
@@ -288,7 +293,7 @@ impl Session {
             return;
         };
         match command {
-            MenuCommand::Action(action) => self.run_action(action, default_font_size, event_loop),
+            MenuCommand::Action(action) => self.run_action(action, event_loop),
             MenuCommand::CloseTab(index) => {
                 if let Some(target) = Target::tab(&self.workspace, index) {
                     self.request_close(target, event_loop);
@@ -384,12 +389,7 @@ impl Session {
 
     /// Applies what a key or a click on the open palette asks: closes it, then runs the
     /// chosen entry. An action run is remembered in the recent file.
-    pub(super) fn palette_outcome(
-        &mut self,
-        outcome: Outcome,
-        default_font_size: f32,
-        event_loop: &ActiveEventLoop,
-    ) {
+    pub(super) fn palette_outcome(&mut self, outcome: Outcome, event_loop: &ActiveEventLoop) {
         let Some(Overlay::Palette(palette)) = self.overlay.take() else {
             return;
         };
@@ -406,7 +406,7 @@ impl Session {
                         log::warn!("cannot write {}: {error}", path.display());
                     }
                 }
-                self.run_action(action, default_font_size, event_loop);
+                self.run_action(action, event_loop);
             }
             Command::Tab(index) => self.change_tab(|workspace| workspace.select(index)),
             Command::Pane(id) => self.focus_pane(id),
@@ -419,12 +419,7 @@ impl Session {
     /// Handles a press while an overlay is open: a button of the dialog answers it, a
     /// row of the palette runs it and a press outside the palette or the rename box
     /// closes it, any press closes the ASCII drawing; anything else is ignored.
-    pub(super) fn overlay_press(
-        &mut self,
-        button: mouse::Button,
-        default_font_size: f32,
-        event_loop: &ActiveEventLoop,
-    ) {
+    pub(super) fn overlay_press(&mut self, button: mouse::Button, event_loop: &ActiveEventLoop) {
         if matches!(self.overlay, Some(Overlay::Art)) {
             self.close_art();
             return;
@@ -452,7 +447,7 @@ impl Session {
                 _ => None,
             };
             if let Some(outcome) = outcome {
-                self.menu_outcome(outcome, default_font_size, event_loop);
+                self.menu_outcome(outcome, event_loop);
             }
             return;
         }
@@ -474,7 +469,7 @@ impl Session {
             Some(_) => None,
         };
         if let Some(outcome) = outcome {
-            self.palette_outcome(outcome, default_font_size, event_loop);
+            self.palette_outcome(outcome, event_loop);
         }
     }
 

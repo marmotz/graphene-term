@@ -68,14 +68,14 @@ _tâches créées — voir [technical.md](features/multiplexing/technical.md)_ �
 
 ## Per-pane font size ·  [overview](features/pane-font-size/overview.md)
 
-_tâches créées — voir [technical.md](features/pane-font-size/technical.md)_ — 0/4 tasks done
+_terminé — voir [technical.md](features/pane-font-size/technical.md)_ — 4/4 tasks done
 
 | Done | Issue                                                       | Title                                                                 | Blocked by |
 |------|-------------------------------------------------------------|-----------------------------------------------------------------------|------------|
-| [ ]  | [#256](https://github.com/marmotz/graphene-term/issues/256) | feat(pane-font-size): glyph cache keyed by font size                  | —          |
-| [ ]  | [#257](https://github.com/marmotz/graphene-term/issues/257) | feat(pane-font-size): per-pane font offset and keyboard actions       | #256       |
-| [ ]  | [#258](https://github.com/marmotz/graphene-term/issues/258) | feat(pane-font-size): Ctrl+wheel changes the hovered pane's font size | #257       |
-| [ ]  | [#259](https://github.com/marmotz/graphene-term/issues/259) | feat(pane-font-size): restore each pane's font size with the session  | #257       |
+| [x]  | [#256](https://github.com/marmotz/graphene-term/issues/256) | feat(pane-font-size): glyph cache keyed by font size                  | —          |
+| [x]  | [#257](https://github.com/marmotz/graphene-term/issues/257) | feat(pane-font-size): per-pane font offset and keyboard actions       | #256       |
+| [x]  | [#258](https://github.com/marmotz/graphene-term/issues/258) | feat(pane-font-size): Ctrl+wheel changes the hovered pane's font size | #257       |
+| [x]  | [#259](https://github.com/marmotz/graphene-term/issues/259) | feat(pane-font-size): restore each pane's font size with the session  | #257       |
 
 ## Quick terminal (mode Quake)  ·  [overview](features/quick-terminal/overview.md)
 

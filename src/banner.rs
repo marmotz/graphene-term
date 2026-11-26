@@ -197,6 +197,8 @@ pub struct BannerLayout {
     pub texts: Vec<PlacedText>,
     /// Click target of each action, in [`Banner::actions`] order.
     pub actions: Vec<PixelRect>,
+    /// Width of a character of the texts: the width of the cell it was laid out with.
+    pub advance: f32,
 }
 
 impl BannerLayout {
@@ -242,6 +244,7 @@ impl BannerLayout {
             },
             texts,
             actions,
+            advance: cell.width,
         }
     }
 
