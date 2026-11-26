@@ -46,7 +46,10 @@ text with `Shift+Arrow` like in an editor: see [Input editor](input-editor.md).
 | `graphene --columns <n> --lines <n>` | Opens the window sized to show a grid of `<n>` columns and `<n>` lines |
 | `graphene --no-restore`            | Opens a new window without restoring the saved session, and keeps it out of the session (see `window.restore_session` in [Configuration](configuration.md#window)) |
 | `graphene --version`               | Prints the version and exits                                         |
+| `graphene --help`                  | Prints the command line options and exits                            |
 | `graphene --prune-config [--yes]`  | Removes the settings this version does not know from the configuration file (see [Configuration](configuration.md#removing-unknown-settings)) |
+
+An argument before `-e` that is not one of these options is an error: Graphene prints a message and exits with code 2 instead of opening a window.
 
 ### Running a program with `-e`
 

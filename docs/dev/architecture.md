@@ -47,7 +47,7 @@ choices are in [decisions.md](decisions.md).
 
 ```
 src/
-  main.rs          binary entry point: --version, --prune-config, --quick-toggle, --quick [--hidden],
+  main.rs          binary entry point: --help, --version, --prune-config, --quick-toggle, --quick [--hidden],
                    -e <program>, logger setup, calls lib::run
   build_version.rs version string from the crate version and GRAPHENE_CHANNEL, shared with build.rs
   lib.rs           library root (modules, VERSION, run); `bench` re-exports for benches/
