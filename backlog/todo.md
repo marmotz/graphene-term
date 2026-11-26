@@ -108,8 +108,8 @@ _terminé — voir [technical.md](bugs/quick-terminal-full-height-under-panel/te
 
 ### Les réglages s'ouvrent sous le quick terminal  ·  [overview](bugs/quick-terminal-settings-hidden/overview.md)
 
-_tâches créées : voir [technical.md](bugs/quick-terminal-settings-hidden/technical.md)_ — 0/1 tasks done
+_terminé — voir [technical.md](bugs/quick-terminal-settings-hidden/technical.md)_ — 1/1 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [ ]  | [#255](https://github.com/marmotz/graphene-term/issues/255) | fix(quick-terminal): open the settings in front of the quick terminal | — |
+| [x]  | [#255](https://github.com/marmotz/graphene-term/issues/255) | fix(quick-terminal): open the settings in front of the quick terminal | — |

@@ -1,4 +1,4 @@
-//! egui drawing of the settings window: the sections sidebar, the file problems at the
+//! egui drawing of the settings tab: the sections sidebar, the file problems at the
 //! top and the selected section's fields.
 
 mod shortcuts;

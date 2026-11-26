@@ -1,8 +1,9 @@
-//! Tab bar (pure, no GPU access): where each tab, its close button and the new tab
-//! button sit, which one the mouse is over, and where a dragged tab lands.
+//! Tab bar (pure, no GPU access): where the settings tab, each tab, its close button
+//! and the new tab button sit, which one the mouse is over, and where a dragged tab
+//! lands.
 //!
-//! The bar is only shown while the window has more than one tab. It sits on the edge
-//! the configuration picks. Along the top or bottom edge, tabs share its width equally,
+//! The bar is always shown: its first slot, a settings icon, is the settings tab. It
+//! sits on the edge the configuration picks. Along the top or bottom edge, tabs share its width equally,
 //! up to a maximum width; along the left or right edge, they are stacked, one text line
 //! high each, in a bar as wide as that maximum. Titles are truncated by the interface
 //! text.
@@ -49,11 +50,6 @@ pub fn opens_rename(clicks: u8) -> bool {
     clicks == 2
 }
 
-/// Whether a window with `tab_count` tabs shows the bar.
-pub fn shown(tab_count: usize) -> bool {
-    tab_count > 1
-}
-
 /// Size of the bar across its edge, in pixels: its height along the top or bottom edge,
 /// its width along a side of a window `window_width` pixels wide.
 pub fn thickness(position: TabBarPosition, window_width: f32, metrics: UiMetrics) -> f32 {
@@ -70,6 +66,8 @@ pub fn thickness(position: TabBarPosition, window_width: f32, metrics: UiMetrics
 /// What the mouse is over in the bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabBarHit {
+    /// The settings tab, first in the bar.
+    Settings,
     Tab(usize),
     Close(usize),
     NewTab,
@@ -103,6 +101,12 @@ pub struct TabSlot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabBarLayout {
     pub rect: Rect,
+    /// The settings tab: a square icon before the tabs, as big as the `+` button.
+    pub settings: Rect,
+    /// Whether the settings tab is the one shown: no tab is then active.
+    pub settings_active: bool,
+    /// Whether the mouse is over the settings tab.
+    pub settings_hovered: bool,
     /// Tabs in order; while one is dragged, see [`TabBarLayout::dragged`].
     pub tabs: Vec<TabSlot>,
     /// `+` button after the last tab.
@@ -132,6 +136,8 @@ impl TabBarLayout {
         let thickness = thickness(position, window.width, metrics);
         let line = metrics.bar_height();
         let count = titles.len().max(1) as f32;
+        // The settings tab and the `+` button take a line each.
+        let buttons = 2.0 * line;
         let rect = match position {
             TabBarPosition::Top => Rect {
                 height: thickness,
@@ -154,10 +160,10 @@ impl TabBarLayout {
         };
         let vertical = position.is_vertical();
         let (tab_width, tab_height, new_tab_size) = if vertical {
-            let tab_height = ((rect.height - line) / count).min(line).max(0.0).floor();
+            let tab_height = ((rect.height - buttons) / count).min(line).max(0.0).floor();
             (rect.width, tab_height, (rect.width, line))
         } else {
-            let tab_width = ((rect.width - line) / count)
+            let tab_width = ((rect.width - buttons) / count)
                 .min(TAB_MAX_WIDTH * metrics.scale)
                 .max(0.0)
                 .floor();
@@ -165,6 +171,13 @@ impl TabBarLayout {
         };
         let mut layout = Self {
             rect,
+            settings: Rect {
+                width: new_tab_size.0,
+                height: new_tab_size.1,
+                ..rect
+            },
+            settings_active: false,
+            settings_hovered: false,
             tabs: Vec::with_capacity(titles.len()),
             new_tab: rect,
             new_tab_hovered: false,
@@ -201,9 +214,19 @@ impl TabBarLayout {
         }
     }
 
-    /// Start of the bar along it.
+    /// Start of the tabs along the bar, after the settings tab.
     fn start(&self) -> f32 {
-        self.along(self.rect.x, self.rect.y)
+        self.along(self.rect.x, self.rect.y) + self.along(self.settings.width, self.settings.height)
+    }
+
+    /// Shows the settings tab rather than the active tab, when `active`.
+    pub fn set_settings_active(&mut self, active: bool) {
+        self.settings_active = active;
+        if active {
+            for tab in &mut self.tabs {
+                tab.active = false;
+            }
+        }
     }
 
     /// Start of slot `index` along the bar.
@@ -294,6 +317,9 @@ impl TabBarLayout {
     pub fn hit(&self, x: f32, y: f32) -> Option<TabBarHit> {
         if !self.rect.contains(x, y) {
             return None;
+        }
+        if self.settings.contains(x, y) {
+            return Some(TabBarHit::Settings);
         }
         if self.new_tab.contains(x, y) {
             return Some(TabBarHit::NewTab);
@@ -477,10 +503,36 @@ mod tests {
     }
 
     #[test]
-    fn bar_is_shown_from_two_tabs() {
-        assert!(!shown(0));
-        assert!(!shown(1));
-        assert!(shown(2));
+    fn the_settings_tab_is_a_square_before_the_tabs() {
+        let bar = top(2000.0, &titles(2), 1, METRICS);
+        assert_eq!(
+            bar.settings,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 30.0,
+                height: 30.0
+            }
+        );
+        assert!(!bar.settings_active && !bar.settings_hovered);
+        assert_eq!(bar.tabs[0].rect.x, bar.settings.width);
+        // A single tab still gets the bar, the settings tab first.
+        let single = top(2000.0, &titles(1), 0, METRICS);
+        assert_eq!(single.tabs.len(), 1);
+        assert_eq!(single.hit(5.0, 15.0), Some(TabBarHit::Settings));
+    }
+
+    #[test]
+    fn the_shown_settings_tab_leaves_no_tab_active() {
+        let mut bar = top(2000.0, &titles(3), 1, METRICS);
+        assert!(bar.tabs[1].active);
+        bar.set_settings_active(true);
+        assert!(bar.settings_active);
+        assert!(bar.tabs.iter().all(|tab| !tab.active));
+        // Left, the tabs keep what the workspace shows.
+        let mut bar = top(2000.0, &titles(3), 1, METRICS);
+        bar.set_settings_active(false);
+        assert!(!bar.settings_active && bar.tabs[1].active);
     }
 
     #[test]
@@ -498,15 +550,16 @@ mod tests {
         let wide = top(2000.0, &titles(3), 0, METRICS);
         assert_eq!(wide.tab_width, TAB_MAX_WIDTH);
         let xs: Vec<f32> = wide.tabs.iter().map(|t| t.rect.x).collect();
-        assert_eq!(xs, [0.0, 220.0, 440.0]);
+        // After the square settings tab.
+        assert_eq!(xs, [30.0, 250.0, 470.0]);
         // The `+` button follows the last tab.
-        assert_eq!(wide.new_tab.x, 660.0);
+        assert_eq!(wide.new_tab.x, 690.0);
         assert_eq!(wide.new_tab.width, wide.rect.height);
 
-        // Shrunk to fit: 4 tabs and the button in 430 px.
-        let narrow = top(430.0, &titles(4), 0, METRICS);
+        // Shrunk to fit: the settings tab, 4 tabs and the button in 460 px.
+        let narrow = top(460.0, &titles(4), 0, METRICS);
         assert_eq!(narrow.tab_width, 100.0);
-        assert!(narrow.new_tab.x + narrow.new_tab.width <= 430.0);
+        assert!(narrow.new_tab.x + narrow.new_tab.width <= 460.0);
     }
 
     #[test]
@@ -562,16 +615,17 @@ mod tests {
     }
 
     #[test]
-    fn hit_finds_the_tab_its_close_button_and_the_new_tab_button() {
+    fn hit_finds_the_settings_the_tab_its_close_button_and_the_new_tab_button() {
         let bar = top(2000.0, &titles(2), 0, METRICS);
-        assert_eq!(bar.hit(5.0, 15.0), Some(TabBarHit::Tab(0)));
-        assert_eq!(bar.hit(225.0, 15.0), Some(TabBarHit::Tab(1)));
+        assert_eq!(bar.hit(5.0, 15.0), Some(TabBarHit::Settings));
+        assert_eq!(bar.hit(35.0, 15.0), Some(TabBarHit::Tab(0)));
+        assert_eq!(bar.hit(255.0, 15.0), Some(TabBarHit::Tab(1)));
         let close = bar.tabs[1].close;
         assert_eq!(
             bar.hit(close.x + 1.0, close.y + 1.0),
             Some(TabBarHit::Close(1))
         );
-        assert_eq!(bar.hit(445.0, 15.0), Some(TabBarHit::NewTab));
+        assert_eq!(bar.hit(475.0, 15.0), Some(TabBarHit::NewTab));
         // Past the button, and below the bar: nothing.
         assert_eq!(bar.hit(1000.0, 15.0), None);
         assert_eq!(bar.hit(5.0, 30.0), None);
@@ -581,8 +635,8 @@ mod tests {
     fn drop_index_is_the_slot_under_the_dragged_tab_center() {
         let bar = top(2000.0, &titles(3), 0, METRICS);
         assert_eq!(bar.drop_index(-50.0), 0);
-        assert_eq!(bar.drop_index(219.0), 0);
-        assert_eq!(bar.drop_index(220.0), 1);
+        assert_eq!(bar.drop_index(249.0), 0);
+        assert_eq!(bar.drop_index(250.0), 1);
         assert_eq!(bar.drop_index(500.0), 2);
         assert_eq!(bar.drop_index(5000.0), 2);
     }
@@ -598,18 +652,22 @@ mod tests {
             .iter()
             .map(|t| (t.title.as_str(), t.rect.x))
             .collect();
-        assert_eq!(placed, [("tab 1", 0.0), ("tab 2", 220.0), ("tab 0", 400.0)]);
+        assert_eq!(
+            placed,
+            [("tab 1", 30.0), ("tab 2", 250.0), ("tab 0", 400.0)]
+        );
         assert!(bar.tabs[2].active);
     }
 
     #[test]
     fn dragged_tab_stays_inside_the_tabs() {
         let mut bar = top(2000.0, &titles(2), 0, METRICS);
+        // Never over the settings tab.
         assert_eq!(bar.dragged(1, -100.0), 0);
-        assert_eq!(bar.tabs.last().unwrap().rect.x, 0.0);
+        assert_eq!(bar.tabs.last().unwrap().rect.x, 30.0);
         let mut bar = top(2000.0, &titles(2), 0, METRICS);
         assert_eq!(bar.dragged(0, 1500.0), 1);
-        assert_eq!(bar.tabs.last().unwrap().rect.x, 220.0);
+        assert_eq!(bar.tabs.last().unwrap().rect.x, 250.0);
     }
 
     #[test]
@@ -682,10 +740,12 @@ mod tests {
     fn bottom_tabs_are_side_by_side_on_the_bottom_edge() {
         let bar = bar_at(TabBarPosition::Bottom, 2);
         assert!(bar.tabs.iter().all(|t| t.rect.y == 570.0));
-        assert_eq!(bar.tabs[1].rect.x, 220.0);
+        assert_eq!(bar.tabs[1].rect.x, 250.0);
         assert_eq!(bar.new_tab.y, 570.0);
+        assert_eq!(bar.settings.y, 570.0);
         assert_eq!(bar.tabs[0].title_y, 576.0);
-        assert_eq!(bar.hit(5.0, 580.0), Some(TabBarHit::Tab(0)));
+        assert_eq!(bar.hit(5.0, 580.0), Some(TabBarHit::Settings));
+        assert_eq!(bar.hit(35.0, 580.0), Some(TabBarHit::Tab(0)));
         assert_eq!(bar.hit(5.0, 10.0), None);
     }
 
@@ -695,48 +755,59 @@ mod tests {
             let bar = bar_at(position, 3);
             assert_eq!((bar.tab_width, bar.tab_height), (220.0, 30.0));
             let corners: Vec<(f32, f32)> = bar.tabs.iter().map(|t| (t.rect.x, t.rect.y)).collect();
-            assert_eq!(corners, [(x, 0.0), (x, 30.0), (x, 60.0)]);
+            // Below the settings tab, a line high and as wide as the bar.
+            assert_eq!(
+                bar.settings,
+                Rect {
+                    x,
+                    y: 0.0,
+                    width: 220.0,
+                    height: 30.0
+                }
+            );
+            assert_eq!(corners, [(x, 30.0), (x, 60.0), (x, 90.0)]);
             // The `+` button follows the last tab, as wide as the bar.
             assert_eq!(
                 bar.new_tab,
                 Rect {
                     x,
-                    y: 90.0,
+                    y: 120.0,
                     width: 220.0,
                     height: 30.0
                 }
             );
             let tab = &bar.tabs[2];
-            assert_eq!((tab.title_x, tab.title_y), (x + 10.0, 66.0));
-            assert_eq!(tab.close.y, 66.0);
+            assert_eq!((tab.title_x, tab.title_y), (x + 10.0, 96.0));
+            assert_eq!(tab.close.y, 96.0);
             assert!(tab.close.x + tab.close.width <= x + 220.0);
-            assert_eq!(bar.hit(x + 5.0, 45.0), Some(TabBarHit::Tab(1)));
-            assert_eq!(bar.hit(x + 5.0, 95.0), Some(TabBarHit::NewTab));
+            assert_eq!(bar.hit(x + 5.0, 5.0), Some(TabBarHit::Settings));
+            assert_eq!(bar.hit(x + 5.0, 75.0), Some(TabBarHit::Tab(1)));
+            assert_eq!(bar.hit(x + 5.0, 125.0), Some(TabBarHit::NewTab));
             assert_eq!(bar.hit(x + 5.0, 300.0), None);
         }
     }
 
     #[test]
     fn side_tabs_shrink_to_fit_the_height() {
-        let window = Rect::from_size(1000, 330);
+        let window = Rect::from_size(1000, 360);
         let bar = TabBarLayout::new(window, TabBarPosition::Left, &titles(20), 0, METRICS);
         assert_eq!(bar.tab_height, 15.0);
-        assert!(bar.new_tab.y + bar.new_tab.height <= 330.0);
+        assert!(bar.new_tab.y + bar.new_tab.height <= 360.0);
     }
 
     #[test]
     fn side_tabs_are_dragged_along_the_height() {
         let mut bar = bar_at(TabBarPosition::Left, 3);
         assert_eq!(bar.along(5.0, 45.0), 45.0);
-        assert_eq!(bar.drop_index(45.0), 1);
-        let to = bar.dragged(0, 50.0);
+        assert_eq!(bar.drop_index(75.0), 1);
+        let to = bar.dragged(0, 80.0);
         assert_eq!(to, 2);
         let placed: Vec<(&str, f32)> = bar
             .tabs
             .iter()
             .map(|t| (t.title.as_str(), t.rect.y))
             .collect();
-        assert_eq!(placed, [("tab 1", 0.0), ("tab 2", 30.0), ("tab 0", 50.0)]);
+        assert_eq!(placed, [("tab 1", 30.0), ("tab 2", 60.0), ("tab 0", 80.0)]);
         assert!(bar.tabs.iter().all(|t| t.rect.x == 0.0));
     }
 
@@ -770,6 +841,7 @@ mod tests {
         let left = TabBarLayout::new(window, TabBarPosition::Left, &titles(3), 0, METRICS);
         assert_eq!(left.rect.y, 40.0);
         assert_eq!(left.rect.height, 560.0);
-        assert_eq!(left.tabs[0].rect.y, 40.0);
+        assert_eq!(left.settings.y, 40.0);
+        assert_eq!(left.tabs[0].rect.y, 70.0);
     }
 }

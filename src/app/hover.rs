@@ -70,7 +70,7 @@ impl Session {
         let (x, y) = self.mouse_pixel();
         let layout = self.shown_layout();
         let metrics = self.ui_metrics(UiFont::Chrome);
-        chrome::button_at(self.tab_bar().as_ref(), &layout.panes, x, y, metrics)
+        chrome::button_at(Some(&self.tab_bar()), &layout.panes, x, y, metrics)
     }
 
     /// Looks the link under the mouse up again when the grid cell under it changed, or

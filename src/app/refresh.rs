@@ -22,7 +22,7 @@ impl Session {
     }
 
     /// Shows `palette` until the next reload: the live preview of the theme being
-    /// edited in the settings window.
+    /// edited in the settings tab.
     pub(super) fn preview_palette(&mut self, palette: &Palette) {
         palette.clone_into(&mut self.palette);
         self.window.request_redraw();
@@ -133,7 +133,6 @@ impl Session {
     /// screen. Returns the earliest of the next expiry and the next animation frame,
     /// `None` without any progress.
     pub(super) fn progress_tick(&mut self, now: Instant) -> Option<Instant> {
-        let bar_shown = self.tab_bar_shown();
         let mut expired = Vec::new();
         let mut deadline = None;
         let mut animated = false;
@@ -148,11 +147,11 @@ impl Session {
             };
             deadline = earliest(deadline, Some(progress.expires_at()));
             animated |= progress.state == ProgressState::Indeterminate
-                && self.workspace.progress_on_screen(id, bar_shown);
+                && self.workspace.progress_on_screen(id);
         }
         let redraw = expired
             .iter()
-            .any(|&id| self.workspace.progress_on_screen(id, bar_shown));
+            .any(|&id| self.workspace.progress_on_screen(id));
         for id in expired {
             self.workspace.touch(id);
         }

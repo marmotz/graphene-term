@@ -1,4 +1,4 @@
-//! What the settings window shows and writes: field values from the applied
+//! What the settings tab shows and writes: field values from the applied
 //! configuration, errors routed by key, the locked state of an unreadable file, and the
 //! changes an edit makes to `config.toml`. Pure; drawn by `view`.
 
@@ -377,7 +377,7 @@ fn same(current: &Value, new: &Value) -> bool {
     }
 }
 
-/// The settings window's state.
+/// The settings tab's state.
 #[derive(Debug, Clone)]
 pub struct SettingsModel {
     config: Config,

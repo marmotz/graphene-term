@@ -105,12 +105,6 @@ impl QuickState {
             (!focused && hide_on_focus_loss && self.shown).then(|| now + BLUR_DELAY);
     }
 
-    /// Another window of the process, the settings window, takes the focus: the window
-    /// stays.
-    pub(super) fn other_window_focused(&mut self) {
-        self.blur_deadline = None;
-    }
-
     /// Whether the window hides now for having lost the focus; the deadline is spent.
     pub(super) fn blur_due(&mut self, now: Instant) -> bool {
         let due = self.blur_deadline.is_some_and(|deadline| now >= deadline);
@@ -722,15 +716,6 @@ mod tests {
         let mut state = QuickState::new(false);
         state.clicked(now);
         assert!(!state.focus_due(now));
-    }
-
-    #[test]
-    fn settings_window_taking_the_focus_cancels_the_deadline() {
-        let now = Instant::now();
-        let mut state = shown();
-        state.focus_changed(false, now, true);
-        state.other_window_focused();
-        assert!(!state.blur_due(now + BLUR_DELAY * 2));
     }
 
     #[test]

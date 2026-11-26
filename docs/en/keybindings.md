@@ -85,12 +85,12 @@ without `Shift`).
 | Keys            | Action                     |
 |-----------------|----------------------------|
 | `Ctrl+Shift+P`  | Command palette            |
-| `Ctrl+,`        | Settings window            |
+| `Ctrl+,`        | Settings tab               |
 | `Ctrl+Shift+Q`  | Quit Graphene              |
 
 ## Changing shortcuts
 
-Use the **Keyboard shortcuts** section of the settings window (`Ctrl+,`): press a new
+Use the **Keyboard shortcuts** section of the settings tab (`Ctrl+,`): press a new
 shortcut to add it, or remove one. Type in the field above the list to keep only the
 actions whose name contains the text, or click **Find a shortcut** and press a shortcut
 to see the actions that use it. Or edit `keybindings.toml`, which sits next to the
@@ -164,6 +164,6 @@ Rules:
 | `next_tab`, `previous_tab`               | Cycle through the tabs                            |
 | `go_to_tab_1` ... `go_to_tab_255`        | Go to a tab by its number                         |
 | `command_palette`                        | Open the command palette                          |
-| `open_settings`                          | Open the settings window                          |
+| `open_settings`                          | Show the settings tab                             |
 | `quit`                                   | Quit Graphene                                     |
 | `none`                                   | Remove the shortcut                               |

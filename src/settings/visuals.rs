@@ -1,4 +1,4 @@
-//! egui look of the settings window, built from the active theme.
+//! egui look of the settings tab, built from the active theme.
 
 use alacritty_terminal::vte::ansi::Rgb;
 use egui::{Color32, Stroke, Theme, Visuals};

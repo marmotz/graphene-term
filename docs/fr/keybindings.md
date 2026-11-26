@@ -90,12 +90,12 @@ disposition (en AZERTY aussi, sans `Shift`).
 | Touches         | Action                     |
 |-----------------|----------------------------|
 | `Ctrl+Shift+P`  | Palette de commandes       |
-| `Ctrl+,`        | Fenêtre des paramètres     |
+| `Ctrl+,`        | Onglet des paramètres      |
 | `Ctrl+Shift+Q`  | Quitter Graphene           |
 
 ## Modifier les raccourcis
 
-Utilisez la section **Raccourcis clavier** de la fenêtre des paramètres (`Ctrl+,`) :
+Utilisez la section **Raccourcis clavier** de l'onglet des paramètres (`Ctrl+,`) :
 appuyez sur un nouveau raccourci pour l'ajouter, ou supprimez-en un. Tapez dans le
 champ au-dessus de la liste pour ne garder que les actions dont le nom contient le
 texte, ou cliquez sur **Rechercher un raccourci** puis appuyez sur un raccourci pour voir
@@ -178,6 +178,6 @@ Règles :
 | `next_tab`, `previous_tab`               | Parcourir les onglets                             |
 | `go_to_tab_1` ... `go_to_tab_255`        | Aller à un onglet par son numéro                  |
 | `command_palette`                        | Ouvrir la palette de commandes                    |
-| `open_settings`                          | Ouvrir la fenêtre des paramètres                  |
+| `open_settings`                          | Afficher l'onglet des paramètres                  |
 | `quit`                                   | Quitter Graphene                                  |
 | `none`                                   | Supprimer le raccourci                            |

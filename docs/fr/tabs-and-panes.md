@@ -29,7 +29,10 @@ Tous les raccourcis ci-dessous sont ceux par défaut ; voir
 | Renommer l'onglet                      | Double-clic sur l'onglet, **Renommer l'onglet** dans son menu ou dans la palette de commandes |
 | Menu de l'onglet (nouvel onglet, fermer, renommer, paramètres, thèmes) | Clic droit sur un onglet |
 
-La barre d'onglets apparaît dès qu'il y a deux onglets. Son bord est défini par
+La barre d'onglets est toujours affichée. Sa première case, une icône de réglages, est
+l'[onglet des paramètres](configuration.md#onglet-des-paramètres) : il ne se ferme
+jamais et les raccourcis d'onglets (`Alt+1` à `Alt+9`, suivant, précédent) ne comptent
+que les autres onglets. Son bord est défini par
 `position` dans la section `[tabs]` de la [configuration](configuration.md#tabs) :
 `"top"` (par défaut), `"bottom"`, `"left"` ou `"right"`. À gauche ou à droite, les
 onglets sont empilés.
@@ -95,8 +98,7 @@ Faites glisser un panneau par sa barre de titre et déposez-le :
   onglet pour afficher cet onglet et le déposer précisément) ;
 - sur `+` ou sur la partie vide de la barre d'onglets : il passe dans un nouvel onglet.
 
-La barre d'onglets s'affiche pendant le glisser même s'il n'y a qu'un onglet, et une
-surbrillance translucide montre où le panneau va atterrir. `Échap` annule le glisser.
+Une surbrillance translucide montre où le panneau va atterrir. `Échap` annule le glisser.
 
 ## Zoom
 
@@ -125,8 +127,7 @@ et commence par `»` suivi du nombre de panneaux.
 Les programmes qui signalent leur progression avec la séquence `OSC 9;4` (comme
 `winget`, `systemd`, certains outils de build et gestionnaires de paquets, ou tout script
 qui écrit `\e]9;4;1;50\a`) ont une fine barre de progression sur le bord inférieur de la
-barre de titre du panneau et, quand la barre d'onglets est affichée, de leur onglet
-(l'onglet suit son panneau actif). La barre prend la couleur d'accent, rouge après une
+barre de titre du panneau et de leur onglet (l'onglet suit son panneau actif). La barre prend la couleur d'accent, rouge après une
 erreur, jaune pendant une pause ; une progression inconnue affiche un segment qui
 glisse le long de la barre. Elle disparaît quand le programme l'efface, à la fin de la
 commande, ou après 15 secondes sans nouvelles. `[window] progress = false` (voir

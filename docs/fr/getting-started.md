@@ -31,11 +31,11 @@ configuration du shell ne sont pas modifiés.
    `Ctrl+Shift+O` pour diviser en bas. Cliquez dans un panneau ou utilisez
    `Ctrl+Shift+Flèche` pour passer de l'un à l'autre, et faites glisser la barre de
    titre d'un panneau pour le déplacer. Voir [Onglets et panneaux](tabs-and-panes.md).
-4. **La fenêtre des paramètres.** Appuyez sur `Ctrl+,` pour changer la police, le
+4. **L'onglet des paramètres.** Appuyez sur `Ctrl+,` pour changer la police, le
    curseur, les raccourcis clavier et plus encore. Les changements s'appliquent
-   aussitôt. Voir [Configuration](configuration.md#fenêtre-des-paramètres).
+   aussitôt. Voir [Configuration](configuration.md#onglet-des-paramètres).
 5. **Un thème.** Faites un clic droit dans la fenêtre, ouvrez **Thèmes** et choisissez-en
-   un ; ou réglez-le dans la fenêtre des paramètres. Voir [Thèmes](themes.md).
+   un ; ou réglez-le dans l'onglet des paramètres. Voir [Thèmes](themes.md).
 
 À l'invite du shell, vous pouvez aussi cliquer dans votre ligne de commande pour y
 déplacer le curseur, et sélectionner du texte avec `Shift+Flèche` comme dans un

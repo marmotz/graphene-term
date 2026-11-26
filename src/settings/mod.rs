@@ -1,6 +1,7 @@
-//! The settings window: a second winit window on the shared GPU context, drawn with
-//! egui and redrawn on demand. Each change is written to `config.toml` at once; the
-//! hot reload applies it to the terminal window and refreshes this one.
+//! The settings tab: the first tab of the terminal window, drawn with egui over the
+//! window's content area, in the terminal's frame, and redrawn on demand. Each change is
+//! written to `config.toml` at once; the hot reload applies it to the terminal and
+//! refreshes the tab.
 
 mod fonts;
 mod model;
@@ -11,18 +12,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Context as _;
 use egui::ViewportId;
-use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::Window;
 
 use crate::appearance::Appearance;
 use crate::config::{self, Config, ConfigError};
 use crate::config_edit::{self, ConfigEdit};
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::Lang;
+use crate::layout::Rect;
 use crate::palette::Palette;
 use crate::renderer::Gpu;
 use crate::{opener, theme, theme_edit};
@@ -31,22 +31,17 @@ pub use model::LoadErrors;
 use model::{Change, SettingsModel, ThemeOp};
 use view::{Edits, View};
 
-const INITIAL_SIZE: LogicalSize<u32> = LogicalSize::new(1000, 700);
-const MIN_SIZE: LogicalSize<u32> = LogicalSize::new(640, 420);
-
-/// What the owner of a settings window does after one of its events.
+/// What the window does after an event of the settings tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Keep,
-    /// The user closed the window: drop it.
-    Close,
+    /// The user left the tab with `Escape`: the previous terminal tab is shown again.
+    Leave,
 }
 
-pub struct SettingsWindow {
+pub struct SettingsTab {
+    /// The terminal window the tab is drawn in.
     window: Arc<Window>,
-    gpu: Arc<Gpu>,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
     egui: egui_winit::State,
     renderer: egui_wgpu::Renderer,
     view: View,
@@ -58,57 +53,38 @@ pub struct SettingsWindow {
     repaint_at: Option<Instant>,
     /// Modifiers held, for a captured shortcut.
     modifiers: ModifiersState,
-    /// The colors shown in the terminal window while a color of the active theme is
-    /// picked.
+    /// The colors shown in the terminal while a color of the active theme is picked.
     preview: LivePreview,
+    /// The frame [`Self::prepare`] ran last, for [`Self::paint`].
+    frame: Option<Prepared>,
 }
 
-impl SettingsWindow {
-    /// Opens the window on `gpu`, colored by `palette` and labelled in `lang`, showing
-    /// `config` and the `errors` of its last load under the system `appearance`; changes
-    /// are written to the files of `dir`.
+/// An egui frame ready to be painted.
+struct Prepared {
+    primitives: Vec<egui::ClippedPrimitive>,
+    pixels_per_point: f32,
+    /// Textures freed once the frame is painted: it may still use them.
+    free: Vec<egui::TextureId>,
+}
+
+impl SettingsTab {
+    /// Opens the tab in the terminal `window`, drawn on `gpu` into textures of `format`,
+    /// colored by `palette` and labelled in `lang`, showing `config` and the `errors` of
+    /// its last load under the system `appearance`; changes are written to the files of
+    /// `dir`.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         event_loop: &ActiveEventLoop,
-        gpu: Arc<Gpu>,
+        gpu: &Gpu,
+        format: wgpu::TextureFormat,
+        window: Arc<Window>,
         palette: &Palette,
         lang: Lang,
         config: &Config,
         errors: &LoadErrors,
         appearance: Appearance,
         dir: PathBuf,
-    ) -> anyhow::Result<Self> {
-        let attributes = Window::default_attributes()
-            .with_title(i18n::text(lang, &Msg::OpenSettings))
-            .with_inner_size(INITIAL_SIZE)
-            .with_min_inner_size(MIN_SIZE);
-        let window = Arc::new(event_loop.create_window(attributes)?);
-
-        let surface = gpu.create_surface(window.clone())?;
-        let caps = surface.get_capabilities(&gpu.adapter);
-        let format = egui_wgpu::preferred_framebuffer_format(&caps.formats)
-            .context("settings surface has no supported format")?;
-        let alpha_mode = caps
-            .alpha_modes
-            .iter()
-            .copied()
-            .find(|&mode| mode == wgpu::CompositeAlphaMode::Opaque)
-            .or_else(|| caps.alpha_modes.first().copied())
-            .context("settings surface has no alpha mode")?;
-        let size = window.inner_size();
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-        };
-        surface.configure(&gpu.device, &surface_config);
-
+    ) -> Self {
         let renderer =
             egui_wgpu::Renderer::new(&gpu.device, format, egui_wgpu::RendererOptions::default());
         let max_texture_side = gpu.device.limits().max_texture_dimension_2d as usize;
@@ -141,9 +117,6 @@ impl SettingsWindow {
 
         let mut settings = Self {
             window,
-            gpu,
-            surface,
-            config: surface_config,
             egui,
             renderer,
             view: View::default(),
@@ -153,22 +126,14 @@ impl SettingsWindow {
             repaint_at: None,
             modifiers: ModifiersState::empty(),
             preview: LivePreview::default(),
+            frame: None,
         };
         settings.apply(palette, lang, config, errors, appearance);
-        Ok(settings)
+        settings
     }
 
-    pub fn id(&self) -> WindowId {
-        self.window.id()
-    }
-
-    /// Brings the window to the front.
-    pub fn focus(&self) {
-        self.window.focus_window();
-    }
-
-    /// Recolors the window with `palette`, relabels it in `lang` and shows `config`
-    /// and its `errors` under the system `appearance`, after a reload.
+    /// Recolors the tab with `palette`, relabels it in `lang` and shows `config` and its
+    /// `errors` under the system `appearance`, after a reload.
     pub fn apply(
         &mut self,
         palette: &Palette,
@@ -182,17 +147,14 @@ impl SettingsWindow {
         self.model
             .set_theme_choices(theme::available(Some(&self.dir), &config.theme.unlocked));
         recolor(self.egui.egui_ctx(), palette);
-        if lang != self.lang {
-            self.lang = lang;
-            self.window.set_title(&i18n::text(lang, &Msg::OpenSettings));
-        }
+        self.lang = lang;
         self.window.request_redraw();
     }
 
-    /// The colors the terminal window shows after the last event of this window, when
-    /// they changed: the active theme with the color being picked, then the active
-    /// theme as loaded once the picker closes. This window takes them too, so both
-    /// windows follow the picker. Read after each event, the window closing included.
+    /// The colors the terminal shows after the last event of the tab, when they changed:
+    /// the active theme with the color being picked, then the active theme as loaded
+    /// once the picker closes. The tab takes them too, so both follow the picker. Read
+    /// after each event, leaving the tab included.
     pub fn take_preview(&mut self) -> Option<Palette> {
         let wanted = self.model.live_preview(self.view.picked());
         let palette = self
@@ -203,7 +165,7 @@ impl SettingsWindow {
         Some(palette)
     }
 
-    /// Next time the window wants a frame, when egui asked for a delayed one.
+    /// Next time the tab wants a frame, when egui asked for a delayed one.
     pub fn deadline(&self) -> Option<Instant> {
         self.repaint_at
     }
@@ -216,19 +178,13 @@ impl SettingsWindow {
         }
     }
 
-    pub fn window_event(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) -> Outcome {
+    /// Handles an event of the window while the tab is shown. The pointer events over
+    /// the tab bar and the overlays are the window's, not the tab's.
+    pub fn window_event(&mut self, event: &WindowEvent) -> Outcome {
         match event {
-            WindowEvent::CloseRequested => return self.close(),
-            WindowEvent::RedrawRequested => {
-                if let Err(error) = self.redraw(event_loop) {
-                    log::error!("settings window render failed: {error:#}");
-                }
-                return Outcome::Keep;
-            }
-            WindowEvent::Resized(size) => self.resize(size.width, size.height),
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             // A captured shortcut is read from the winit event, to match it as the
-            // terminal window does; egui does not see the key press.
+            // terminal does; egui does not see the key press.
             WindowEvent::KeyboardInput { event: key, .. }
                 if self.view.capturing() && key.state == ElementState::Pressed =>
             {
@@ -247,17 +203,17 @@ impl SettingsWindow {
                 self.window.request_redraw();
                 return Outcome::Keep;
             }
-            // Escape alone closes the window, unless egui uses it (an open popup, a
-            // focused field) or it dismisses a shortcut conflict.
+            // Escape alone leaves the tab, unless egui uses it (an open popup, a focused
+            // field) or it dismisses a shortcut conflict.
             WindowEvent::KeyboardInput { event: key, .. }
-                if closes_on_escape(&key.logical_key, key.state, self.modifiers)
+                if leaves_on_escape(&key.logical_key, key.state, self.modifiers)
                     && !self.egui_takes_escape() =>
             {
                 if self.view.escape() {
                     self.window.request_redraw();
                     return Outcome::Keep;
                 }
-                return self.close();
+                return Outcome::Leave;
             }
             _ => {}
         }
@@ -267,8 +223,8 @@ impl SettingsWindow {
         Outcome::Keep
     }
 
-    /// Writes the color of a picker still open, then lets the window close.
-    fn close(&mut self) -> Outcome {
+    /// Writes the color of a picker still open, before the tab is left.
+    pub fn leave(&mut self) {
         if let Some(op) = self.view.finish_picking() {
             let mut edits = Edits::default();
             if let Ok(theme_op) = self.model.theme_op(op) {
@@ -276,7 +232,8 @@ impl SettingsWindow {
                 self.write(&edits);
             }
         }
-        Outcome::Close
+        // egui may have asked for the input method of a text field.
+        self.window.set_ime_allowed(false);
     }
 
     /// Whether egui handles `Escape` itself: it closes a popup or drops a field's focus.
@@ -316,17 +273,12 @@ impl SettingsWindow {
         self.window.request_redraw();
     }
 
-    fn resize(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 {
-            return;
-        }
-        self.config.width = width;
-        self.config.height = height;
-        self.surface.configure(&self.gpu.device, &self.config);
-    }
-
-    fn redraw(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
-        let input = self.egui.take_egui_input(&self.window);
+    /// Runs the egui frame of the tab laid out in `content`, in physical pixels, writes
+    /// its changes and uploads its textures to `gpu`: [`Self::paint`] then draws it.
+    pub fn prepare(&mut self, gpu: &Gpu, content: Rect) {
+        let mut input = self.egui.take_egui_input(&self.window);
+        let scale = self.window.scale_factor() as f32;
+        input.screen_rect = Some(content_in_points(content, scale));
         let ctx = self.egui.egui_ctx().clone();
         let view = &mut self.view;
         let model = &self.model;
@@ -336,11 +288,8 @@ impl SettingsWindow {
         if !edits.is_empty() {
             self.write(&edits);
         }
-        self.egui.handle_platform_output_with_event_loop(
-            &self.window,
-            event_loop,
-            output.platform_output,
-        );
+        self.egui
+            .handle_platform_output(&self.window, output.platform_output);
         let delay = output
             .viewport_output
             .get(&ViewportId::ROOT)
@@ -358,80 +307,57 @@ impl SettingsWindow {
         for (id, deltas) in textures.set.drain() {
             for delta in deltas {
                 self.renderer
-                    .update_texture(&self.gpu.device, &self.gpu.queue, id, &delta);
+                    .update_texture(&gpu.device, &gpu.queue, id, &delta);
             }
         }
         let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
-        let painted = self.paint(&ctx, &primitives, output.pixels_per_point);
-        // Freed after the submit, or with no frame at all: the frame may still use them.
-        for id in textures.free.drain() {
-            self.renderer.free_texture(&id);
+        // A frame left unpainted frees its textures now.
+        if let Some(stale) = self.frame.take() {
+            self.free(stale.free);
         }
-        painted
+        self.frame = Some(Prepared {
+            primitives,
+            pixels_per_point: output.pixels_per_point,
+            free: textures.free.drain().collect(),
+        });
     }
 
-    /// Paints `primitives` on the next surface texture and presents it.
-    fn paint(
+    /// Records the frame [`Self::prepare`] ran into `encoder`, over `view`, a texture of
+    /// `size` pixels holding the terminal's frame.
+    pub fn paint(
         &mut self,
-        ctx: &egui::Context,
-        primitives: &[egui::ClippedPrimitive],
-        pixels_per_point: f32,
-    ) -> anyhow::Result<()> {
-        let device = &self.gpu.device;
-        let queue = &self.gpu.queue;
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        size: (u32, u32),
+    ) {
+        let Some(frame) = self.frame.take() else {
+            return;
+        };
         let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [self.config.width, self.config.height],
-            pixels_per_point,
+            size_in_pixels: [size.0, size.1],
+            pixels_per_point: frame.pixels_per_point,
         };
-
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
-                self.surface.configure(device, &self.config);
-                self.window.request_redraw();
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self.gpu.create_surface(self.window.clone())?;
-                self.surface.configure(device, &self.config);
-                self.window.request_redraw();
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                anyhow::bail!("settings surface validation error")
-            }
-        };
-        let target = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("settings"),
-        });
-        let callbacks =
-            self.renderer
-                .update_buffers(device, queue, &mut encoder, primitives, &screen);
-        let [r, g, b, a] = ctx
-            .global_style()
-            .visuals
-            .panel_fill
-            .to_normalized_gamma_f32();
+        let callbacks = self.renderer.update_buffers(
+            &gpu.device,
+            &gpu.queue,
+            encoder,
+            &frame.primitives,
+            &screen,
+        );
+        // Paint callbacks run before the frame's own commands.
+        if !callbacks.is_empty() {
+            gpu.queue.submit(callbacks);
+        }
         {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("settings pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target,
+                    view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: f64::from(r),
-                            g: f64::from(g),
-                            b: f64::from(b),
-                            a: f64::from(a),
-                        }),
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -441,13 +367,26 @@ impl SettingsWindow {
                 multiview_mask: None,
             });
             self.renderer
-                .render(&mut pass.forget_lifetime(), primitives, &screen);
+                .render(&mut pass.forget_lifetime(), &frame.primitives, &screen);
         }
-        queue.submit(callbacks.into_iter().chain([encoder.finish()]));
-        self.window.pre_present_notify();
-        queue.present(frame);
-        Ok(())
+        // Freed once recorded: the textures are only released after the submit.
+        self.free(frame.free);
     }
+
+    fn free(&mut self, ids: Vec<egui::TextureId>) {
+        for id in ids {
+            self.renderer.free_texture(&id);
+        }
+    }
+}
+
+/// The content area `content`, in physical pixels, in the points of a window of
+/// `scale`: the rectangle egui lays the tab out in.
+fn content_in_points(content: Rect, scale: f32) -> egui::Rect {
+    egui::Rect::from_min_size(
+        egui::pos2(content.x / scale, content.y / scale),
+        egui::vec2(content.width / scale, content.height / scale),
+    )
 }
 
 /// Draws the window with the colors of `palette` from the next frame on.
@@ -483,7 +422,7 @@ impl LivePreview {
 }
 
 /// Whether a key event is a press of `Escape` with no modifier held.
-fn closes_on_escape(key: &Key, state: ElementState, mods: ModifiersState) -> bool {
+fn leaves_on_escape(key: &Key, state: ElementState, mods: ModifiersState) -> bool {
     state == ElementState::Pressed && mods.is_empty() && *key == Key::Named(NamedKey::Escape)
 }
 
@@ -715,17 +654,31 @@ mod tests {
     }
 
     #[test]
-    fn escape_alone_pressed_closes() {
+    fn the_tab_is_laid_out_in_the_content_area_in_points() {
+        let content = Rect {
+            x: 0.0,
+            y: 60.0,
+            width: 2000.0,
+            height: 1140.0,
+        };
+        let rect = content_in_points(content, 2.0);
+        assert_eq!(rect.min, egui::pos2(0.0, 30.0));
+        assert_eq!(rect.size(), egui::vec2(1000.0, 570.0));
+        assert_eq!(content_in_points(content, 1.0).min, egui::pos2(0.0, 60.0));
+    }
+
+    #[test]
+    fn escape_alone_pressed_leaves_the_tab() {
         let escape = Key::Named(NamedKey::Escape);
         let none = ModifiersState::empty();
-        assert!(closes_on_escape(&escape, ElementState::Pressed, none));
-        assert!(!closes_on_escape(&escape, ElementState::Released, none));
-        assert!(!closes_on_escape(
+        assert!(leaves_on_escape(&escape, ElementState::Pressed, none));
+        assert!(!leaves_on_escape(&escape, ElementState::Released, none));
+        assert!(!leaves_on_escape(
             &escape,
             ElementState::Pressed,
             ModifiersState::SHIFT
         ));
-        assert!(!closes_on_escape(
+        assert!(!leaves_on_escape(
             &Key::Named(NamedKey::Enter),
             ElementState::Pressed,
             none

@@ -79,8 +79,7 @@ coup). Le relancer pendant un glissement le fait repartir dans l'autre sens depu
 il se trouve.
 
 Quand il perd le focus au profit d'une autre application, il se masque après un court
-délai (`hide_on_focus_loss`, activé par défaut). Ouvrir la fenêtre des paramètres depuis
-le quick terminal ne le masque pas.
+délai (`hide_on_focus_loss`, activé par défaut).
 
 Le fermer, par son dernier panneau, par la sortie du shell ou par le raccourci de
 fermeture de la fenêtre, ne met pas fin au quick terminal : il se masque, et revient la
@@ -92,12 +91,12 @@ ordinaire.
 
 Le quick terminal couvre une part de l'écran contre l'un de ses bords, réglée dans la
 section [`[quick_terminal]`](configuration.md#quick_terminal) de la configuration ou dans
-la section **Quick terminal** de la fenêtre des paramètres :
+la section **Quick terminal** de l'onglet des paramètres :
 
 - `edge` : le bord auquel il est attaché, `top` (haut) par défaut ;
 - `size` : la part de l'écran qu'il couvre, 40 % par défaut ;
-- `screen` : l'écran où il apparaît, celui sous le pointeur de la souris par défaut. La
-  fenêtre des paramètres propose l'écran sous le pointeur, l'écran principal et les
+- `screen` : l'écran où il apparaît, celui sous le pointeur de la souris par défaut.
+  L'onglet des paramètres propose l'écran sous le pointeur, l'écran principal et les
   écrans branchés à son ouverture.
 
 Ces réglages s'appliquent au prochain affichage. Il n'a pas de barre de titre, reste

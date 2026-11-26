@@ -29,6 +29,7 @@ const SHAPE_RECT: u32 = 0u;
 const SHAPE_CHEVRON: u32 = 1u;
 const SHAPE_HEXAGON: u32 = 2u;
 const SHAPE_SCANLINES: u32 = 3u;
+const SHAPE_SLIDERS: u32 = 4u;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32, instance: Instance) -> VertexOutput {
@@ -98,6 +99,23 @@ fn sd_hexagon_outline(p: vec2<f32>, size: vec2<f32>, half_stroke: f32) -> f32 {
     return abs(sd_hexagon(p - size * 0.5, middle)) - half_stroke;
 }
 
+// Signed distance to the sliders icon filling the width of a square of side `size.x`
+// centered in the box: two bars with round ends, each crossed by a ring knob, drawn
+// in a 680 wide design frame centered on (400, 400).
+fn sd_sliders(p: vec2<f32>, size: vec2<f32>) -> f32 {
+    let scale = 680.0 / min(size.x, size.y);
+    let q = (p - size * 0.5) * scale + vec2<f32>(400.0);
+    let top = vec2<f32>(280.0, 260.0);
+    let bottom = vec2<f32>(520.0, 540.0);
+    var d = min(
+        sd_segment(q, vec2<f32>(100.0, 260.0), vec2<f32>(680.0, 260.0)),
+        sd_segment(q, vec2<f32>(120.0, 540.0), vec2<f32>(700.0, 540.0)),
+    ) - 40.0;
+    d = min(d, min(length(q - top), length(q - bottom)) - 140.0);
+    d = max(d, 60.0 - min(length(q - top), length(q - bottom)));
+    return d / scale;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Scanlines: the instance's color on one row of physical pixels out of 3, nothing
@@ -118,6 +136,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         d = sd_chevron(in.local, size, in.radius, in.bend);
     } else if in.shape == SHAPE_HEXAGON {
         d = sd_hexagon_outline(in.local, size, in.radius);
+    } else if in.shape == SHAPE_SLIDERS {
+        d = sd_sliders(in.local, size);
     } else {
         let half = size * 0.5;
         d = sd_rounded_box(in.local - half, half, in.radius);

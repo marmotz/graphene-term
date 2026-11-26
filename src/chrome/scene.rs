@@ -47,6 +47,9 @@ const CLOSE: &str = "×";
 
 /// Thickness of the strokes of the `+` button, relative to the bar height.
 const PLUS_STROKE: f32 = 1.0 / 15.0;
+/// Side of the settings tab's sliders icon, as a fraction of the smaller side of its
+/// slot.
+const ICON_SIZE: f32 = 0.6;
 
 /// Thickness of the dialog border, in physical pixels.
 const DIALOG_BORDER: f32 = 1.0;
@@ -446,12 +449,13 @@ pub fn tooltip(tooltip: &TooltipLayout, colors: &UiColors, srgb_target: bool, ui
     });
 }
 
-/// The tab bar: its background, the shown tab's background, each title and close
-/// button, then the `+` button.
+/// The tab bar: its background, the settings tab, the shown tab's background, each
+/// title and close button, then the `+` button.
 fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
     let color = |c| gpu_color(c, srgb_target);
     ui.rects
         .push(rect(bar.rect, color(colors.tab_bar_background)));
+    settings_tab(bar, colors, srgb_target, ui);
     for tab in &bar.tabs {
         let text = if tab.active {
             ui.rects
@@ -509,6 +513,35 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
         [stroke, arm],
         text,
     ));
+}
+
+/// The settings tab, first in the bar: a sliders icon, on the shown tab's background when
+/// it is the one shown.
+fn settings_tab(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
+    let color = |c| gpu_color(c, srgb_target);
+    let slot = bar.settings;
+    let text = if bar.settings_active {
+        ui.rects
+            .push(rect(slot, color(colors.tab_active_background)));
+        color(colors.tab_active_text)
+    } else {
+        color(colors.tab_inactive_text)
+    };
+    if bar.settings_hovered && !bar.settings_active {
+        button_hover(slot, text, ui);
+    }
+    let side = (slot.width.min(slot.height) * ICON_SIZE).round();
+    ui.rects.push(
+        RectInstance::new(
+            [
+                (slot.x + (slot.width - side) / 2.0).round(),
+                (slot.y + (slot.height - side) / 2.0).round(),
+            ],
+            [side, side],
+            text,
+        )
+        .sliders(),
+    );
 }
 
 /// The chrome over the panes of `layout`: the title bar of every pane (see
@@ -837,13 +870,17 @@ mod tests {
         assert_eq!(ui.rects[0].position, [0.0, 0.0]);
         assert_eq!(ui.rects[0].size, [1000.0, bar.rect.height]);
         assert_eq!(ui.rects[0].color, color(BAR));
+        // The settings icon, inside its slot.
+        let icon = ui.rects[1];
+        assert!(bar.settings.contains(icon.position[0], icon.position[1]));
+        assert_eq!(icon.color, color(INACTIVE_TEXT));
         // Only the shown tab (the second) gets a background.
-        assert_eq!(ui.rects[1].position, [bar.tabs[1].rect.x, 0.0]);
-        assert_eq!(ui.rects[1].color, color(ACTIVE_TAB));
+        assert_eq!(ui.rects[2].position, [bar.tabs[1].rect.x, 0.0]);
+        assert_eq!(ui.rects[2].color, color(ACTIVE_TAB));
         // Then the two strokes of the `+` button, inside it.
-        assert_eq!(ui.rects.len(), 4);
+        assert_eq!(ui.rects.len(), 5);
         assert!(
-            ui.rects[2..]
+            ui.rects[3..]
                 .iter()
                 .all(|r| bar.new_tab.contains(r.position[0], r.position[1]))
         );
@@ -1293,13 +1330,13 @@ mod tests {
         let mut bar = bar();
         bar.tabs[0].close_hovered = true;
         let ui = build(&single, None, &[], Some(&bar), None, &tab_colors(), false);
-        // Bar background, shown tab background, hover of the first tab's button (the
-        // first tab is not shown: inactive text color), then the `+` strokes.
+        // Bar background, settings icon, hover of the first tab's button (the first tab
+        // is not shown: inactive text color), shown tab background, then the `+` strokes.
         let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
         let close = bar.tabs[0].close;
-        assert_eq!(ui.rects.len(), 5);
+        assert_eq!(ui.rects.len(), 6);
         assert_eq!(
-            drawn(&ui.rects[1..2]),
+            drawn(&ui.rects[2..3]),
             vec![(
                 [close.x, close.y],
                 [close.width, close.height],
@@ -1318,15 +1355,82 @@ mod tests {
         let mut bar = bar();
         bar.new_tab_hovered = true;
         let ui = build(&single, None, &[], Some(&bar), None, &tab_colors(), false);
-        // Bar background, shown tab background, hover of the `+` button, its strokes.
+        // Bar background, settings icon, shown tab background, hover of the `+` button,
+        // its strokes.
         let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
         let plus = bar.new_tab;
-        assert_eq!(ui.rects.len(), 5);
+        assert_eq!(ui.rects.len(), 6);
         assert_eq!(
-            drawn(&ui.rects[2..3]),
+            drawn(&ui.rects[3..4]),
             vec![(
                 [plus.x, plus.y],
                 [plus.width, plus.height],
+                [r, g, b, BUTTON_HOVER]
+            )]
+        );
+    }
+
+    #[test]
+    fn the_shown_settings_tab_gets_the_shown_tab_background() {
+        let mut bar = bar();
+        bar.set_settings_active(true);
+        let ui = build(
+            &Layout::default(),
+            None,
+            &[],
+            Some(&bar),
+            None,
+            &tab_colors(),
+            false,
+        );
+        let color = |c| gpu_color(c, false);
+        let slot = bar.settings;
+        assert_eq!(
+            drawn(&ui.rects[1..2]),
+            vec![(
+                [slot.x, slot.y],
+                [slot.width, slot.height],
+                color(ACTIVE_TAB)
+            )]
+        );
+        // The icon in the shown tab's text color, centered in the slot; no tab
+        // background after it.
+        let icon = ui.rects[2];
+        assert_eq!(
+            (icon.shape, icon.color),
+            (
+                RectInstance::new([0.0; 2], [0.0; 2], [0.0; 4])
+                    .sliders()
+                    .shape,
+                color(ACTIVE_TEXT)
+            )
+        );
+        let side = (slot.width.min(slot.height) * ICON_SIZE).round();
+        assert_eq!(icon.size, [side, side]);
+        assert!((icon.position[0] + side / 2.0 - (slot.x + slot.width / 2.0)).abs() <= 0.5);
+        assert_eq!(ui.rects.len(), 5);
+    }
+
+    #[test]
+    fn a_hovered_settings_tab_gets_a_translucent_text_background() {
+        let mut bar = bar();
+        bar.settings_hovered = true;
+        let ui = build(
+            &Layout::default(),
+            None,
+            &[],
+            Some(&bar),
+            None,
+            &tab_colors(),
+            false,
+        );
+        let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
+        let slot = bar.settings;
+        assert_eq!(
+            drawn(&ui.rects[1..2]),
+            vec![(
+                [slot.x, slot.y],
+                [slot.width, slot.height],
                 [r, g, b, BUTTON_HOVER]
             )]
         );

@@ -19,7 +19,7 @@ use crate::config::{QuickTerminalEdge, QuickTerminalScreen};
 pub const SLIDE_FRAME: Duration = Duration::from_millis(16);
 
 /// How long after losing the focus the quick terminal hides: it absorbs the brief focus
-/// losses at the time it is shown, and the focus taken by the settings window.
+/// losses at the time it is shown.
 pub const BLUR_DELAY: Duration = Duration::from_millis(150);
 
 /// A command of the quick terminal process, one line on its socket.

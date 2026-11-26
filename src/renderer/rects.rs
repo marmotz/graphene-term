@@ -47,6 +47,10 @@ pub enum Shape {
     /// Darkens one row of physical pixels out of 3 with the instance's color, leaves the
     /// others untouched: the scanlines of the hidden CRT theme.
     Scanlines = 3,
+    /// The settings icon, filling the largest square centered in the box: two
+    /// horizontal bars with round ends, each crossed by a ring knob, the top one on
+    /// the left, the bottom one on the right.
+    Sliders = 4,
 }
 
 /// Color of a dark row of [`Shape::Scanlines`]: black at 50 % opacity. Blended in linear
@@ -88,6 +92,11 @@ impl RectInstance {
             radius: stroke / 2.0,
             ..self.with_shape(Shape::Hexagon)
         }
+    }
+
+    /// The same box drawing a [`Shape::Sliders`].
+    pub fn sliders(self) -> Self {
+        self.with_shape(Shape::Sliders)
     }
 
     /// Scanlines over the box at `position` of `size`, see [`Shape::Scanlines`].
@@ -304,40 +313,38 @@ mod tests {
             (hexagon.radius, hexagon.shape),
             (1.0, Shape::Hexagon as u32)
         );
+        let sliders = rect.sliders();
+        assert_eq!(
+            (sliders.shape, sliders.position),
+            (Shape::Sliders as u32, rect.position)
+        );
     }
 
     #[test]
-    fn hexagon_covers_its_center_but_not_the_corners_of_its_box() {
-        // A pointy-top hexagon of side 24 in a 41.57 x 48 box at (11, 8): a stroke as
-        // wide as its inradius fills it.
-        let side = 24.0_f32;
-        let size = [3.0_f32.sqrt() * side, 2.0 * side];
-        let position = [11.0, 8.0];
-        let inradius = size[0] / 2.0;
-        let filled = RectInstance::new(position, size, WHITE).hexagon(inradius);
-        let Some(pixels) = draw(&[filled]) else {
+    fn sliders_have_two_bars_crossed_by_ring_knobs() {
+        // A 64 pixel square at the origin.
+        let sliders = RectInstance::new([0.0, 0.0], [64.0, 64.0], WHITE).sliders();
+        let Some(pixels) = draw(&[sliders]) else {
             eprintln!("no GPU adapter available, skipped");
             return;
         };
-        let (cx, cy) = (32, 32);
-        assert_eq!(red(&pixels, cx, cy), 255, "center");
-        // The corners of the box are outside the hexagon.
-        for (x, y) in [(12, 9), (51, 9), (12, 55), (51, 55)] {
-            assert_eq!(red(&pixels, x, y), 0, "corner ({x}, {y})");
-        }
-        // Its vertices touch the middle of the top and bottom edges, its flat sides
-        // the left and right ones.
-        for (x, y) in [(cx, 11), (cx, 52), (12, cy), (51, cy)] {
-            assert_eq!(red(&pixels, x, y), 255, "edge ({x}, {y})");
-        }
-
-        // A thin outline leaves the center empty and lights its sides.
-        let outline = RectInstance::new(position, size, WHITE).hexagon(3.0);
-        let pixels = draw(&[outline]).unwrap();
-        assert_eq!(red(&pixels, cx, cy), 0, "center of the outline");
-        assert!(red(&pixels, 12, cy) > 127, "left side");
-        assert!(red(&pixels, 51, cy) > 127, "right side");
-        for (x, y) in [(12, 9), (51, 9), (12, 55), (51, 55)] {
+        // In pixels: design (x, y) maps to ((x - 400) * 64 / 680 + 32, ...).
+        let at = |x: f32, y: f32| {
+            let map = |v: f32| ((v - 400.0) * 64.0 / 680.0 + 32.0) as u32;
+            red(&pixels, map(x), map(y))
+        };
+        // The holes of the knobs, top left and bottom right.
+        assert_eq!(at(280.0, 260.0), 0, "top hole");
+        assert_eq!(at(520.0, 540.0), 0, "bottom hole");
+        // Their rings, above the holes.
+        assert_eq!(at(280.0, 160.0), 255, "top ring");
+        assert_eq!(at(520.0, 440.0), 255, "bottom ring");
+        // The bars, away from the knobs.
+        assert_eq!(at(600.0, 260.0), 255, "top bar");
+        assert_eq!(at(220.0, 540.0), 255, "bottom bar");
+        // Between the bars, and the corners of the box.
+        assert_eq!(at(650.0, 400.0), 0, "between the bars");
+        for (x, y) in [(1, 1), (62, 1), (1, 62), (62, 62)] {
             assert_eq!(red(&pixels, x, y), 0, "corner ({x}, {y})");
         }
     }

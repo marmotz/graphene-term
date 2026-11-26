@@ -35,7 +35,7 @@ hotkey = "Ctrl+`"
 The shortcut works from any application. While it is set, the first Graphene window you
 open also starts the quick terminal in the background, hidden, so that the shortcut
 works at once, before any `graphene --quick-toggle`. Setting the shortcut in a running
-Graphene, from the configuration file or the settings window, starts it the same way.
+Graphene, from the configuration file or the settings tab, starts it the same way.
 Changing it replaces the previous one without a restart.
 
 When the shortcut cannot be registered, because another application already uses it or
@@ -52,7 +52,7 @@ working with `graphene --quick-toggle`.
 ## Start with the session
 
 With `autostart = true` in the [`[quick_terminal]`](configuration.md#quick_terminal)
-section, or **Start with the session** checked in the settings window, the quick terminal
+section, or **Start with the session** checked in the settings tab, the quick terminal
 starts hidden when you log in, without opening any Graphene window. Graphene creates the
 entry at once and removes it when the setting is turned off, and puts it back at each
 start if it was deleted or if the Graphene executable moved:
@@ -72,8 +72,7 @@ in 150 ms by default (`animation_ms`, `0` to show and hide it at once). Toggling
 while it slides turns it back from where it is.
 
 When it loses the focus, to another application, it hides after a short delay
-(`hide_on_focus_loss`, on by default). Opening the settings window from it does not hide
-it.
+(`hide_on_focus_loss`, on by default).
 
 Closing it, by its last pane, by the shell exiting or by the window shortcut, does not
 end the quick terminal: it hides, and the next time it comes back with a single new tab,
@@ -84,12 +83,12 @@ the same as for an ordinary window.
 
 The quick terminal covers a share of the screen against one of its edges, set in the
 [`[quick_terminal]`](configuration.md#quick_terminal) section of the configuration or in
-the **Quick terminal** section of the settings window:
+the **Quick terminal** section of the settings tab:
 
 - `edge`: the edge it is attached to, `top` by default;
 - `size`: the share of the screen it covers, 40% by default;
 - `screen`: the screen it appears on, the one under the mouse cursor by default. The
-  settings window offers the screen under the cursor, the primary screen and the
+  settings tab offers the screen under the cursor, the primary screen and the
   screens connected when it opens.
 
 These settings apply the next time it is shown. It has no title bar, stays above the

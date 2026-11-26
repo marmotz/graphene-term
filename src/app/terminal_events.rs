@@ -13,8 +13,6 @@ impl Session {
     ) {
         let visible = self.workspace.is_visible(id);
         let active = self.workspace.active_pane_id() == Some(id);
-        // The tab bar shows the title of every tab.
-        let bar_shown = self.tab_bar_shown();
         let Some(pane) = self.workspace.pane_mut(id) else {
             return;
         };
@@ -40,7 +38,7 @@ impl Session {
                 if progress {
                     self.workspace.touch(id);
                 }
-                if visible || progress && self.workspace.progress_on_screen(id, bar_shown) {
+                if visible || progress && self.workspace.progress_on_screen(id) {
                     self.window.request_redraw();
                 }
                 let hovered = self.hovered_cell.is_some_and(|(pane, ..)| pane == id);
@@ -64,18 +62,15 @@ impl Session {
                 if active {
                     self.refresh_title();
                 }
-                if bar_shown {
-                    self.window.request_redraw();
-                }
+                // The tab bar shows the title of every tab.
+                self.window.request_redraw();
             }
             TermEvent::ResetTitle => {
                 pane.title = None;
                 if active {
                     self.refresh_title();
                 }
-                if bar_shown {
-                    self.window.request_redraw();
-                }
+                self.window.request_redraw();
             }
             TermEvent::PtyWrite(text) => pane.terminal.write(text.into_bytes()),
             TermEvent::ClipboardStore(_, text) => {

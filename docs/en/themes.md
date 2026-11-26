@@ -22,7 +22,7 @@ Any of these switches the theme at once:
   the arrow keys) previews it in the terminal, and closing the menu without choosing one
   brings the colors back. When the themes do not all fit in the window height, the last
   row, **More...**, opens the next ones;
-- the **Theme** section of the settings window (`Ctrl+,`);
+- the **Theme** section of the settings tab (`Ctrl+,`);
 - `name` in the `[theme]` section of the [configuration file](configuration.md):
 
   ```toml
@@ -30,7 +30,7 @@ Any of these switches the theme at once:
   name = "gruvbox-dark"
   ```
 
-The menu and the settings window write the same setting to the configuration file.
+The menu and the settings tab write the same setting to the configuration file.
 
 ## Built-in themes
 
@@ -76,7 +76,7 @@ A theme is a `.toml` file in the `themes` folder next to your configuration file
 | macOS  | `~/Library/Application Support/graphene/themes/`      |
 
 The file name, without `.toml`, is the theme name: `themes/my-theme.toml` is used with
-`name = "my-theme"`, and it shows in the theme menu and the settings window.
+`name = "my-theme"`, and it shows in the theme menu and the settings tab.
 
 - A theme file with the name of a built-in theme replaces it.
 - A theme file only needs the colors it changes: every missing color comes from
@@ -90,7 +90,7 @@ To create or change a theme without editing its file by hand, use the
 
 ## Theme editor
 
-The **Theme editor** sits at the bottom of the **Theme** section of the settings window
+The **Theme editor** sits at the bottom of the **Theme** section of the settings tab
 (`Ctrl+,`). **Theme to edit** picks the theme to change; it opens on the theme in use,
 but any theme can be edited without switching to it.
 

@@ -39,9 +39,8 @@ impl Session {
             return;
         }
         let (x, y) = self.mouse_pixel();
-        if let Some(bar) = self.tab_bar()
-            && bar.rect.contains(x, y)
-        {
+        let bar = self.tab_bar();
+        if bar.rect.contains(x, y) {
             if let Some(hit) = bar.hit(x, y) {
                 self.tab_bar_press(button, hit, &bar, event_loop);
             }
@@ -324,11 +323,10 @@ impl Session {
             && let Some(Drag::Tab { index, grab_offset }) = self.drag
         {
             self.drag = None;
-            if let Some(mut bar) = self.tab_bar() {
-                let (x, y) = self.mouse_pixel();
-                let to = bar.dragged(index, bar.along(x, y) - grab_offset);
-                self.workspace.move_tab(index, to);
-            }
+            let mut bar = self.tab_bar();
+            let (x, y) = self.mouse_pixel();
+            let to = bar.dragged(index, bar.along(x, y) - grab_offset);
+            self.workspace.move_tab(index, to);
             self.window.request_redraw();
             self.update_pointer();
             return;

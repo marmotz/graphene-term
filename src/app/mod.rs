@@ -18,6 +18,7 @@ mod overlays;
 mod pane_drag;
 mod pointer;
 mod redraw;
+mod settings_tab;
 
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
@@ -87,7 +88,7 @@ use crate::progress::{self, Progress, ProgressColors, ProgressState, ProgressVie
 use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
 use crate::session::{Placement, SESSION_VERSION, SessionSaver, WindowKind, WindowSnapshot};
-use crate::settings::{self, LoadErrors, SettingsWindow};
+use crate::settings::{self, LoadErrors, SettingsTab};
 use crate::taskbar::Taskbar;
 use crate::terminal::{EventProxy, PaneId, Terminal, UserEvent};
 use crate::theme;
@@ -284,9 +285,12 @@ struct Session {
     /// Last inner size seen while the window was not maximized, in logical pixels:
     /// winit has no getter for the size a maximized window is restored to.
     restore_size: LogicalSize<u32>,
-    /// Set by [`Action::OpenSettings`]: the window is owned by [`App`], which opens it
-    /// after the event.
+    /// Set by [`Action::OpenSettings`] and the settings tab of the bar: [`App`], which
+    /// holds the configuration, opens the tab after the event.
     settings_requested: bool,
+    /// The settings tab, while it is the one shown; the active tab of the workspace is
+    /// the terminal tab shown again once it is left.
+    settings: Option<SettingsTab>,
     /// Whether the window was sized by `--columns` or `--lines`: its size is then not
     /// saved to `window.json`.
     sized_by_grid: bool,

@@ -3,13 +3,13 @@
 # Configuration
 
 Graphene works without any configuration. To change it, use the
-[settings window](#settings-window) (`Ctrl+,`) or edit the configuration file by hand:
+[settings tab](#settings-tab) (`Ctrl+,`) or edit the configuration file by hand:
 both write the same file, and every change applies to the open window at once.
 
 - [File locations](#file-locations)
 - [The configuration file](#the-configuration-file)
 - [Live reload and errors](#live-reload-and-errors)
-- [Settings window](#settings-window)
+- [Settings tab](#settings-tab)
 - [Removing unknown settings](#removing-unknown-settings)
 - [Settings reference](#settings-reference)
 - [Update check](#update-check)
@@ -69,10 +69,12 @@ describes each problem (click it to hide it):
 - an unknown setting is ignored;
 - a TOML syntax error ignores the whole file until it is fixed.
 
-## Settings window
+## Settings tab
 
-Open it with `Ctrl+,`, with **Settings** in the [command palette](tabs-and-panes.md#command-palette),
-or from the right-click menu. It shows the same sections as the file (language, font,
+The settings are the first tab of the window, the sliders icon at the start of the tab
+bar. Show it with a click on the icon, `Ctrl+,`, **Settings** in the
+[command palette](tabs-and-panes.md#command-palette), or the right-click menu; leave it
+with a click on another tab or with `Escape`. It is never closed. It shows the same sections as the file (language, font,
 window, scrollback, cursor, selection, tabs, theme, keyboard shortcuts, notifications,
 quick terminal, updates), and each change is written at once to `config.toml`, or to
 `keybindings.toml` for keyboard shortcuts, keeping the files' comments, then applied like
@@ -82,7 +84,7 @@ a hand edit.
   pressing it (`Escape` cancels), or remove one.
 - Problems in the file are shown under the setting concerned; unknown settings are
   listed at the top.
-- While a file has a syntax error, the window shows it and locks what depends on that
+- While a file has a syntax error, the tab shows it and locks what depends on that
   file (the keyboard shortcuts for `keybindings.toml`, the other sections for
   `config.toml`) until you fix the file by hand.
 
