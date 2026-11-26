@@ -7,28 +7,22 @@ impl Session {
         &mut self,
         state: ElementState,
         button: MouseButton,
-        default_font_size: f32,
         event_loop: &ActiveEventLoop,
     ) {
         let Some(button) = mouse::button_from(button) else {
             return;
         };
         match state {
-            ElementState::Pressed => self.mouse_press(button, default_font_size, event_loop),
+            ElementState::Pressed => self.mouse_press(button, event_loop),
             ElementState::Released => self.mouse_release(button),
         }
     }
 
     /// A press goes to the first of: the overlay, the banner, the tab bar, a divider, a
     /// pane bar, a pane. While an overlay is open, it takes every press.
-    pub(super) fn mouse_press(
-        &mut self,
-        button: mouse::Button,
-        default_font_size: f32,
-        event_loop: &ActiveEventLoop,
-    ) {
+    pub(super) fn mouse_press(&mut self, button: mouse::Button, event_loop: &ActiveEventLoop) {
         if self.overlay.is_some() {
-            self.overlay_press(button, default_font_size, event_loop);
+            self.overlay_press(button, event_loop);
             return;
         }
         // The other buttons do nothing while a pane is dragged.

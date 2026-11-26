@@ -59,7 +59,8 @@ Les modifications enregistrées de `config.toml`, de `keybindings.toml` et de vo
 fichiers de thème s'appliquent aux fenêtres ouvertes sans redémarrer, à quelques
 exceptions près :
 
-- une nouvelle valeur de `font.size` annule aussi le zoom fait avec `Ctrl+=` / `Ctrl+-` ;
+- un pane dont la police a été zoomée avec `Ctrl+=` / `Ctrl+-` garde son écart avec
+  la nouvelle valeur de `font.size` ;
 - `window.width`, `window.height` et `window.startup_mode` ne concernent que les
   fenêtres ouvertes ensuite.
 

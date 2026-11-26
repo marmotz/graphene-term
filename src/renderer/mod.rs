@@ -719,18 +719,12 @@ impl Renderer {
         self.direct = direct;
     }
 
-    /// Cell of the base font size, see [`Self::font_size`].
+    /// Cell of the base font size, see [`Glyphs::font_size`].
     pub fn cell_size(&self) -> CellSize {
         self.layers.glyphs.cell_size()
     }
 
-    /// Base size of the grid font, see [`Glyphs::font_size`].
-    pub fn font_size(&self) -> GridSize {
-        self.layers.glyphs.font_size()
-    }
-
     /// Cell of the grid font at `size`, measured on first use.
-    #[expect(dead_code, reason = "the panes do not have their own font size yet")]
     pub fn cell_size_at(&mut self, size: GridSize) -> CellSize {
         self.layers.glyphs.cell_size_at(size)
     }

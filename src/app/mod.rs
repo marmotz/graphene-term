@@ -85,7 +85,7 @@ use crate::palette::Palette;
 use crate::pane::{self, Pane};
 use crate::perf;
 use crate::progress::{self, Progress, ProgressColors, ProgressState, ProgressView};
-use crate::renderer::{FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
+use crate::renderer::{self, FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
 use crate::selection::{self, ClickTracker};
 use crate::session::{Placement, SESSION_VERSION, SessionSaver, WindowKind, WindowSnapshot};
 use crate::settings::{self, LoadErrors, SettingsTab};
@@ -237,6 +237,8 @@ struct Session {
     /// Blink phase of the active pane's cursor.
     cursor_blink: CursorBlink,
     modifiers: ModifiersState,
+    /// Configured font size, in logical points; each pane is drawn at its own offset
+    /// from it (see [`Pane::font_offset`]).
     font_size: f32,
     /// Minimum padding around the grid, in logical pixels.
     padding: f32,

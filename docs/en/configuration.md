@@ -56,7 +56,8 @@ are kept as they are.
 Saved changes to `config.toml`, `keybindings.toml` and your theme files apply to the open windows
 without restarting, with a few exceptions:
 
-- a new `font.size` also resets the zoom made with `Ctrl+=` / `Ctrl+-`;
+- a pane whose font was zoomed with `Ctrl+=` / `Ctrl+-` keeps its gap from the new
+  `font.size`;
 - `window.width`, `window.height` and `window.startup_mode` only affect windows opened
   afterwards.
 

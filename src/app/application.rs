@@ -75,17 +75,6 @@ pub(super) fn initial_window(
     }
 }
 
-/// Font size of a session after a reload from `old` to `new`, `current` being the size
-/// shown (zoom included): the configured size when it changed, dropping the zoom in
-/// progress, else `current`.
-pub(super) fn reloaded_font_size(old: &FontConfig, new: &FontConfig, current: f32) -> f32 {
-    if new.size == old.size {
-        current
-    } else {
-        new.size
-    }
-}
-
 /// The grid font of the renderer for the configured `font`.
 pub(super) fn font_options(font: &FontConfig) -> FontOptions {
     FontOptions {
@@ -417,7 +406,7 @@ impl App {
                 None,
                 self.first_program.take(),
             )?;
-            workspace.new_tab(id, Pane::new(id, terminal, layout));
+            workspace.new_tab(id, Pane::new(id, terminal, layout, 0.0));
         }
         workspace.set_progress_shown(self.config.window.progress);
         perf::mark("shell spawned");
@@ -439,7 +428,7 @@ impl App {
                 cwd,
                 None,
             ) {
-                Ok(terminal) => Some(Pane::new(id, terminal, layout)),
+                Ok(terminal) => Some(Pane::new(id, terminal, layout, 0.0)),
                 Err(error) => {
                     log::error!("cannot start a shell of the restored session: {error:#}");
                     None
@@ -730,7 +719,6 @@ impl App {
         event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) {
-        let default_font_size = self.config.font.size;
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -778,13 +766,13 @@ impl App {
                 is_synthetic,
                 ..
             } if is_real_key_press(event.state, is_synthetic) => {
-                session.key_press(&event, default_font_size, event_loop);
+                session.key_press(&event, event_loop);
             }
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
             WindowEvent::CursorLeft { .. } => session.cursor_left(),
             WindowEvent::MouseInput { state, button, .. } => {
-                session.mouse_input(state, button, default_font_size, event_loop);
+                session.mouse_input(state, button, event_loop);
                 if let Some(tag) = session.ignored_tag.take() {
                     self.update_checker.ignore(&tag);
                 }
@@ -1145,27 +1133,6 @@ mod tests {
         assert_eq!(options.family.as_deref(), Some("Fira Code"));
         assert!(!options.ligatures);
         assert_eq!(options.features, config.features.font_features());
-    }
-
-    #[test]
-    fn reload_keeps_the_zoom_when_the_font_size_did_not_change() {
-        assert_eq!(
-            reloaded_font_size(&font(None, 14.0), &font(None, 14.0), 18.0),
-            18.0
-        );
-        // A new family alone keeps the zoom too.
-        assert_eq!(
-            reloaded_font_size(&font(None, 14.0), &font(Some("Fira Code"), 14.0), 18.0),
-            18.0
-        );
-    }
-
-    #[test]
-    fn reload_applies_a_changed_font_size_and_drops_the_zoom() {
-        assert_eq!(
-            reloaded_font_size(&font(None, 14.0), &font(None, 12.0), 18.0),
-            12.0
-        );
     }
 
     fn window_config(startup_mode: StartupMode) -> WindowConfig {

@@ -29,9 +29,12 @@ Shortcuts that only work while editing the command line are on the
 |-------------------------------------|------------------------------------------------------------|
 | `Shift+PageUp` / `Shift+PageDown`   | Scroll up / down a page (the selected block, or the history) |
 | `Shift+Home` / `Shift+End`          | Top / bottom of the history                                |
-| `Ctrl+=` or `Ctrl++`                | Bigger font                                                |
-| `Ctrl+-` or `Ctrl+_`                | Smaller font                                               |
-| `Ctrl+0`                            | Back to the configured font size                           |
+| `Ctrl+=` or `Ctrl++`                | Bigger font in the active pane                             |
+| `Ctrl+-` or `Ctrl+_`                | Smaller font in the active pane                            |
+| `Ctrl+0`                            | Active pane back to the configured font size               |
+
+Each pane has its own font size. A split starts at the size of the pane it comes from, a
+new tab at the configured size.
 
 At the prompt, `Shift+Home` and `Shift+End` select in the command line instead (see
 [Input editor](input-editor.md)).

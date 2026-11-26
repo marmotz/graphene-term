@@ -4,8 +4,10 @@ use super::*;
 
 impl Session {
     /// Lays out every tab, hidden ones included, so each shell keeps a correct size;
-    /// only panes whose cell count changed resize their shell. Each grid fills the pane
-    /// under its title bar. The hidden panes of a zoomed tab keep their last size.
+    /// only panes whose cell count or cell size changed resize their shell. Each grid
+    /// fills the pane under its title bar, with the cells of the pane's own font size;
+    /// the space is shared between the panes in cells of the configured size. The hidden
+    /// panes of a zoomed tab keep their last size.
     pub(super) fn relayout(&mut self) {
         let geometry = self.geometry();
         let metrics = self.ui_metrics(UiFont::Chrome);
@@ -13,12 +15,50 @@ impl Session {
         for index in 0..self.workspace.tabs().len() {
             for (id, rect) in self.workspace.layout(index, geometry).panes {
                 let (_, content) = pane_bar::split(rect, metrics);
+                let Some(offset) = self.workspace.pane(id).map(|pane| pane.font_offset) else {
+                    continue;
+                };
+                let cell = self.renderer.cell_size_at(self.grid_size(offset));
                 if let Some(pane) = self.workspace.pane_mut(id) {
-                    pane.resize(GridLayout::new(content, geometry.cell, padding));
+                    pane.resize(GridLayout::new(content, cell, padding));
                 }
             }
         }
         self.window.request_redraw();
+    }
+
+    /// Physical font size of the grid of a pane `offset` points away from the
+    /// configured size.
+    pub(super) fn grid_size(&self, offset: f32) -> renderer::GridSize {
+        grid_size(self.font_size, offset, self.window.scale_factor() as f32)
+    }
+
+    /// Sets the font offset of the pane `id` and lays the panes out again for it.
+    pub(super) fn set_pane_font_offset(&mut self, id: PaneId, offset: f32) {
+        let Some(pane) = self.workspace.pane_mut(id) else {
+            return;
+        };
+        if pane.font_offset == offset {
+            return;
+        }
+        pane.font_offset = offset;
+        self.relayout();
+    }
+
+    /// Moves the font size of the active pane by `steps` points.
+    pub(super) fn step_active_pane_font(&mut self, steps: f32) {
+        if let Some(id) = self.workspace.active_pane_id() {
+            self.step_pane_font(id, steps);
+        }
+    }
+
+    /// Moves the font size of the pane `id` by `steps` points, within the allowed sizes.
+    pub(super) fn step_pane_font(&mut self, id: PaneId, steps: f32) {
+        let Some(offset) = self.workspace.pane(id).map(|pane| pane.font_offset) else {
+            return;
+        };
+        let offset = pane::stepped_font_offset(self.font_size, offset, steps);
+        self.set_pane_font_offset(id, offset);
     }
 
     /// Shows `palette` until the next reload: the live preview of the theme being
@@ -46,9 +86,10 @@ impl Session {
         }
         self.term_config = term_config;
 
-        let font_size = reloaded_font_size(&old.font, &new.font, self.font_size);
+        // Each pane keeps its offset from the configured size.
+        let font_size = new.font.size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         if font_changed(&old.font, &new.font) {
-            self.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+            self.font_size = font_size;
             let scale = self.window.scale_factor() as f32;
             self.renderer
                 .set_font(&font_options(&new.font), self.font_size * scale);
@@ -76,6 +117,8 @@ impl Session {
         self.relayout();
     }
 
+    /// Sets the configured font size (each pane keeps its offset from it) and the UI
+    /// scale, then lays the panes out again.
     pub(super) fn apply_font_size(&mut self, font_size: f32) {
         self.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         let scale = self.window.scale_factor() as f32;
@@ -267,4 +310,10 @@ impl Session {
             self.window_title = title;
         }
     }
+}
+
+/// Physical font size of the grid of a pane `offset` points away from the configured
+/// size `base`, at the UI `scale`.
+pub(super) fn grid_size(base: f32, offset: f32, scale: f32) -> renderer::GridSize {
+    renderer::GridSize::new(pane::pane_font_size(base, offset) * scale)
 }

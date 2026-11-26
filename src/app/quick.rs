@@ -595,7 +595,7 @@ impl Session {
         let padding = self.padding * self.window.scale_factor() as f32;
         let layout = GridLayout::new(geometry.area, geometry.cell, padding);
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let spawn = self.pane_spawner(home, layout);
+        let spawn = self.pane_spawner(home, layout, 0.0);
         if !reset_workspace(&mut self.workspace, spawn) {
             return false;
         }

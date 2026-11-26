@@ -34,9 +34,12 @@ Les touches sont écrites comme dans le fichier de configuration : `Shift` pour 
 |-------------------------------------|------------------------------------------------------------|
 | `Shift+PageUp` / `Shift+PageDown`   | Remonter / descendre d'une page (le bloc sélectionné, ou l'historique) |
 | `Shift+Home` / `Shift+End`          | Haut / bas de l'historique                                 |
-| `Ctrl+=` ou `Ctrl++`                | Agrandir la police                                         |
-| `Ctrl+-` ou `Ctrl+_`                | Réduire la police                                          |
-| `Ctrl+0`                            | Revenir à la taille de police configurée                   |
+| `Ctrl+=` ou `Ctrl++`                | Agrandir la police du pane actif                           |
+| `Ctrl+-` ou `Ctrl+_`                | Réduire la police du pane actif                            |
+| `Ctrl+0`                            | Remettre le pane actif à la taille de police configurée    |
+
+Chaque pane a sa propre taille de police. Un split démarre à la taille du pane dont il
+vient, un nouvel onglet à la taille configurée.
 
 À l'invite du shell, `Shift+Home` et `Shift+End` sélectionnent plutôt dans la ligne de
 commande (voir [Éditeur de saisie](input-editor.md)).

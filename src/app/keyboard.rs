@@ -3,12 +3,7 @@
 use super::*;
 
 impl Session {
-    pub(super) fn run_action(
-        &mut self,
-        action: Action,
-        default_font_size: f32,
-        event_loop: &ActiveEventLoop,
-    ) {
+    pub(super) fn run_action(&mut self, action: Action, event_loop: &ActiveEventLoop) {
         match action {
             Action::NewTab => self.new_tab(),
             Action::CloseTab => {
@@ -17,7 +12,7 @@ impl Session {
                 }
             }
             Action::Quit => self.request_close(Target::Window, event_loop),
-            Action::CommandPalette => self.open_palette(default_font_size),
+            Action::CommandPalette => self.open_palette(),
             Action::OpenSettings => self.settings_requested = true,
             Action::NextTab => self.change_tab(|workspace| {
                 workspace.next();
@@ -91,9 +86,13 @@ impl Session {
             Action::RenameTab => self.open_rename_tab(self.workspace.active_index()),
             Action::Copy => self.copy(),
             Action::Paste => self.paste(),
-            Action::FontSizeIncrease => self.apply_font_size(self.font_size + 1.0),
-            Action::FontSizeDecrease => self.apply_font_size(self.font_size - 1.0),
-            Action::FontSizeReset => self.apply_font_size(default_font_size),
+            Action::FontSizeIncrease => self.step_active_pane_font(1.0),
+            Action::FontSizeDecrease => self.step_active_pane_font(-1.0),
+            Action::FontSizeReset => {
+                if let Some(id) = self.workspace.active_pane_id() {
+                    self.set_pane_font_offset(id, 0.0);
+                }
+            }
             Action::CopyCommand => self.copy_block_part(Part::Command),
             Action::CopyOutput => self.copy_block_part(Part::Output),
             _ => {
@@ -104,12 +103,7 @@ impl Session {
         }
     }
 
-    pub(super) fn key_press(
-        &mut self,
-        event: &KeyEvent,
-        default_font_size: f32,
-        event_loop: &ActiveEventLoop,
-    ) {
+    pub(super) fn key_press(&mut self, event: &KeyEvent, event_loop: &ActiveEventLoop) {
         self.reset_blink();
         // While an overlay is open, keys go to it only.
         match &mut self.overlay {
@@ -121,7 +115,7 @@ impl Session {
             }
             Some(Overlay::Palette(palette)) => {
                 match palette.key(&event.logical_key, event.text.as_deref()) {
-                    Some(outcome) => self.palette_outcome(outcome, default_font_size, event_loop),
+                    Some(outcome) => self.palette_outcome(outcome, event_loop),
                     None => self.window.request_redraw(),
                 }
                 return;
@@ -135,7 +129,7 @@ impl Session {
             }
             Some(Overlay::Menu(menu)) => {
                 if let Some(outcome) = menu.key(&event.logical_key) {
-                    self.menu_outcome(outcome, default_font_size, event_loop);
+                    self.menu_outcome(outcome, event_loop);
                 } else {
                     self.window.request_redraw();
                 }
@@ -172,7 +166,7 @@ impl Session {
                 .active_tab()
                 .is_some_and(|tab| !tab.is_single())
         {
-            self.run_action(action, default_font_size, event_loop);
+            self.run_action(action, event_loop);
             return;
         }
         // The active pane decides whether the key is a shortcut (run once, never
@@ -184,7 +178,7 @@ impl Session {
                 && Some(id) == active
                 && let Some(action) = action
             {
-                self.run_action(action, default_font_size, event_loop);
+                self.run_action(action, event_loop);
                 return;
             }
         }

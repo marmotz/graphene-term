@@ -191,17 +191,16 @@ impl Session {
                 frame
             });
         }
-        // Every pane is at the base size until they get their own.
-        let font_size = self.renderer.font_size();
+        let (base, scale) = (self.font_size, self.window.scale_factor() as f32);
         let panes: Vec<_> = shown
             .iter()
             .filter_map(|&id| {
                 let frame = self.frames.get(id)?;
-                let layout = &self.workspace.pane(id)?.layout;
+                let pane = self.workspace.pane(id)?;
                 Some(PaneFrame {
                     frame,
-                    layout,
-                    font_size,
+                    layout: &pane.layout,
+                    font_size: refresh::grid_size(base, pane.font_offset, scale),
                 })
             })
             .collect();
