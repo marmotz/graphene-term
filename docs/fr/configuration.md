@@ -86,8 +86,9 @@ chaque changement est écrit aussitôt dans `config.toml`, ou dans `keybindings.
 les raccourcis clavier, en conservant les commentaires des fichiers, puis appliqué comme
 une modification à la main.
 
-- **Raccourcis clavier** : liste chaque action avec ses raccourcis. Ajoutez un raccourci
-  en l'appuyant (`Échap` annule), ou supprimez-en un.
+- **Raccourcis clavier** : liste chaque action avec ses raccourcis. Cliquez sur **+**
+  après les raccourcis d'une action puis appuyez sur le nouveau pour l'ajouter (`Échap`
+  annule), ou supprimez-en un.
 - Les problèmes du fichier s'affichent sous le paramètre concerné ; les paramètres
   inconnus sont listés en haut.
 - Tant qu'un fichier contient une erreur de syntaxe, l'onglet l'affiche et verrouille

@@ -151,8 +151,8 @@ impl View {
     }
 
     /// The filter field, then one row per action kept by the filter: its label, its
-    /// shortcuts in aligned slots, each removable, and the "Add" button that captures a
-    /// new one on the right. The row under the pointer, or being edited, is
+    /// shortcuts in aligned slots, each removable, and the button that captures a new
+    /// one right after them. The row under the pointer, or being edited, is
     /// highlighted.
     pub(super) fn shortcuts(
         &mut self,
@@ -166,7 +166,6 @@ impl View {
         ui.add_space(ui.spacing().item_spacing.y);
         let rows = model.shortcut_rows();
         let body = TextStyle::Body.resolve(ui.style());
-        let button = TextStyle::Button.resolve(ui.style());
         let width = |text: String, font: &FontId| {
             ui.painter()
                 .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
@@ -181,15 +180,7 @@ impl View {
             .iter()
             .flat_map(|(_, shortcuts)| shortcuts)
             .map(|shortcut| chip_width(ui, &shortcut.label()))
-            .fold(
-                width(label(Msg::NoShortcut), &body) + 2.0 * ui.spacing().button_padding.x,
-                f32::max,
-            );
-        let add_width = [label(Msg::AddShortcut), label(Msg::Cancel)]
-            .into_iter()
-            .map(|text| width(text, &button))
-            .fold(0.0, f32::max)
-            + 2.0 * ui.spacing().button_padding.x;
+            .fold(0.0, f32::max);
         let rows = filtered(rows, &self.filter, lang);
         if rows.is_empty() {
             let empty = match self.filter {
@@ -210,8 +201,7 @@ impl View {
                     ui.spacing_mut().item_spacing.y = row_gap;
                     let total = ui.available_width();
                     let name_width = label_width.min(total * LABEL_SHARE);
-                    let slots_width =
-                        (total - name_width - add_width - 2.0 * SHORTCUTS_GAP).max(0.0);
+                    let slots_width = (total - name_width - SHORTCUTS_GAP).max(0.0);
                     let slot_width = slot_width.min(slots_width);
                     let text_offset = ui.spacing().button_padding.y;
                     let top = ui.cursor().top();
@@ -228,13 +218,6 @@ impl View {
                         slots_width,
                         slots,
                         |ui| {
-                            if shortcuts.is_empty() && self.capturing != Some(Capture::Bind(action))
-                            {
-                                ui.add_sized(
-                                    [slot_width, ui.spacing().interact_size.y],
-                                    Label::new(RichText::new(label(Msg::NoShortcut)).weak()),
-                                );
-                            }
                             for shortcut in shortcuts {
                                 let chip =
                                     chip(&shortcut.label()).min_size(Vec2::new(slot_width, 0.0));
@@ -247,19 +230,17 @@ impl View {
                                     changes.extend(model.remove_shortcut(action, shortcut));
                                 }
                             }
-                        },
-                    ));
-                    bottom = bottom.max(column(
-                        ui,
-                        left + total - add_width,
-                        add_width,
-                        Layout::top_down(Align::Max),
-                        |ui| {
                             if self.capturing == Some(Capture::Bind(action)) {
-                                if ui.button(label(Msg::Cancel)).clicked() {
+                                if square_button(ui, CHIP_REMOVE)
+                                    .on_hover_text(label(Msg::Cancel))
+                                    .clicked()
+                                {
                                     self.capturing = None;
                                 }
-                            } else if ui.button(label(Msg::AddShortcut)).clicked() {
+                            } else if square_button(ui, ADD_MARK)
+                                .on_hover_text(label(Msg::AddShortcutHint))
+                                .clicked()
+                            {
                                 self.capturing = Some(Capture::Bind(action));
                                 self.conflict = None;
                             }

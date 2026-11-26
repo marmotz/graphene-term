@@ -102,12 +102,12 @@ disposition (en AZERTY aussi, sans `Shift`). `Ctrl+0` et `Ctrl+Shift+0` aussi ; 
 ## Modifier les raccourcis
 
 Utilisez la section **Raccourcis clavier** de l'onglet des paramètres (`Ctrl+,`) :
-appuyez sur un nouveau raccourci pour l'ajouter, ou supprimez-en un. Tapez dans le
-champ au-dessus de la liste pour ne garder que les actions dont le nom contient le
-texte, ou cliquez sur **Rechercher un raccourci** puis appuyez sur un raccourci pour voir
-les actions qui l'utilisent. Ou modifiez
-`keybindings.toml`, situé à côté du
-[fichier de configuration](configuration.md#emplacement-des-fichiers) :
+cliquez sur **+** après les raccourcis d'une action puis appuyez sur le nouveau pour
+l'ajouter, ou supprimez-en un. Tapez dans le champ au-dessus de la liste pour ne garder
+que les actions dont le nom contient le texte, ou cliquez sur **Rechercher un
+raccourci** puis appuyez sur un raccourci pour voir les actions qui l'utilisent. Ou
+modifiez `keybindings.toml`, situé à côté du [fichier de
+configuration](configuration.md#emplacement-des-fichiers) :
 
 ```toml
 [keybindings]

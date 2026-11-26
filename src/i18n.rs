@@ -320,8 +320,10 @@ pub enum Msg {
     AtLeast(String),
     /// A number field is above its maximum.
     AtMost(String),
-    /// Button adding a shortcut to an action.
+    /// Button setting the shortcut of an empty shortcut field.
     AddShortcut,
+    /// Tooltip of the button adding a shortcut to an action.
+    AddShortcutHint,
     /// Button capturing a new shortcut in place of the current one.
     ChangeShortcut,
     /// Tooltip of the button removing a shortcut.
@@ -552,6 +554,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::AtLeast(min) => return format!("Must be at least {min}").into(),
         Msg::AtMost(max) => return format!("Must be at most {max}").into(),
         Msg::AddShortcut => "Add",
+        Msg::AddShortcutHint => "Add shortcut",
         Msg::ChangeShortcut => "Change",
         Msg::RemoveShortcut => "Remove this shortcut",
         Msg::NoShortcut => "No shortcut",
@@ -767,6 +770,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::AtLeast(min) => return format!("Doit valoir au moins {min}").into(),
         Msg::AtMost(max) => return format!("Doit valoir au plus {max}").into(),
         Msg::AddShortcut => "Ajouter",
+        Msg::AddShortcutHint => "Ajouter un raccourci",
         Msg::ChangeShortcut => "Modifier",
         Msg::RemoveShortcut => "Supprimer ce raccourci",
         Msg::NoShortcut => "Aucun raccourci",
@@ -1029,6 +1033,7 @@ mod tests {
             Msg::AtLeast(_) => 51,
             Msg::AtMost(_) => 52,
             Msg::AddShortcut => 53,
+            Msg::AddShortcutHint => 104,
             Msg::ChangeShortcut => 99,
             Msg::RemoveShortcut => 54,
             Msg::NoShortcut => 55,
@@ -1069,7 +1074,7 @@ mod tests {
             Msg::ProgramExited(_) => 103,
         }
     }
-    const VARIANT_COUNT: usize = 104;
+    const VARIANT_COUNT: usize = 105;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1151,6 +1156,7 @@ mod tests {
             Msg::AtLeast("6".into()),
             Msg::AtMost("72".into()),
             Msg::AddShortcut,
+            Msg::AddShortcutHint,
             Msg::ChangeShortcut,
             Msg::RemoveShortcut,
             Msg::NoShortcut,
@@ -1342,6 +1348,11 @@ mod tests {
             labels.dedup();
             assert_eq!(labels.len(), SettingsSection::ALL.len(), "{lang:?}");
         }
+        assert_eq!(text(Lang::En, &Msg::AddShortcutHint), "Add shortcut");
+        assert_eq!(
+            text(Lang::Fr, &Msg::AddShortcutHint),
+            "Ajouter un raccourci"
+        );
         assert_eq!(text(Lang::En, &Msg::AtLine(12)), "line 12");
         assert_eq!(text(Lang::Fr, &Msg::AtLine(12)), "ligne 12");
         assert_eq!(
