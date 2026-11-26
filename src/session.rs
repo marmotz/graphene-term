@@ -91,6 +91,10 @@ pub struct TabSnapshot {
 pub enum NodeSnapshot {
     Pane {
         cwd: Option<PathBuf>,
+        /// Points added by the user to the configured font size in this pane. Left out
+        /// of the file at 0, and read as 0 from a file without it.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        font_offset: f32,
     },
     Split {
         axis: Axis,
@@ -98,6 +102,11 @@ pub enum NodeSnapshot {
         first: Box<NodeSnapshot>,
         second: Box<NodeSnapshot>,
     },
+}
+
+/// Whether a font offset is the default one, left out of the session file.
+fn is_zero(offset: &f32) -> bool {
+    *offset == 0.0
 }
 
 /// The leading field of a session file, read before the rest to tell a known format.
@@ -574,8 +583,12 @@ mod tests {
                         ratio: 0.25,
                         first: Box::new(NodeSnapshot::Pane {
                             cwd: Some(PathBuf::from("/tmp")),
+                            font_offset: 3.0,
                         }),
-                        second: Box::new(NodeSnapshot::Pane { cwd: None }),
+                        second: Box::new(NodeSnapshot::Pane {
+                            cwd: None,
+                            font_offset: 0.0,
+                        }),
                     },
                     active: 1,
                     zoomed: true,
@@ -584,6 +597,7 @@ mod tests {
                     title: None,
                     tree: NodeSnapshot::Pane {
                         cwd: Some(PathBuf::from("/")),
+                        font_offset: -2.0,
                     },
                     active: 0,
                     zoomed: false,
@@ -601,6 +615,34 @@ mod tests {
         atomic_file::write_json(&file, &snapshot()).unwrap();
         assert_eq!(WindowSnapshot::load(&file), Some(snapshot()));
         assert!(file.exists());
+    }
+
+    #[test]
+    fn font_offset_is_left_out_of_the_file_at_zero() {
+        let pane = |font_offset| {
+            serde_json::to_value(NodeSnapshot::Pane {
+                cwd: None,
+                font_offset,
+            })
+            .unwrap()
+        };
+        assert_eq!(pane(0.0), serde_json::json!({ "Pane": { "cwd": null } }));
+        assert_eq!(
+            pane(1.5),
+            serde_json::json!({ "Pane": { "cwd": null, "font_offset": 1.5 } })
+        );
+    }
+
+    #[test]
+    fn pane_without_font_offset_is_read_at_zero() {
+        let pane: NodeSnapshot = serde_json::from_str(r#"{ "Pane": { "cwd": "/tmp" } }"#).unwrap();
+        assert_eq!(
+            pane,
+            NodeSnapshot::Pane {
+                cwd: Some(PathBuf::from("/tmp")),
+                font_offset: 0.0,
+            }
+        );
     }
 
     #[test]

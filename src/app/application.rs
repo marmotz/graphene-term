@@ -420,22 +420,27 @@ impl App {
     /// that fails is logged and left out.
     fn restore_workspace(&self, snapshot: &WindowSnapshot, layout: GridLayout) -> Workspace<Pane> {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let workspace = Workspace::restore(&snapshot.tabs, snapshot.active_tab, |id, cwd| {
-            let cwd = cwd.and_then(|cwd| crate::session::nearest_existing_dir(&cwd, home.clone()));
-            match Terminal::spawn(
-                EventProxy::new(self.proxy.clone(), id),
-                layout.window_size(),
-                self.config.term_config(),
-                cwd,
-                None,
-            ) {
-                Ok(terminal) => Some(Pane::new(id, terminal, layout, 0.0)),
-                Err(error) => {
-                    log::error!("cannot start a shell of the restored session: {error:#}");
-                    None
+        let workspace = Workspace::restore(
+            &snapshot.tabs,
+            snapshot.active_tab,
+            |id, cwd, font_offset| {
+                let cwd =
+                    cwd.and_then(|cwd| crate::session::nearest_existing_dir(&cwd, home.clone()));
+                match Terminal::spawn(
+                    EventProxy::new(self.proxy.clone(), id),
+                    layout.window_size(),
+                    self.config.term_config(),
+                    cwd,
+                    None,
+                ) {
+                    Ok(terminal) => Some(Pane::new(id, terminal, layout, font_offset)),
+                    Err(error) => {
+                        log::error!("cannot start a shell of the restored session: {error:#}");
+                        None
+                    }
                 }
-            }
-        });
+            },
+        );
         perf::mark("session restored");
         workspace
     }

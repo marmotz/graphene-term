@@ -36,7 +36,7 @@ use crate::terminal::{EventProxy, PaneId, Terminal};
 use crate::timeline::{BlockId, Timeline};
 use crate::timeline_selection::{self, End, TimelineSelection};
 use crate::view::{self, Anchor, RowSource, ScrollTarget, ViewRow};
-use crate::workspace::{ProgressSource, TitleSource};
+use crate::workspace::{FontOffsetSource, ProgressSource, TitleSource};
 
 /// How often a pane without OSC title has its fallback title (its directory) read
 /// again from `/proc`.
@@ -100,6 +100,12 @@ impl TitleSource for Pane {
 
     fn shell_name(&self) -> Option<String> {
         self.terminal.shell_name()
+    }
+}
+
+impl FontOffsetSource for Pane {
+    fn font_offset(&self) -> f32 {
+        self.font_offset
     }
 }
 
