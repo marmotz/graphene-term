@@ -10,6 +10,7 @@ use super::context_menu::{MenuLayout, MenuRow};
 use super::dialog::DialogLayout;
 use super::pane_bar::PaneBarLayout;
 use super::rename_tab::RenameTabLayout;
+use super::search_bar::SearchBarLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
 use crate::easter_eggs::art::ArtLayout;
@@ -356,6 +357,84 @@ fn rename_tab(rename: &RenameTabLayout, colors: &UiColors, srgb_target: bool, ui
         max_width: rename.text_width,
         font: UiFont::Palette,
     });
+}
+
+/// The search bar of a pane, over its rows and under the overlay: its box and border
+/// (in `error`, the terminal red, while the regex is invalid), the field with its
+/// selection, caret and text or placeholder, the counter, then the toggles, selectors
+/// and buttons, an active one filled with the accent and a greyed out one in the
+/// inactive tab text color.
+pub fn search_bar(
+    bar: &SearchBarLayout,
+    colors: &UiColors,
+    error: Rgb,
+    srgb_target: bool,
+    ui: &mut UiLayer,
+) {
+    let color = |c| gpu_color(c, srgb_target);
+    let text = color(colors.palette_text);
+    let dim = color(colors.tab_inactive_text);
+    ui.rects
+        .push(rect(bar.rect, color(colors.palette_background)));
+    let edge = if bar.invalid {
+        error
+    } else if bar.focused {
+        colors.palette_match
+    } else {
+        colors.pane_border
+    };
+    ui.rects
+        .push(rect(bar.field, color(colors.tab_bar_background)));
+    if let Some(selection) = bar.selection {
+        ui.rects
+            .push(rect(selection, color(colors.palette_selection_background)));
+    }
+    if let Some(caret) = bar.caret {
+        ui.rects.push(rect(caret, text));
+    }
+    ui.texts.push(UiTextItem {
+        text: bar.text.clone(),
+        x: bar.text_x,
+        y: bar.text_y,
+        color: if bar.placeholder { dim } else { text },
+        max_width: bar.text_width,
+        font: UiFont::Chrome,
+    });
+    if !bar.counter.is_empty() {
+        let first_button = bar
+            .buttons
+            .first()
+            .map_or(bar.rect.x + bar.rect.width, |button| button.rect.x);
+        ui.texts.push(UiTextItem {
+            text: bar.counter.clone(),
+            x: bar.counter_x,
+            y: bar.text_y,
+            color: if bar.invalid { color(error) } else { dim },
+            max_width: (first_button - bar.counter_x).max(0.0),
+            font: UiFont::Chrome,
+        });
+    }
+    for button in &bar.buttons {
+        let label = if button.active {
+            ui.rects
+                .push(rect(button.rect, color(colors.palette_match)));
+            color(readable_on(colors.palette_background, colors.palette_match))
+        } else if button.enabled {
+            text
+        } else {
+            dim
+        };
+        ui.texts.push(UiTextItem {
+            text: button.label.clone(),
+            x: button.label_x,
+            y: bar.text_y,
+            color: label,
+            max_width: button.rect.width,
+            font: UiFont::Chrome,
+        });
+    }
+    ui.rects
+        .extend(border(bar.rect, DIALOG_BORDER, color(edge)));
 }
 
 /// The dialog, in the overlay: its box and border, its title and message, then its
@@ -1852,5 +1931,86 @@ mod tests {
                 font: UiFont::Chrome,
             }]
         );
+    }
+
+    #[test]
+    fn a_search_bar_draws_its_box_field_and_controls_with_an_error_border() {
+        use crate::chrome::search_bar::{SearchBarHit, SearchBarView};
+        const ERROR: Rgb = Rgb { r: 90, g: 0, b: 0 };
+        let colors = UiColors {
+            palette_background: DIALOG_BACKGROUND,
+            palette_text: DIALOG_TEXT,
+            ..tab_colors()
+        };
+        let view = |invalid| SearchBarView {
+            text: "foo(".to_owned(),
+            caret: 4,
+            selected: false,
+            focused: true,
+            placeholder: "Search".to_owned(),
+            counter: if invalid { "Invalid regex" } else { "1/2" }.to_owned(),
+            invalid,
+            case_sensitive: false,
+            regex: true,
+            whole_word: false,
+            zone: "All".to_owned(),
+            status: "Any".to_owned(),
+            filters: false,
+            zone_active: false,
+            status_active: false,
+        };
+        let metrics = UiMetrics {
+            line_height: 18.0,
+            scale: 1.0,
+        };
+        let layout = |invalid| {
+            SearchBarLayout::new(
+                PaneId(1),
+                area(0.0, 30.0, 1000.0, 400.0),
+                &view(invalid),
+                metrics,
+                |t| t.chars().count() as f32 * 8.0,
+            )
+        };
+        let color = |c| gpu_color(c, false);
+        let bar = layout(true);
+        let mut ui = UiLayer::default();
+        search_bar(&bar, &colors, ERROR, false, &mut ui);
+        assert_eq!(ui.rects[0].position, [bar.rect.x, bar.rect.y]);
+        assert_eq!(ui.rects[0].color, color(DIALOG_BACKGROUND));
+        assert_eq!(ui.rects[1].position, [bar.field.x, bar.field.y]);
+        // Caret, the active regex toggle, then the four border sides in the error color.
+        assert_eq!(ui.rects[2].color, color(DIALOG_TEXT));
+        let regex = bar
+            .buttons
+            .iter()
+            .find(|b| b.hit == SearchBarHit::Regex)
+            .expect("regex toggle");
+        assert_eq!(ui.rects[3].position, [regex.rect.x, regex.rect.y]);
+        assert_eq!(ui.rects[3].color, color(ACCENT));
+        assert_eq!(ui.rects.len(), 8);
+        assert!(ui.rects[4..].iter().all(|r| r.color == color(ERROR)));
+        let text_color = |text: &str| {
+            ui.texts
+                .iter()
+                .find(|t| t.text == text)
+                .map(|t| t.color)
+                .expect(text)
+        };
+        assert_eq!(text_color("foo("), color(DIALOG_TEXT));
+        assert_eq!(text_color("Invalid regex"), color(ERROR));
+        // Greyed out selectors without blocks.
+        assert_eq!(text_color("All"), color(INACTIVE_TEXT));
+
+        // A valid query has the accent border while the bar has the keyboard.
+        let bar = layout(false);
+        let mut ui = UiLayer::default();
+        search_bar(&bar, &colors, ERROR, false, &mut ui);
+        assert!(
+            ui.rects[ui.rects.len() - 4..]
+                .iter()
+                .all(|r| r.color == color(ACCENT))
+        );
+        assert!(ui.overlay_rects.is_empty() && ui.overlay_texts.is_empty());
     }
 }

@@ -15,7 +15,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use winit::keyboard::{Key, NamedKey};
 
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::Term;
+use alacritty_terminal::term::{Term, TermMode};
 
 use super::tab_bar::UiMetrics;
 use super::text_field::TextField;
@@ -92,6 +92,8 @@ pub struct PaneContext {
     pub scroll_page_down: bool,
     pub scroll_to_top: bool,
     pub scroll_to_bottom: bool,
+    /// The history can be searched: no full-screen application is shown.
+    pub search: bool,
 }
 
 impl PaneContext {
@@ -143,6 +145,7 @@ impl PaneContext {
             scroll_page_down: page_down,
             scroll_to_top: timeline_scroll < max_timeline,
             scroll_to_bottom: timeline_scroll > 0 || timeline.current().scroll > 0,
+            search: !live.mode().contains(TermMode::ALT_SCREEN),
         }
     }
 }
@@ -212,6 +215,7 @@ pub fn available<P>(
         Action::ScrollPageDown => pane.scroll_page_down,
         Action::ScrollToTop => pane.scroll_to_top,
         Action::ScrollToBottom => pane.scroll_to_bottom,
+        Action::OpenSearch => pane.search,
     }
 }
 
@@ -1187,6 +1191,7 @@ mod tests {
             scroll_page_down: true,
             scroll_to_top: true,
             scroll_to_bottom: true,
+            search: true,
         };
         let full = Context {
             pane: Some(everything),
@@ -1218,18 +1223,40 @@ mod tests {
     }
 
     #[test]
-    fn pane_context_of_an_empty_session_allows_nothing() {
+    fn pane_context_of_an_empty_session_allows_only_the_search() {
         let session = Session::new(1000);
+        let search = PaneContext {
+            search: true,
+            ..PaneContext::default()
+        };
         let context = PaneContext::read(&session.timeline, &session.term, None, false);
-        assert_eq!(context, PaneContext::default());
+        assert_eq!(context, search);
         let context = PaneContext::read(&session.timeline, &session.term, None, true);
         assert_eq!(
             context,
             PaneContext {
                 copy: true,
-                ..PaneContext::default()
+                ..search
             }
         );
+    }
+
+    #[test]
+    fn pane_context_has_no_search_on_the_alternate_screen() {
+        let mut session = Session::new(1000);
+        session.feed("\x1b[?1049h");
+        let pane = PaneContext::read(&session.timeline, &session.term, None, false);
+        assert!(!pane.search);
+        let full = Context {
+            pane: Some(pane),
+            ..context()
+        };
+        assert!(!available(
+            Action::OpenSearch,
+            &single_pane(),
+            geometry(),
+            &full
+        ));
     }
 
     #[test]

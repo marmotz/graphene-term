@@ -30,13 +30,13 @@ mod notifications;
 mod opener;
 mod palette;
 mod pane;
+mod pane_search;
 mod perf;
 mod process;
 mod progress;
 mod pty;
 mod quick_terminal;
 mod renderer;
-#[allow(dead_code)] // Used by the search bar: issue #212.
 mod search;
 mod selection;
 mod session;

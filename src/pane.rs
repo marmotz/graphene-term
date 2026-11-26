@@ -32,7 +32,9 @@ use crate::input_editor::{self, EditorCommand};
 use crate::layout::{GridLayout, Hit};
 use crate::links::{self, Link};
 use crate::mouse;
+use crate::pane_search::{self, SearchState};
 use crate::progress::{self, Progress};
+use crate::search;
 use crate::selection::{self, ClickTracker, SelectionSnapshot};
 use crate::terminal::{EventProxy, PaneId, Terminal};
 use crate::timeline::{BlockId, Timeline};
@@ -122,6 +124,8 @@ pub struct Pane {
     progress_seen: Option<Progress>,
     /// What the pane does once its program ends (see `-E`).
     pub hold: Hold,
+    /// The open search bar, `None` while it is closed.
+    pub search: Option<SearchState>,
 }
 
 impl ProgressSource for Pane {
@@ -173,6 +177,7 @@ impl Pane {
             unseen: 0,
             progress_seen: None,
             hold: Hold::Off,
+            search: None,
         }
     }
 
@@ -519,6 +524,101 @@ impl Pane {
                 timeline.toggle_fold(id);
             }
         });
+    }
+
+    /// Opens the search bar, or gives an open one the keyboard back with its text
+    /// selected. Nothing while a full-screen application shows: the search only covers
+    /// the history. Returns whether the bar is open.
+    pub fn open_search(&mut self) -> bool {
+        if self.mode().contains(TermMode::ALT_SCREEN) {
+            return false;
+        }
+        match &mut self.search {
+            Some(search) => {
+                search.focused = true;
+                search.field.select_all();
+            }
+            None => self.search = Some(SearchState::new()),
+        }
+        self.request_redraw();
+        true
+    }
+
+    /// Closes the search bar. The view stays where the last match left it.
+    pub fn close_search(&mut self) {
+        if self.search.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
+    /// Searches again after the query changed, the pane being at `revision`, and shows
+    /// the new current match.
+    pub fn search_edited(&mut self, revision: u64) {
+        {
+            let term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let Some(search) = self.search.as_mut() else {
+                return;
+            };
+            let rows = shown_rows(&self.anchor, &term, &mut timeline);
+            search.requery(&timeline, &*term, &rows, revision);
+            if let Some(current) = search.current_match() {
+                reveal_match(&mut timeline, &term, current);
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// Goes to the next match toward the oldest (`older`) or the most recent, and shows
+    /// it.
+    pub fn search_step(&mut self, older: bool) {
+        {
+            let term = self.terminal.term.lock();
+            let mut timeline = lock(&self.terminal.timeline);
+            let Some(search) = self.search.as_mut() else {
+                return;
+            };
+            if let Some(current) = search.step(older) {
+                reveal_match(&mut timeline, &term, current);
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// Keeps the search bar in step with the pane at `revision`: closes it once a
+    /// full-screen application shows, searches again when the pane changed. The view
+    /// does not move. Returns whether the bar changed.
+    pub fn refresh_search(&mut self, revision: u64) -> bool {
+        if self.search.is_none() {
+            return false;
+        }
+        if self.mode().contains(TermMode::ALT_SCREEN) {
+            self.search = None;
+            return true;
+        }
+        let term = self.terminal.term.lock();
+        let timeline = lock(&self.terminal.timeline);
+        self.search
+            .as_mut()
+            .is_some_and(|search| search.refresh(&timeline, &*term, revision))
+    }
+
+    /// Takes the keyboard from the search bar, which stays open: keys go to the shell.
+    /// Returns whether the bar had it.
+    pub fn blur_search(&mut self) -> bool {
+        match &mut self.search {
+            Some(search) if search.focused => {
+                search.focused = false;
+                self.request_redraw();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the search bar is open and has the keyboard.
+    pub fn search_focused(&self) -> bool {
+        self.search.as_ref().is_some_and(|search| search.focused)
     }
 
     /// Sends a paste to the shell. Like a keystroke, it clears the selection.
@@ -997,6 +1097,12 @@ pub fn write_exit<L: EventListener>(term: &mut Term<L>, text: &str) {
 
 pub fn lock(timeline: &Mutex<Timeline>) -> MutexGuard<'_, Timeline> {
     timeline.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Makes the search match `m` visible (see [`view::reveal_line`]).
+fn reveal_match(timeline: &mut Timeline, term: &term::Term<EventProxy>, m: &search::Match) {
+    let line = pane_search::start_line(m, term);
+    view::reveal_line(timeline, term, term.screen_lines(), m.source, line);
 }
 
 /// Rows of the view over `timeline`, whose current block lives in `term`, kept still

@@ -127,6 +127,14 @@ impl Session {
                 self.workspace.touch(id);
             }
         }
+        // The search bars follow their pane: new output, a reflow, a full-screen
+        // application.
+        for &id in &shown {
+            let revision = self.workspace.revision(id);
+            if let Some(pane) = self.workspace.pane_mut(id) {
+                pane.refresh_search(revision);
+            }
+        }
         for &id in &shown {
             let Some(pane) = self.workspace.pane(id) else {
                 continue;
@@ -191,6 +199,7 @@ impl Session {
                 frame
             });
         }
+        let search_bars = self.search_bars(&layout);
         let (base, scale) = (self.font_size, self.window.scale_factor() as f32);
         let panes: Vec<_> = shown
             .iter()
@@ -246,6 +255,16 @@ impl Session {
             &self.palette.ui,
             self.renderer.is_srgb(),
         );
+        let error = self.progress_colors().error;
+        for search_bar in &search_bars {
+            chrome::scene::search_bar(
+                search_bar,
+                &self.palette.ui,
+                error,
+                self.renderer.is_srgb(),
+                &mut ui,
+            );
+        }
         if let Some(honeycomb) = &self.honeycomb {
             let color = gpu_color(self.palette.cursor, self.renderer.is_srgb());
             let scale = self.window.scale_factor() as f32;

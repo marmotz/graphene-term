@@ -620,8 +620,6 @@ fn scroll_to_body_row(shape: &Shape, cap: usize, index: usize) -> usize {
 /// the line itself is in the view. A header row cut by the cap stays out of sight; the
 /// block is still revealed. Nothing moves on the alternate screen or for a block no
 /// longer in the timeline.
-// Called by the search bar once it lands (#212).
-#[allow(dead_code)]
 pub fn reveal_line<L>(
     timeline: &mut Timeline,
     live: &Term<L>,

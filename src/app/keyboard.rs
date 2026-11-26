@@ -167,6 +167,9 @@ impl Session {
             self.close_pane(id, event_loop);
             return;
         }
+        if self.search_key(event, event_loop) {
+            return;
+        }
         let modifiers = self.modifiers;
         self.watch_konami(&event.logical_key, modifiers);
         let action = self
@@ -194,6 +197,85 @@ impl Session {
                 self.run_action(action, event_loop);
                 return;
             }
+        }
+    }
+
+    /// Handles a key while the search bar of the active pane has the keyboard: `Enter`
+    /// and `Shift+Enter` go to the older and the more recent match, `Escape` closes the
+    /// bar, the search and paste shortcuts act on the field, the other shortcuts run as
+    /// usual and the other keys edit the field. Nothing reaches the shell. Returns
+    /// whether the bar took the key.
+    fn search_key(&mut self, event: &KeyEvent, event_loop: &ActiveEventLoop) -> bool {
+        let Some(id) = self.workspace.active_pane_id() else {
+            return false;
+        };
+        if !self.workspace.pane(id).is_some_and(Pane::search_focused) {
+            return false;
+        }
+        let modifiers = self.modifiers;
+        let action = self
+            .keybindings
+            .action(&event.logical_key, event.physical_key, modifiers);
+        let changed = match pane_search::bar_key(&event.logical_key, modifiers, action) {
+            BarKey::Close => {
+                self.with_pane(id, Pane::close_search);
+                false
+            }
+            BarKey::Older => {
+                self.with_pane(id, |pane| pane.search_step(true));
+                false
+            }
+            BarKey::Newer => {
+                self.with_pane(id, |pane| pane.search_step(false));
+                false
+            }
+            BarKey::SelectAll => {
+                self.with_pane(id, |pane| {
+                    pane.open_search();
+                });
+                false
+            }
+            BarKey::Paste => {
+                let text = self.clipboard.as_mut().and_then(|c| c.get_text().ok());
+                text.is_some_and(|text| self.edit_search(id, |field| field.insert(&text)))
+            }
+            BarKey::Shortcut(action) => {
+                self.run_action(action, event_loop);
+                false
+            }
+            BarKey::Edit => {
+                let ctrl = modifiers.control_key();
+                self.edit_search(id, |field| {
+                    field.key(&event.logical_key, event.text.as_deref(), ctrl)
+                })
+            }
+        };
+        if changed {
+            let revision = self.workspace.revision(id);
+            self.with_pane(id, |pane| pane.search_edited(revision));
+        }
+        true
+    }
+
+    /// Edits the search field of the pane `id` with `edit`, which tells whether the
+    /// text changed, then redraws.
+    fn edit_search(&mut self, id: PaneId, edit: impl FnOnce(&mut SearchField) -> bool) -> bool {
+        let Some(pane) = self.workspace.pane_mut(id) else {
+            return false;
+        };
+        let Some(search) = pane.search.as_mut() else {
+            return false;
+        };
+        let changed = edit(&mut search.field);
+        self.window.request_redraw();
+        changed
+    }
+
+    /// Runs `f` on the pane `id`, then redraws.
+    pub(super) fn with_pane(&mut self, id: PaneId, f: impl FnOnce(&mut Pane)) {
+        if let Some(pane) = self.workspace.pane_mut(id) {
+            f(pane);
+            self.window.request_redraw();
         }
     }
 
@@ -308,6 +390,9 @@ pub(super) fn run_pane_action(pane: &mut Pane, action: Action) {
         Action::NextBlock => pane.navigate_block(Direction::Next),
         Action::ToggleFold => pane.toggle_fold(),
         Action::ToggleFoldAll => pane.change_folds(|timeline, _| timeline.toggle_fold_all()),
+        Action::OpenSearch => {
+            pane.open_search();
+        }
         Action::Copy
         | Action::Paste
         | Action::FontSizeIncrease

@@ -166,6 +166,43 @@ impl Session {
             .collect()
     }
 
+    /// Search bars of the panes of `layout` that have one open, over their content.
+    pub(super) fn search_bars(&mut self, layout: &Layout) -> Vec<SearchBarLayout> {
+        let metrics = self.ui_metrics(UiFont::Chrome);
+        let lang = self.lang;
+        let renderer = &mut self.renderer;
+        layout
+            .panes
+            .iter()
+            .filter_map(|&(id, rect)| {
+                let pane = self.workspace.pane(id)?;
+                let search = pane.search.as_ref()?;
+                let filters = search::filters_available(&pane::lock(&pane.terminal.timeline));
+                let (_, content) = pane_bar::split(rect, metrics);
+                Some(SearchBarLayout::new(
+                    id,
+                    content,
+                    &search.view(filters, lang),
+                    metrics,
+                    |text| renderer.ui_text_width(UiFont::Chrome, text),
+                ))
+            })
+            .collect()
+    }
+
+    /// The search bar of `layout` under the pixel `(x, y)`: its pane and what the pixel
+    /// is over.
+    pub(super) fn search_bar_at(
+        &mut self,
+        layout: &Layout,
+        x: f32,
+        y: f32,
+    ) -> Option<(PaneId, SearchBarHit)> {
+        self.search_bars(layout)
+            .iter()
+            .find_map(|bar| bar.hit(x, y).map(|hit| (bar.pane, hit)))
+    }
+
     /// Layout of the shown tab: no pane while the settings tab is shown.
     pub(super) fn shown_layout(&self) -> Layout {
         if self.settings_shown() {

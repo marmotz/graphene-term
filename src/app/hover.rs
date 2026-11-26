@@ -39,6 +39,12 @@ impl Session {
             mouse::divider_icon(axis)
         } else if self.pane_bar_at(&layout, x, y).is_some() {
             winit::window::CursorIcon::Default
+        } else if let Some((_, hit)) = self.search_bar_at(&layout, x, y) {
+            match hit {
+                SearchBarHit::Field => winit::window::CursorIcon::Text,
+                SearchBarHit::Bar => winit::window::CursorIcon::Default,
+                _ => winit::window::CursorIcon::Pointer,
+            }
         } else {
             let id = layout
                 .pane_at(x, y)
