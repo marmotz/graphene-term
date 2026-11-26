@@ -107,9 +107,9 @@ _tâches créées — voir [technical.md](features/scrollback-search/technical.m
 
 ### Quick terminal crashes when closed after changing the settings  ·  [overview](bugs/quick-terminal-crash-after-settings-change/overview.md)
 
-_tâches créées — voir [technical.md](bugs/quick-terminal-crash-after-settings-change/technical.md)_ — 1/2 tasks done
+_terminé — voir [technical.md](bugs/quick-terminal-crash-after-settings-change/technical.md)_ — 2/2 tasks done
 
 | Done | Issue                                                       | Title                                                                  | Blocked by |
 |------|-------------------------------------------------------------|------------------------------------------------------------------------|------------|
 | [x]  | [#267](https://github.com/marmotz/graphene-term/issues/267) | fix(settings): paint the settings tab at the size of the render target | —          |
-| [ ]  | [#268](https://github.com/marmotz/graphene-term/issues/268) | fix(renderer): log uncaptured GPU errors instead of panicking          | —          |
+| [x]  | [#268](https://github.com/marmotz/graphene-term/issues/268) | fix(renderer): log uncaptured GPU errors instead of panicking          | —          |
