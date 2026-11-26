@@ -204,6 +204,10 @@ fn select<T>(mut candidates: Vec<(T, SystemTime)>) -> (Vec<T>, Vec<T>) {
 ///   that reopens it (see [`adopt`]); a file `reopen` fails on is removed. Unreadable
 ///   files are removed.
 ///
+/// There is a single quick terminal: for [`WindowKind::Quick`], the other kept
+/// snapshots are removed, never handed to `reopen`. Snapshots of another kind are
+/// always left alone.
+///
 /// Holds [`RESTORE_LOCK`] meanwhile, until the instance is claimed and the other
 /// windows are handed over: a launch that follows sees it alive.
 pub fn start(
@@ -268,6 +272,12 @@ pub fn start(
         },
         None => None,
     };
+    if kind == WindowKind::Quick {
+        for (file, _) in kept {
+            remove(&file);
+        }
+        return Ok((instance, restored));
+    }
     for file in park(dir, kept.map(|(file, _)| file)) {
         if let Err(error) = reopen(&file) {
             log::warn!("cannot reopen {}: {error}", file.display());
@@ -394,16 +404,16 @@ pub fn sessions_dir() -> Option<PathBuf> {
 }
 
 /// Whether a launch takes part in the session (saves its window): only when
-/// `restore_session` is on, for an ordinary window that neither runs a program (`-e`),
-/// nor is sized in cells (`--columns`, `--lines`), nor was started with `--no-restore`.
+/// `restore_session` is on, for a window, ordinary or the quick terminal, that neither
+/// runs a program (`-e`), nor is sized in cells (`--columns`, `--lines`), nor was
+/// started with `--no-restore`.
 pub fn participates(
     restore_session: bool,
-    normal: bool,
     program: bool,
     sized_by_grid: bool,
     no_restore: bool,
 ) -> bool {
-    restore_session && normal && !program && !sized_by_grid && !no_restore
+    restore_session && !program && !sized_by_grid && !no_restore
 }
 
 /// Whether the instance whose lock file is `lock` is alive: its lock is held by an
@@ -518,6 +528,12 @@ impl SessionSaver {
 
     /// Writes the final `snapshot`, at the clean exit.
     pub fn finish(&mut self, snapshot: &WindowSnapshot) {
+        self.save(snapshot);
+    }
+
+    /// Writes `snapshot` now, without waiting for the next check: the quick terminal
+    /// starting over with a fresh tab.
+    pub fn save(&mut self, snapshot: &WindowSnapshot) {
         match serde_json::to_string_pretty(snapshot) {
             Ok(json) => self.write(json),
             Err(error) => log::warn!("cannot serialize the session: {error}"),
@@ -676,14 +692,14 @@ mod tests {
     }
 
     #[test]
-    fn only_ordinary_windows_launched_plainly_take_part() {
-        assert!(participates(true, true, false, false, false));
-        assert!(!participates(false, true, false, false, false));
-        // The quick terminal, `-e`, `--columns`/`--lines`, `--no-restore`.
-        assert!(!participates(true, false, false, false, false));
-        assert!(!participates(true, true, true, false, false));
-        assert!(!participates(true, true, false, true, false));
-        assert!(!participates(true, true, false, false, true));
+    fn only_windows_launched_plainly_take_part() {
+        // Ordinary windows and the quick terminal alike.
+        assert!(participates(true, false, false, false));
+        assert!(!participates(false, false, false, false));
+        // `-e`, `--columns`/`--lines`, `--no-restore`.
+        assert!(!participates(true, true, false, false));
+        assert!(!participates(true, false, true, false));
+        assert!(!participates(true, false, false, true));
     }
 
     #[test]
@@ -777,6 +793,22 @@ mod tests {
             WindowSnapshot::load(saver.file()).unwrap().closed_at,
             Some(1_700_000_000)
         );
+    }
+
+    #[test]
+    fn save_writes_at_once_between_two_checks() {
+        let dir = TempDir::new("save");
+        let now = Instant::now();
+        let mut saver = SessionSaver::new(Instance::claim(&dir.0).unwrap(), now);
+        saver.tick(now, snapshot);
+        let mut reset = snapshot();
+        reset.tabs.truncate(1);
+        reset.active_tab = 0;
+        saver.save(&reset);
+        assert_eq!(WindowSnapshot::load(saver.file()), Some(reset.clone()));
+        // The next check sees it written: nothing new to write.
+        saver.tick(now + SESSION_SAVE_INTERVAL, || reset.clone());
+        assert_eq!(WindowSnapshot::load(saver.file()), Some(reset));
     }
 
     fn at(seconds: u64) -> SystemTime {
@@ -987,6 +1019,54 @@ mod tests {
 
         let (_instance, restored) = start(&dir.0, WindowKind::Quick, no_reopen).unwrap();
         assert_eq!(restored.unwrap().kind, WindowKind::Quick);
+    }
+
+    #[test]
+    fn the_quick_terminal_never_takes_nor_starts_an_ordinary_window() {
+        let dir = TempDir::new("quick-only");
+        fs::create_dir_all(&dir.0).unwrap();
+        let now = now_seconds();
+        let normal = saved(
+            &dir.0,
+            "1-1",
+            WindowKind::Normal,
+            Some(now),
+            SystemTime::now(),
+        );
+        let other = saved(
+            &dir.0,
+            "2-2",
+            WindowKind::Normal,
+            Some(now),
+            SystemTime::now(),
+        );
+
+        let (instance, restored) = start(&dir.0, WindowKind::Quick, no_reopen).unwrap();
+        assert_eq!(restored, None);
+        assert!(normal.exists());
+        assert!(other.exists());
+        assert!(!instance.file().exists());
+    }
+
+    #[test]
+    fn the_quick_terminal_reopens_its_last_snapshot_and_drops_the_others() {
+        let dir = TempDir::new("quick-last");
+        fs::create_dir_all(&dir.0).unwrap();
+        let now = now_seconds();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        let last = saved(&dir.0, "1-1", WindowKind::Quick, Some(now), old);
+        let close = saved(&dir.0, "2-22", WindowKind::Quick, Some(now - 1), old);
+        let normal = saved(&dir.0, "3-333", WindowKind::Normal, Some(now), old);
+
+        let (instance, restored) = start(&dir.0, WindowKind::Quick, no_reopen).unwrap();
+        let restored = restored.expect("the quick terminal to reopen");
+        assert_eq!((restored.kind, restored.active_tab), (WindowKind::Quick, 3));
+        assert_eq!(WindowSnapshot::load(instance.file()), Some(restored));
+        assert!(!last.exists());
+        // A single quick terminal: the other one is neither kept nor handed over.
+        assert!(!close.exists());
+        assert!(!dir.0.join("pending-0.json").exists());
+        assert!(normal.exists());
     }
 
     #[test]

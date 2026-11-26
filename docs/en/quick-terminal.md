@@ -79,6 +79,20 @@ end the quick terminal: it hides, and the next time it comes back with a single 
 its shell in your home directory. The confirmation asked when a program still runs is
 the same as for an ordinary window.
 
+## Session restore
+
+With [`window.restore_session`](configuration.md#window) on, the quick terminal saves its
+tabs like an ordinary window, and reopens them the next time its process starts, with
+`graphene --quick-toggle`, the global shortcut or at login. Each pane starts a new shell
+in its saved directory. Its place and size still come from the
+[`[quick_terminal]`](configuration.md#quick_terminal) section.
+
+The quick terminal and the ordinary windows are restored apart: starting the quick
+terminal never reopens an ordinary window, and a resident quick terminal does not stop
+the ordinary windows from being reopened at the next launch. After it is closed, the
+single new tab it starts over with is saved at once: a restart does not bring the closed
+tabs back.
+
 ## Where it appears
 
 The quick terminal covers a share of the screen against one of its edges, set in the

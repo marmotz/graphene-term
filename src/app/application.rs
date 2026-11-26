@@ -198,7 +198,8 @@ impl App {
                 self.config.window.background_opacity,
                 cfg!(target_os = "macos"),
             ));
-        if let Some((x, y)) = restored.as_ref().and_then(|snapshot| {
+        // The quick terminal goes to its own place, from `[quick_terminal]`.
+        if let Some((x, y)) = restored.as_ref().filter(|_| !quick).and_then(|snapshot| {
             let monitors: Vec<String> = event_loop
                 .available_monitors()
                 .filter_map(|monitor| monitor.name())
@@ -897,14 +898,17 @@ fn run_app(
 ) -> anyhow::Result<i32> {
     let update_proxy = event_loop.create_proxy();
     let (config, palette, config_banner, load_errors) = load_config();
+    let kind = match mode {
+        WindowMode::Normal => WindowKind::Normal,
+        WindowMode::Quick(_) => WindowKind::Quick,
+    };
     let session_saver = crate::session::participates(
         config.window.restore_session,
-        mode == WindowMode::Normal,
         first_program.is_some(),
         grid.is_set(),
         restore.no_restore,
     )
-    .then(|| start_session(restore.handed_over.as_deref()))
+    .then(|| start_session(kind, restore.handed_over.as_deref()))
     .flatten();
     let (session_saver, restored) = match session_saver {
         Some((saver, restored)) => (Some(saver), restored),
@@ -953,11 +957,13 @@ fn run_app(
     }
 }
 
-/// A saver for a new instance in the session folder, with the saved window it reopens:
-/// `handed_over` when given (see [`crate::session::adopt`]), else the one it picks,
-/// starting a process for each other window to reopen (see [`crate::session::start`]).
-/// `None`, logged, when the folder cannot be found or the instance cannot be claimed.
+/// A saver for a new instance of `kind` in the session folder, with the saved window it
+/// reopens: `handed_over` when given (see [`crate::session::adopt`]), else the one of
+/// `kind` it picks, starting a process for each other window to reopen (see
+/// [`crate::session::start`]; never for the quick terminal). `None`, logged, when the
+/// folder cannot be found or the instance cannot be claimed.
 fn start_session(
+    kind: WindowKind,
     handed_over: Option<&std::path::Path>,
 ) -> Option<(SessionSaver, Option<WindowSnapshot>)> {
     let Some(dir) = crate::session::sessions_dir() else {
@@ -966,7 +972,7 @@ fn start_session(
     };
     let started = match handed_over {
         Some(file) => crate::session::adopt(&dir, file),
-        None => crate::session::start(&dir, WindowKind::Normal, spawn_restored_window),
+        None => crate::session::start(&dir, kind, spawn_restored_window),
     };
     match started {
         Ok((instance, restored)) => Some((SessionSaver::new(instance, Instant::now()), restored)),
