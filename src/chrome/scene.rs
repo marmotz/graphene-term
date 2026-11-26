@@ -47,6 +47,9 @@ const CLOSE: &str = "×";
 
 /// Thickness of the strokes of the `+` button, relative to the bar height.
 const PLUS_STROKE: f32 = 1.0 / 15.0;
+/// Side of the settings tab's sliders icon, as a fraction of the smaller side of its
+/// slot.
+const ICON_SIZE: f32 = 0.6;
 
 /// Thickness of the dialog border, in physical pixels.
 const DIALOG_BORDER: f32 = 1.0;
@@ -512,8 +515,8 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
     ));
 }
 
-/// The settings tab, first in the bar: a sliders icon, three lines each crossed by a
-/// knob, on the shown tab's background when it is the one shown.
+/// The settings tab, first in the bar: a sliders icon, on the shown tab's background when
+/// it is the one shown.
 fn settings_tab(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
     let color = |c| gpu_color(c, srgb_target);
     let slot = bar.settings;
@@ -527,26 +530,18 @@ fn settings_tab(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &m
     if bar.settings_hovered && !bar.settings_active {
         button_hover(slot, text, ui);
     }
-    let side = slot.width.min(slot.height);
-    let stroke = (side * PLUS_STROKE).round().max(1.0);
-    let width = (side * 0.45).round();
-    let gap = (side / 6.0).round();
-    let knob = 3.0 * stroke;
-    let left = (slot.x + (slot.width - width) / 2.0).round();
-    let cy = (slot.y + slot.height / 2.0).round();
-    for (row, at) in [(-1.0, 0.3), (0.0, 0.7), (1.0, 0.45)] {
-        let y = cy + row * gap;
-        ui.rects.push(RectInstance::new(
-            [left, y - stroke / 2.0],
-            [width, stroke],
+    let side = (slot.width.min(slot.height) * ICON_SIZE).round();
+    ui.rects.push(
+        RectInstance::new(
+            [
+                (slot.x + (slot.width - side) / 2.0).round(),
+                (slot.y + (slot.height - side) / 2.0).round(),
+            ],
+            [side, side],
             text,
-        ));
-        ui.rects.push(RectInstance::new(
-            [(left + width * at - knob / 2.0).round(), y - knob / 2.0],
-            [knob, knob],
-            text,
-        ));
-    }
+        )
+        .sliders(),
+    );
 }
 
 /// The chrome over the panes of `layout`: the title bar of every pane (see
@@ -875,17 +870,17 @@ mod tests {
         assert_eq!(ui.rects[0].position, [0.0, 0.0]);
         assert_eq!(ui.rects[0].size, [1000.0, bar.rect.height]);
         assert_eq!(ui.rects[0].color, color(BAR));
-        // The settings icon, three lines and their knobs, inside its slot.
-        assert!(ui.rects[1..7].iter().all(|r| {
-            bar.settings.contains(r.position[0], r.position[1]) && r.color == color(INACTIVE_TEXT)
-        }));
+        // The settings icon, inside its slot.
+        let icon = ui.rects[1];
+        assert!(bar.settings.contains(icon.position[0], icon.position[1]));
+        assert_eq!(icon.color, color(INACTIVE_TEXT));
         // Only the shown tab (the second) gets a background.
-        assert_eq!(ui.rects[7].position, [bar.tabs[1].rect.x, 0.0]);
-        assert_eq!(ui.rects[7].color, color(ACTIVE_TAB));
+        assert_eq!(ui.rects[2].position, [bar.tabs[1].rect.x, 0.0]);
+        assert_eq!(ui.rects[2].color, color(ACTIVE_TAB));
         // Then the two strokes of the `+` button, inside it.
-        assert_eq!(ui.rects.len(), 10);
+        assert_eq!(ui.rects.len(), 5);
         assert!(
-            ui.rects[8..]
+            ui.rects[3..]
                 .iter()
                 .all(|r| bar.new_tab.contains(r.position[0], r.position[1]))
         );
@@ -1339,9 +1334,9 @@ mod tests {
         // is not shown: inactive text color), shown tab background, then the `+` strokes.
         let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
         let close = bar.tabs[0].close;
-        assert_eq!(ui.rects.len(), 11);
+        assert_eq!(ui.rects.len(), 6);
         assert_eq!(
-            drawn(&ui.rects[7..8]),
+            drawn(&ui.rects[2..3]),
             vec![(
                 [close.x, close.y],
                 [close.width, close.height],
@@ -1364,9 +1359,9 @@ mod tests {
         // its strokes.
         let [r, g, b, _] = gpu_color(INACTIVE_TEXT, false);
         let plus = bar.new_tab;
-        assert_eq!(ui.rects.len(), 11);
+        assert_eq!(ui.rects.len(), 6);
         assert_eq!(
-            drawn(&ui.rects[8..9]),
+            drawn(&ui.rects[3..4]),
             vec![(
                 [plus.x, plus.y],
                 [plus.width, plus.height],
@@ -1398,9 +1393,22 @@ mod tests {
                 color(ACTIVE_TAB)
             )]
         );
-        // The icon in the shown tab's text color; no tab background after it.
-        assert!(ui.rects[2..8].iter().all(|r| r.color == color(ACTIVE_TEXT)));
-        assert_eq!(ui.rects.len(), 10);
+        // The icon in the shown tab's text color, centered in the slot; no tab
+        // background after it.
+        let icon = ui.rects[2];
+        assert_eq!(
+            (icon.shape, icon.color),
+            (
+                RectInstance::new([0.0; 2], [0.0; 2], [0.0; 4])
+                    .sliders()
+                    .shape,
+                color(ACTIVE_TEXT)
+            )
+        );
+        let side = (slot.width.min(slot.height) * ICON_SIZE).round();
+        assert_eq!(icon.size, [side, side]);
+        assert!((icon.position[0] + side / 2.0 - (slot.x + slot.width / 2.0)).abs() <= 0.5);
+        assert_eq!(ui.rects.len(), 5);
     }
 
     #[test]
