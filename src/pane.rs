@@ -10,9 +10,11 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
-use alacritty_terminal::term::{self, TermMode};
+use alacritty_terminal::term::{self, Term, TermMode};
+use alacritty_terminal::vte::ansi::Processor;
 use winit::dpi::PhysicalPosition;
 use winit::event::MouseScrollDelta;
 use winit::keyboard::ModifiersState;
@@ -41,6 +43,43 @@ use crate::workspace::{FontOffsetSource, ProgressSource, TitleSource};
 /// How often a pane without OSC title has its fallback title (its directory) read
 /// again from `/proc`.
 pub const TITLE_REFRESH: Duration = Duration::from_secs(1);
+
+/// What a pane does once its program ends (see `-E`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hold {
+    /// The pane closes with its program (shell, `-e`).
+    #[default]
+    Off,
+    /// `-E`: the pane stays open once its program ends.
+    Armed,
+    /// The program ended: the message is shown, the next key closes the pane.
+    Waiting,
+}
+
+/// What the end of a pane's program calls for, by [`Hold::program_ended`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldStep {
+    /// Close the pane, as without `-E`.
+    Close,
+    /// Show the end message, then wait for a key.
+    ShowExit,
+    /// Nothing: the message is already shown (the `Exit` after a `ChildExit`).
+    Nothing,
+}
+
+impl Hold {
+    /// Moves to the state after the program ended and tells what to do.
+    pub fn program_ended(&mut self) -> HoldStep {
+        match self {
+            Hold::Off => HoldStep::Close,
+            Hold::Armed => {
+                *self = Hold::Waiting;
+                HoldStep::ShowExit
+            }
+            Hold::Waiting => HoldStep::Nothing,
+        }
+    }
+}
 
 pub struct Pane {
     pub id: PaneId,
@@ -81,6 +120,8 @@ pub struct Pane {
     unseen: u32,
     /// The timeline's progress as last read by the window (see [`Self::sync_progress`]).
     progress_seen: Option<Progress>,
+    /// What the pane does once its program ends (see `-E`).
+    pub hold: Hold,
 }
 
 impl ProgressSource for Pane {
@@ -131,7 +172,15 @@ impl Pane {
             primary: None,
             unseen: 0,
             progress_seen: None,
+            hold: Hold::Off,
         }
+    }
+
+    /// Writes the end message of the program, `text`, in the live grid, and redraws.
+    /// The PTY loop has stopped, so nothing else writes there.
+    pub fn show_exit(&self, text: &str) {
+        write_exit(&mut self.terminal.term.lock(), text);
+        self.request_redraw();
     }
 
     /// Reads the timeline's progress; whether it changed since the last read.
@@ -933,6 +982,19 @@ pub fn stepped_font_offset(base: f32, offset: f32, steps: f32) -> f32 {
 
 /// Locks the timeline. Only while the terminal is locked, or without it: lock order
 /// `Term`, then `Timeline`.
+/// Writes `text` in `term` after the program's output: attributes reset, on a line of
+/// its own, in reverse video, then the cursor hidden since nothing is typed anymore.
+pub fn write_exit<L: EventListener>(term: &mut Term<L>, text: &str) {
+    let mut bytes = b"\x1b[0m".to_vec();
+    if term.grid().cursor.point.column.0 != 0 {
+        bytes.extend_from_slice(b"\r\n");
+    }
+    bytes.extend_from_slice(b"\x1b[7m");
+    bytes.extend_from_slice(text.as_bytes());
+    bytes.extend_from_slice(b"\x1b[0m\x1b[?25l");
+    crate::pty::feed(&mut Processor::new(), term, &bytes);
+}
+
 pub fn lock(timeline: &Mutex<Timeline>) -> MutexGuard<'_, Timeline> {
     timeline.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -1137,5 +1199,74 @@ mod tests {
         assert!(toggle_fold_of(&mut session.timeline, BlockId(0)));
         assert!(session.timeline.is_folded(BlockId(0)));
         assert_eq!(selection, before);
+    }
+
+    fn exit_term() -> Term<alacritty_terminal::event::VoidListener> {
+        use alacritty_terminal::term::test::TermSize;
+        Term::new(
+            term::Config::default(),
+            &TermSize::new(40, 5),
+            alacritty_terminal::event::VoidListener,
+        )
+    }
+
+    fn line_text(term: &Term<alacritty_terminal::event::VoidListener>, line: i32) -> String {
+        let row = &term.grid()[Line(line)];
+        (0..term.columns())
+            .map(|column| row[Column(column)].c)
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    }
+
+    #[test]
+    fn exit_message_goes_on_the_next_line_in_reverse_video_with_the_cursor_hidden() {
+        use alacritty_terminal::term::cell::Flags;
+        let mut term = exit_term();
+        // Output left mid-line, in bold red.
+        crate::pty::feed(&mut Processor::new(), &mut term, b"\x1b[1;31mtotal 0");
+        write_exit(&mut term, "Done");
+        assert_eq!(line_text(&term, 0), "total 0");
+        assert_eq!(line_text(&term, 1), "Done");
+        let cell = &term.grid()[Line(1)][Column(0)];
+        assert!(cell.flags.contains(Flags::INVERSE));
+        // The program's attributes are reset first.
+        assert!(!cell.flags.contains(Flags::BOLD));
+        assert_eq!(
+            cell.fg,
+            alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Foreground
+            )
+        );
+        assert!(!term.mode().contains(TermMode::SHOW_CURSOR));
+        // Attributes are reset after the message too.
+        assert!(!term.grid().cursor.template.flags.contains(Flags::INVERSE));
+    }
+
+    #[test]
+    fn exit_message_stays_on_the_cursor_line_at_column_zero() {
+        let mut term = exit_term();
+        crate::pty::feed(&mut Processor::new(), &mut term, b"done\r\n");
+        write_exit(&mut term, "Ended");
+        assert_eq!(line_text(&term, 0), "done");
+        assert_eq!(line_text(&term, 1), "Ended");
+        assert_eq!(line_text(&term, 2), "");
+    }
+
+    #[test]
+    fn hold_off_closes_with_the_program() {
+        let mut hold = Hold::Off;
+        assert_eq!(hold.program_ended(), HoldStep::Close);
+        assert_eq!(hold, Hold::Off);
+    }
+
+    #[test]
+    fn hold_armed_shows_the_message_once_for_child_exit_then_exit() {
+        let mut hold = Hold::Armed;
+        // `ChildExit`, then the `Exit` that always follows.
+        assert_eq!(hold.program_ended(), HoldStep::ShowExit);
+        assert_eq!(hold, Hold::Waiting);
+        assert_eq!(hold.program_ended(), HoldStep::Nothing);
+        assert_eq!(hold, Hold::Waiting);
     }
 }

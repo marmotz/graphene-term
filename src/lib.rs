@@ -55,18 +55,19 @@ mod workspace;
 #[cfg(target_os = "linux")]
 mod x11_window;
 
-pub use app::GridSize;
+pub use app::{GridSize, Program};
 
 /// Version of this build, computed by `build.rs`.
 pub const VERSION: &str = env!("GRAPHENE_VERSION");
 
 /// Opens the window and runs the event loop until its last pane exits. The first pane
-/// runs `program` (the program then its arguments) instead of the shell when given;
+/// runs `program` instead of the shell when given, and stays open once it ends when
+/// `program.hold` (`-E`);
 /// the window is sized to show `grid` when it sets a dimension. `no_restore` keeps the
 /// window out of the saved session (`--no-restore`). `restore_session` is a saved
 /// window handed over by the launch that restored the session (`--restore-session`).
 pub fn run(
-    program: Option<Vec<String>>,
+    program: Option<Program>,
     grid: GridSize,
     no_restore: bool,
     restore_session: Option<std::path::PathBuf>,

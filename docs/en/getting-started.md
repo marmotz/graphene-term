@@ -43,13 +43,14 @@ text with `Shift+Arrow` like in an editor: see [Input editor](input-editor.md).
 |------------------------------------|----------------------------------------------------------------------|
 | `graphene`                         | Opens a window running your shell                                    |
 | `graphene -e <program> [args...]`  | Opens a window whose first pane runs `<program>` instead of the shell |
+| `graphene -E <program> [args...]`  | Like `-e`, but the window stays open once `<program>` ends, until a key is pressed |
 | `graphene --columns <n> --lines <n>` | Opens the window sized to show a grid of `<n>` columns and `<n>` lines |
 | `graphene --no-restore`            | Opens a new window without restoring the saved session, and keeps it out of the session (see `window.restore_session` in [Configuration](configuration.md#window)) |
 | `graphene --version`               | Prints the version and exits                                         |
 | `graphene --help`                  | Prints the command line options and exits                            |
 | `graphene --prune-config [--yes]`  | Removes the settings this version does not know from the configuration file (see [Configuration](configuration.md#removing-unknown-settings)) |
 
-An argument before `-e` that is not one of these options is an error: Graphene prints a message and exits with code 2 instead of opening a window.
+An argument before `-e` or `-E` that is not one of these options is an error: Graphene prints a message and exits with code 2 instead of opening a window.
 
 ### Running a program with `-e`
 
@@ -66,6 +67,24 @@ graphene -e vim --clean notes.txt
 - New panes and tabs opened afterwards start your shell as usual.
 - Options placed after `-e` belong to the program: `graphene -e less --version` runs
   `less --version`. `graphene -e` with nothing after it is an error.
+
+### Keeping the window open with `-E`
+
+`-E` works like `-e`, except that the window does not close when the program ends, so
+its output can still be read:
+
+```bash
+graphene -E ls -la
+```
+
+- Once the program ends, the pane shows `Program ended (code 0). Press any key to
+  close.` below its output, with the exit code (or the signal that killed it).
+- Any key closes the pane, shortcuts included; a modifier alone (`Shift`, `Ctrl`, `Alt`,
+  `Super`) does not. Scrolling and selecting with the mouse still work.
+- Use `-e` for interactive programs and for tools that expect the window to close
+  (application launchers, `$TERMINAL -e`); use `-E` to read what a command printed.
+- Like `-e`, `-E` comes last. If both are given, the first one wins and the other is
+  passed to the program.
 
 ### Window size in cells
 

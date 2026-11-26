@@ -155,6 +155,18 @@ impl Session {
             }
             return;
         }
+        // `-E`: once the program ended, any key but a modifier alone closes the pane,
+        // shortcuts included.
+        if let Some(id) = self.workspace.active_pane_id()
+            && self
+                .workspace
+                .active_pane()
+                .is_some_and(|pane| pane.hold == Hold::Waiting)
+            && closes_hold(&event.logical_key)
+        {
+            self.close_pane(id, event_loop);
+            return;
+        }
         let modifiers = self.modifiers;
         self.watch_konami(&event.logical_key, modifiers);
         let action = self
@@ -264,6 +276,27 @@ impl Session {
     }
 }
 
+/// Whether `key` closes a pane waiting after its program (`-E`): every key but a
+/// modifier alone, so a combination is not cut at its first key.
+pub(super) fn closes_hold(key: &Key) -> bool {
+    !matches!(
+        key,
+        Key::Named(
+            NamedKey::Shift
+                | NamedKey::Control
+                | NamedKey::Alt
+                | NamedKey::AltGraph
+                | NamedKey::Super
+                | NamedKey::Meta
+                | NamedKey::Hyper
+                | NamedKey::CapsLock
+                | NamedKey::NumLock
+                | NamedKey::Fn
+                | NamedKey::FnLock
+        )
+    )
+}
+
 /// Runs an action that only concerns `pane`; the other actions are ignored.
 pub(super) fn run_pane_action(pane: &mut Pane, action: Action) {
     match action {
@@ -303,5 +336,33 @@ pub(super) fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::CommandPalette
         | Action::OpenSettings
         | Action::Quit => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn any_key_but_a_modifier_alone_closes_a_waiting_pane() {
+        for key in [
+            Key::Character("a".into()),
+            Key::Character("C".into()),
+            Key::Named(NamedKey::Enter),
+            Key::Named(NamedKey::Escape),
+            Key::Named(NamedKey::Space),
+            Key::Named(NamedKey::F5),
+        ] {
+            assert!(closes_hold(&key), "{key:?}");
+        }
+        for key in [
+            NamedKey::Shift,
+            NamedKey::Control,
+            NamedKey::Alt,
+            NamedKey::Super,
+            NamedKey::CapsLock,
+        ] {
+            assert!(!closes_hold(&Key::Named(key)), "{key:?}");
+        }
     }
 }

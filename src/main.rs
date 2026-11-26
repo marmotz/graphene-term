@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use graphene::GridSize;
+use graphene::{GridSize, Program};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -70,13 +70,13 @@ enum Command {
     Quick {
         hidden: bool,
     },
-    /// Opens the window; its first pane runs `program` instead of the shell when given,
-    /// and the window is sized to `grid` when it sets a dimension. With `no_restore`
+    /// Opens the window; its first pane runs `program` instead of the shell when given
+    /// (and stays open once it ends with `-E`), and the window is sized to `grid` when it sets a dimension. With `no_restore`
     /// (`--no-restore`), the window stays out of the saved session. `restore_session`
     /// (`--restore-session <file>`, internal) is a saved window handed over by the
     /// launch that restored the session, reopened by this one.
     Run {
-        program: Option<Vec<String>>,
+        program: Option<Program>,
         grid: GridSize,
         no_restore: bool,
         restore_session: Option<PathBuf>,
@@ -85,7 +85,7 @@ enum Command {
 
 /// Command line help, printed by `--help` and `-h`.
 const HELP: &str = "\
-Usage: graphene [options] [-e <program> [args...]]
+Usage: graphene [options] [-e|-E <program> [args...]]
 
 Options:
   --columns <n>             Size the window to <n> columns
@@ -105,6 +105,9 @@ Running a program:
                             -e must come last: every argument after it, options
                             included, is passed to <program>, not to graphene.
                             Example: `graphene -e vim --help` runs `vim --help`.
+  -E <program> [args...]    Like -e, but the window stays open once <program> ends,
+                            showing its output until a key is pressed.
+                            Example: `graphene -E ls -la`.
 ";
 
 /// Options without a value.
@@ -121,17 +124,23 @@ const FLAGS: [&str; 7] = [
 /// Options followed by a value, checked by `count` and `value`.
 const VALUED: [&str; 3] = ["--columns", "--lines", "--restore-session"];
 
-/// Parses the arguments. `-e` takes every following argument as the program and its
-/// arguments, so options after it belong to the program. `--help` wins over every other
+/// Parses the arguments. `-e` (or `-E`, which keeps the window open once the program
+/// ends) takes every following argument as the program and its arguments, so options
+/// after it belong to the program; the first of `-e` and `-E` wins. `--help` wins over every other
 /// option, and any argument before `-e` that is not an option is an error.
 fn command(args: &[String]) -> Result<Command, String> {
-    let (options, program) = match args.iter().position(|arg| arg == "-e") {
+    let (options, program) = match args.iter().position(|arg| arg == "-e" || arg == "-E") {
         Some(index) => {
+            let option = &args[index];
             let program = &args[index + 1..];
             if program.is_empty() {
-                return Err("-e requires a program to run".to_owned());
+                return Err(format!("{option} requires a program to run"));
             }
-            (&args[..index], Some(program.to_vec()))
+            let program = Program {
+                argv: program.to_vec(),
+                hold: option == "-E",
+            };
+            (&args[..index], Some(program))
         }
         None => (args, None),
     };
@@ -205,6 +214,31 @@ mod tests {
         list.iter().map(|arg| (*arg).to_owned()).collect()
     }
 
+    /// The program of `-e`: the window closes with it.
+    fn execute(list: &[&str]) -> Program {
+        Program {
+            argv: args(list),
+            hold: false,
+        }
+    }
+
+    /// The program of `-E`: the window stays open once it ends.
+    fn execute_hold(list: &[&str]) -> Program {
+        Program {
+            argv: args(list),
+            hold: true,
+        }
+    }
+
+    fn run(program: Program) -> Command {
+        Command::Run {
+            program: Some(program),
+            grid: GridSize::default(),
+            no_restore: false,
+            restore_session: None,
+        }
+    }
+
     #[test]
     fn help_wins_over_every_other_option() {
         for list in [
@@ -223,7 +257,7 @@ mod tests {
         assert_eq!(
             command(&args(&["-e", "vim", "--help"])),
             Ok(Command::Run {
-                program: Some(args(&["vim", "--help"])),
+                program: Some(execute(&["vim", "--help"])),
                 grid: GridSize::default(),
                 no_restore: false,
                 restore_session: None
@@ -253,7 +287,11 @@ mod tests {
 
     #[test]
     fn help_lists_every_option() {
-        for option in FLAGS.iter().chain(&VALUED).chain(&["-e", "--help", "-h"]) {
+        for option in FLAGS
+            .iter()
+            .chain(&VALUED)
+            .chain(&["-e", "-E", "--help", "-h"])
+        {
             assert!(HELP.contains(option), "{option} missing from the help");
         }
     }
@@ -325,7 +363,7 @@ mod tests {
         assert_eq!(
             command(&args(&["-e", "cat", "file.txt"])),
             Ok(Command::Run {
-                program: Some(args(&["cat", "file.txt"])),
+                program: Some(execute(&["cat", "file.txt"])),
                 grid: GridSize::default(),
                 no_restore: false,
                 restore_session: None
@@ -335,7 +373,66 @@ mod tests {
 
     #[test]
     fn execute_without_a_program_is_an_error() {
-        assert!(command(&args(&["-e"])).is_err());
+        assert_eq!(
+            command(&args(&["-e"])),
+            Err("-e requires a program to run".to_owned())
+        );
+    }
+
+    #[test]
+    fn execute_hold_takes_the_program_and_its_arguments() {
+        assert_eq!(
+            command(&args(&["-E", "ls", "-la"])),
+            Ok(run(execute_hold(&["ls", "-la"])))
+        );
+    }
+
+    #[test]
+    fn execute_hold_without_a_program_is_an_error_naming_it() {
+        assert_eq!(
+            command(&args(&["-E"])),
+            Err("-E requires a program to run".to_owned())
+        );
+        assert!(command(&args(&["--columns", "80", "-E"])).is_err());
+    }
+
+    #[test]
+    fn options_after_execute_hold_belong_to_the_program() {
+        assert_eq!(
+            command(&args(&["-E", "vim", "--help", "--no-restore"])),
+            Ok(run(execute_hold(&["vim", "--help", "--no-restore"])))
+        );
+        assert_eq!(
+            command(&args(&["--columns", "100", "-E", "make"])),
+            Ok(Command::Run {
+                program: Some(execute_hold(&["make"])),
+                grid: GridSize {
+                    columns: Some(100),
+                    lines: None
+                },
+                no_restore: false,
+                restore_session: None
+            })
+        );
+    }
+
+    #[test]
+    fn the_first_of_execute_and_execute_hold_wins() {
+        assert_eq!(
+            command(&args(&["-e", "prog", "-E"])),
+            Ok(run(execute(&["prog", "-E"])))
+        );
+        assert_eq!(
+            command(&args(&["-E", "prog", "-e", "x"])),
+            Ok(run(execute_hold(&["prog", "-e", "x"])))
+        );
+    }
+
+    #[test]
+    fn help_describes_execute_hold() {
+        assert!(HELP.contains("-E <program> [args...]"));
+        assert!(HELP.contains("the window stays open once <program> ends"));
+        assert!(HELP.contains("`graphene -E ls -la`"));
     }
 
     #[test]
@@ -343,7 +440,7 @@ mod tests {
         assert_eq!(
             command(&args(&["-e", "vim", "--version", "--prune-config"])),
             Ok(Command::Run {
-                program: Some(args(&["vim", "--version", "--prune-config"])),
+                program: Some(execute(&["vim", "--version", "--prune-config"])),
                 grid: GridSize::default(),
                 no_restore: false,
                 restore_session: None
@@ -368,7 +465,7 @@ mod tests {
         assert_eq!(
             command(&args(&["--columns", "120", "--lines", "36", "-e", "top"])),
             Ok(Command::Run {
-                program: Some(args(&["top"])),
+                program: Some(execute(&["top"])),
                 grid: GridSize {
                     columns: Some(120),
                     lines: Some(36)
@@ -406,7 +503,7 @@ mod tests {
         assert_eq!(
             command(&args(&["-e", "tool", "--no-restore"])),
             Ok(Command::Run {
-                program: Some(args(&["tool", "--no-restore"])),
+                program: Some(execute(&["tool", "--no-restore"])),
                 grid: GridSize::default(),
                 no_restore: false,
                 restore_session: None
@@ -434,7 +531,7 @@ mod tests {
         assert_eq!(
             command(&args(&["-e", "tool", "--restore-session", "x"])),
             Ok(Command::Run {
-                program: Some(args(&["tool", "--restore-session", "x"])),
+                program: Some(execute(&["tool", "--restore-session", "x"])),
                 grid: GridSize::default(),
                 no_restore: false,
                 restore_session: None
@@ -461,7 +558,7 @@ mod tests {
         assert_eq!(
             command(&args(&["-e", "less", "--lines", "5"])),
             Ok(Command::Run {
-                program: Some(args(&["less", "--lines", "5"])),
+                program: Some(execute(&["less", "--lines", "5"])),
                 grid: GridSize::default(),
                 no_restore: false,
                 restore_session: None
