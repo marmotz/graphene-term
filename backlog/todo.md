@@ -1,6 +1,14 @@
-<!-- backlog-sync 2026-11-25T21:56Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-26T08:00Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
+
+## Garder la fenêtre ouverte après `-e`  ·  [overview](features/execute-hold/overview.md)
+
+_tâches créées — voir [technical.md](features/execute-hold/technical.md)_ — 0/1 tasks done
+
+| Done | Issue | Title | Blocked by |
+|------|-------|-------|------------|
+| [ ]  | [#266](https://github.com/marmotz/graphene-term/issues/266) | Keep the window open after the program with -E | — |
 
 ## Internationalisation (i18n)  ·  [overview](features/i18n/overview.md)
 
@@ -94,21 +102,3 @@ _tâches créées — voir [technical.md](features/scrollback-search/technical.m
 | [ ]  | [#212](https://github.com/marmotz/graphene-term/issues/212) | [Recherche] Barre de recherche du pane | #200, #202, #203 |
 | [ ]  | [#216](https://github.com/marmotz/graphene-term/issues/216) | [Recherche] Surlignage des occurrences | #201, #202, #212 |
 | [ ]  | [#218](https://github.com/marmotz/graphene-term/issues/218) | [Recherche] Documentation | #212, #216 |
-
-## Bugs
-
-### `graphene --help` n'affiche pas l'aide du CLI  ·  [overview](bugs/cli-help-not-shown/overview.md)
-
-_terminé — voir [technical.md](bugs/cli-help-not-shown/technical.md)_ — 1/1 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [x]  | [#263](https://github.com/marmotz/graphene-term/issues/263) | Show the CLI help with --help and reject unknown arguments | — |
-
-### Les réglages s'ouvrent sous le quick terminal  ·  [overview](bugs/quick-terminal-settings-hidden/overview.md)
-
-_terminé — voir [technical.md](bugs/quick-terminal-settings-hidden/technical.md)_ — 0/1 tasks done
-
-| Done | Issue | Title | Blocked by |
-|------|-------|-------|------------|
-| [ ]  | [#255](https://github.com/marmotz/graphene-term/issues/255) | fix(quick-terminal): open the settings in front of the quick terminal | — |
