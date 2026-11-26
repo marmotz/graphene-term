@@ -165,9 +165,12 @@ palette_match = "#82aaff"        # matched letters in the command palette
 palette_selection_background = "#2e3440"
 banner_background = "#5c2a30"
 banner_text = "#f2f4f8"
+search_match_background = "#4a3f1c"    # scrollback search matches
+search_current_background = "#7a5400"  # current scrollback search match
 ```
 
-These are the values of `graphene-night`. A theme that only changes the background:
+These are the values of `graphene-night`. The two `search_*` keys color the background of the scrollback
+search matches and of the current match; the text keeps its own color. A theme that only changes the background:
 
 ```toml
 [colors]

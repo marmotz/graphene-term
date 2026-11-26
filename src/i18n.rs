@@ -907,6 +907,8 @@ fn english_color(key: ColorKey) -> &'static str {
         ColorKey::PaletteSelectionBackground => "Command palette selection",
         ColorKey::BannerBackground => "Banner background",
         ColorKey::BannerText => "Banner text",
+        ColorKey::SearchMatchBackground => "Search matches",
+        ColorKey::SearchCurrentBackground => "Current search match",
     }
 }
 
@@ -947,6 +949,8 @@ fn french_color(key: ColorKey) -> &'static str {
         ColorKey::PaletteSelectionBackground => "Sélection dans la palette",
         ColorKey::BannerBackground => "Fond du bandeau",
         ColorKey::BannerText => "Texte du bandeau",
+        ColorKey::SearchMatchBackground => "Occurrences de la recherche",
+        ColorKey::SearchCurrentBackground => "Occurrence courante de la recherche",
     }
 }
 

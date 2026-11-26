@@ -42,6 +42,10 @@ pub struct UiColors {
     pub palette_selection_background: Rgb,
     pub banner_background: Rgb,
     pub banner_text: Rgb,
+    /// Background of the scrollback search matches; their text keeps its color.
+    pub search_match_background: Rgb,
+    /// Background of the current scrollback search match.
+    pub search_current_background: Rgb,
 }
 
 impl UiColors {
@@ -60,6 +64,8 @@ impl UiColors {
             palette_selection_background: color,
             banner_background: color,
             banner_text: color,
+            search_match_background: color,
+            search_current_background: color,
         }
     }
 }
