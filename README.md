@@ -29,8 +29,14 @@ uncomment the line below.
   dotfiles: [shell integration](docs/en/command-blocks.md#shell-integration).
 - **Rich prompt editor**: click to move the cursor, select with the mouse or
   `Shift+Arrow`, editor shortcuts: [input editor](docs/en/input-editor.md).
-- **Tabs and split panes**, drag panes to rearrange them, zoom a pane:
-  [tabs and panes](docs/en/tabs-and-panes.md).
+- **Tabs and split panes**, drag panes to rearrange them, zoom a pane, type in several
+  panes at once: [tabs and panes](docs/en/tabs-and-panes.md),
+  [broadcast](docs/en/tabs-and-panes.md#broadcast).
+- **Session restore**: tabs, pane layout, directories and font sizes come back at the
+  next launch: [configuration](docs/en/configuration.md#window).
+- **Per-pane font size**, zoomed with `Ctrl+=` / `Ctrl+-` or `Ctrl` + mouse wheel:
+  [keyboard shortcuts](docs/en/keybindings.md#scrolling-and-font-size).
+- **Font ligatures** and OpenType features: [font settings](docs/en/configuration.md#font).
 - **Command palette** with fuzzy search over every action:
   [command palette](docs/en/tabs-and-panes.md#command-palette).
 - **Inline images** (kitty graphics protocol with animations, sixel) and **clickable
@@ -38,12 +44,16 @@ uncomment the line below.
 - **Mouse selection**, including rectangular selection, and mouse reporting to
   applications: [selection and clipboard](docs/en/selection-and-clipboard.md).
 - **Remappable keybindings**: [keyboard shortcuts](docs/en/keybindings.md).
+- **Desktop notifications** for long commands, programs (OSC 9, OSC 777) and the bell,
+  and a **progress indicator** (OSC 9;4): [notifications](docs/en/configuration.md#notifications),
+  [progress](docs/en/tabs-and-panes.md#progress).
 - **Quick terminal** attached to a screen edge, shown and hidden by
-  `graphene --quick-toggle` (macOS and X11): [quick terminal](docs/en/quick-terminal.md).
+  `graphene --quick-toggle` (macOS and X11), started and restored with the session:
+  [quick terminal](docs/en/quick-terminal.md).
 - **Settings window**, live config reload, remembered window size, update
   notification: [configuration](docs/en/configuration.md).
-- **Eight built-in themes**, your own theme files, and themes that follow the system
-  light/dark mode: [themes](docs/en/themes.md).
+- **Eight built-in themes**, your own theme files, a theme editor, and themes that follow
+  the system light/dark mode: [themes](docs/en/themes.md).
 - **Interface in English and French**, following the system language:
   [language setting](docs/en/configuration.md#general).
 
@@ -52,13 +62,13 @@ uncomment the line below.
 Graphene compared with other Linux terminals, each with its default configuration.
 
 **Performance**: Graphene is in the same range as the other terminals: it takes 0.22 s
-to `cat` an 11 MB text file, against 0.16 s to 0.48 s for the others. It starts slower
+to `cat` an 11 MB text file (measured on 0.1.3), against 0.16 s to 0.48 s for the others. It starts slower
 and uses more memory than Alacritty. Measurements, the test machine and how to
 reproduce them are in [Comparing terminals](docs/dev/development.md#comparing-terminals).
 
 ✅ supported, ❌ not supported, ⚠️ partial (see the notes under the table).
 
-| Feature | Graphene 0.1.3 | Alacritty 0.17.0 | Kitty 0.50.0 | WezTerm 20260716 | Terminator 2.1.6 | GNOME Terminal 3.60.0 |
+| Feature | Graphene 0.4.1 | Alacritty 0.17.0 | Kitty 0.50.0 | WezTerm 20260716 | Terminator 2.1.6 | GNOME Terminal 3.60.0 |
 |---|---|---|---|---|---|---|
 | **Rendering** | | | | | | |
 | GPU rendering | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |

@@ -32,8 +32,15 @@ décommenter la ligne ci-dessous.
 - **Éditeur d'invite enrichi** : cliquez pour déplacer le curseur, sélectionnez à la
   souris ou avec `Shift+Flèche`, raccourcis d'éditeur :
   [éditeur de saisie](docs/fr/input-editor.md).
-- **Onglets et panneaux**, déplacement des panneaux à la souris, zoom sur un panneau :
-  [onglets et panneaux](docs/fr/tabs-and-panes.md).
+- **Onglets et panneaux**, déplacement des panneaux à la souris, zoom sur un panneau,
+  saisie dans plusieurs panneaux à la fois : [onglets et panneaux](docs/fr/tabs-and-panes.md),
+  [diffusion](docs/fr/tabs-and-panes.md#diffusion).
+- **Restauration de session** : onglets, disposition des panneaux, répertoires et tailles
+  de police reviennent au lancement suivant : [configuration](docs/fr/configuration.md#window).
+- **Taille de police par panneau**, avec `Ctrl+=` / `Ctrl+-` ou `Ctrl` + molette :
+  [raccourcis clavier](docs/fr/keybindings.md#défilement-et-taille-de-police).
+- **Ligatures** et fonctionnalités OpenType des polices :
+  [paramètres de police](docs/fr/configuration.md#font).
 - **Palette de commandes** avec recherche approximative sur toutes les actions :
   [palette de commandes](docs/fr/tabs-and-panes.md#palette-de-commandes).
 - **Images dans le terminal** (protocole graphique de kitty avec animations, sixel) et **liens cliquables** (OSC 8 et
@@ -42,13 +49,18 @@ décommenter la ligne ci-dessous.
 - **Sélection à la souris**, y compris rectangulaire, et transmission de la souris aux
   applications : [sélection et presse-papiers](docs/fr/selection-and-clipboard.md).
 - **Raccourcis clavier modifiables** : [raccourcis clavier](docs/fr/keybindings.md).
+- **Notifications de bureau** pour les commandes longues, les programmes (OSC 9, OSC 777)
+  et la cloche, et un **indicateur de progression** (OSC 9;4) :
+  [notifications](docs/fr/configuration.md#notifications),
+  [progression](docs/fr/tabs-and-panes.md#progression).
 - **Quick terminal** attaché à un bord de l'écran, affiché et masqué par
-  `graphene --quick-toggle` (macOS et X11) : [quick terminal](docs/fr/quick-terminal.md).
+  `graphene --quick-toggle` (macOS et X11), démarré et restauré avec la session :
+  [quick terminal](docs/fr/quick-terminal.md).
 - **Fenêtre des paramètres**, rechargement à chaud de la configuration, taille de
   fenêtre mémorisée, notification de mise à jour :
   [configuration](docs/fr/configuration.md).
-- **Huit thèmes intégrés**, vos propres fichiers de thème, et des thèmes qui suivent le
-  mode clair/sombre du système : [thèmes](docs/fr/themes.md).
+- **Huit thèmes intégrés**, vos propres fichiers de thème, un éditeur de thème, et des
+  thèmes qui suivent le mode clair/sombre du système : [thèmes](docs/fr/themes.md).
 - **Interface en anglais et en français**, selon la langue du système :
   [paramètre de langue](docs/fr/configuration.md#général).
 
@@ -57,14 +69,14 @@ décommenter la ligne ci-dessous.
 Graphene comparé à d'autres terminaux Linux, chacun dans sa configuration par défaut.
 
 **Performances** : Graphene est dans la moyenne des autres terminaux : il met 0,22 s à
-afficher avec `cat` un fichier texte de 11 Mo, contre 0,16 s à 0,48 s pour les autres.
+afficher avec `cat` un fichier texte de 11 Mo (mesuré sur la 0.1.3), contre 0,16 s à 0,48 s pour les autres.
 Il démarre plus lentement et consomme plus de mémoire qu'Alacritty. Les mesures, la
 machine de test et la façon de les reproduire sont dans
 [Comparing terminals](docs/dev/development.md#comparing-terminals) (en anglais).
 
 ✅ pris en charge, ❌ non pris en charge, ⚠️ partiel (voir les notes sous le tableau).
 
-| Fonctionnalité                                                                              | Graphene 0.1.3 | Alacritty 0.17.0 | Kitty 0.50.0 | WezTerm 20260716 | Terminator 2.1.6 | GNOME Terminal 3.60.0 |
+| Fonctionnalité                                                                              | Graphene 0.4.1 | Alacritty 0.17.0 | Kitty 0.50.0 | WezTerm 20260716 | Terminator 2.1.6 | GNOME Terminal 3.60.0 |
 |---------------------------------------------------------------------------------------------|----------------|------------------|--------------|------------------|------------------|-----------------------|
 | **Rendu**                                                                                   |                |                  |              |                  |                  |                       |
 | Rendu GPU                                                                                   | ✅             | ✅               | ✅           | ✅               | ❌               | ❌                    |

@@ -21,7 +21,7 @@ paramètres) sont ceux de l'interface en français : voir le paramètre `languag
 |------------------------------------------------------------|---------------------------------------------------------------------------|
 | [Blocs de commande](command-blocks.md)                     | Intégration shell, blocs de commande, couleurs d'état, copie et repli     |
 | [Éditeur de saisie](input-editor.md)                       | Modifier la ligne de commande à la souris et avec des raccourcis d'éditeur |
-| [Onglets et panneaux](tabs-and-panes.md)                   | Onglets, panneaux, zoom, réorganisation à la souris, palette de commandes |
+| [Onglets et panneaux](tabs-and-panes.md)                   | Onglets, panneaux, zoom, réorganisation à la souris, diffusion, progression, palette de commandes |
 | [Sélection et presse-papiers](selection-and-clipboard.md)  | Sélection à la souris, sélection rectangulaire, copier, coller            |
 | [Images et liens](images-and-links.md)                     | Images dans le terminal (kitty graphics, sixel), liens cliquables         |
 | [Quick terminal](quick-terminal.md)                        | Un terminal résident attaché à un bord de l'écran, affiché par une commande |
