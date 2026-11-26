@@ -485,6 +485,32 @@ fn chip(shortcut: &str) -> Button<'static> {
     ))
 }
 
+/// Mark of the button adding a shortcut to an action.
+const ADD_MARK: &str = "+";
+
+/// Adds a square button showing `mark`, as tall as a chip: its horizontal padding
+/// shrinks so the mark fits in the square.
+fn square_button(ui: &mut Ui, mark: &str) -> egui::Response {
+    let font = TextStyle::Button.resolve(ui.style());
+    let mark_size = ui
+        .painter()
+        .layout_no_wrap(mark.to_owned(), font, Color32::PLACEHOLDER)
+        .size();
+    let mark_width = mark_size.x;
+    // A button is as tall as its text plus the vertical padding, or as the
+    // interaction height when that is larger: the side must follow the font.
+    let side = ui
+        .spacing()
+        .interact_size
+        .y
+        .max(mark_size.y + 2.0 * ui.spacing().button_padding.y);
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding.x = ((side - mark_width) / 2.0).max(0.0);
+        ui.add(Button::new(mark.to_owned()).min_size(Vec2::splat(side)))
+    })
+    .inner
+}
+
 /// Smallest width of the `chip` of `shortcut`: its two texts, the gaps egui keeps
 /// between its four atoms, and the button padding.
 fn chip_width(ui: &Ui, shortcut: &str) -> f32 {
@@ -1587,6 +1613,120 @@ mod tests {
             (left_gap - right_gap).abs() <= 2.0,
             "{left_gap} vs {right_gap}"
         );
+    }
+
+    /// The texts drawn by one frame of the shortcuts section of `view`, with their
+    /// rects, and the screen width.
+    fn shortcut_texts(mut view: View) -> (Vec<(String, Rect)>, f32) {
+        view.section = SettingsSection::KeyboardShortcuts;
+        let model = model("");
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            view.show(ui, Lang::Fr, &model);
+        });
+        output.textures_delta.clear();
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                _ => None,
+            })
+            .collect();
+        (texts, ctx.content_rect().width())
+    }
+
+    fn count(texts: &[(String, Rect)], wanted: &str) -> usize {
+        texts.iter().filter(|(text, _)| text == wanted).count()
+    }
+
+    fn rect_of(texts: &[(String, Rect)], wanted: &str) -> Rect {
+        texts
+            .iter()
+            .find(|(text, _)| text == wanted)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_else(|| panic!("no {wanted:?} text in {texts:?}"))
+    }
+
+    #[test]
+    fn the_add_button_follows_the_last_shortcut_of_its_row() {
+        let (texts, _) = shortcut_texts(View::default());
+        assert_eq!(count(&texts, "Ajouter"), 0, "{texts:?}");
+        let (texts, screen) = shortcut_texts(View {
+            filter: ShortcutFilter::Text("Agrandir la police".into()),
+            ..View::default()
+        });
+        assert_eq!(count(&texts, ADD_MARK), 1, "{texts:?}");
+        let add = rect_of(&texts, ADD_MARK);
+        let last = rect_of(&texts, "Ctrl++");
+        assert!(add.left() > last.right(), "{add:?} vs {last:?}");
+        assert!(
+            (add.center().y - last.center().y).abs() <= 1.0,
+            "{add:?} vs {last:?}"
+        );
+        assert!(add.right() < screen / 2.0, "{add:?} on {screen}");
+    }
+
+    #[test]
+    fn an_action_without_shortcut_shows_only_the_add_button() {
+        let (texts, _) = shortcut_texts(View {
+            filter: ShortcutFilter::Text("Déplacer le panneau dans un nouvel onglet".into()),
+            ..View::default()
+        });
+        assert_eq!(count(&texts, "Aucun raccourci"), 0, "{texts:?}");
+        assert_eq!(count(&texts, ADD_MARK), 1, "{texts:?}");
+        assert_eq!(count(&texts, CHIP_REMOVE), 0, "{texts:?}");
+    }
+
+    #[test]
+    fn the_add_button_becomes_a_cancel_mark_while_capturing() {
+        let (texts, _) = shortcut_texts(View {
+            filter: ShortcutFilter::Text("Déplacer le panneau dans un nouvel onglet".into()),
+            capturing: Some(Capture::Bind(Action::DetachPane)),
+            ..View::default()
+        });
+        assert_eq!(count(&texts, ADD_MARK), 0, "{texts:?}");
+        assert_eq!(count(&texts, CHIP_REMOVE), 1, "{texts:?}");
+        let hint = i18n::text(Lang::Fr, &Msg::PressShortcut);
+        assert_eq!(count(&texts, &hint), 1, "{texts:?}");
+    }
+
+    #[test]
+    fn a_square_button_is_as_wide_as_it_is_tall() {
+        let ctx = egui::Context::default();
+        let mut sizes = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for mark in [ADD_MARK, CHIP_REMOVE] {
+                sizes.push(square_button(ui, mark).rect.size());
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(sizes.len(), 2);
+        for size in sizes {
+            assert_eq!(size.x, size.y, "{size:?}");
+        }
+    }
+
+    #[test]
+    fn a_square_button_stays_square_with_the_settings_text_size() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.text_styles = crate::settings::fonts::text_styles());
+        let mut sizes = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let interact = ui.spacing().interact_size.y;
+            for mark in [ADD_MARK, CHIP_REMOVE] {
+                sizes.push((square_button(ui, mark).rect.size(), interact));
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(sizes.len(), 2);
+        for (size, interact) in sizes {
+            assert!(size.y > interact, "font must drive the height: {size:?}");
+            assert_eq!(size.x, size.y, "{size:?}");
+        }
     }
 
     #[test]

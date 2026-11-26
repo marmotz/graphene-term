@@ -81,8 +81,8 @@ quick terminal, updates), and each change is written at once to `config.toml`, o
 `keybindings.toml` for keyboard shortcuts, keeping the files' comments, then applied like
 a hand edit.
 
-- **Keyboard shortcuts**: lists every action with its shortcuts. Add a shortcut by
-  pressing it (`Escape` cancels), or remove one.
+- **Keyboard shortcuts**: lists every action with its shortcuts. Click **+** after an
+  action's shortcuts and press the new one to add it (`Escape` cancels), or remove one.
 - Problems in the file are shown under the setting concerned; unknown settings are
   listed at the top.
 - While a file has a syntax error, the tab shows it and locks what depends on that

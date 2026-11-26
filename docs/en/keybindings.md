@@ -96,11 +96,12 @@ are the same shortcuts as the digit row.
 
 ## Changing shortcuts
 
-Use the **Keyboard shortcuts** section of the settings tab (`Ctrl+,`): press a new
-shortcut to add it, or remove one. Type in the field above the list to keep only the
-actions whose name contains the text, or click **Find a shortcut** and press a shortcut
-to see the actions that use it. Or edit `keybindings.toml`, which sits next to the
-[configuration file](configuration.md#file-locations):
+Use the **Keyboard shortcuts** section of the settings tab (`Ctrl+,`): click **+** after
+an action's shortcuts and press the new one to add it, or remove one. Type in the field
+above the list to keep only the actions whose name contains the text, or click **Find a
+shortcut** and press a shortcut to see the actions that use it. Or edit
+`keybindings.toml`, which sits next to the [configuration
+file](configuration.md#file-locations):
 
 ```toml
 [keybindings]

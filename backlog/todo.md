@@ -36,6 +36,14 @@ _tâches créées — voir [technical.md](features/ime-input/technical.md)_ — 
 | [ ]  | [#172](https://github.com/marmotz/graphene-term/issues/172) | [Palette] Saisie IME dans la palette de commandes                        | #171       |
 | [ ]  | [#173](https://github.com/marmotz/graphene-term/issues/173) | [Docs] Documenter la saisie IME et vérifier les plateformes              | #171, #172 |
 
+## Inline "+" button to add a keybinding  ·  [overview](features/keybinding-add-button-inline/overview.md)
+
+_terminé, voir [technical.md](features/keybinding-add-button-inline/technical.md)_ — 1/1 tasks done
+
+| Done | Issue                                                       | Title                                             | Blocked by |
+|------|-------------------------------------------------------------|---------------------------------------------------|------------|
+| [x]  | [#273](https://github.com/marmotz/graphene-term/issues/273) | Inline "+" button to add a keybinding in settings | —          |
+
 ## Protocole clavier kitty ·  [overview](features/kitty-keyboard-protocol/overview.md)
 
 _tâches créées — voir [technical.md](features/kitty-keyboard-protocol/technical.md)_ — 0/6 tasks done
