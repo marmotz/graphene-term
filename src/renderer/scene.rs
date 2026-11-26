@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
-use super::glyphs::GlyphKey;
+use super::glyphs::{GlyphKey, GridSize};
 use super::progress_bar::progress_rects;
 use super::rects::RectInstance;
 use crate::fold_animation;
@@ -14,15 +14,6 @@ use crate::i18n::{self, Msg};
 use crate::layout::{GridLayout, Rect};
 use crate::progress;
 use crate::timeline::Status;
-
-fn plain(c: char) -> GlyphKey {
-    GlyphKey {
-        c,
-        bold: false,
-        italic: false,
-        ui: None,
-    }
-}
 
 /// A glyph to draw: the character of one cell (or of the banner), anchored at the
 /// top-left corner of its cell. Spaces never produce one.
@@ -51,6 +42,8 @@ pub struct TextRun {
     /// Width of a cell, in pixels: the cell `i` starts `i * advance` after `origin`.
     pub advance: f32,
     pub cells: Vec<RunCell>,
+    /// Size of the grid font of the pane.
+    pub size: GridSize,
     pub bold: bool,
     pub italic: bool,
     /// Cell of the terminal cursor, around which the ligatures are broken.
@@ -351,17 +344,22 @@ fn image_quad(
     ))
 }
 
+/// How the grid text of a pane is drawn.
+#[derive(Debug, Clone, Copy)]
+struct GridText {
+    /// Size of the grid font of the pane.
+    size: GridSize,
+    /// Width of a cell, in pixels.
+    advance: f32,
+    srgb_target: bool,
+}
+
 /// The glyph of the grid cell `c` at `origin`.
-fn cell_glyph(c: &frame::FrameCell, origin: [f32; 2], srgb_target: bool) -> GlyphInstance {
+fn cell_glyph(c: &frame::FrameCell, origin: [f32; 2], text: GridText) -> GlyphInstance {
     GlyphInstance {
         origin,
-        key: GlyphKey {
-            c: c.c,
-            bold: c.bold,
-            italic: c.italic,
-            ui: None,
-        },
-        color: gpu_color(c.fg, srgb_target),
+        key: GlyphKey::grid(c.c, text.size, c.bold, c.italic),
+        color: gpu_color(c.fg, text.srgb_target),
     }
 }
 
@@ -388,21 +386,20 @@ fn same_style(a: &frame::FrameCell, b: &frame::FrameCell, colors: bool) -> bool 
 /// single cell) to `glyphs`, one each. The column `cursor` holds the terminal cursor:
 /// its colors are left out of the style comparison, and its run records it.
 fn push_runs(
-    layout: &GridLayout,
-    srgb_target: bool,
+    text: GridText,
     origin: [f32; 2],
     cells: &[frame::FrameCell],
     cursor: Option<usize>,
     glyphs: &mut Vec<GlyphInstance>,
     runs: &mut Vec<TextRun>,
 ) {
-    let x = |column: usize| origin[0] + column as f32 * layout.cell.width;
+    let x = |column: usize| origin[0] + column as f32 * text.advance;
     let mut column = 0;
     while column < cells.len() {
         let c = &cells[column];
         if !runnable(cells, column) {
             if !c.spacer && c.c != ' ' {
-                glyphs.push(cell_glyph(c, [x(column), origin[1]], srgb_target));
+                glyphs.push(cell_glyph(c, [x(column), origin[1]], text));
             }
             column += 1;
             continue;
@@ -427,19 +424,20 @@ fn push_runs(
             column += 1;
         }
         if column - start == 1 {
-            glyphs.push(cell_glyph(c, [x(start), origin[1]], srgb_target));
+            glyphs.push(cell_glyph(c, [x(start), origin[1]], text));
             continue;
         }
         runs.push(TextRun {
             origin: [x(start), origin[1]],
-            advance: layout.cell.width,
+            advance: text.advance,
             cells: cells[start..column]
                 .iter()
                 .map(|cell| RunCell {
                     c: cell.c,
-                    color: gpu_color(cell.fg, srgb_target),
+                    color: gpu_color(cell.fg, text.srgb_target),
                 })
                 .collect(),
+            size: text.size,
             bold: c.bold,
             italic: c.italic,
             cursor: cursor
@@ -449,10 +447,23 @@ fn push_runs(
     }
 }
 
-/// The scene of `frame`. With `ligatures`, the grid cells are grouped into
+/// The scene of `frame`, its grid drawn with the font size `font_size` and its banner
+/// with the base size `base_size`. With `ligatures`, the grid cells are grouped into
 /// [`TextRun`]s shaped together; otherwise each cell is drawn on its own.
-pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: bool) -> Scene {
+pub fn build(
+    frame: &Frame,
+    layout: &GridLayout,
+    font_size: GridSize,
+    base_size: GridSize,
+    srgb_target: bool,
+    ligatures: bool,
+) -> Scene {
     let cell = layout.cell;
+    let text = GridText {
+        size: font_size,
+        advance: cell.width,
+        srgb_target,
+    };
     let thickness = (cell.height / 16.0).round().max(1.0);
     let mut under = cards_under(frame, layout, srgb_target);
     let mut over = Vec::new();
@@ -494,7 +505,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: b
                     let x = layout.cell_x(column);
                     glyphs.push(GlyphInstance {
                         origin: [x, y],
-                        key: plain(c),
+                        key: GlyphKey::grid(c, font_size, false, false),
                         color,
                     });
                 }
@@ -523,8 +534,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: b
 
         if ligatures {
             push_runs(
-                layout,
-                srgb_target,
+                text,
                 [layout.cell_x(0), y],
                 cells,
                 frame
@@ -541,7 +551,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: b
                 if c.spacer || c.c == ' ' {
                     continue;
                 }
-                glyphs.push(cell_glyph(c, [layout.cell_x(column), y], srgb_target));
+                glyphs.push(cell_glyph(c, [layout.cell_x(column), y], text));
             }
         }
     }
@@ -579,7 +589,7 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: b
 
     // The banner sits in its own strip above the tab bar and the panes, drawn after them:
     // its rect and its glyphs go in the overlay, one character per cell width from the
-    // text position.
+    // text position. It is laid out and drawn at the base size, whatever the pane's.
     let mut overlay_rects = Vec::new();
     let mut overlay = Vec::new();
     if let Some(banner) = &frame.banner {
@@ -593,13 +603,8 @@ pub fn build(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: b
         for placed in &banner.layout.texts {
             let characters = placed.text.chars().enumerate().filter(|(_, c)| *c != ' ');
             overlay.extend(characters.map(|(index, c)| GlyphInstance {
-                origin: [placed.x + index as f32 * cell.width, placed.y],
-                key: GlyphKey {
-                    c,
-                    bold: false,
-                    italic: false,
-                    ui: None,
-                },
+                origin: [placed.x + index as f32 * banner.layout.advance, placed.y],
+                key: GlyphKey::grid(c, base_size, false, false),
                 color,
             }));
         }
@@ -665,6 +670,14 @@ mod tests {
                 0.0,
             )
         }
+    }
+
+    /// Base size of the grid font of the tests.
+    const SIZE: GridSize = GridSize::new(10.0);
+
+    /// The scene of `frame`, its grid at the base size.
+    fn build_base(frame: &Frame, layout: &GridLayout, srgb_target: bool, ligatures: bool) -> Scene {
+        build(frame, layout, SIZE, SIZE, srgb_target, ligatures)
     }
 
     /// Same cells, with the grid at the origin.
@@ -791,7 +804,7 @@ mod tests {
             vec![cell('a'), image_cell(0, 0), image_cell(0, 1)],
             vec![cell('b'), image_cell(1, 0), image_cell(1, 1)],
         ]));
-        let scene = build(&frame, &layout(), false, false);
+        let scene = build_base(&frame, &layout(), false, false);
         // Scaled 5 times to 20 x 20 px, 10 px from the box top.
         assert_eq!(
             quad_geometry(&scene),
@@ -810,7 +823,7 @@ mod tests {
     fn a_cut_image_shows_the_part_of_its_cells() {
         // Only the second column of the first row, at the left edge.
         let frame = with_image(frame(vec![vec![image_cell(0, 1), cell('c')]]));
-        let scene = build(&frame, &layout(), false, false);
+        let scene = build_base(&frame, &layout(), false, false);
         assert_eq!(
             quad_geometry(&scene),
             vec![([0.0, 10.0], [10.0, 10.0], [0.5, 0.0, 1.0, 0.5])]
@@ -819,7 +832,7 @@ mod tests {
 
     #[test]
     fn image_cells_without_their_image_draw_nothing() {
-        let scene = build(
+        let scene = build_base(
             &frame(vec![vec![image_cell(0, 0), image_cell(0, 1)]]),
             &layout(),
             false,
@@ -831,7 +844,7 @@ mod tests {
 
     #[test]
     fn default_background_produces_no_rect() {
-        let scene = build(
+        let scene = build_base(
             &frame(vec![vec![cell('a'), cell('b')]]),
             &layout(),
             false,
@@ -846,7 +859,7 @@ mod tests {
         let mut row = vec![cell('a'), cell('b'), cell('c')];
         row[1].bg = RED;
         row[2].bg = RED;
-        let scene = build(&frame(vec![row]), &layout(), false, false);
+        let scene = build_base(&frame(vec![row]), &layout(), false, false);
         assert_eq!(scene.under.len(), 1);
         assert_eq!(scene.under[0].position, [10.0, 0.0]);
         assert_eq!(scene.under[0].size, [20.0, 20.0]);
@@ -869,7 +882,7 @@ mod tests {
             shape: CursorShape::Beam,
             color: RED,
         });
-        let scene = build(&f, &layout(), false, false);
+        let scene = build_base(&f, &layout(), false, false);
         assert_eq!(
             placed(&scene.glyphs),
             vec![([0.0, 10.0], 'a'), ([0.0, 30.0], 'b'), ([0.0, 60.0], 'c')]
@@ -884,21 +897,13 @@ mod tests {
         row[1].fg = RED;
         row[1].bold = true;
         row[1].italic = true;
-        let scene = build(&frame(vec![vec![cell('x')], row]), &layout(), false, false);
+        let scene = build_base(&frame(vec![vec![cell('x')], row]), &layout(), false, false);
         assert_eq!(
             placed(&scene.glyphs),
             vec![([0.0, 0.0], 'x'), ([0.0, 20.0], 'a'), ([10.0, 20.0], 'b')]
         );
         let b = scene.glyphs[2];
-        assert_eq!(
-            b.key,
-            GlyphKey {
-                c: 'b',
-                bold: true,
-                italic: true,
-                ui: None,
-            }
-        );
+        assert_eq!(b.key, GlyphKey::grid('b', SIZE, true, true));
         assert_eq!(b.color, [1.0, 0.0, 0.0, 1.0]);
     }
 
@@ -907,7 +912,7 @@ mod tests {
         let mut row = vec![cell('a'), cell(' '), cell(' '), cell('b')];
         row[1].fg = RED;
         row[2].bg = RED;
-        let scene = build(&frame(vec![row]), &layout(), false, false);
+        let scene = build_base(&frame(vec![row]), &layout(), false, false);
         assert_eq!(
             placed(&scene.glyphs),
             vec![([0.0, 0.0], 'a'), ([30.0, 0.0], 'b')]
@@ -918,7 +923,7 @@ mod tests {
     fn wide_char_is_drawn_once_and_keeps_the_next_cell_aligned() {
         let mut row = vec![cell('日'), cell(' '), cell('c')];
         row[1].spacer = true;
-        let scene = build(&frame(vec![row]), &layout(), false, false);
+        let scene = build_base(&frame(vec![row]), &layout(), false, false);
         assert_eq!(
             placed(&scene.glyphs),
             vec![([0.0, 0.0], '日'), ([20.0, 0.0], 'c')]
@@ -936,14 +941,14 @@ mod tests {
             shape: CursorShape::Beam,
             color: RED,
         });
-        let scene = build(&f, &layout(), false, false);
+        let scene = build_base(&f, &layout(), false, false);
         assert_eq!(scene.over.len(), 2);
         assert_eq!(scene.over[1].position, [10.0, 0.0]);
     }
 
     #[test]
     fn no_banner_draws_no_overlay() {
-        let scene = build(&frame(vec![vec![cell('a')]]), &layout(), false, false);
+        let scene = build_base(&frame(vec![vec![cell('a')]]), &layout(), false, false);
         assert!(scene.over.is_empty());
         assert!(scene.overlay_rects.is_empty());
         assert!(scene.overlay.is_empty());
@@ -967,7 +972,7 @@ mod tests {
             background: RED,
             text: FG,
         });
-        let scene = build(&f, &layout(), false, false);
+        let scene = build_base(&f, &layout(), false, false);
         // The cursor stays in `over`, clipped to its pane; the banner is drawn later.
         assert_eq!(scene.over.len(), 1);
         assert_eq!(scene.overlay_rects.len(), 1);
@@ -991,6 +996,44 @@ mod tests {
     }
 
     #[test]
+    fn grid_is_drawn_at_the_pane_size_and_the_banner_at_the_base_size() {
+        let large = GridSize::new(20.0);
+        let banner = Banner {
+            text: "ok".into(),
+            actions: Vec::new(),
+        };
+        // The pane's cells are twice as wide as the base cells the banner is laid out with.
+        let pane = GridLayout {
+            cell: CellSize {
+                width: 20.0,
+                height: 40.0,
+            },
+            ..layout()
+        };
+        // Room after the content for the hidden-rows summary, drawn in the grid font.
+        let mut f = frame(vec![row("a->b c          ")]);
+        f.decorations = vec![RowDecoration { summary: Some(1) }];
+        f.banner = Some(FrameBanner {
+            layout: BannerLayout::new(&banner, layout().cell, 100.0),
+            background: RED,
+            text: FG,
+        });
+        for ligatures in [false, true] {
+            let scene = build(&f, &pane, large, SIZE, false, ligatures);
+            assert!(!scene.glyphs.is_empty());
+            assert!(scene.glyphs.iter().all(|glyph| glyph.key.size == large));
+            assert!(scene.runs.iter().all(|run| run.size == large));
+            assert_eq!(scene.runs.is_empty(), !ligatures);
+            assert!(scene.overlay.iter().all(|glyph| glyph.key.size == SIZE));
+            let ok = &f.banner.as_ref().unwrap().layout.texts[0];
+            assert_eq!(
+                placed(&scene.overlay),
+                vec![([ok.x, ok.y], 'o'), ([ok.x + 10.0, ok.y], 'k')]
+            );
+        }
+    }
+
+    #[test]
     fn banner_spaces_draw_no_glyph() {
         let banner = Banner {
             text: "a b".into(),
@@ -1002,7 +1045,7 @@ mod tests {
             background: RED,
             text: FG,
         });
-        let scene = build(&f, &layout(), false, false);
+        let scene = build_base(&f, &layout(), false, false);
         let text = &f.banner.as_ref().unwrap().layout.texts[0];
         assert_eq!(
             placed(&scene.overlay),
@@ -1023,7 +1066,7 @@ mod tests {
 
     #[test]
     fn no_card_without_blocks() {
-        let scene = build(
+        let scene = build_base(
             &frame(vec![vec![cell('a')]; 3]),
             &margin_layout(),
             false,
@@ -1044,7 +1087,7 @@ mod tests {
             card(2..5, Some(Status::Failure(2))),
         ];
         let l = margin_layout();
-        let scene = build(&f, &l, false, false);
+        let scene = build_base(&f, &l, false, false);
         let rgb = |c: Rgb| gpu_color(c, false);
         // Cards from the margin edge (5 px) to the grid right edge plus the 22 px right
         // card padding, radius a quarter of the cell height. Stripes 2 px wide (a sixth
@@ -1079,7 +1122,7 @@ mod tests {
             ..card(0..4, Some(Status::Success))
         }];
         let l = margin_layout();
-        let scene = build(&f, &l, false, false);
+        let scene = build_base(&f, &l, false, false);
         // Card, stripe, then the 2 px thumb centered in the 22 px right card padding,
         // under the chevron: a quarter of the 60 px track, halfway down.
         assert_eq!(scene.under.len(), 3);
@@ -1107,7 +1150,7 @@ mod tests {
             }),
             ..card(0..4, None)
         }];
-        let scene = build(&f, &margin_layout(), false, false);
+        let scene = build_base(&f, &margin_layout(), false, false);
         // No stripe on a neutral card: the thumb follows the card background.
         let thumb = &scene.under[1];
         assert_eq!((thumb.position[1], thumb.size[1]), (78.0, 2.0));
@@ -1118,7 +1161,7 @@ mod tests {
         let mut f = frame(vec![vec![cell('a')]; 2]);
         f.cards = vec![card(0..1, None), card(1..2, Some(Status::Running))];
         f.cards[1].selected = true;
-        let scene = build(&f, &margin_layout(), false, false);
+        let scene = build_base(&f, &margin_layout(), false, false);
         let colors: Vec<_> = scene.under.iter().map(|r| r.color).collect();
         assert_eq!(
             colors,
@@ -1142,7 +1185,7 @@ mod tests {
             ..card(0..2, Some(Status::Running))
         }];
         let l = margin_layout();
-        let scene = build(&f, &l, false, false);
+        let scene = build_base(&f, &l, false, false);
         // Card, stripe, then the 2 px track and bar on the card's bottom edge (40 px),
         // between its 5 px rounded corners.
         let inner = l.grid_right() + 22.0 - 5.0 - 10.0;
@@ -1172,7 +1215,7 @@ mod tests {
     fn card_without_progress_draws_no_bar() {
         let mut f = frame(vec![vec![cell('a')]; 2]);
         f.cards = vec![card(0..2, Some(Status::Running))];
-        let scene = build(&f, &margin_layout(), false, false);
+        let scene = build_base(&f, &margin_layout(), false, false);
         assert_eq!(scene.under.len(), 2);
     }
 
@@ -1183,7 +1226,7 @@ mod tests {
             clipped_top: true,
             ..card(0..2, Some(Status::Success))
         }];
-        let scene = build(&f, &margin_layout(), false, false);
+        let scene = build_base(&f, &margin_layout(), false, false);
         // Background and stripe start one radius (5 px) above the first row.
         assert_eq!(scene.under[0].position[1], -5.0);
         assert_eq!(scene.under[0].size[1], 45.0);
@@ -1207,7 +1250,7 @@ mod tests {
             },
         ];
         let l = margin_layout();
-        let scene = build(&f, &l, false, false);
+        let scene = build_base(&f, &l, false, false);
         let rgb = |c: Rgb| gpu_color(c, false);
         // A 12 x 6 box (4 px of bend, a 2 px stroke) centered in the 22 px right card
         // padding and on the first row (10 px below the card top at 0, then at 50).
@@ -1272,7 +1315,7 @@ mod tests {
             background: RED,
             text: FG,
         });
-        let scene = build(&f, &layout(), true, false);
+        let scene = build_base(&f, &layout(), true, false);
         let rects: Vec<_> = scene
             .under
             .iter()
@@ -1316,7 +1359,7 @@ mod tests {
             vec![cell('$'); 6],
         ]);
         frame.decorations[0].summary = Some(12);
-        let scene = build(&frame, &margin_layout(), false, false);
+        let scene = build_base(&frame, &margin_layout(), false, false);
         let grey = gpu_color(GREY, false);
         // "12 lines hidden" from column 5 (two after "ls"), cut at the grid edge (6
         // columns): only "1" fits.
@@ -1343,7 +1386,7 @@ mod tests {
             },
             0.0,
         );
-        let scene = build(&frame, &layout, false, false);
+        let scene = build_base(&frame, &layout, false, false);
         let grey = gpu_color(GREY, false);
         let summary: Vec<_> = scene.glyphs.iter().filter(|g| g.color == grey).collect();
         let text: String = summary.iter().map(|g| g.key.c).collect();
@@ -1371,14 +1414,14 @@ mod tests {
 
     #[test]
     fn without_ligatures_every_cell_is_drawn_on_its_own() {
-        let scene = build(&frame(vec![row("a->b")]), &layout(), false, false);
+        let scene = build_base(&frame(vec![row("a->b")]), &layout(), false, false);
         assert!(scene.runs.is_empty());
         assert_eq!(scene.glyphs.len(), 4);
     }
 
     #[test]
     fn ligatures_group_the_cells_into_runs_cut_at_spaces() {
-        let scene = build(
+        let scene = build_base(
             &frame(vec![row("a->b x  ==="), row("c")]),
             &layout(),
             false,
@@ -1404,7 +1447,7 @@ mod tests {
 
     #[test]
     fn runs_start_at_the_grid_origin() {
-        let scene = build(&frame(vec![row(" ->")]), &margin_layout(), false, true);
+        let scene = build_base(&frame(vec![row(" ->")]), &margin_layout(), false, true);
         assert_eq!(runs(&scene), vec![([20.0, 0.0], "->".into(), false, false)]);
     }
 
@@ -1413,7 +1456,7 @@ mod tests {
         let styled = |change: fn(&mut FrameCell)| {
             let mut cells = row("->>");
             change(&mut cells[2]);
-            let scene = build(&frame(vec![cells]), &layout(), false, true);
+            let scene = build_base(&frame(vec![cells]), &layout(), false, true);
             (runs(&scene), placed(&scene.glyphs))
         };
         let changes: [fn(&mut FrameCell); 6] = [
@@ -1443,7 +1486,7 @@ mod tests {
             cell.italic = true;
             cell.fg = RED;
         }
-        let scene = build(&frame(vec![cells]), &layout(), false, true);
+        let scene = build_base(&frame(vec![cells]), &layout(), false, true);
         assert_eq!(runs(&scene), vec![([0.0, 0.0], "=>".into(), true, true)]);
         assert!(
             scene.runs[0]
@@ -1462,7 +1505,7 @@ mod tests {
             ..image_cell(0, 0)
         });
         cells.extend(row("ef"));
-        let scene = build(&frame(vec![cells]), &layout(), false, true);
+        let scene = build_base(&frame(vec![cells]), &layout(), false, true);
         assert_eq!(
             runs(&scene),
             vec![
@@ -1490,7 +1533,7 @@ mod tests {
     #[test]
     fn the_block_cursor_does_not_cut_the_run() {
         for column in 0..3 {
-            let scene = build(&with_block_cursor("-->", column), &layout(), false, true);
+            let scene = build_base(&with_block_cursor("-->", column), &layout(), false, true);
             assert_eq!(runs(&scene), vec![([0.0, 0.0], "-->".into(), false, false)]);
             let run = &scene.runs[0];
             assert_eq!(run.cursor, Some(column));
@@ -1504,14 +1547,14 @@ mod tests {
         // The cells around the cursor still differ in color.
         let mut frame = with_block_cursor("->>", 1);
         frame.rows[0][2].fg = RED;
-        let scene = build(&frame, &layout(), false, true);
+        let scene = build_base(&frame, &layout(), false, true);
         assert_eq!(runs(&scene), vec![([0.0, 0.0], "->".into(), false, false)]);
         assert_eq!(scene.runs[0].cursor, Some(1));
 
         // A bold cursor cell cuts the run.
         let mut frame = with_block_cursor("->>", 1);
         frame.rows[0][1].bold = true;
-        let scene = build(&frame, &layout(), false, true);
+        let scene = build_base(&frame, &layout(), false, true);
         assert!(scene.runs.is_empty());
     }
 
@@ -1519,7 +1562,7 @@ mod tests {
     fn only_the_run_holding_the_cursor_records_it() {
         let mut frame = frame(vec![row("-> =="), row("=>")]);
         frame.ligature_break = Some((0, 3));
-        let scene = build(&frame, &layout(), false, true);
+        let scene = build_base(&frame, &layout(), false, true);
         let cursors: Vec<_> = scene.runs.iter().map(|run| run.cursor).collect();
         assert_eq!(cursors, [None, Some(0), None]);
     }

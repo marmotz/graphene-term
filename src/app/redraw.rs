@@ -191,12 +191,18 @@ impl Session {
                 frame
             });
         }
+        // Every pane is at the base size until they get their own.
+        let font_size = self.renderer.font_size();
         let panes: Vec<_> = shown
             .iter()
             .filter_map(|&id| {
                 let frame = self.frames.get(id)?;
                 let layout = &self.workspace.pane(id)?.layout;
-                Some(PaneFrame { frame, layout })
+                Some(PaneFrame {
+                    frame,
+                    layout,
+                    font_size,
+                })
             })
             .collect();
         // A frame without its panes waits for them, unless it shows the settings tab.
