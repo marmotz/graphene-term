@@ -50,7 +50,10 @@ déplacer le curseur, et sélectionner du texte avec `Shift+Flèche` comme dans 
 | `graphene --columns <n> --lines <n>` | Ouvre la fenêtre à la taille d'une grille de `<n>` colonnes et `<n>` lignes |
 | `graphene --no-restore`            | Ouvre une fenêtre neuve sans restaurer la session sauvegardée, et la garde hors de la session (voir `window.restore_session` dans [Configuration](configuration.md#window)) |
 | `graphene --version`               | Affiche la version et quitte                                         |
+| `graphene --help`                  | Affiche les options de la ligne de commande et quitte                |
 | `graphene --prune-config [--yes]`  | Retire du fichier de configuration les paramètres que cette version ne connaît pas (voir [Configuration](configuration.md#retirer-les-paramètres-inconnus)) |
+
+Un argument placé avant `-e` qui ne fait pas partie de ces options est une erreur : Graphene affiche un message et quitte avec le code 2 au lieu d'ouvrir une fenêtre.
 
 ### Lancer un programme avec `-e`
 

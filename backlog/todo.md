@@ -1,4 +1,4 @@
-<!-- backlog-sync 2026-11-25T16:58Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-25T21:56Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
 
@@ -97,19 +97,18 @@ _tâches créées — voir [technical.md](features/scrollback-search/technical.m
 
 ## Bugs
 
-### Quick terminal at full height goes under the desktop panel  ·  [overview](bugs/quick-terminal-full-height-under-panel/overview.md)
+### `graphene --help` n'affiche pas l'aide du CLI  ·  [overview](bugs/cli-help-not-shown/overview.md)
 
-_terminé — voir [technical.md](bugs/quick-terminal-full-height-under-panel/technical.md)_ — 2/2 tasks done
+_terminé — voir [technical.md](bugs/cli-help-not-shown/technical.md)_ — 1/1 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [x]  | [#260](https://github.com/marmotz/graphene-term/issues/260) | Quick terminal: work area geometry and screen selection on the physical screen | — |
-| [x]  | [#261](https://github.com/marmotz/graphene-term/issues/261) | Quick terminal: read the X11 work area so it fits beside the desktop panels | #260 |
+| [x]  | [#263](https://github.com/marmotz/graphene-term/issues/263) | Show the CLI help with --help and reject unknown arguments | — |
 
 ### Les réglages s'ouvrent sous le quick terminal  ·  [overview](bugs/quick-terminal-settings-hidden/overview.md)
 
-_terminé — voir [technical.md](bugs/quick-terminal-settings-hidden/technical.md)_ — 1/1 tasks done
+_terminé — voir [technical.md](bugs/quick-terminal-settings-hidden/technical.md)_ — 0/1 tasks done
 
 | Done | Issue | Title | Blocked by |
 |------|-------|-------|------------|
-| [x]  | [#255](https://github.com/marmotz/graphene-term/issues/255) | fix(quick-terminal): open the settings in front of the quick terminal | — |
+| [ ]  | [#255](https://github.com/marmotz/graphene-term/issues/255) | fix(quick-terminal): open the settings in front of the quick terminal | — |

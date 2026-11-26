@@ -12,6 +12,10 @@ fn main() -> anyhow::Result<()> {
         }
     };
     match command {
+        Command::Help => {
+            print!("{HELP}");
+            Ok(())
+        }
         Command::Version => {
             println!("graphene {}", graphene::VERSION);
             Ok(())
@@ -53,6 +57,8 @@ fn main() -> anyhow::Result<()> {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
+    /// Prints the command line help.
+    Help,
     Version,
     PruneConfig {
         yes: bool,
@@ -77,19 +83,67 @@ enum Command {
     },
 }
 
+/// Command line help, printed by `--help` and `-h`.
+const HELP: &str = "\
+Usage: graphene [options] [-e <program> [args...]]
+
+Options:
+  -e <program> [args...]    Run <program> in the first pane instead of the shell;
+                            every argument after it belongs to the program
+  --columns <n>             Size the window to <n> columns
+  --lines <n>               Size the window to <n> lines
+  --no-restore              Open a new window outside the saved session
+  --restore-session <file>  Reopen the window saved in <file>
+  --quick-toggle            Show or hide the quick terminal, starting it if needed
+  --quick                   Run the quick terminal
+  --hidden                  With --quick, start with the window hidden
+  --prune-config            Remove unknown settings from the configuration file
+  --yes                     With --prune-config, apply without asking
+  --version                 Print the version and exit
+  -h, --help                Print this help and exit
+";
+
+/// Options without a value.
+const FLAGS: [&str; 7] = [
+    "--version",
+    "--prune-config",
+    "--yes",
+    "--quick-toggle",
+    "--quick",
+    "--hidden",
+    "--no-restore",
+];
+
+/// Options followed by a value, checked by `count` and `value`.
+const VALUED: [&str; 3] = ["--columns", "--lines", "--restore-session"];
+
 /// Parses the arguments. `-e` takes every following argument as the program and its
-/// arguments, so options after it belong to the program.
-fn command(args: &[String]) -> Result<Command, &'static str> {
+/// arguments, so options after it belong to the program. `--help` wins over every other
+/// option, and any argument before `-e` that is not an option is an error.
+fn command(args: &[String]) -> Result<Command, String> {
     let (options, program) = match args.iter().position(|arg| arg == "-e") {
         Some(index) => {
             let program = &args[index + 1..];
             if program.is_empty() {
-                return Err("-e requires a program to run");
+                return Err("-e requires a program to run".to_owned());
             }
             (&args[..index], Some(program.to_vec()))
         }
         None => (args, None),
     };
+    if options.iter().any(|arg| arg == "--help" || arg == "-h") {
+        return Ok(Command::Help);
+    }
+    let mut walk = options.iter();
+    while let Some(arg) = walk.next() {
+        if VALUED.contains(&arg.as_str()) {
+            walk.next();
+        } else if !FLAGS.contains(&arg.as_str()) {
+            return Err(format!(
+                "unknown argument '{arg}'; run 'graphene --help' for the options"
+            ));
+        }
+    }
     Ok(if options.iter().any(|arg| arg == "--version") {
         Command::Version
     } else if options.iter().any(|arg| arg == "--prune-config") {
@@ -106,11 +160,13 @@ fn command(args: &[String]) -> Result<Command, &'static str> {
         Command::Run {
             program,
             grid: GridSize {
-                columns: count(options, "--columns")?,
-                lines: count(options, "--lines")?,
+                columns: count(options, "--columns").map_err(str::to_owned)?,
+                lines: count(options, "--lines").map_err(str::to_owned)?,
             },
             no_restore: options.iter().any(|arg| arg == "--no-restore"),
-            restore_session: value(options, "--restore-session")?.map(PathBuf::from),
+            restore_session: value(options, "--restore-session")
+                .map_err(str::to_owned)?
+                .map(PathBuf::from),
         }
     })
 }
@@ -143,6 +199,59 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    #[test]
+    fn help_wins_over_every_other_option() {
+        for list in [
+            &["--help"][..],
+            &["-h"],
+            &["--version", "--help"],
+            &["--foo", "-h"],
+            &["--help", "-e", "vim"],
+        ] {
+            assert_eq!(command(&args(list)), Ok(Command::Help), "{list:?}");
+        }
+    }
+
+    #[test]
+    fn help_after_execute_belongs_to_the_program() {
+        assert_eq!(
+            command(&args(&["-e", "vim", "--help"])),
+            Ok(Command::Run {
+                program: Some(args(&["vim", "--help"])),
+                grid: GridSize::default(),
+                no_restore: false,
+                restore_session: None
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_arguments_are_errors_naming_them() {
+        for unknown in ["--foo", "--no-restor", "-x", "htop"] {
+            assert_eq!(
+                command(&args(&[unknown])),
+                Err(format!(
+                    "unknown argument '{unknown}'; run 'graphene --help' for the options"
+                ))
+            );
+        }
+        assert!(command(&args(&["--version", "--foo"])).is_err());
+        assert!(command(&args(&["htop", "-e", "true"])).is_err());
+    }
+
+    #[test]
+    fn option_values_are_not_unknown_arguments() {
+        assert!(command(&args(&["--columns", "120"])).is_ok());
+        assert!(command(&args(&["--restore-session", "/state/pending-0.json"])).is_ok());
+    }
+
+    #[test]
+    fn help_lists_every_option() {
+        for option in FLAGS.iter().chain(&VALUED).chain(&["-e", "--help", "-h"]) {
+            assert!(HELP.contains(option), "{option} missing from the help");
+        }
     }
 
     #[test]
