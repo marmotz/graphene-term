@@ -169,8 +169,9 @@ search_match_background = "#4a3f1c"    # scrollback search matches
 search_current_background = "#7a5400"  # current scrollback search match
 ```
 
-These are the values of `graphene-night`. The two `search_*` keys color the background of the scrollback
-search matches and of the current match; the text keeps its own color. A theme that only changes the background:
+These are the values of `graphene-night`. The two `search_*` keys color the background of the
+[history search](command-blocks.md#searching-the-history) matches and of the current
+match; the text keeps its own color. A theme that only changes the background:
 
 ```toml
 [colors]

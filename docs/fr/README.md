@@ -19,7 +19,7 @@ paramètres) sont ceux de l'interface en français : voir le paramètre `languag
 
 | Page                                                       | Contenu                                                                   |
 |------------------------------------------------------------|---------------------------------------------------------------------------|
-| [Blocs de commande](command-blocks.md)                     | Intégration shell, blocs de commande, couleurs d'état, copie et repli     |
+| [Blocs de commande](command-blocks.md)                     | Intégration shell, blocs de commande, couleurs d'état, copie, repli, recherche dans l'historique |
 | [Éditeur de saisie](input-editor.md)                       | Modifier la ligne de commande à la souris et avec des raccourcis d'éditeur |
 | [Onglets et panneaux](tabs-and-panes.md)                   | Onglets, panneaux, zoom, réorganisation à la souris, diffusion, progression, palette de commandes |
 | [Sélection et presse-papiers](selection-and-clipboard.md)  | Sélection à la souris, sélection rectangulaire, copier, coller            |

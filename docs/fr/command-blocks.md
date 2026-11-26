@@ -12,6 +12,7 @@ vous pouvez sélectionner, copier et replier.
 - [Copier une commande ou sa sortie](#copier-une-commande-ou-sa-sortie)
 - [Replier](#replier)
 - [Défilement](#défilement)
+- [Rechercher dans l'historique](#rechercher-dans-lhistorique)
 
 ## Intégration shell
 
@@ -100,5 +101,64 @@ l'intérieur de sa carte.
 | Faire défiler le bloc sous le pointeur, ou l'historique | Molette de la souris              |
 | Faire défiler le bloc sélectionné, ou l'historique | `Shift+PageUp` / `Shift+PageDown`     |
 | Haut / bas de l'historique                      | `Shift+Home` / `Shift+End` (hors de l'invite) |
+
+## Rechercher dans l'historique
+
+`Ctrl+Shift+F` ouvre une barre de recherche en haut à droite du pane actif. Elle
+cherche dans tout l'historique du pane pendant la frappe et surligne chaque occurrence ;
+l'occurrence courante ressort dans une autre couleur (deux [couleurs de thème](themes.md),
+**Occurrences de la recherche** et **Occurrence courante de la recherche**).
+
+| Pour                                   | Utilisez                                            |
+|----------------------------------------|-----------------------------------------------------|
+| Ouvrir la barre de recherche, ou lui redonner le clavier | `Ctrl+Shift+F`, ou **Rechercher dans l'historique** dans la palette de commandes |
+| Aller à l'occurrence plus ancienne / plus récente | `Enter` / `Shift+Enter`, ou les boutons `↑` / `↓` |
+| Fermer la barre                        | `Escape`, ou le bouton `×`                           |
+| Rendre le clavier au shell, barre ouverte | Cliquez dans le contenu du pane                  |
+| Redonner le clavier à la barre         | Cliquez sur la barre, ou `Ctrl+Shift+F`             |
+
+**Correspondance.** La recherche ignore la casse par défaut. Trois bascules à côté du
+champ la modifient :
+
+| Bascule | Activée                                                        |
+|---------|----------------------------------------------------------------|
+| `Aa`    | Majuscules et minuscules sont distinguées                      |
+| `.*`    | Le texte est une expression régulière (`Regex invalide` s'affiche tant qu'elle n'est pas valide) |
+| `ab`    | Seuls les mots entiers correspondent                           |
+
+Une occurrence peut s'étendre sur une ligne que le terminal a renvoyée à la ligne.
+
+**Filtres.** Deux sélecteurs gardent une partie de l'historique ; cliquez sur l'un pour
+passer à sa valeur suivante :
+
+| Sélecteur | Valeurs                                                      |
+|-----------|--------------------------------------------------------------|
+| Zone      | **Tout**, **Commandes** (le texte de la commande, sans l'invite), **Sorties** |
+| Statut    | **Tous**, **Succès**, **Échecs** (les blocs encore en cours sont exclus des deux derniers) |
+
+Ils sont grisés sans [intégration shell](#intégration-shell) : la recherche porte alors
+sur tout l'historique, qui n'est pas découpé en blocs.
+
+**Compteur.** La barre affiche l'occurrence courante et le nombre d'occurrences, par
+exemple `2/7`. Les occurrences sont comptées depuis le bas : `1` est la plus récente.
+`Enter` remonte vers les occurrences plus anciennes et repart du bas après la plus
+ancienne. Au-delà de 10 000 occurrences, le compteur affiche `10000+`.
+
+**Aller à une occurrence.** À l'ouverture de la barre, l'occurrence courante est la plus
+récente au-dessus du bas de la vue. Aller à une occurrence fait défiler l'historique, ou
+la sortie de son bloc, pour la montrer ; un bloc replié se déplie quand une occurrence
+de sa sortie devient la courante. La sortie ajoutée pendant que la barre est ouverte
+rejoint les occurrences sans déplacer la vue. `Escape` laisse la vue sur la dernière
+occurrence montrée.
+
+**Le champ.** `Left` / `Right`, `Home` / `End`, `Backspace`, `Delete` et
+`Ctrl+Backspace` (effacer un mot) modifient le texte ; `Ctrl+Shift+V` colle, les
+retours à la ligne devenant des espaces. Tant que la barre a le clavier, rien de ce que
+vous tapez ne part au shell, mais les autres raccourcis de Graphene marchent toujours.
+Un pane étroit masque d'abord les sélecteurs, puis les bascules.
+
+**Non cherchés :** la ligne de commande en cours de saisie, et l'écran d'un programme
+plein écran (`vim`, `less`, `htop`...). Pendant qu'un tel programme tourne,
+`Ctrl+Shift+F` ne fait rien, et une barre ouverte se ferme.
 
 Les raccourcis sont modifiables : voir [Raccourcis clavier](keybindings.md).

@@ -182,7 +182,7 @@ Ce sont les valeurs de `graphene-night`. Quelques précisions sur les clés :
 - `[colors.normal]` et `[colors.bright]` : couleurs ANSI 0 à 7 et 8 à 15 ;
 - `palette_match` : lettres trouvées dans la palette de commandes ;
 - `search_match_background` et `search_current_background` : fond des occurrences de la
-  recherche dans l'historique et de l'occurrence courante ; le texte garde sa couleur.
+  [recherche dans l'historique](command-blocks.md#rechercher-dans-lhistorique) et de l'occurrence courante ; le texte garde sa couleur.
 
 Un thème qui ne change que le fond :
 

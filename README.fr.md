@@ -27,6 +27,9 @@ décommenter la ligne ci-dessous.
 - **Blocs de commande** : chaque commande et sa sortie forment un bloc avec son code de
   retour ; sélectionnez-le, copiez-le, repliez-le et dépliez-le :
   [blocs de commande](docs/fr/command-blocks.md).
+- **Recherche dans l'historique** avec `Ctrl+Shift+F` : toutes les occurrences
+  surlignées, bascules casse, regex et mot entier, filtres commande / sortie et code de
+  retour : [recherche dans l'historique](docs/fr/command-blocks.md#rechercher-dans-lhistorique).
 - **Intégration shell automatique** pour zsh, bash et fish, sans modifier vos fichiers
   de configuration : [intégration shell](docs/fr/command-blocks.md#intégration-shell).
 - **Éditeur d'invite enrichi** : cliquez pour déplacer le curseur, sélectionnez à la
