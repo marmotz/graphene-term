@@ -130,6 +130,8 @@ src/
   fold_animation.rs  fold chevron animations, per pane (pure, time passed in)
   cursor_blink.rs  blink phase of the text cursor (pure, time passed in)
   timeline_selection.rs  text selection across blocks, split into one Selection per grid
+  search.rs        history search: query, regex, matches per grid (zone and status filters,
+                   whole word, 10 000 cap, frozen grid cache), current match navigation (pure)
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations
   input.rs         key -> bytes encoding, per-pane key resolution (editor command, shortcut, input), actions and their ids, paste wrapping
   keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)

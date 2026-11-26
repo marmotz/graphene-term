@@ -36,6 +36,8 @@ mod progress;
 mod pty;
 mod quick_terminal;
 mod renderer;
+#[allow(dead_code)] // Used by the search bar: issue #212.
+mod search;
 mod selection;
 mod session;
 mod settings;
@@ -110,6 +112,7 @@ pub mod bench {
     pub use crate::pty::process;
     pub use crate::renderer::scene;
     pub use crate::renderer::{FontOptions, GlyphKey, Glyphs, GridSize, Headless, pack_argb32};
+    pub use crate::search::{Query, Searcher};
     pub use crate::signals::Scanner;
     pub use crate::timeline::Timeline;
     pub use crate::view::{rows as view_rows, scroll_block};
