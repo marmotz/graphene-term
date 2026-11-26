@@ -77,6 +77,8 @@ Graphene.
   comme d'habitude malgré tout.
 - Pour y ouvrir un [lien](images-and-links.md#liens-cliquables), faites `Ctrl` + clic
   dessus.
+- `Ctrl` + molette change toujours la taille de police du panneau, elle ne va
+  jamais au programme.
 - Dans un programme plein écran qui n'utilise pas la souris (`less`, `man`...), la
   molette fait défiler le programme en lui envoyant des flèches.
 - Les clics sur la barre de titre d'un panneau, sur la barre d'état ou le chevron d'un

@@ -457,6 +457,20 @@ impl Session {
             return;
         }
         let (position, modifiers) = (self.mouse_position, self.modifiers);
+        if wheel_changes_font(modifiers) {
+            // Ctrl+wheel is Graphene's: the program never gets it, even in mouse mode.
+            if let Some(id) = self.pane_under_mouse()
+                && let Some(pane) = self.workspace.pane(id)
+            {
+                let cell_height = pane.layout.cell.height;
+                let steps = font_wheel_steps(delta, &mut self.font_wheel_accumulator, cell_height);
+                if steps != 0 {
+                    self.step_pane_font(id, steps as f32);
+                    self.window.request_redraw();
+                }
+            }
+            return;
+        }
         if let Some(id) = self.pane_under_mouse()
             && let Some(pane) = self.workspace.pane_mut(id)
         {
@@ -469,5 +483,90 @@ impl Session {
         self.tooltip_hidden = true;
         self.update_hover(false);
         self.update_pointer();
+    }
+}
+
+/// Whether the wheel changes the font size of the pane under the mouse instead of going
+/// to it: with `Ctrl` held.
+fn wheel_changes_font(modifiers: ModifiersState) -> bool {
+    modifiers.control_key()
+}
+
+/// Font size steps of one wheel event, one point each: a line of `LineDelta` is a step,
+/// and `PixelDelta` adds up in `accumulator` with a step per `cell_height`. Wheel up
+/// (positive) makes the font bigger.
+fn font_wheel_steps(delta: MouseScrollDelta, accumulator: &mut f64, cell_height: f32) -> i32 {
+    *accumulator += match delta {
+        MouseScrollDelta::LineDelta(_, y) => f64::from(y),
+        MouseScrollDelta::PixelDelta(position) => position.y / f64::from(cell_height.max(1.0)),
+    };
+    let whole = accumulator.trunc();
+    *accumulator -= whole;
+    whole as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wheel_line_is_a_font_step() {
+        let mut accumulator = 0.0;
+        assert_eq!(
+            font_wheel_steps(
+                MouseScrollDelta::LineDelta(0.0, 1.0),
+                &mut accumulator,
+                20.0
+            ),
+            1
+        );
+        assert_eq!(
+            font_wheel_steps(
+                MouseScrollDelta::LineDelta(0.0, 2.0),
+                &mut accumulator,
+                20.0
+            ),
+            2
+        );
+        assert_eq!(accumulator, 0.0);
+    }
+
+    #[test]
+    fn wheel_down_makes_the_font_smaller() {
+        let mut accumulator = 0.0;
+        assert_eq!(
+            font_wheel_steps(
+                MouseScrollDelta::LineDelta(0.0, -1.0),
+                &mut accumulator,
+                20.0
+            ),
+            -1
+        );
+        let pixels = MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -40.0));
+        assert_eq!(font_wheel_steps(pixels, &mut accumulator, 20.0), -2);
+    }
+
+    #[test]
+    fn wheel_pixels_add_up_to_a_step_per_cell_height() {
+        let mut accumulator = 0.0;
+        let pixels = MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 15.0));
+        assert_eq!(font_wheel_steps(pixels, &mut accumulator, 20.0), 0);
+        assert_eq!(font_wheel_steps(pixels, &mut accumulator, 20.0), 1);
+        assert!((accumulator - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ctrl_wheel_changes_the_font_instead_of_going_to_the_pane() {
+        assert!(wheel_changes_font(ModifiersState::CONTROL));
+        assert!(wheel_changes_font(
+            ModifiersState::CONTROL | ModifiersState::SHIFT
+        ));
+    }
+
+    #[test]
+    fn wheel_alone_goes_to_the_pane() {
+        assert!(!wheel_changes_font(ModifiersState::empty()));
+        assert!(!wheel_changes_font(ModifiersState::SHIFT));
+        assert!(!wheel_changes_font(ModifiersState::ALT));
     }
 }

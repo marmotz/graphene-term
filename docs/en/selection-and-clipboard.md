@@ -72,6 +72,8 @@ screen, clicks, drags and the wheel go to the program, not to Graphene.
 
 - Hold `Shift` to select, extend or right-click as usual anyway.
 - To open a [link](images-and-links.md#clickable-links) there, `Ctrl` + click it.
+- `Ctrl` + wheel always changes the font size of the pane, it never goes to the
+  program.
 - In a full-screen program that does not use the mouse (`less`, `man`...), the wheel
   scrolls the program by sending it arrow keys.
 - Clicks on a pane's title bar, on a block's status bar or chevron, and on earlier

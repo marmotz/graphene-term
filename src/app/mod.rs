@@ -254,6 +254,8 @@ struct Session {
     pane_bar_clicks: ClickTracker<PaneId>,
     /// Clicks on the tabs, per index: a double click on a tab opens its rename box.
     tab_bar_clicks: ClickTracker<usize>,
+    /// Fraction of a font size step left by the pixel deltas of `Ctrl`+wheel.
+    font_wheel_accumulator: f64,
     /// Whether the link tooltip stays hidden: set by the wheel, cleared when the mouse
     /// moves.
     tooltip_hidden: bool,

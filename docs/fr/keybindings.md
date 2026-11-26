@@ -37,6 +37,7 @@ Les touches sont écrites comme dans le fichier de configuration : `Shift` pour 
 | `Ctrl+=` ou `Ctrl++`                | Agrandir la police du pane actif                           |
 | `Ctrl+-` ou `Ctrl+_`                | Réduire la police du pane actif                            |
 | `Ctrl+0`                            | Remettre le pane actif à la taille de police configurée    |
+| `Ctrl` + molette                    | Agrandir / réduire la police du pane sous la souris        |
 
 Chaque pane a sa propre taille de police. Un split démarre à la taille du pane dont il
 vient, un nouvel onglet à la taille configurée.

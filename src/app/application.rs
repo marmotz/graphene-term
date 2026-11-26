@@ -304,6 +304,7 @@ impl App {
             link_press: None,
             pane_bar_clicks: ClickTracker::default(),
             tab_bar_clicks: ClickTracker::default(),
+            font_wheel_accumulator: 0.0,
             tooltip_hidden: false,
             pointer: None,
             hovered_button: None,

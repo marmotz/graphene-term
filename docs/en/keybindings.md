@@ -32,6 +32,7 @@ Shortcuts that only work while editing the command line are on the
 | `Ctrl+=` or `Ctrl++`                | Bigger font in the active pane                             |
 | `Ctrl+-` or `Ctrl+_`                | Smaller font in the active pane                            |
 | `Ctrl+0`                            | Active pane back to the configured font size               |
+| `Ctrl` + mouse wheel                | Bigger / smaller font in the pane under the mouse          |
 
 Each pane has its own font size. A split starts at the size of the pane it comes from, a
 new tab at the configured size.
