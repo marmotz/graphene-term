@@ -47,13 +47,14 @@ déplacer le curseur, et sélectionner du texte avec `Shift+Flèche` comme dans 
 |------------------------------------|----------------------------------------------------------------------|
 | `graphene`                         | Ouvre une fenêtre avec votre shell                                   |
 | `graphene -e <programme> [args...]` | Ouvre une fenêtre dont le premier panneau lance `<programme>` au lieu du shell |
+| `graphene -E <programme> [args...]` | Comme `-e`, mais la fenêtre reste ouverte après la fin de `<programme>`, jusqu'à l'appui sur une touche |
 | `graphene --columns <n> --lines <n>` | Ouvre la fenêtre à la taille d'une grille de `<n>` colonnes et `<n>` lignes |
 | `graphene --no-restore`            | Ouvre une fenêtre neuve sans restaurer la session sauvegardée, et la garde hors de la session (voir `window.restore_session` dans [Configuration](configuration.md#window)) |
 | `graphene --version`               | Affiche la version et quitte                                         |
 | `graphene --help`                  | Affiche les options de la ligne de commande et quitte                |
 | `graphene --prune-config [--yes]`  | Retire du fichier de configuration les paramètres que cette version ne connaît pas (voir [Configuration](configuration.md#retirer-les-paramètres-inconnus)) |
 
-Un argument placé avant `-e` qui ne fait pas partie de ces options est une erreur : Graphene affiche un message et quitte avec le code 2 au lieu d'ouvrir une fenêtre.
+Un argument placé avant `-e` ou `-E` qui ne fait pas partie de ces options est une erreur : Graphene affiche un message et quitte avec le code 2 au lieu d'ouvrir une fenêtre.
 
 ### Lancer un programme avec `-e`
 
@@ -72,6 +73,27 @@ graphene -e vim --clean notes.txt
 - Les panneaux et onglets ouverts ensuite lancent votre shell comme d'habitude.
 - Les options placées après `-e` appartiennent au programme : `graphene -e less --version`
   lance `less --version`. `graphene -e` sans rien derrière est une erreur.
+
+### Garder la fenêtre ouverte avec `-E`
+
+`-E` fonctionne comme `-e`, sauf que la fenêtre ne se ferme pas à la fin du programme :
+sa sortie reste lisible.
+
+```bash
+graphene -E ls -la
+```
+
+- Une fois le programme terminé, le panneau affiche `Programme terminé (code 0).
+  Appuyez sur une touche pour fermer.` sous sa sortie, avec le code de retour (ou le
+  signal qui l'a arrêté).
+- Toute touche ferme le panneau, raccourcis compris ; une touche de modification seule
+  (`Shift`, `Ctrl`, `Alt`, `Super`) ne le ferme pas. Le défilement et la sélection à la
+  souris restent possibles.
+- Utilisez `-e` pour les programmes interactifs et les outils qui comptent sur la
+  fermeture de la fenêtre (lanceurs d'applications, `$TERMINAL -e`) ; utilisez `-E`
+  pour lire ce qu'une commande a affiché.
+- Comme `-e`, `-E` se place en dernier. Si les deux sont donnés, le premier l'emporte
+  et l'autre est passé au programme.
 
 ### Taille de la fenêtre en cellules
 

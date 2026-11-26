@@ -10,6 +10,15 @@ pub struct GridSize {
     pub lines: Option<u16>,
 }
 
+/// The program run by the first pane instead of the shell (`-e`, `-E`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Program {
+    /// The program then its arguments.
+    pub argv: Vec<String>,
+    /// `-E`: the pane stays open once the program ends, until a key is pressed.
+    pub hold: bool,
+}
+
 impl GridSize {
     pub(super) fn is_set(self) -> bool {
         self.columns.is_some() || self.lines.is_some()
@@ -115,9 +124,9 @@ pub struct App {
     pub(super) appearance: Appearance,
     /// Whether the appearance thread runs: started once a configuration needs it.
     pub(super) appearance_watched: bool,
-    /// Program given by `-e`, run by the first pane instead of the shell; taken when
-    /// that pane spawns.
-    pub(super) first_program: Option<Vec<String>>,
+    /// Program given by `-e` or `-E`, run by the first pane instead of the shell; taken
+    /// when that pane spawns.
+    pub(super) first_program: Option<Program>,
     /// Size of the first window asked by `--columns` and `--lines`.
     pub(super) grid: GridSize,
     /// An ordinary window, or the quick terminal of `graphene --quick`.
@@ -401,14 +410,20 @@ impl App {
         };
         if workspace.tabs().is_empty() {
             let id = workspace.allocate_id();
+            let program = self.first_program.take();
+            let hold = program.as_ref().is_some_and(|program| program.hold);
             let terminal = Terminal::spawn(
                 EventProxy::new(self.proxy.clone(), id),
                 layout.window_size(),
                 self.config.term_config(),
                 None,
-                self.first_program.take(),
+                program.map(|program| program.argv),
             )?;
-            workspace.new_tab(id, Pane::new(id, terminal, layout, 0.0));
+            let mut pane = Pane::new(id, terminal, layout, 0.0);
+            if hold {
+                pane.hold = Hold::Armed;
+            }
+            workspace.new_tab(id, pane);
         }
         workspace.set_progress_shown(self.config.window.progress);
         perf::mark("shell spawned");
@@ -819,7 +834,7 @@ pub(super) fn with_theme(
 }
 
 pub fn run(
-    first_program: Option<Vec<String>>,
+    first_program: Option<Program>,
     grid: GridSize,
     no_restore: bool,
     restore_session: Option<PathBuf>,
@@ -892,7 +907,7 @@ impl App {
 fn run_app(
     event_loop: EventLoop<UserEvent>,
     mode: WindowMode,
-    first_program: Option<Vec<String>>,
+    first_program: Option<Program>,
     grid: GridSize,
     restore: Restore,
 ) -> anyhow::Result<i32> {

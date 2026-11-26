@@ -4,11 +4,11 @@
 
 ## Garder la fenêtre ouverte après `-e`  ·  [overview](features/execute-hold/overview.md)
 
-_tâches créées — voir [technical.md](features/execute-hold/technical.md)_ — 0/1 tasks done
+_terminé — voir [technical.md](features/execute-hold/technical.md)_ — 1/1 tasks done
 
 | Done | Issue                                                       | Title                                          | Blocked by |
 |------|-------------------------------------------------------------|------------------------------------------------|------------|
-| [ ]  | [#266](https://github.com/marmotz/graphene-term/issues/266) | Keep the window open after the program with -E | —          |
+| [x]  | [#266](https://github.com/marmotz/graphene-term/issues/266) | Keep the window open after the program with -E | —          |
 
 ## Internationalisation (i18n)  ·  [overview](features/i18n/overview.md)
 

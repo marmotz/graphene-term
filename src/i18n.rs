@@ -206,6 +206,31 @@ impl SettingsField {
     ];
 }
 
+/// How a program run by `-E` ended, shown by the message of its pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exit {
+    /// The program returned this exit code.
+    Code(i32),
+    /// The program was killed by this signal.
+    Signal(i32),
+    /// The status could not be read.
+    Unknown,
+}
+
+impl From<Option<std::process::ExitStatus>> for Exit {
+    fn from(status: Option<std::process::ExitStatus>) -> Self {
+        use std::os::unix::process::ExitStatusExt;
+        match status {
+            Some(status) => match (status.code(), status.signal()) {
+                (Some(code), _) => Exit::Code(code),
+                (None, Some(signal)) => Exit::Signal(signal),
+                (None, None) => Exit::Unknown,
+            },
+            None => Exit::Unknown,
+        }
+    }
+}
+
 /// A translatable label. Messages carrying a value have fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
@@ -392,6 +417,9 @@ pub enum Msg {
     Bell,
     /// Action of a notification: shows the pane that raised it.
     ShowPane,
+    // `-E`.
+    /// Shown in the pane once its program ended: how, and that a key closes it.
+    ProgramExited(Exit),
 }
 
 /// Every language, for tests that must cover each of them.
@@ -606,6 +634,13 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::CommandFailed(code) => return format!("Command failed (code {code})").into(),
         Msg::Bell => "Bell",
         Msg::ShowPane => "Show pane",
+        Msg::ProgramExited(Exit::Code(code)) => {
+            return format!("Program ended (code {code}). Press any key to close.").into();
+        }
+        Msg::ProgramExited(Exit::Signal(signal)) => {
+            return format!("Program ended (signal {signal}). Press any key to close.").into();
+        }
+        Msg::ProgramExited(Exit::Unknown) => "Program ended. Press any key to close.",
     };
     Cow::Borrowed(text)
 }
@@ -814,6 +849,19 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::CommandFailed(code) => return format!("Commande échouée (code {code})").into(),
         Msg::Bell => "Sonnerie",
         Msg::ShowPane => "Afficher le panneau",
+        Msg::ProgramExited(Exit::Code(code)) => {
+            return format!("Programme terminé (code {code}). Appuyez sur une touche pour fermer.")
+                .into();
+        }
+        Msg::ProgramExited(Exit::Signal(signal)) => {
+            return format!(
+                "Programme terminé (signal {signal}). Appuyez sur une touche pour fermer."
+            )
+            .into();
+        }
+        Msg::ProgramExited(Exit::Unknown) => {
+            "Programme terminé. Appuyez sur une touche pour fermer."
+        }
     };
     Cow::Borrowed(text)
 }
@@ -1018,6 +1066,7 @@ mod tests {
             Msg::QuickTerminalUnavailableOnWayland => 98,
             Msg::ActiveScreen => 101,
             Msg::PrimaryScreen => 102,
+            Msg::ProgramExited(_) => 103,
         }
     }
     const VARIANT_COUNT: usize = 104;
@@ -1130,6 +1179,9 @@ mod tests {
             Msg::CommandFailed(2),
             Msg::Bell,
             Msg::ShowPane,
+            Msg::ProgramExited(Exit::Code(1)),
+            Msg::ProgramExited(Exit::Signal(9)),
+            Msg::ProgramExited(Exit::Unknown),
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
@@ -1142,6 +1194,48 @@ mod tests {
             [NameError::Empty, NameError::Invalid, NameError::Taken].map(Msg::ThemeNameError),
         );
         messages
+    }
+
+    #[test]
+    fn program_exited_texts_tell_how_and_that_a_key_closes() {
+        assert_eq!(
+            text(Lang::En, &Msg::ProgramExited(Exit::Code(0))),
+            "Program ended (code 0). Press any key to close."
+        );
+        assert_eq!(
+            text(Lang::En, &Msg::ProgramExited(Exit::Signal(9))),
+            "Program ended (signal 9). Press any key to close."
+        );
+        assert_eq!(
+            text(Lang::En, &Msg::ProgramExited(Exit::Unknown)),
+            "Program ended. Press any key to close."
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::ProgramExited(Exit::Code(2))),
+            "Programme terminé (code 2). Appuyez sur une touche pour fermer."
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::ProgramExited(Exit::Signal(15))),
+            "Programme terminé (signal 15). Appuyez sur une touche pour fermer."
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::ProgramExited(Exit::Unknown)),
+            "Programme terminé. Appuyez sur une touche pour fermer."
+        );
+    }
+
+    #[test]
+    fn exit_reads_the_code_then_the_signal_of_the_status() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::ExitStatus;
+        // Raw wait statuses: the code in the second byte, the signal in the first.
+        assert_eq!(Exit::from(Some(ExitStatus::from_raw(0))), Exit::Code(0));
+        assert_eq!(
+            Exit::from(Some(ExitStatus::from_raw(3 << 8))),
+            Exit::Code(3)
+        );
+        assert_eq!(Exit::from(Some(ExitStatus::from_raw(9))), Exit::Signal(9));
+        assert_eq!(Exit::from(None), Exit::Unknown);
     }
 
     #[test]

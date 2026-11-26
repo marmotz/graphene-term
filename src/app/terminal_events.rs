@@ -100,10 +100,36 @@ impl Session {
                     .request_user_attention(Some(winit::window::UserAttentionType::Informational));
                 notices.push(Notice::Bell);
             }
-            TermEvent::Exit | TermEvent::ChildExit(_) => self.close_pane(id, event_loop),
+            TermEvent::ChildExit(status) => self.program_ended(id, Some(status), event_loop),
+            TermEvent::Exit => self.program_ended(id, None, event_loop),
         }
         for notice in notices {
             self.notify(id, notice);
+        }
+    }
+
+    /// The program of the pane `id` ended, with `status` when known: the pane closes,
+    /// or with `-E` shows the end message and waits for a key (see [`Hold`]).
+    fn program_ended(
+        &mut self,
+        id: PaneId,
+        status: Option<std::process::ExitStatus>,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let lang = self.lang;
+        let Some(pane) = self.workspace.pane_mut(id) else {
+            return;
+        };
+        match pane.hold.program_ended() {
+            HoldStep::Close => self.close_pane(id, event_loop),
+            HoldStep::ShowExit => {
+                let text = i18n::text(lang, &Msg::ProgramExited(Exit::from(status)));
+                pane.show_exit(&text);
+                if self.workspace.is_visible(id) {
+                    self.window.request_redraw();
+                }
+            }
+            HoldStep::Nothing => {}
         }
     }
 }

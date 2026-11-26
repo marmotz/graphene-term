@@ -71,7 +71,7 @@ use crate::easter_eggs::{
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;
-use crate::i18n::Lang;
+use crate::i18n::{self, Exit, Lang, Msg};
 use crate::input::{self, Action, Delivery};
 use crate::input_editor;
 use crate::keybindings::Keybindings;
@@ -82,7 +82,7 @@ use crate::notifications::backend::{Command as NotificationCommand, Notifier};
 use crate::notifications::{self, Badge, Notice};
 use crate::opener;
 use crate::palette::Palette;
-use crate::pane::{self, Pane};
+use crate::pane::{self, Hold, HoldStep, Pane};
 use crate::perf;
 use crate::progress::{self, Progress, ProgressColors, ProgressState, ProgressView};
 use crate::renderer::{self, FontOptions, Glyphs, Gpu, PaneFrame, Renderer, UiFont};
