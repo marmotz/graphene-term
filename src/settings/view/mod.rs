@@ -491,13 +491,19 @@ const ADD_MARK: &str = "+";
 /// Adds a square button showing `mark`, as tall as a chip: its horizontal padding
 /// shrinks so the mark fits in the square.
 fn square_button(ui: &mut Ui, mark: &str) -> egui::Response {
-    let side = ui.spacing().interact_size.y;
     let font = TextStyle::Button.resolve(ui.style());
-    let mark_width = ui
+    let mark_size = ui
         .painter()
         .layout_no_wrap(mark.to_owned(), font, Color32::PLACEHOLDER)
-        .size()
-        .x;
+        .size();
+    let mark_width = mark_size.x;
+    // A button is as tall as its text plus the vertical padding, or as the
+    // interaction height when that is larger: the side must follow the font.
+    let side = ui
+        .spacing()
+        .interact_size
+        .y
+        .max(mark_size.y + 2.0 * ui.spacing().button_padding.y);
     ui.scope(|ui| {
         ui.spacing_mut().button_padding.x = ((side - mark_width) / 2.0).max(0.0);
         ui.add(Button::new(mark.to_owned()).min_size(Vec2::splat(side)))
@@ -1693,15 +1699,33 @@ mod tests {
         let ctx = egui::Context::default();
         let mut sizes = Vec::new();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let side = ui.spacing().interact_size.y;
             for mark in [ADD_MARK, CHIP_REMOVE] {
-                sizes.push((square_button(ui, mark).rect.size(), side));
+                sizes.push(square_button(ui, mark).rect.size());
             }
         });
         output.textures_delta.clear();
         assert_eq!(sizes.len(), 2);
-        for (size, side) in sizes {
-            assert_eq!(size, Vec2::splat(side));
+        for size in sizes {
+            assert_eq!(size.x, size.y, "{size:?}");
+        }
+    }
+
+    #[test]
+    fn a_square_button_stays_square_with_the_settings_text_size() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.text_styles = crate::settings::fonts::text_styles());
+        let mut sizes = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let interact = ui.spacing().interact_size.y;
+            for mark in [ADD_MARK, CHIP_REMOVE] {
+                sizes.push((square_button(ui, mark).rect.size(), interact));
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(sizes.len(), 2);
+        for (size, interact) in sizes {
+            assert!(size.y > interact, "font must drive the height: {size:?}");
+            assert_eq!(size.x, size.y, "{size:?}");
         }
     }
 
