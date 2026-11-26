@@ -49,6 +49,10 @@ impl Session {
                 pane::pane_font_size(self.font_size, pane.font_offset)
             }),
             default_font_size: self.font_size,
+            any_pane_font_changed: self
+                .workspace
+                .panes()
+                .any(|(_, pane)| pane.font_offset != 0.0),
         };
         let entries = command_palette::entries(
             &self.workspace,

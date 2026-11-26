@@ -37,6 +37,7 @@ Les touches sont écrites comme dans le fichier de configuration : `Shift` pour 
 | `Ctrl+=` ou `Ctrl++`                | Agrandir la police du pane actif                           |
 | `Ctrl+-` ou `Ctrl+_`                | Réduire la police du pane actif                            |
 | `Ctrl+0`                            | Remettre le pane actif à la taille de police configurée    |
+| `Ctrl+Shift+0`                      | Remettre tous les panes à la taille de police configurée   |
 | `Ctrl` + molette                    | Agrandir / réduire la police du pane sous la souris        |
 
 Chaque pane a sa propre taille de police. Un split démarre à la taille du pane dont il
@@ -87,7 +88,8 @@ Voir [Onglets et panneaux](tabs-and-panes.md).
 | `Alt+1` ... `Alt+9`                     | Aller à l'onglet 1 à 9  |
 
 `Alt+1` à `Alt+9` utilisent la rangée des chiffres du clavier quelle que soit la
-disposition (en AZERTY aussi, sans `Shift`).
+disposition (en AZERTY aussi, sans `Shift`). `Ctrl+0` et `Ctrl+Shift+0` aussi ; avec
+`Ctrl+Shift`, les chiffres du pavé numérique valent ceux de la rangée.
 
 ### Application
 
@@ -165,7 +167,7 @@ Règles :
 | `paste`                                  | Coller depuis le presse-papiers                   |
 | `scroll_page_up`, `scroll_page_down`     | Défiler d'une page                                |
 | `scroll_to_top`, `scroll_to_bottom`      | Haut / bas de l'historique                        |
-| `font_size_increase`, `font_size_decrease`, `font_size_reset` | Taille de police             |
+| `font_size_increase`, `font_size_decrease`, `font_size_reset`, `font_size_reset_all` | Taille de police |
 | `previous_block`, `next_block`           | Sélectionner le bloc de commande précédent / suivant |
 | `copy_command`, `copy_output`            | Copier la commande / la sortie d'un bloc          |
 | `toggle_fold`, `toggle_fold_all`         | Replier un bloc / tous les blocs                  |

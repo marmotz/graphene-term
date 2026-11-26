@@ -93,6 +93,7 @@ impl Session {
                     self.set_pane_font_offset(id, 0.0);
                 }
             }
+            Action::FontSizeResetAll => self.reset_all_pane_fonts(),
             Action::CopyCommand => self.copy_block_part(Part::Command),
             Action::CopyOutput => self.copy_block_part(Part::Output),
             _ => {
@@ -279,6 +280,7 @@ pub(super) fn run_pane_action(pane: &mut Pane, action: Action) {
         | Action::FontSizeIncrease
         | Action::FontSizeDecrease
         | Action::FontSizeReset
+        | Action::FontSizeResetAll
         | Action::CopyCommand
         | Action::CopyOutput
         | Action::SplitRight

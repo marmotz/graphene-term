@@ -6,7 +6,9 @@
 //! then a key: a winit `NamedKey` name (`PageUp`, `F5`, `Insert`...) or one character.
 //! Letters are matched case-insensitively. For other characters `Shift` is ignored,
 //! because the layout already used it to produce the character (`Ctrl++`). Digits bound
-//! with `Alt` are matched on the physical digit row, so `Alt+1` works on AZERTY.
+//! with `Alt` or with `Ctrl+Shift` are matched on the physical digit row, so `Alt+1` and
+//! `Ctrl+Shift+0` work on AZERTY; with `Ctrl+Shift` the keypad digits count too. A `Ctrl` digit not typed by its key (AZERTY) falls
+//! back to that physical key, so `Ctrl+0` stays apart from `Ctrl+Shift+0` there too.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -107,6 +109,7 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Ctrl+-", Action::FontSizeDecrease),
     ("Ctrl+_", Action::FontSizeDecrease),
     ("Ctrl+0", Action::FontSizeReset),
+    ("Ctrl+Shift+0", Action::FontSizeResetAll),
     ("Ctrl+Shift+PageUp", Action::PreviousBlock),
     ("Ctrl+Shift+PageDown", Action::NextBlock),
     ("Ctrl+Shift+Alt+C", Action::CopyCommand),
@@ -205,8 +208,8 @@ impl Shortcut {
         Ok(Shortcut { key, mods })
     }
 
-    /// The shortcut of a character key: a letter lowercased, a digit with `Alt` on its
-    /// physical key, any other character without `Shift`.
+    /// The shortcut of a character key: a letter lowercased, a digit with `Alt` or
+    /// `Ctrl+Shift` on its physical key, any other character without `Shift`.
     fn character(c: char, mods: ModifiersState) -> Shortcut {
         if c.is_alphabetic() {
             let lower = c.to_lowercase().next().unwrap_or(c);
@@ -215,7 +218,7 @@ impl Shortcut {
                 mods,
             };
         }
-        if mods.alt_key()
+        if by_physical_digit(mods)
             && let Some(digit) = c.to_digit(10)
         {
             return Shortcut {
@@ -233,11 +236,10 @@ impl Shortcut {
     /// digit with `Alt` by its physical key, a named key by its logical value, a Latin
     /// letter or another character by the character typed, any other letter (and a key
     /// typing no single character) by its physical letter key. `None` for a key a
-    /// shortcut cannot name: a modifier alone, an unnamed key.
+    /// shortcut cannot name: a modifier alone, an unnamed key. `Ctrl+Shift` counts as
+    /// `Alt` for the digits.
     pub fn from_event(key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Option<Shortcut> {
-        if mods.alt_key()
-            && let Some(digit) = physical_digit(physical)
-        {
+        if let Some(digit) = digit_key(physical, mods) {
             return Some(Shortcut {
                 key: KeyId::Digit(digit),
                 mods,
@@ -374,8 +376,7 @@ impl Keybindings {
     /// without Latin letters; named keys by their logical value.
     pub fn action(&self, key: &Key, physical: PhysicalKey, mods: ModifiersState) -> Option<Action> {
         let get = |key, mods| self.actions.get(&Shortcut { key, mods }).copied();
-        if mods.alt_key()
-            && let Some(digit) = physical_digit(physical)
+        if let Some(digit) = digit_key(physical, mods)
             && let Some(action) = get(KeyId::Digit(digit), mods)
         {
             return Some(action);
@@ -396,6 +397,17 @@ impl Keybindings {
                     {
                         return Some(action);
                     }
+                }
+                // A digit key typing another character (AZERTY): its digit with `Ctrl`.
+                if mods.control_key()
+                    && !typed.is_some_and(|c| c.is_ascii_digit())
+                    && let Some(digit) = physical_digit(physical)
+                    && let Some(action) = get(
+                        KeyId::Char(char::from(b'0' + digit)),
+                        mods - ModifiersState::SHIFT,
+                    )
+                {
+                    return Some(action);
                 }
                 if typed.is_some_and(|c| c.is_ascii_alphabetic()) {
                     return None;
@@ -470,6 +482,46 @@ fn physical_letter(physical: PhysicalKey) -> Option<char> {
         _ => return None,
     };
     Some(letter)
+}
+
+/// Digits are matched by their physical key with these modifiers: `Alt`, or `Ctrl` and
+/// `Shift` together, whose character depends on the layout.
+fn by_physical_digit(mods: ModifiersState) -> bool {
+    mods.alt_key() || (mods.control_key() && mods.shift_key())
+}
+
+/// The digit a key event names as a [`KeyId::Digit`]: with `Alt`, a key of the digit
+/// row; with `Ctrl+Shift`, a key of the digit row or of the keypad, whose `Shift` level
+/// depends on the layout and on Num Lock alike.
+fn digit_key(physical: PhysicalKey, mods: ModifiersState) -> Option<u8> {
+    if mods.alt_key() {
+        return physical_digit(physical);
+    }
+    if !by_physical_digit(mods) {
+        return None;
+    }
+    physical_digit(physical).or_else(|| keypad_digit(physical))
+}
+
+/// The digit of a physical key of the keypad.
+fn keypad_digit(physical: PhysicalKey) -> Option<u8> {
+    let PhysicalKey::Code(code) = physical else {
+        return None;
+    };
+    let digit = match code {
+        KeyCode::Numpad0 => 0,
+        KeyCode::Numpad1 => 1,
+        KeyCode::Numpad2 => 2,
+        KeyCode::Numpad3 => 3,
+        KeyCode::Numpad4 => 4,
+        KeyCode::Numpad5 => 5,
+        KeyCode::Numpad6 => 6,
+        KeyCode::Numpad7 => 7,
+        KeyCode::Numpad8 => 8,
+        KeyCode::Numpad9 => 9,
+        _ => return None,
+    };
+    Some(digit)
 }
 
 /// The digit of a physical key of the digit row.
@@ -648,6 +700,10 @@ mod tests {
         assert_eq!(get(&ch("+"), CTRL), Some(Action::FontSizeIncrease));
         assert_eq!(get(&ch("-"), CTRL), Some(Action::FontSizeDecrease));
         assert_eq!(get(&ch("0"), CTRL), Some(Action::FontSizeReset));
+        assert_eq!(
+            bindings.label(Action::FontSizeResetAll).as_deref(),
+            Some("Ctrl+Shift+0")
+        );
         assert_eq!(get(&named(NamedKey::Insert), SHIFT), Some(Action::Paste));
         assert_eq!(get(&named(NamedKey::Paste), NONE), Some(Action::Paste));
         assert_eq!(get(&named(NamedKey::Copy), NONE), Some(Action::Copy));
@@ -761,6 +817,53 @@ mod tests {
         assert_eq!(bindings.action(&ch("0"), digit0, ALT), None);
         assert_eq!(bindings.action(&ch("1"), digit1, ALT | CTRL), None);
         assert_eq!(action_for(&bindings, &ch("1"), ALT), None);
+    }
+
+    #[test]
+    fn ctrl_shift_0_resets_every_pane_by_its_physical_key() {
+        let bindings = defaults();
+        let digit0 = PhysicalKey::Code(KeyCode::Digit0);
+        // US layout: Shift+0 types `)`.
+        assert_eq!(
+            bindings.action(&ch(")"), digit0, cs()),
+            Some(Action::FontSizeResetAll)
+        );
+        // AZERTY: Shift on the Digit0 key types `0`.
+        assert_eq!(
+            bindings.action(&ch("0"), digit0, cs()),
+            Some(Action::FontSizeResetAll)
+        );
+        assert_eq!(
+            bindings.action(&ch("0"), digit0, CTRL),
+            Some(Action::FontSizeReset)
+        );
+        // The keypad 0, with Num Lock (`0`) or without (`Insert`).
+        let numpad0 = PhysicalKey::Code(KeyCode::Numpad0);
+        assert_eq!(
+            bindings.action(&ch("0"), numpad0, cs()),
+            Some(Action::FontSizeResetAll)
+        );
+        assert_eq!(
+            bindings.action(&named(NamedKey::Insert), numpad0, cs()),
+            Some(Action::FontSizeResetAll)
+        );
+    }
+
+    #[test]
+    fn ctrl_digit_falls_back_on_the_physical_key() {
+        let bindings = defaults();
+        // AZERTY: the Digit0 key types `à` without Shift.
+        let digit0 = PhysicalKey::Code(KeyCode::Digit0);
+        assert_eq!(
+            bindings.action(&ch("à"), digit0, CTRL),
+            Some(Action::FontSizeReset)
+        );
+        // The typed character wins: AZERTY's Digit6 key types `-`.
+        assert_eq!(
+            bindings.action(&ch("-"), PhysicalKey::Code(KeyCode::Digit6), CTRL),
+            Some(Action::FontSizeDecrease)
+        );
+        assert_eq!(bindings.action(&ch("à"), digit0, NONE), None);
     }
 
     #[test]
@@ -956,6 +1059,20 @@ mod tests {
         assert_eq!(
             captured(&ch("1"), code(KeyCode::Digit1), CTRL).as_deref(),
             Some("Ctrl+1")
+        );
+        // US layout: Ctrl+Shift on the Digit0 key is the digit, not `)`.
+        assert_eq!(
+            captured(&ch(")"), code(KeyCode::Digit0), cs()).as_deref(),
+            Some("Ctrl+Shift+0")
+        );
+        // Ctrl+Shift on the keypad 0 is the same digit.
+        assert_eq!(
+            captured(&ch("0"), code(KeyCode::Numpad0), cs()).as_deref(),
+            Some("Ctrl+Shift+0")
+        );
+        assert_eq!(
+            captured(&named(NamedKey::Insert), code(KeyCode::Numpad0), cs()).as_deref(),
+            Some("Ctrl+Shift+0")
         );
     }
 

@@ -45,6 +45,25 @@ impl Session {
         self.relayout();
     }
 
+    /// Gives every pane, in every tab, the configured font size.
+    pub(super) fn reset_all_pane_fonts(&mut self) {
+        let changed: Vec<PaneId> = self
+            .workspace
+            .panes()
+            .filter(|(_, pane)| pane.font_offset != 0.0)
+            .map(|(id, _)| id)
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        for id in changed {
+            if let Some(pane) = self.workspace.pane_mut(id) {
+                pane.font_offset = 0.0;
+            }
+        }
+        self.relayout();
+    }
+
     /// Moves the font size of the active pane by `steps` points.
     pub(super) fn step_active_pane_font(&mut self, steps: f32) {
         if let Some(id) = self.workspace.active_pane_id() {
