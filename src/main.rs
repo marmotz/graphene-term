@@ -88,8 +88,6 @@ const HELP: &str = "\
 Usage: graphene [options] [-e <program> [args...]]
 
 Options:
-  -e <program> [args...]    Run <program> in the first pane instead of the shell;
-                            every argument after it belongs to the program
   --columns <n>             Size the window to <n> columns
   --lines <n>               Size the window to <n> lines
   --no-restore              Open a new window outside the saved session
@@ -101,6 +99,12 @@ Options:
   --yes                     With --prune-config, apply without asking
   --version                 Print the version and exit
   -h, --help                Print this help and exit
+
+Running a program:
+  -e <program> [args...]    Run <program> in the first pane instead of the shell.
+                            -e must come last: every argument after it, options
+                            included, is passed to <program>, not to graphene.
+                            Example: `graphene -e vim --help` runs `vim --help`.
 ";
 
 /// Options without a value.
@@ -252,6 +256,13 @@ mod tests {
         for option in FLAGS.iter().chain(&VALUED).chain(&["-e", "--help", "-h"]) {
             assert!(HELP.contains(option), "{option} missing from the help");
         }
+    }
+
+    #[test]
+    fn help_shows_that_options_after_execute_go_to_the_program() {
+        // The example in the help matches `help_after_execute_belongs_to_the_program`.
+        assert!(HELP.contains("`graphene -e vim --help` runs `vim --help`"));
+        assert!(HELP.contains("-e must come last"));
     }
 
     #[test]
