@@ -45,8 +45,10 @@ pub struct UiLayer {
 
 /// Records drawing over the window into the encoder and texture view of a frame, after
 /// the interface and the banner and before the overlay: the settings tab, drawn with
-/// egui.
-pub type ContentPainter<'a> = &'a mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView);
+/// egui. It also gets the size of that texture in pixels, which can lag behind the
+/// window's own size until its `Resized` event: drawing past it is a GPU error.
+pub type ContentPainter<'a> =
+    &'a mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView, (u32, u32));
 
 /// One pane to draw: its frame and the layout placing its grid in the window.
 #[derive(Clone, Copy)]
@@ -261,7 +263,7 @@ impl Layers {
         self.cells.render(&mut pass, prepared.panes.len() + 1);
         if let Some(content) = content {
             drop(pass);
-            content(encoder, view);
+            content(encoder, view, prepared.screen);
             pass = begin_pass(encoder, view, wgpu::LoadOp::Load);
         }
         self.rects.render(&mut pass, prepared.overlay.clone());
@@ -468,6 +470,7 @@ impl Gpu {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await?;
+        install_error_handler(&device);
         perf::mark("GPU device ready");
         let gpu = Self {
             instance,
@@ -482,6 +485,12 @@ impl Gpu {
     pub fn create_surface(&self, window: Arc<Window>) -> anyhow::Result<wgpu::Surface<'static>> {
         Ok(self.instance.create_surface(window)?)
     }
+}
+
+/// Logs the GPU errors no error scope catches instead of letting wgpu panic on them:
+/// the faulty frame is lost but the application goes on.
+fn install_error_handler(device: &wgpu::Device) {
+    device.on_uncaptured_error(Arc::new(|error| log::error!("GPU error: {error}")));
 }
 
 pub struct Renderer {
@@ -1235,6 +1244,64 @@ mod tests {
             expected,
             Glyphs::new(&FontOptions::default(), 14.0).cell_size()
         );
+    }
+
+    #[test]
+    fn content_painter_gets_the_size_of_the_drawn_target() {
+        let (width, height) = (SIZE, SIZE / 2);
+        let Some(mut renderer) =
+            Headless::new(width, height, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        let prepared = renderer.layers.prepare(
+            &renderer.device,
+            &renderer.queue,
+            renderer.screen,
+            &[],
+            &UiLayer::default(),
+        );
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut received = None;
+        let mut paint = |_: &mut wgpu::CommandEncoder, _: &wgpu::TextureView, size| {
+            received = Some(size);
+        };
+        renderer.layers.draw(
+            &mut encoder,
+            &renderer.target.view,
+            &prepared,
+            Some(&mut paint),
+        );
+        renderer.queue.submit(Some(encoder.finish()));
+        assert_eq!(received, Some((width, height)));
+        assert_eq!(received, Some(renderer.target.size));
+    }
+
+    #[test]
+    fn an_uncaptured_gpu_error_does_not_panic_once_the_handler_is_installed() {
+        let Some(renderer) = Headless::new(SIZE, SIZE, Glyphs::new(&FontOptions::default(), 14.0))
+        else {
+            eprintln!("no GPU adapter available, skipped");
+            return;
+        };
+        install_error_handler(&renderer.device);
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = begin_pass(
+                &mut encoder,
+                &renderer.target.view,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
+            // Twice the width of the target: a validation error.
+            pass.set_scissor_rect(0, 0, SIZE * 2, SIZE);
+        }
+        renderer.queue.submit(Some(encoder.finish()));
+        let _ = renderer.device.poll(wgpu::PollType::wait_indefinitely());
     }
 
     #[test]
