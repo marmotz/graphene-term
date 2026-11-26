@@ -81,9 +81,9 @@ A folded block hides its output behind a single "n lines hidden" line.
 
 | Do this                                | With                                                |
 |----------------------------------------|-----------------------------------------------------|
-| Fold / unfold a block                  | Click the chevron at the top right of its card, `Ctrl+Shift+F`, or **Fold block** / **Unfold block** in the right-click menu |
+| Fold / unfold a block                  | Click the chevron at the top right of its card, `Ctrl+Shift+Z`, or **Fold block** / **Unfold block** in the right-click menu |
 | Unfold a folded block                  | Click its "n lines hidden" line                     |
-| Fold all finished blocks, or unfold them all | `Ctrl+Shift+Alt+F`                            |
+| Fold all finished blocks, or unfold them all | `Ctrl+Shift+Alt+Z`                            |
 
 An output taller than the window is folded automatically when its command ends.
 Unfold it to read it.

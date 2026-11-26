@@ -22,7 +22,7 @@ configuration du shell ne sont pas modifiés.
    `false`. Chaque commande et sa sortie forment un bloc avec une barre colorée à
    gauche : verte en cas de succès, rouge en cas d'échec, jaune pendant l'exécution.
    Cliquez sur la barre pour sélectionner le bloc, puis appuyez sur `Ctrl+Shift+Alt+O`
-   pour copier sa sortie, ou sur `Ctrl+Shift+F` pour le replier.
+   pour copier sa sortie, ou sur `Ctrl+Shift+Z` pour le replier.
    Voir [Blocs de commande](command-blocks.md).
 2. **La palette de commandes.** Appuyez sur `Ctrl+Shift+P`, tapez quelques lettres
    (`diviser`, `onglet`, `police`...) puis `Entrée`. Toutes les actions y sont, avec

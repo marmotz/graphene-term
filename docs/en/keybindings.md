@@ -48,8 +48,8 @@ At the prompt, `Shift+Home` and `Shift+End` select in the command line instead (
 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | Select the previous / next command block          |
 | `Ctrl+Shift+Alt+C`                        | Copy the command of the selected (or last) block    |
 | `Ctrl+Shift+Alt+O`                        | Copy the output of the selected (or last) block     |
-| `Ctrl+Shift+F`                            | Fold / unfold the selected (or last) block          |
-| `Ctrl+Shift+Alt+F`                        | Fold all finished blocks, or unfold them all        |
+| `Ctrl+Shift+Z`                            | Fold / unfold the selected (or last) block          |
+| `Ctrl+Shift+Alt+Z`                        | Fold all finished blocks, or unfold them all        |
 
 See [Command blocks](command-blocks.md).
 

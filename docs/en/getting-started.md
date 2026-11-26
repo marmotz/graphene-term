@@ -20,7 +20,7 @@ not modified.
 1. **Command blocks.** Run a few commands, for example `ls` then `false`. Each
    command and its output form a block with a colored bar on the left: green for
    success, red for failure, yellow while it runs. Click the bar to select the block,
-   then press `Ctrl+Shift+Alt+O` to copy its output, or `Ctrl+Shift+F` to fold it.
+   then press `Ctrl+Shift+Alt+O` to copy its output, or `Ctrl+Shift+Z` to fold it.
    See [Command blocks](command-blocks.md).
 2. **The command palette.** Press `Ctrl+Shift+P`, type a few letters (`split`,
    `theme`, `tab`...) and press `Enter`. Every action is there, with its shortcut.

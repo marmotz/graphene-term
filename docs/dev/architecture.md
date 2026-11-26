@@ -560,8 +560,8 @@ Renderer::render(pane frames, interface rects)
   (`GridLayout::hit` / `point_at`, then `view::point`) go through. On the alternate
   screen the view is the live screen, with no card.
 - Folding shows a block's header and one summary row (`RowSource::Summary`, "N lines
-  hidden") instead of its output. `Ctrl+Shift+F` toggles the fold of the target block;
-  `Ctrl+Shift+Alt+F` folds every finished block when any is unfolded, otherwise unfolds
+  hidden") instead of its output. `Ctrl+Shift+Z` toggles the fold of the target block;
+  `Ctrl+Shift+Alt+Z` folds every finished block when any is unfolded, otherwise unfolds
   them all. A click on the chevron (`Hit::Chevron`: the right card padding of the
   card's first row) toggles the fold, a click on the summary label unfolds. Nothing is folded automatically.
 - The wheel (unless an application captures it) scrolls the output of the block under

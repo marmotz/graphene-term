@@ -53,8 +53,8 @@ commande (voir [Éditeur de saisie](input-editor.md)).
 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | Sélectionner le bloc de commande précédent / suivant    |
 | `Ctrl+Shift+Alt+C`                          | Copier la commande du bloc sélectionné (ou du dernier)  |
 | `Ctrl+Shift+Alt+O`                          | Copier la sortie du bloc sélectionné (ou du dernier)    |
-| `Ctrl+Shift+F`                              | Replier / déplier le bloc sélectionné (ou le dernier)   |
-| `Ctrl+Shift+Alt+F`                          | Replier tous les blocs terminés, ou tous les déplier    |
+| `Ctrl+Shift+Z`                              | Replier / déplier le bloc sélectionné (ou le dernier)   |
+| `Ctrl+Shift+Alt+Z`                          | Replier tous les blocs terminés, ou tous les déplier    |
 
 Voir [Blocs de commande](command-blocks.md).
 

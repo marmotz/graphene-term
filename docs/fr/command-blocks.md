@@ -83,9 +83,9 @@ Un bloc replié cache sa sortie derrière une seule ligne « n lignes masquées 
 
 | Pour                                   | Utilisez                                            |
 |----------------------------------------|-----------------------------------------------------|
-| Replier / déplier un bloc              | Cliquez sur le chevron en haut à droite de sa carte, `Ctrl+Shift+F`, ou **Replier le bloc** / **Déplier le bloc** dans le menu du clic droit |
+| Replier / déplier un bloc              | Cliquez sur le chevron en haut à droite de sa carte, `Ctrl+Shift+Z`, ou **Replier le bloc** / **Déplier le bloc** dans le menu du clic droit |
 | Déplier un bloc replié                 | Cliquez sur sa ligne « n lignes masquées »          |
-| Replier tous les blocs terminés, ou tous les déplier | `Ctrl+Shift+Alt+F`                    |
+| Replier tous les blocs terminés, ou tous les déplier | `Ctrl+Shift+Alt+Z`                    |
 
 Une sortie plus haute que la fenêtre est repliée automatiquement à la fin de sa
 commande. Dépliez-la pour la lire.
