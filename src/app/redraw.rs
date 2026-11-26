@@ -259,12 +259,15 @@ impl Session {
         }
         let area = self.settings_area();
         let gpu = self.renderer.gpu().clone();
-        let size = self.window.inner_size();
         let rendered = match self.settings.as_mut() {
             Some(settings) => {
                 settings.prepare(&gpu, area);
-                let mut paint = |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView| {
-                    settings.paint(&gpu, encoder, view, (size.width, size.height));
+                // The size of the drawn texture, not of the window: right after a resize
+                // the window is already at its new size while the surface is not yet.
+                let mut paint = |encoder: &mut wgpu::CommandEncoder,
+                                 view: &wgpu::TextureView,
+                                 size: (u32, u32)| {
+                    settings.paint(&gpu, encoder, view, size);
                 };
                 self.renderer.render_with(&panes, &ui, Some(&mut paint))
             }
