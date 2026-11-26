@@ -233,7 +233,12 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   searches again (`SearchState::requery`) and shows the new current match; each frame,
   a pane whose revision changed is searched again without moving the view
   (`Pane::refresh_search`). The bar is drawn in the interface layer over the rows
-  (`chrome::scene::search_bar`), under the overlay.
+  (`chrome::scene::search_bar`), under the overlay. While the bar is open, the frame
+  of the pane paints the background of the matches whose source is in the view after
+  the capture (`Frame::highlight_matches`, `ui.search_current_background` for the
+  current one, `ui.search_match_background` for the others, the text keeping its
+  colors); `FrameKey` holds `SearchState::revision`, which changes with the matches and
+  the current one, so a frame is captured again only then.
 - New panes (split, new tab) start their shell in the active pane's directory
   (`Terminal::current_dir`, from `/proc/<pid>/cwd` on Linux, `proc_pidinfo` on macOS), else `$HOME`.
 - `graphene -e <program> [args]` stores the program in `App.first_program`; the first

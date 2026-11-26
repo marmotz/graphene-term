@@ -125,7 +125,7 @@ impl SearchState {
         }
     }
 
-    #[allow(dead_code)] // Read by the highlighting of the matches: issue #216.
+    /// The matches of the last search, oldest first.
     pub fn matches(&self) -> &Matches {
         &self.matches
     }
@@ -136,7 +136,6 @@ impl SearchState {
     }
 
     /// Changes whenever the matches or the current one change.
-    #[allow(dead_code)] // Keys the frame highlighting the matches: issue #216.
     pub fn revision(&self) -> u64 {
         self.revision
     }

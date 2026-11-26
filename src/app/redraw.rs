@@ -2,7 +2,10 @@
 
 use std::ops::RangeInclusive;
 
+use alacritty_terminal::term::Term;
+
 use super::*;
+use crate::pane_search::SearchState;
 use crate::renderer::scene::gpu_color;
 use crate::view::ViewRow;
 
@@ -23,6 +26,34 @@ pub(super) struct FrameKey {
     /// Progress of the pane drawn on the card of its running block, with the bar's
     /// thickness: an indeterminate one changes at each frame of its animation.
     progress: Option<(ProgressView, f32)>,
+    /// Revision of the open search bar of the pane, whose matches are highlighted.
+    search: Option<u64>,
+}
+
+/// The matches of `search` whose source shows in `view`, in the lines of its rows, with
+/// the index of the current one among them.
+fn search_highlights<L>(
+    search: &SearchState,
+    view: &[ViewRow],
+    live: &Term<L>,
+) -> (Vec<(RowSource, RangeInclusive<Point>)>, Option<usize>) {
+    let current = search.current_match();
+    let mut index = None;
+    let mut matches = Vec::new();
+    for m in &search.matches().list {
+        if !view.iter().any(|row| row.source == m.source) {
+            continue;
+        }
+        if current.is_some_and(|current| std::ptr::eq(current, m)) {
+            index = Some(matches.len());
+        }
+        let range = match m.source {
+            RowSource::Live => m.grid_range(live),
+            _ => m.range.clone(),
+        };
+        matches.push((m.source, range));
+    }
+    (matches, index)
 }
 
 /// Longest wait for the window manager to maximize a window shown maximized, before
@@ -168,6 +199,7 @@ impl Session {
                 banner: banner.clone(),
                 link: link.clone(),
                 progress,
+                search: pane.search.as_ref().map(SearchState::revision),
             });
             let palette = &self.palette;
             let lang = self.lang;
@@ -188,6 +220,10 @@ impl Session {
                 pane.fold_animations
                     .borrow_mut()
                     .apply(&mut frame.cards, &rows, now);
+                if let Some(search) = &pane.search {
+                    let (matches, current) = search_highlights(search, &rows, &*term);
+                    frame.highlight_matches(&rows, &matches, current, &palette.ui);
+                }
                 if let Some((source, range)) = &link {
                     frame.underline_link(&rows, *source, range);
                 }
