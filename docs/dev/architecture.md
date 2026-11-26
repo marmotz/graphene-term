@@ -575,6 +575,10 @@ Renderer::render(pane frames, interface rects)
   block by a page when it can scroll, otherwise the timeline (`view::page_target`);
   `Shift+Home/End` go to the timeline's top / bottom. A key press or a paste brings the
   timeline and the current block back to the bottom.
+- `view::reveal_line` brings one line of a grid into the view, for the history search:
+  it unfolds the block when the line is in its hidden output, scrolls the block's output
+  (or the current block's live grid) the least so the line is among the rows shown,
+  reveals the block, then scrolls the timeline to the line if it is still out of view.
 - A block that shows only part of its output has a scroll indicator: a thin bar in the
   dim color in the card's right padding, beside its output rows (`frame::ScrollBar`).
 - The window holds, from the left: the padding, a margin of half a cell, half a cell of
