@@ -7,6 +7,23 @@ affichez et masquez avec une seule commande. Il reste résident entre deux utili
 son shell continue de tourner pendant qu'il est masqué, et il revient aussitôt, tel que
 vous l'avez laissé.
 
+## Activer le quick terminal
+
+Le quick terminal est désactivé par défaut. Activez-le avec la clé `enabled` de la
+section [`[quick_terminal]`](configuration.md#quick_terminal) :
+
+```toml
+[quick_terminal]
+enabled = true
+```
+
+Tant qu'il est désactivé, Graphene ne lance jamais le quick terminal : ni la première
+fenêtre que vous ouvrez, ni le raccourci global, ni l'entrée de démarrage de session, et
+`graphene --quick-toggle` échoue avec un message qui explique comment l'activer. Le
+changement s'applique au prochain démarrage de Graphene : un quick terminal déjà lancé
+reste jusqu'à la fin de votre session, mais `graphene --quick-toggle` refuse dès que le
+réglage est désactivé.
+
 ## L'afficher et le masquer
 
 ```bash
@@ -14,7 +31,9 @@ graphene --quick-toggle
 ```
 
 La commande affiche le quick terminal quand il est masqué et le masque quand il est
-affiché. La première fois, elle lance le processus du quick terminal, qui reste ensuite
+affiché. Elle exige `enabled = true` (voir
+[Activer le quick terminal](#activer-le-quick-terminal)) : sinon, elle affiche comment
+l'activer et sort avec le code 1. La première fois, elle lance le processus du quick terminal, qui reste ensuite
 en arrière-plan jusqu'à la fin de votre session graphique. Associez la commande à une
 touche dans votre gestionnaire de fenêtres ou dans les raccourcis clavier de votre
 système (par exemple `F12`).
@@ -34,11 +53,14 @@ son propre raccourci global avec la clé `hotkey` de la section
 hotkey = "Ctrl+`"
 ```
 
-Le raccourci fonctionne depuis n'importe quelle application. Tant qu'il est défini, la
+Le raccourci exige `enabled = true` (voir
+[Activer le quick terminal](#activer-le-quick-terminal)). Il fonctionne depuis n'importe
+quelle application. Tant qu'il est défini, la
 première fenêtre Graphene que vous ouvrez lance aussi le quick terminal en arrière-plan,
 masqué, pour que le raccourci fonctionne tout de suite, avant tout
 `graphene --quick-toggle`. Définir le raccourci dans un Graphene déjà lancé, depuis le
-fichier de configuration ou la fenêtre de réglages, le lance de la même façon. Le
+fichier de configuration ou la fenêtre de réglages, le lance de la même façon, tout
+comme activer `enabled` alors que le raccourci est défini. Le
 changer remplace le précédent sans redémarrage.
 
 Quand le raccourci ne peut pas être enregistré, parce qu'une autre application l'utilise
@@ -59,7 +81,9 @@ Avec `autostart = true` dans la section
 coché dans la fenêtre de réglages, le quick terminal démarre masqué à l'ouverture de
 votre session, sans ouvrir de fenêtre Graphene. Graphene crée l'entrée aussitôt et la
 supprime quand le réglage est désactivé, et la remet en place à chaque démarrage si elle
-a été supprimée ou si l'exécutable de Graphene a été déplacé :
+a été supprimée ou si l'exécutable de Graphene a été déplacé. L'entrée n'existe que tant
+que le quick terminal est activé (`enabled = true`) : le désactiver supprime l'entrée,
+sans changer `autostart`.
 
 - **Linux sous X11** : `graphene-quick-terminal.desktop` dans
   `$XDG_CONFIG_HOME/autostart/` (`~/.config/autostart/` par défaut). Pour une AppImage,

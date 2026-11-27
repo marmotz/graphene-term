@@ -591,11 +591,8 @@ autostart = true
     fn invalid_quick_terminal_enabled_keeps_the_previous_value() {
         let mut previous = Config::default();
         previous.quick_terminal.enabled = true;
-        let (config, errors) = Config::parse(
-            "[quick_terminal]\nenabled = \"yes\"\n",
-            &previous,
-            &file(),
-        );
+        let (config, errors) =
+            Config::parse("[quick_terminal]\nenabled = \"yes\"\n", &previous, &file());
         assert!(config.quick_terminal.enabled);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].key.as_deref(), Some("quick_terminal.enabled"));

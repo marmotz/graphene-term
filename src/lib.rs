@@ -78,18 +78,38 @@ pub fn run(
 }
 
 /// Runs the resident quick terminal process (`graphene --quick`), hidden at startup
-/// when `hidden`, and returns its exit code: `3` under Wayland, where it cannot run.
+/// when `hidden`, and returns its exit code: `4` when the quick terminal is disabled,
+/// `3` under Wayland, where it cannot run.
 /// Exits at once, with `0`, when another quick terminal process runs, after asking it
 /// to toggle its window unless `hidden`.
 pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
     app::run_quick(hidden)
 }
 
+/// The message to print for the exit code `code` of [`run_quick`], if any.
+pub fn quick_exit_message(code: i32) -> Option<String> {
+    (code == quick_terminal::control::DISABLED_EXIT_CODE)
+        .then(|| quick_terminal::control::ToggleError::Disabled.to_string())
+}
+
 /// `graphene --quick-toggle`: shows or hides the quick terminal, starting it when it
-/// does not run. The error is the message to print.
+/// does not run. The error is the message to print. A disabled quick terminal fails
+/// before the socket is touched or a process started.
 pub fn quick_toggle() -> Result<(), String> {
+    let (config, _) = config::load();
+    toggle_gate(&config.quick_terminal)?;
     let dir = config::runtime_dir().map_err(|error| format!("no runtime folder: {error}"))?;
     quick_terminal::control::toggle(&dir).map_err(|error| error.to_string())
+}
+
+/// Whether `--quick-toggle` may go on for `quick`: the error message when the quick
+/// terminal is disabled.
+fn toggle_gate(quick: &config::QuickTerminalConfig) -> Result<(), String> {
+    if quick.enabled {
+        Ok(())
+    } else {
+        Err(quick_terminal::control::ToggleError::Disabled.to_string())
+    }
 }
 
 /// Lists and optionally removes unknown entries from the user's configuration file.
@@ -116,4 +136,34 @@ pub mod bench {
     pub use crate::signals::Scanner;
     pub use crate::timeline::Timeline;
     pub use crate::view::{rows as view_rows, scroll_block};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_fails_with_the_activation_message_when_disabled() {
+        let mut quick = config::Config::default().quick_terminal;
+        quick.enabled = false;
+        assert_eq!(
+            toggle_gate(&quick),
+            Err(quick_terminal::control::ToggleError::Disabled.to_string())
+        );
+        quick.enabled = true;
+        assert_eq!(toggle_gate(&quick), Ok(()));
+    }
+
+    #[test]
+    fn only_the_disabled_exit_code_has_a_message() {
+        assert_eq!(
+            quick_exit_message(quick_terminal::control::DISABLED_EXIT_CODE),
+            Some(quick_terminal::control::ToggleError::Disabled.to_string())
+        );
+        assert_eq!(quick_exit_message(0), None);
+        assert_eq!(
+            quick_exit_message(quick_terminal::control::WAYLAND_EXIT_CODE),
+            None
+        );
+    }
 }

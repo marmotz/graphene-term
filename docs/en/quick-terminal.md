@@ -6,6 +6,22 @@ The quick terminal is a terminal window attached to a screen edge, which you sho
 hide with a single command. It stays resident between two uses: its shell keeps running
 while it is hidden, and it comes back at once, as you left it.
 
+## Enable the quick terminal
+
+The quick terminal is disabled by default. Turn it on with the `enabled` key of the
+[`[quick_terminal]`](configuration.md#quick_terminal) section:
+
+```toml
+[quick_terminal]
+enabled = true
+```
+
+While it is disabled, Graphene never starts the quick terminal: neither the first window
+you open, nor the global shortcut, nor the login entry, and `graphene --quick-toggle`
+fails with a message that explains how to turn it on. The change applies the next time
+Graphene starts: a quick terminal already running stays until the end of your session,
+but `graphene --quick-toggle` refuses as soon as the setting is off.
+
 ## Show and hide it
 
 ```bash
@@ -13,7 +29,8 @@ graphene --quick-toggle
 ```
 
 The command shows the quick terminal when it is hidden and hides it when it is shown.
-The first time, it starts the quick terminal process, which then stays in the background
+It requires `enabled = true` (see [Enable the quick terminal](#enable-the-quick-terminal)):
+otherwise it prints the way to turn it on and exits with the code 1. The first time, it starts the quick terminal process, which then stays in the background
 until the end of your graphical session. Bind the command to a key in your window
 manager or in the keyboard shortcuts of your system (for example `F12`).
 
@@ -32,10 +49,13 @@ shortcut of its own with the `hotkey` key of the
 hotkey = "Ctrl+`"
 ```
 
-The shortcut works from any application. While it is set, the first Graphene window you
+The shortcut requires `enabled = true` (see
+[Enable the quick terminal](#enable-the-quick-terminal)). It works from any application.
+While it is set, the first Graphene window you
 open also starts the quick terminal in the background, hidden, so that the shortcut
 works at once, before any `graphene --quick-toggle`. Setting the shortcut in a running
-Graphene, from the configuration file or the settings tab, starts it the same way.
+Graphene, from the configuration file or the settings tab, starts it the same way, and
+so does turning `enabled` on while the shortcut is set.
 Changing it replaces the previous one without a restart.
 
 When the shortcut cannot be registered, because another application already uses it or
@@ -55,7 +75,9 @@ With `autostart = true` in the [`[quick_terminal]`](configuration.md#quick_termi
 section, or **Start with the session** checked in the settings tab, the quick terminal
 starts hidden when you log in, without opening any Graphene window. Graphene creates the
 entry at once and removes it when the setting is turned off, and puts it back at each
-start if it was deleted or if the Graphene executable moved:
+start if it was deleted or if the Graphene executable moved. The entry only exists while
+the quick terminal is enabled (`enabled = true`): turning it off removes the entry,
+without changing `autostart`.
 
 - **Linux under X11**: `graphene-quick-terminal.desktop` in `$XDG_CONFIG_HOME/autostart/`
   (`~/.config/autostart/` by default). For an AppImage, it starts the AppImage file.
