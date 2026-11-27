@@ -58,7 +58,8 @@ uncomment the line below.
 - **Eight built-in themes**, your own theme files, a theme editor, and themes that follow
   the system light/dark mode: [themes](docs/en/themes.md).
 - **Interface in English and French**, with their British and Canadian variants,
-  following the system language and region, numbers and configuration errors included:
+  following the system language and region, numbers, configuration errors and settings
+  lists included:
   [language setting](docs/en/configuration.md#general).
 
 ## Comparison

@@ -339,3 +339,34 @@ config-hotkey-taken = the global hotkey "{ $hotkey }" is already used by another
 config-hotkey-failed = cannot register the global hotkey: { $detail }
 # Banner of several errors: the first one ($first), then the count of the others.
 more-config-errors = { $first } (+{ $more } more)
+
+## Settings lists
+
+# Value `auto` of the language: the language of the system.
+language-auto = System language
+choice-cursor-shape = { $shape ->
+   *[block] Block
+    [beam] Beam
+    [underline] Underline
+}
+# Tab position and screen edge of the quick terminal.
+choice-side = { $side ->
+   *[top] Top
+    [bottom] Bottom
+    [left] Left
+    [right] Right
+}
+choice-startup-mode = { $mode ->
+   *[default] Configured size
+    [maximized] Maximized
+    [remember] Size of the last window
+}
+choice-update-interval = { $interval ->
+   *[auto] Automatic
+    [hours-6] Every 6 hours
+    [hours-12] Every 12 hours
+    [hours-24] Every 24 hours
+    [days-2] Every 2 days
+    [days-3] Every 3 days
+    [week-1] Every week
+}

@@ -14,7 +14,7 @@ use crate::config::{
     MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, QuickTerminalScreen, StartupMode, TabPosition,
     UpdateInterval,
 };
-use crate::i18n::{self, Lang, Msg, SettingsField as Field, SettingsSection as Section};
+use crate::i18n::{self, ChoiceMsg, Lang, Msg, SettingsField as Field, SettingsSection as Section};
 use crate::input::Action;
 use crate::keybindings::{self, Keybindings, NONE_ACTION, Shortcut};
 use crate::palette::Palette;
@@ -323,12 +323,14 @@ fn name_of<T: PartialEq + Copy>(values: &[(&'static str, T)], value: T) -> &'sta
         .map_or("", |(name, _)| name)
 }
 
-fn names<T>(values: &[(&'static str, T)]) -> Vec<Choice> {
+/// Entries of the `values` of an enum: the value written to the file, shown by its
+/// translated label.
+fn names<T: Copy + Into<ChoiceMsg>>(values: &[(&'static str, T)]) -> Vec<Choice> {
     values
         .iter()
-        .map(|(name, _)| Choice {
-            value: (*name).to_owned(),
-            label: None,
+        .map(|&(name, value)| Choice {
+            value: name.to_owned(),
+            label: Some(Msg::Choice(value.into())),
         })
         .collect()
 }
@@ -1885,6 +1887,53 @@ bell = true
         assert_eq!(
             values(Field::UpdatesInterval).len(),
             UpdateInterval::VALUES.len()
+        );
+    }
+
+    #[test]
+    fn enum_choices_write_their_value_and_show_a_translated_label() {
+        let m = model("[cursor]\nshape = \"beam\"\n");
+        let choices = m.choices(Field::CursorShape);
+        let shown = |lang| -> Vec<String> {
+            choices
+                .iter()
+                .map(|choice| i18n::text(lang, choice.label.as_ref().expect("label")))
+                .collect()
+        };
+        assert_eq!(shown(Lang::EnUs), ["Block", "Beam", "Underline"]);
+        assert_eq!(shown(Lang::Fr), ["Bloc", "Barre", "Soulignement"]);
+        // The value written to the file does not change.
+        assert_eq!(m.text(Field::CursorShape), "beam");
+        assert_eq!(
+            m.edit(Field::CursorShape, Input::Choice("underline".into())),
+            Ok(set(&["cursor", "shape"], text("underline")))
+        );
+        for field in [
+            Field::Language,
+            Field::StartupMode,
+            Field::TabPosition,
+            Field::UpdatesInterval,
+            Field::QuickTerminalEdge,
+        ] {
+            assert!(
+                m.choices(field).iter().all(|choice| choice.label.is_some()),
+                "{field:?}"
+            );
+        }
+        let languages: Vec<_> = m
+            .choices(Field::Language)
+            .iter()
+            .map(|choice| i18n::text(Lang::Fr, choice.label.as_ref().expect("label")))
+            .collect();
+        assert_eq!(
+            languages,
+            [
+                "Langue du système",
+                "English (US)",
+                "English (UK)",
+                "Français",
+                "Français (Canada)"
+            ]
         );
     }
 

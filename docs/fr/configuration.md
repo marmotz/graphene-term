@@ -97,6 +97,10 @@ une modification à la main.
 - Les nombres s'affichent au format de la langue de l'interface (`1,280` en anglais,
   `1 280` en français). Saisissez-les avec son séparateur décimal ou un point ; les
   séparateurs de milliers sont ignorés, et le fichier garde toujours le point.
+- Les listes affichent leurs valeurs par leur nom dans la langue de l'interface
+  (**Barre** pour `beam`, **Tous les 2 jours** pour `2d`) ; le fichier garde la valeur.
+  Les langues sont nommées dans leur propre langue (**English (UK)**), quelle que soit
+  la langue de l'interface.
 - Les problèmes du fichier s'affichent sous le paramètre concerné ; les paramètres
   inconnus sont listés en haut.
 - Tant qu'un fichier contient une erreur de syntaxe, l'onglet l'affiche et verrouille

@@ -434,6 +434,12 @@ variable), with its region: a region without a variant gives the base language. 
 `language` setting takes BCP 47 tags (`en-US`, `fr-CA`), case ignored, and keeps `en` as
 an alias so that existing files stay valid.
 
+The entries of the choice lists of the settings are labelled by an `i18n::ChoiceMsg`
+(one variant per enum of `config`, built from its `VALUES`); the value written to the
+file stays the raw one. Language names come from `i18n/languages.ftl`, added to every
+bundle so that a language reads the same in all of them (`Français (Canada)`); only
+`auto` is translated. A test rejects a language file that defines one of these names.
+
 Configuration errors are translated too: `ConfigError.detail` is an `i18n::ConfigMsg`
 (boxed, to keep the `Result`s that carry it small), shown by `Msg::Config`, and
 `ConfigError::text(lang)` prefixes it with the file name and line. A rejected value

@@ -26,6 +26,9 @@ use intl_memoizer::Memoizable;
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use unic_langid::LanguageIdentifier;
 
+use crate::config::{
+    CursorShape, Language, QuickTerminalEdge, StartupMode, TabPosition, UpdateInterval,
+};
 use crate::theme::{ColorGroup, ColorKey, NameError};
 
 /// Language of the user interface. A regional variant only defines the texts that
@@ -612,7 +615,42 @@ pub enum Msg {
         first: String,
         more: usize,
     },
+    // Settings lists.
+    /// An entry of a choice list of the settings, for the value it writes.
+    Choice(ChoiceMsg),
 }
+
+/// A value of a choice list of the settings, shown by its label rather than by the
+/// value written to the file.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChoiceMsg {
+    /// A language is shown by its name in itself, the same in every language; `auto`
+    /// is translated.
+    Language(Language),
+    CursorShape(CursorShape),
+    TabPosition(TabPosition),
+    StartupMode(StartupMode),
+    UpdateInterval(UpdateInterval),
+    QuickTerminalEdge(QuickTerminalEdge),
+}
+
+macro_rules! choice_from {
+    ($($kind:ident),*) => {
+        $(impl From<$kind> for ChoiceMsg {
+            fn from(value: $kind) -> Self {
+                ChoiceMsg::$kind(value)
+            }
+        })*
+    };
+}
+choice_from!(
+    Language,
+    CursorShape,
+    TabPosition,
+    StartupMode,
+    UpdateInterval,
+    QuickTerminalEdge
+);
 
 /// Every language, in [`Lang`] order.
 pub const LANGS: [Lang; 4] = [Lang::EnUs, Lang::EnGb, Lang::Fr, Lang::FrCa];
@@ -650,6 +688,8 @@ fn bundle(lang: Lang) -> Bundle {
     let id: LanguageIdentifier = tag.parse().expect("valid language tag");
     let resource = FluentResource::try_new(lang.source().to_owned())
         .unwrap_or_else(|(_, errors)| panic!("i18n/{tag}.ftl: {errors:?}"));
+    let names = FluentResource::try_new(LANGUAGE_NAMES.to_owned())
+        .unwrap_or_else(|(_, errors)| panic!("i18n/languages.ftl: {errors:?}"));
     let mut bundle = FluentBundle::new_concurrent(vec![id]);
     // No RTL in the interface, and the isolation marks would show in the grid font.
     bundle.set_use_isolating(false);
@@ -657,8 +697,16 @@ fn bundle(lang: Lang) -> Bundle {
     bundle
         .add_resource(resource)
         .unwrap_or_else(|errors| panic!("i18n/{tag}.ftl: {errors:?}"));
+    // An identifier of the file that is also a language name fails here.
+    bundle
+        .add_resource(names)
+        .unwrap_or_else(|errors| panic!("i18n/languages.ftl in {tag}: {errors:?}"));
     bundle
 }
+
+/// The name of every language in itself, shared by every bundle: a language reads the
+/// same whatever the language of the interface.
+const LANGUAGE_NAMES: &str = include_str!("../i18n/languages.ftl");
 
 /// Formatter of the Fluent numbers: each [`FluentValue::Number`] is written in the
 /// locale of its bundle, with the formatter kept by the bundle's memoizer. The
@@ -1033,8 +1081,88 @@ fn fluent(msg: &Msg) -> (&'static str, FluentArgs<'_>) {
             args.set("more", *more);
             "more-config-errors"
         }
+        Msg::Choice(choice) => choice_fluent(*choice, &mut args),
     };
     (id, args)
+}
+
+/// Fluent identifier of a choice of the settings, its arguments set in `args`.
+fn choice_fluent(choice: ChoiceMsg, args: &mut FluentArgs) -> &'static str {
+    match choice {
+        ChoiceMsg::Language(language) => language.lang().map_or("language-auto", language_id),
+        ChoiceMsg::CursorShape(shape) => {
+            args.set(
+                "shape",
+                match shape {
+                    CursorShape::Block => "block",
+                    CursorShape::Beam => "beam",
+                    CursorShape::Underline => "underline",
+                },
+            );
+            "choice-cursor-shape"
+        }
+        ChoiceMsg::TabPosition(position) => {
+            args.set(
+                "side",
+                match position {
+                    TabPosition::Top => "top",
+                    TabPosition::Bottom => "bottom",
+                    TabPosition::Left => "left",
+                    TabPosition::Right => "right",
+                },
+            );
+            "choice-side"
+        }
+        ChoiceMsg::QuickTerminalEdge(edge) => {
+            args.set(
+                "side",
+                match edge {
+                    QuickTerminalEdge::Top => "top",
+                    QuickTerminalEdge::Bottom => "bottom",
+                    QuickTerminalEdge::Left => "left",
+                    QuickTerminalEdge::Right => "right",
+                },
+            );
+            "choice-side"
+        }
+        ChoiceMsg::StartupMode(mode) => {
+            args.set(
+                "mode",
+                match mode {
+                    StartupMode::Default => "default",
+                    StartupMode::Maximized => "maximized",
+                    StartupMode::Remember => "remember",
+                },
+            );
+            "choice-startup-mode"
+        }
+        ChoiceMsg::UpdateInterval(interval) => {
+            // Fluent keys cannot start with a digit.
+            args.set(
+                "interval",
+                match interval {
+                    UpdateInterval::Auto => "auto",
+                    UpdateInterval::Hours6 => "hours-6",
+                    UpdateInterval::Hours12 => "hours-12",
+                    UpdateInterval::Hours24 => "hours-24",
+                    UpdateInterval::Days2 => "days-2",
+                    UpdateInterval::Days3 => "days-3",
+                    UpdateInterval::Week1 => "week-1",
+                },
+            );
+            "choice-update-interval"
+        }
+    }
+}
+
+/// Identifier of the name of `lang` in `languages.ftl`.
+fn language_id(lang: Lang) -> &'static str {
+    match lang {
+        Lang::EnUs => "language-en-US",
+        Lang::EnGb => "language-en-GB",
+        Lang::Fr => "language-fr",
+        Lang::FrCa => "language-fr-CA",
+    }
 }
 
 /// Fluent identifier of a configuration error, its arguments set in `args`.
@@ -1460,9 +1588,38 @@ mod tests {
             Msg::DurationHours { .. } => 117,
             Msg::Config(_) => 118,
             Msg::MoreConfigErrors { .. } => 119,
+            Msg::Choice(_) => 120,
         }
     }
-    const VARIANT_COUNT: usize = 120;
+    const VARIANT_COUNT: usize = 121;
+
+    /// Every entry of a choice list, by list, through an exhaustive match: a new kind
+    /// fails to compile here until it is listed.
+    fn choice_lists() -> Vec<Vec<ChoiceMsg>> {
+        fn list<T: Copy + Into<ChoiceMsg>>(values: &[(&str, T)]) -> Vec<ChoiceMsg> {
+            values.iter().map(|&(_, value)| value.into()).collect()
+        }
+        let lists = vec![
+            list(&Language::VALUES),
+            list(&CursorShape::VALUES),
+            list(&TabPosition::VALUES),
+            list(&StartupMode::VALUES),
+            list(&UpdateInterval::VALUES),
+            list(&QuickTerminalEdge::VALUES),
+        ];
+        for (i, choices) in lists.iter().enumerate() {
+            let index = match choices[0] {
+                ChoiceMsg::Language(_) => 0,
+                ChoiceMsg::CursorShape(_) => 1,
+                ChoiceMsg::TabPosition(_) => 2,
+                ChoiceMsg::StartupMode(_) => 3,
+                ChoiceMsg::UpdateInterval(_) => 4,
+                ChoiceMsg::QuickTerminalEdge(_) => 5,
+            };
+            assert_eq!(index, i);
+        }
+        lists
+    }
 
     /// Index of the configuration error, through an exhaustive match: a new variant
     /// fails to compile here until `config_messages` covers it.
@@ -1732,6 +1889,7 @@ mod tests {
             [NameError::Empty, NameError::Invalid, NameError::Taken].map(Msg::ThemeNameError),
         );
         messages.extend(config_messages().into_iter().map(Msg::Config));
+        messages.extend(choice_lists().into_iter().flatten().map(Msg::Choice));
         messages
     }
 
@@ -1911,6 +2069,61 @@ mod tests {
     }
 
     #[test]
+    fn every_language_name_is_used_and_no_language_file_redefines_one() {
+        let resource = fluent_syntax::parser::parse(LANGUAGE_NAMES).expect("parses");
+        let names: Vec<_> = resource
+            .body
+            .into_iter()
+            .filter_map(|entry| match entry {
+                fluent_syntax::ast::Entry::Message(message) => Some(message.id.name),
+                _ => None,
+            })
+            .collect();
+        let named: Vec<_> = LANGS.map(language_id).to_vec();
+        assert_eq!(names, named);
+        for lang in LANGS {
+            for id in message_ids(lang) {
+                assert!(!names.contains(&id), "{id} of {lang:?} is a language name");
+            }
+        }
+    }
+
+    #[test]
+    fn languages_are_named_in_themselves_whatever_the_language() {
+        let name = |lang, language| text(lang, &Msg::Choice(ChoiceMsg::Language(language)));
+        for lang in LANGS {
+            assert_eq!(name(lang, Language::EnUs), "English (US)");
+            assert_eq!(name(lang, Language::EnGb), "English (UK)");
+            assert_eq!(name(lang, Language::Fr), "Français");
+            assert_eq!(name(lang, Language::FrCa), "Français (Canada)");
+        }
+        // `auto` is translated.
+        assert_eq!(name(Lang::EnUs, Language::Auto), "System language");
+        assert_eq!(name(Lang::Fr, Language::Auto), "Langue du système");
+    }
+
+    #[test]
+    fn choices_are_translated() {
+        let choice = |lang, choice: ChoiceMsg| text(lang, &Msg::Choice(choice));
+        assert_eq!(choice(Lang::EnUs, CursorShape::Beam.into()), "Beam");
+        assert_eq!(choice(Lang::Fr, CursorShape::Beam.into()), "Barre");
+        assert_eq!(choice(Lang::Fr, TabPosition::Left.into()), "À gauche");
+        assert_eq!(choice(Lang::Fr, QuickTerminalEdge::Left.into()), "À gauche");
+        assert_eq!(
+            choice(Lang::Fr, UpdateInterval::Days2.into()),
+            "Tous les 2 jours"
+        );
+        assert_eq!(
+            choice(Lang::EnGb, StartupMode::Maximized.into()),
+            "Maximised"
+        );
+        assert_eq!(
+            choice(Lang::FrCa, StartupMode::Maximized.into()),
+            "Maximisée"
+        );
+    }
+
+    #[test]
     fn every_file_starts_with_its_review_status() {
         for lang in LANGS {
             let first = lang.source().lines().next();
@@ -1990,7 +2203,7 @@ mod tests {
     fn every_selector_value_has_its_own_text() {
         // A selector key missing from a file falls back to the default variant
         // silently: distinct texts show that each value has its own.
-        let groups: [Vec<Msg>; 8] = [
+        let mut groups: Vec<Vec<Msg>> = vec![
             reasons()
                 .into_iter()
                 .map(|reason| {
@@ -2012,6 +2225,11 @@ mod tests {
                 .map(Msg::ProgramExited)
                 .to_vec(),
         ];
+        groups.extend(
+            choice_lists()
+                .into_iter()
+                .map(|choices| choices.into_iter().map(Msg::Choice).collect()),
+        );
         for lang in LANGS {
             for group in &groups {
                 let mut texts: Vec<_> = group.iter().map(|msg| text(lang, msg)).collect();
@@ -2145,7 +2363,12 @@ mod tests {
                 minutes: 5,
             },
         ];
-        for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {
+        // Language names, written in the language they name.
+        let named = |msg: &Msg| matches!(msg, Msg::Choice(ChoiceMsg::Language(language)) if language.lang().is_some());
+        for msg in all_messages()
+            .into_iter()
+            .filter(|msg| !same.contains(msg) && !named(msg))
+        {
             assert_ne!(text(Lang::EnUs, &msg), text(Lang::Fr, &msg), "{msg:?}");
         }
     }

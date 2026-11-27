@@ -322,3 +322,32 @@ more-config-errors = { $more ->
     [one] { $first } (+{ $more } autre)
    *[other] { $first } (+{ $more } autres)
 }
+
+## Settings lists
+
+language-auto = Langue du système
+choice-cursor-shape = { $shape ->
+   *[block] Bloc
+    [beam] Barre
+    [underline] Soulignement
+}
+choice-side = { $side ->
+   *[top] En haut
+    [bottom] En bas
+    [left] À gauche
+    [right] À droite
+}
+choice-startup-mode = { $mode ->
+   *[default] Taille configurée
+    [maximized] Maximisée
+    [remember] Taille de la dernière fenêtre
+}
+choice-update-interval = { $interval ->
+   *[auto] Automatique
+    [hours-6] Toutes les 6 heures
+    [hours-12] Toutes les 12 heures
+    [hours-24] Toutes les 24 heures
+    [days-2] Tous les 2 jours
+    [days-3] Tous les 3 jours
+    [week-1] Toutes les semaines
+}

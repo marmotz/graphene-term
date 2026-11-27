@@ -34,3 +34,11 @@ config-invalid-value = invalid value for `{ $path }`: { $reason ->
     [not-a-color] `{ $text }` is not a "#rrggbb" colour
    *[detail] { $detail }
 }
+
+## Settings lists
+
+choice-startup-mode = { $mode ->
+   *[default] Configured size
+    [maximized] Maximised
+    [remember] Size of the last window
+}

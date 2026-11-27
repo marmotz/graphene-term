@@ -90,6 +90,9 @@ a hand edit.
 - Numbers are shown in the format of the interface language (`1,280` in English,
   `1 280` in French). Type them with its decimal separator or a point; group separators
   are ignored, and the file always keeps the point.
+- Lists show their values by name in the interface language (**Beam** for `beam`,
+  **Every 2 days** for `2d`); the file keeps the value. Languages are named in
+  themselves (**Français (Canada)**), whatever the interface language.
 - Problems in the file are shown under the setting concerned; unknown settings are
   listed at the top.
 - While a file has a syntax error, the tab shows it and locks what depends on that

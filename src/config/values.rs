@@ -57,12 +57,17 @@ impl Language {
     /// Language of the interface: the forced one, or `detected` (the locale's) for
     /// `auto`.
     pub fn resolve(self, detected: impl FnOnce() -> Lang) -> Lang {
+        self.lang().unwrap_or_else(detected)
+    }
+
+    /// The forced language; `None` for `auto`.
+    pub fn lang(self) -> Option<Lang> {
         match self {
-            Language::Auto => detected(),
-            Language::EnUs => Lang::EnUs,
-            Language::EnGb => Lang::EnGb,
-            Language::Fr => Lang::Fr,
-            Language::FrCa => Lang::FrCa,
+            Language::Auto => None,
+            Language::EnUs => Some(Lang::EnUs),
+            Language::EnGb => Some(Lang::EnGb),
+            Language::Fr => Some(Lang::Fr),
+            Language::FrCa => Some(Lang::FrCa),
         }
     }
 }
