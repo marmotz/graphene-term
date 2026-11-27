@@ -4,7 +4,7 @@ use winit::keyboard::{Key, NamedKey};
 
 use super::tab_bar::UiMetrics;
 use crate::block_actions::Part;
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::input::Action;
 use crate::keybindings::Keybindings;
 use crate::layout::Rect;
@@ -33,13 +33,13 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Entry {
-        label: String,
+        label: UiText,
         shortcut: Option<String>,
         enabled: bool,
         command: Command,
     },
     Submenu {
-        label: String,
+        label: UiText,
         entries: Vec<Item>,
     },
     Separator,
@@ -111,7 +111,7 @@ fn themes(context: &MenuContext<'_>, lang: Lang) -> Item {
 /// row is a "More..." submenu holding the next ones, and so on.
 fn theme_pages(themes: &[String], rows: usize, lang: Lang) -> Vec<Item> {
     let entry = |theme: &String| Item::Entry {
-        label: theme.clone(),
+        label: UiText::user(theme.clone()),
         shortcut: None,
         enabled: true,
         command: Command::Theme(theme.clone()),
@@ -562,7 +562,7 @@ fn move_selectable(items: &[Item], selected: Option<usize>, delta: isize) -> Opt
 pub struct MenuRow {
     pub rect: Rect,
     pub index: usize,
-    pub label: Option<String>,
+    pub label: Option<UiText>,
     pub text_x: f32,
     pub text_y: f32,
     pub max_width: f32,
@@ -978,14 +978,14 @@ mod tests {
     fn keyboard_navigation_skips_disabled_entries_and_separators() {
         let items = vec![
             Item::Entry {
-                label: "disabled".into(),
+                label: UiText::user("disabled"),
                 shortcut: None,
                 enabled: false,
                 command: Command::Action(Action::Copy),
             },
             Item::Separator,
             Item::Entry {
-                label: "enabled".into(),
+                label: UiText::user("enabled"),
                 shortcut: None,
                 enabled: true,
                 command: Command::Action(Action::Paste),
@@ -1005,15 +1005,15 @@ mod tests {
             (0.0, 0.0),
             vec![
                 Item::Entry {
-                    label: "Copy".into(),
+                    label: UiText::user("Copy"),
                     shortcut: None,
                     enabled: true,
                     command: Command::Action(Action::Copy),
                 },
                 Item::Submenu {
-                    label: "Themes".into(),
+                    label: UiText::user("Themes"),
                     entries: vec![Item::Entry {
-                        label: "Night".into(),
+                        label: UiText::user("Night"),
                         shortcut: None,
                         enabled: true,
                         command: Command::Theme("Night".into()),
@@ -1046,7 +1046,7 @@ mod tests {
         let menu = ContextMenu::new(
             (98.0, 98.0),
             vec![Item::Entry {
-                label: "Copy".into(),
+                label: UiText::user("Copy"),
                 shortcut: None,
                 enabled: true,
                 command: Command::Action(Action::Copy),
@@ -1146,7 +1146,7 @@ mod tests {
         ContextMenu::new(
             (10.0, 10.0),
             vec![Item::Submenu {
-                label: "Themes".into(),
+                label: UiText::user("Themes"),
                 entries: theme_pages(&themes, rows, Lang::EnUs),
             }],
         )
@@ -1249,7 +1249,7 @@ mod tests {
 
     fn theme_menu() -> ContextMenu {
         let theme = |name: &str| Item::Entry {
-            label: name.into(),
+            label: UiText::user(name),
             shortcut: None,
             enabled: true,
             command: Command::Theme(name.into()),
@@ -1265,7 +1265,7 @@ mod tests {
                     Lang::EnUs,
                 ),
                 Item::Submenu {
-                    label: "Themes".into(),
+                    label: UiText::user("Themes"),
                     entries: vec![theme("Dark"), theme("Light")],
                 },
             ],
@@ -1335,9 +1335,9 @@ mod tests {
         let menu = ContextMenu::from_context(
             (0.0, 0.0),
             vec![Item::Submenu {
-                label: "Themes".into(),
+                label: UiText::user("Themes"),
                 entries: vec![Item::Entry {
-                    label: "Dark".into(),
+                    label: UiText::user("Dark"),
                     shortcut: None,
                     enabled: true,
                     command: Command::Theme("Dark".into()),

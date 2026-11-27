@@ -6,7 +6,7 @@ use winit::keyboard::{Key, NamedKey};
 use super::command_palette::{MARGIN, MAX_WIDTH, PADDING, ROW_PADDING, TEXT_PADDING, TOP};
 use super::tab_bar::UiMetrics;
 use super::text_field::TextField;
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::layout::Rect;
 use crate::terminal::PaneId;
 
@@ -63,7 +63,7 @@ impl RenameTab {
 pub struct RenameTabLayout {
     pub rect: Rect,
     /// Heading of the box and its left edge and top.
-    pub heading: String,
+    pub heading: UiText,
     pub heading_x: f32,
     pub heading_y: f32,
     /// The text field.

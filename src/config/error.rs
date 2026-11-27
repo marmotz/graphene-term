@@ -47,22 +47,22 @@ impl ConfigError {
     }
 
     /// What is wrong, in `lang`, without the file nor the line.
-    pub fn message(&self, lang: Lang) -> String {
+    pub fn message(&self, lang: Lang) -> UiText {
         i18n::text(lang, &Msg::Config((*self.detail).clone()))
     }
 
     /// The error in `lang`, after the name of its file and its line when known:
     /// `config.toml:12: unknown key `font.sise``.
-    pub fn text(&self, lang: Lang) -> String {
+    pub fn text(&self, lang: Lang) -> UiText {
         let name = self.file.file_name().map_or_else(
             || self.file.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        let message = self.message(lang);
-        match self.line {
-            Some(line) => format!("{name}:{line}: {message}"),
-            None => format!("{name}: {message}"),
-        }
+        let location = match self.line {
+            Some(line) => format!("{name}:{line}: "),
+            None => format!("{name}: "),
+        };
+        self.message(lang).after(location)
     }
 }
 

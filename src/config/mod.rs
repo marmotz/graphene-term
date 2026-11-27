@@ -16,7 +16,7 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 
 use crate::appearance::Appearance;
-use crate::i18n::{self, ConfigMsg, Lang, Msg, ValueError};
+use crate::i18n::{self, ConfigMsg, Lang, Msg, UiText, ValueError};
 use crate::keybindings;
 
 mod error;
@@ -1250,7 +1250,7 @@ autostart = true
             ])
         );
         assert!(unknown.is_empty());
-        let messages: Vec<String> = errors.iter().map(|e| e.text(Lang::EnUs)).collect();
+        let messages: Vec<UiText> = errors.iter().map(|e| e.text(Lang::EnUs)).collect();
         assert_eq!(
             messages,
             [

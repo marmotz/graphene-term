@@ -145,16 +145,16 @@ impl View {
         let label = |msg: Msg| i18n::text(lang, &msg);
         let editable = !model.edited_is_built_in();
         ui.add_space(24.0);
-        ui.heading(label(Msg::ThemeEditor));
+        ui.show_heading(label(Msg::ThemeEditor));
         ui.separator();
-        ui.label(label(Msg::ThemeEditorIntro));
+        ui.show_label(label(Msg::ThemeEditorIntro));
         ui.add_space(8.0);
         Frame::group(ui.style())
             .inner_margin(Margin::same(BOX_MARGIN))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(label(Msg::EditedTheme));
+                    ui.show_label(label(Msg::EditedTheme));
                     if let Some(name) = theme_selector(ui, model) {
                         self.switch_theme(model, name, edits);
                     }
@@ -182,7 +182,7 @@ impl View {
                         self.request_delete(model);
                     }
                     ui.separator();
-                    if ui.button(label(Msg::OpenThemesFolder)).clicked() {
+                    if ui.show_button(label(Msg::OpenThemesFolder)).clicked() {
                         edits.open_themes_dir = true;
                     }
                 });
@@ -191,24 +191,24 @@ impl View {
                     ui.add_space(6.0);
                     warn_label(
                         ui,
-                        &label(Msg::ConfirmDeleteTheme(model.edited_theme().to_owned())),
+                        label(Msg::ConfirmDeleteTheme(model.edited_theme().to_owned())),
                     );
                     ui.horizontal(|ui| {
-                        if ui.button(label(Msg::Delete)).clicked() {
+                        if ui.show_button(label(Msg::Delete)).clicked() {
                             self.confirm_delete(model, edits);
                         }
-                        if ui.button(label(Msg::Cancel)).clicked() {
+                        if ui.show_button(label(Msg::Cancel)).clicked() {
                             self.confirm_delete = false;
                         }
                     });
                 }
                 if !editable {
                     ui.add_space(6.0);
-                    warn_label(ui, &label(Msg::BuiltInTheme));
+                    warn_label(ui, label(Msg::BuiltInTheme));
                 }
             });
         ui.add_space(12.0);
-        ui.label(RichText::new(label(Msg::ThemeColorsHint)).weak());
+        ui.show_label(label(Msg::ThemeColorsHint).weak());
         ui.add_space(4.0);
         let group_size = ui
             .style()
@@ -223,18 +223,16 @@ impl View {
                     for (index, group) in ColorGroup::ALL.into_iter().enumerate() {
                         ui.vertical(|ui| {
                             ui.add_space(if index == 0 { 4.0 } else { 14.0 });
-                            ui.label(
-                                RichText::new(label(Msg::ThemeColorGroup(group)))
-                                    .strong()
-                                    .size(group_size),
+                            ui.show_label(
+                                label(Msg::ThemeColorGroup(group)).strong().size(group_size),
                             );
                         });
-                        ui.label("");
+                        ui.show_label(UiText::default());
                         ui.end_row();
                         for key in group.keys() {
                             ui.horizontal(|ui| {
                                 ui.add_space(COLOR_INDENT);
-                                ui.label(label(Msg::ThemeColor(key)));
+                                ui.show_label(label(Msg::ThemeColor(key)));
                             });
                             ui.push_id(key, |ui| {
                                 ui.horizontal(|ui| self.color_row(ui, lang, model, key, edits));
@@ -260,16 +258,16 @@ impl View {
         };
         let (mut confirm, mut cancel) = (false, false);
         ui.horizontal(|ui| {
-            ui.label(label(Msg::NewThemeName));
+            ui.show_label(label(Msg::NewThemeName));
             let response =
                 ui.add(TextEdit::singleline(&mut naming.text).desired_width(FIELD_WIDTH));
             confirm =
                 response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            confirm |= ui.button(label(Msg::Confirm)).clicked();
-            cancel = ui.button(label(Msg::Cancel)).clicked();
+            confirm |= ui.show_button(label(Msg::Confirm)).clicked();
+            cancel = ui.show_button(label(Msg::Cancel)).clicked();
         });
         if let Some(error) = naming.error {
-            error_label(ui, &label(Msg::ThemeNameError(error)));
+            error_label(ui, label(Msg::ThemeNameError(error)));
         }
         if cancel {
             self.naming = None;
@@ -348,7 +346,7 @@ impl View {
             }
         }
         if invalid {
-            error_label(ui, &i18n::text(lang, &Msg::InvalidHexColor));
+            error_label(ui, i18n::text(lang, &Msg::InvalidHexColor));
         }
     }
 }

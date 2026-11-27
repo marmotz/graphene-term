@@ -21,8 +21,8 @@ impl Session {
         let (title, body) = notifications::content(&notice, title.as_deref(), self.lang);
         self.notifier.send(NotificationCommand::Show {
             pane: id,
-            title,
-            body,
+            title: title.into(),
+            body: body.into(),
         });
         self.sync_badge();
         // The counts are drawn on the tab and pane bars.

@@ -1,0 +1,9 @@
+# The texts of the Settings window go through the wrappers of
+# `src/settings/view/text.rs`, which only take a translated `UiText`.
+disallowed-methods = [
+    { path = "egui::Ui::label", reason = "use `Texts::show_label` with a `UiText`" },
+    { path = "egui::Ui::button", reason = "use `Texts::show_button` with a `UiText`" },
+    { path = "egui::Ui::heading", reason = "use `Texts::show_heading` with a `UiText`" },
+    { path = "egui::Ui::selectable_label", reason = "use `Texts::show_selectable` with a `UiText`" },
+    { path = "egui::Ui::strong", reason = "use `Texts::show_label` with a strong `UiText`" },
+]

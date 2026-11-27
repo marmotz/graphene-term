@@ -22,7 +22,7 @@ use super::text_field::TextField;
 use crate::block_actions::{self, Direction as BlockDirection, Part};
 use crate::config::{MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::easter_eggs::secrets::{self, Secret};
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::input::Action;
 use crate::keybindings::Keybindings;
 use crate::layout::Rect;
@@ -73,7 +73,7 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub command: Command,
-    pub label: String,
+    pub label: UiText,
     pub shortcut: Option<String>,
 }
 
@@ -627,7 +627,7 @@ impl PaletteLayout {
         let input_text_y = input.y + row_padding;
         let placeholder = palette.query().is_empty();
         let input_text = if placeholder {
-            i18n::text(lang, &Msg::PalettePlaceholder)
+            i18n::text(lang, &Msg::PalettePlaceholder).into()
         } else {
             palette.query().to_owned()
         };
@@ -771,7 +771,7 @@ mod tests {
     fn entry(label: &str, action: Action) -> Entry {
         Entry {
             command: Command::Action(action),
-            label: label.to_owned(),
+            label: UiText::user(label),
             shortcut: None,
         }
     }

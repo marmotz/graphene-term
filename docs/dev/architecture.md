@@ -134,7 +134,7 @@ src/
                    whole word, 10 000 cap, frozen grid cache), current match navigation (pure)
   pane_search.rs   search bar state of a pane: field, toggles, matches, current match, focus,
                    search again on a new pane revision, key routing of a focused bar (pure)
-  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations, read from the Fluent files of `i18n/`; numbers and dates in the format of the language (ICU4X)
+  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations, read from the Fluent files of `i18n/`, as `UiText` (the only type the display fields take); numbers and dates in the format of the language (ICU4X)
   input.rs         key -> bytes encoding, per-pane key resolution (editor command, shortcut, input), actions and their ids, paste wrapping
   keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)
   mouse.rs         mouse, focus and alternate scroll encoding, mouse routing between app and Graphene (pure)
@@ -329,7 +329,9 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
 - Layout (`settings/view.rs`): a sidebar with the ten sections (`i18n::SettingsSection`:
   Language, Font, Window, Scrollback, Cursor, Selection, Tabs, Theme, Keyboard shortcuts,
   Updates) and the selected section's fields (label, widget, errors under it); labels
-  in the configuration's resolved language (`Msg::Field(SettingsField)`). Text uses the
+  in the configuration's resolved language (`Msg::Field(SettingsField)`), written
+  through the `UiText` wrappers of `settings/view/text.rs` (egui's own text methods are
+  disallowed by `clippy.toml`). Text uses the
   command palette's font (`settings/fonts.rs`: the sans-serif face of cosmic-text's font
   database, in front of egui's fonts) at the palette's size. In an open combo box,
   typing the start of a choice highlights it and scrolls to it, `Enter` picks it; the

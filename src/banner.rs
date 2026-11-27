@@ -7,19 +7,19 @@
 use semver::Version;
 
 use crate::config::ConfigError;
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::layout::{CellSize, Rect};
 use crate::update::{self, Release};
 
 /// Label of the action closing the update banner for the session.
-const CLOSE_LABEL: &str = "×";
+const CLOSE_SYMBOL: &str = "×";
 
 /// Content of the banner: a message followed by clickable actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Banner {
-    pub text: String,
+    pub text: UiText,
     /// Labels of the click targets, drawn after the text, left to right.
-    pub actions: Vec<String>,
+    pub actions: Vec<UiText>,
 }
 
 impl Banner {
@@ -29,7 +29,13 @@ impl Banner {
         let first = errors.first()?.text(lang);
         let text = match errors.len() - 1 {
             0 => first,
-            more => i18n::text(lang, &Msg::MoreConfigErrors { first, more }),
+            more => i18n::text(
+                lang,
+                &Msg::MoreConfigErrors {
+                    first: first.into(),
+                    more,
+                },
+            ),
         };
         Some(Self {
             text,
@@ -48,7 +54,7 @@ impl Banner {
                 .map(|action| match action {
                     UpdateAction::Open => i18n::text(lang, &Msg::OpenRelease),
                     UpdateAction::Ignore => i18n::text(lang, &Msg::IgnoreVersion),
-                    UpdateAction::Close => CLOSE_LABEL.to_owned(),
+                    UpdateAction::Close => UiText::symbol(CLOSE_SYMBOL),
                 })
                 .collect(),
         }
@@ -214,7 +220,7 @@ impl BannerLayout {
         let mut texts = vec![PlacedText {
             x,
             y: margin,
-            text: banner.text.clone(),
+            text: banner.text.to_string(),
         }];
         x += text_width(&banner.text);
         let mut actions = Vec::with_capacity(banner.actions.len());
@@ -223,7 +229,7 @@ impl BannerLayout {
             texts.push(PlacedText {
                 x,
                 y: margin,
-                text: label.clone(),
+                text: label.to_string(),
             });
             // The target extends half a gap around the label, over the full banner height.
             actions.push(PixelRect {
@@ -448,7 +454,7 @@ mod tests {
     #[test]
     fn layout_spans_the_window_top() {
         let banner = Banner {
-            text: "hello".into(),
+            text: UiText::user("hello"),
             actions: Vec::new(),
         };
         let layout = BannerLayout::new(&banner, CELL, 800.0);
@@ -475,8 +481,8 @@ mod tests {
     #[test]
     fn actions_follow_the_text() {
         let banner = Banner {
-            text: "abc".into(),
-            actions: vec!["open".into(), "x".into()],
+            text: UiText::user("abc"),
+            actions: vec![UiText::user("open"), UiText::user("x")],
         };
         let layout = BannerLayout::new(&banner, CELL, 800.0);
         // Text from 20 to 50, then a 20 px gap before each action.
@@ -491,8 +497,8 @@ mod tests {
     #[test]
     fn hit_testing() {
         let banner = Banner {
-            text: "abc".into(),
-            actions: vec!["open".into(), "x".into()],
+            text: UiText::user("abc"),
+            actions: vec![UiText::user("open"), UiText::user("x")],
         };
         let layout = BannerLayout::new(&banner, CELL, 800.0);
         assert_eq!(layout.hit(30.0, 10.0), Some(BannerHit::Body));
@@ -505,7 +511,7 @@ mod tests {
     #[test]
     fn layout_height_does_not_depend_on_the_text() {
         let short = Banner {
-            text: "a".to_owned(),
+            text: UiText::user("a"),
             actions: Vec::new(),
         };
         let long = Banner::update(&release("v0.2.0"), Lang::EnUs);

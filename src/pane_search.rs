@@ -8,7 +8,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::chrome::search_bar::SearchBarView;
 use crate::chrome::search_field::SearchField;
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::input::Action;
 use crate::search::{self, Match, Matches, Query, Searcher, StatusFilter, Zone};
 use crate::view::{RowSource, ViewRow};
@@ -222,7 +222,7 @@ impl SearchState {
     pub fn view(&self, filters: bool, lang: Lang) -> SearchBarView {
         let text = |msg: Msg| i18n::text(lang, &msg);
         let counter = match self.counter() {
-            Counter::Empty => String::new(),
+            Counter::Empty => UiText::default(),
             Counter::Invalid => text(Msg::InvalidRegex),
             Counter::Count {
                 current,
@@ -231,7 +231,8 @@ impl SearchState {
             } => {
                 let current = current.map_or_else(|| "0".to_owned(), |n| n.to_string());
                 let plus = if capped { "+" } else { "" };
-                format!("{current}/{total}{plus}")
+                // Digits and signs, written the same in every language.
+                UiText::user(format!("{current}/{total}{plus}"))
             }
         };
         SearchBarView {

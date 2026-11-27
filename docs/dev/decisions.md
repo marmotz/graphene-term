@@ -449,6 +449,21 @@ instead of an English string. The texts the application does not write, the deta
 the `toml` crate and of an `io::Error`, are inserted untranslated after a translated
 prefix. The logs keep English (`Lang::EnUs`).
 
+A hardcoded text is refused by the types. The display fields (`Banner.text` and
+`actions`, `context_menu::Item.label`, `command_palette::Entry.label`, the title, message
+and buttons of `dialog`, the texts of the search bar, the title and body of the
+notifications) are an `i18n::UiText`, which only `i18n::text` builds from a message,
+`UiText::user` from content the application does not write (tab title, program, theme
+or font name, command, path) and `UiText::symbol` from a symbol (`×`); it reads as a
+`str` and turns into a `String`, but no `String` turns into it, so a literal does not
+compile there. egui's `Ui::label`, `button`, `heading`, `selectable_label` and `strong`
+take any `&str`: `clippy.toml` lists them in `disallowed-methods` (CI runs
+`cargo clippy -- -D warnings`), and the Settings view calls the wrappers of
+`settings/view/text.rs` (`Texts::show_label`...), which take a `UiText` styled through
+`Style` (`weak`, `strong`, `small`...). A test scanning the code for literals was
+rejected: false positives, and easy to get around. Key names of shortcuts (`Ctrl+T`)
+stay English, as written in the `keybindings` file.
+
 ### Numbers and dates of the language: ICU4X
 
 Numbers and dates follow the conventions of the interface language through ICU4X 2.4

@@ -141,8 +141,8 @@ system-monospace = System monospace
 active-screen = Screen under the mouse cursor
 primary-screen = Primary screen
 unknown-keys = Unknown keys
-# $line: 1-based line of the file.
-at-line = line { $line }
+# $key: unknown key of the file, $line: its 1-based line.
+key-at-line = { $key } (line { $line })
 fix-file-by-hand = The file cannot be read: fix it by hand. The settings stay disabled until then.
 quick-terminal-unavailable-on-wayland = The quick terminal is not available on Wayland
 quick-terminal-disabled = Turn it on to change the settings below. Takes effect the next time Graphene starts.
@@ -160,8 +160,8 @@ change-shortcut = Change
 remove-shortcut = Remove this shortcut
 no-shortcut = No shortcut
 press-shortcut = Press a shortcut · Esc to cancel
-# $action: label of the other action.
-already-used-by = Already used by { $action }
+# $shortcut: key names of the captured shortcut, $action: label of the other action.
+already-used-by = { $shortcut }: Already used by { $action }
 replace = Replace
 filter-actions = Filter actions
 no-action-matches = No action matches

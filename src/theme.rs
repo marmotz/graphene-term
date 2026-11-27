@@ -951,7 +951,7 @@ banner = "#000000"
         assert_eq!(p.selection_foreground, None);
         let lines: Vec<_> = errors
             .iter()
-            .map(|e| (e.line, e.message(Lang::EnUs)))
+            .map(|e| (e.line, String::from(e.message(Lang::EnUs))))
             .collect();
         assert_eq!(
             lines,

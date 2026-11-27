@@ -14,7 +14,9 @@ use crate::config::{
     MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, QuickTerminalScreen, StartupMode, TabPosition,
     UpdateInterval,
 };
-use crate::i18n::{self, ChoiceMsg, Lang, Msg, SettingsField as Field, SettingsSection as Section};
+use crate::i18n::{
+    self, ChoiceMsg, Lang, Msg, SettingsField as Field, SettingsSection as Section, UiText,
+};
 use crate::input::Action;
 use crate::keybindings::{self, Keybindings, NONE_ACTION, Shortcut};
 use crate::palette::Palette;
@@ -660,7 +662,7 @@ impl SettingsModel {
     }
 
     /// The last failed write, in the language of the model.
-    pub fn write_error(&self) -> Option<String> {
+    pub fn write_error(&self) -> Option<UiText> {
         self.write_error.as_ref().map(|error| error.text(self.lang))
     }
 
@@ -856,7 +858,7 @@ impl SettingsModel {
     }
 
     /// Messages of the configuration errors of `field`, in the language of the model.
-    pub fn field_errors(&self, field: Field) -> Vec<String> {
+    pub fn field_errors(&self, field: Field) -> Vec<UiText> {
         let Some(path) = path(field).map(config::key_path) else {
             return Vec::new();
         };
@@ -868,7 +870,7 @@ impl SettingsModel {
 
     /// Messages of the configuration errors of `section` tied to no field (a section
     /// that is not a table, a keybinding).
-    pub fn section_errors(&self, section: Section) -> Vec<String> {
+    pub fn section_errors(&self, section: Section) -> Vec<UiText> {
         self.value_errors()
             .filter(|error| {
                 let key = error.key.as_deref().unwrap_or_default();
@@ -879,7 +881,7 @@ impl SettingsModel {
     }
 
     /// Errors of the theme file and theme name, shown in the Theme section.
-    pub fn theme_errors(&self) -> Vec<String> {
+    pub fn theme_errors(&self) -> Vec<UiText> {
         self.errors
             .theme
             .iter()
@@ -898,7 +900,7 @@ impl SettingsModel {
     }
 
     /// Value errors tied to neither a field nor a section.
-    pub fn other_errors(&self) -> Vec<String> {
+    pub fn other_errors(&self) -> Vec<UiText> {
         self.value_errors()
             .filter(|error| {
                 let key = error.key.as_deref().unwrap_or_default();
@@ -1894,7 +1896,7 @@ bell = true
     fn enum_choices_write_their_value_and_show_a_translated_label() {
         let m = model("[cursor]\nshape = \"beam\"\n");
         let choices = m.choices(Field::CursorShape);
-        let shown = |lang| -> Vec<String> {
+        let shown = |lang| -> Vec<UiText> {
             choices
                 .iter()
                 .map(|choice| i18n::text(lang, choice.label.as_ref().expect("label")))

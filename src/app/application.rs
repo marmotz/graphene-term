@@ -341,7 +341,7 @@ impl App {
             notifications: self.config.notifications.clone(),
             notifier: notifications::backend::spawn(
                 self.proxy.clone(),
-                crate::i18n::text(lang, &crate::i18n::Msg::ShowPane),
+                crate::i18n::text(lang, &crate::i18n::Msg::ShowPane).into(),
             ),
             badge: Badge::default(),
             progress_epoch: Instant::now(),

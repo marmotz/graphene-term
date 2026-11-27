@@ -474,8 +474,11 @@ pub enum Msg {
     PrimaryScreen,
     /// Heading of the unknown keys of the file.
     UnknownKeys,
-    /// 1-based line of the file.
-    AtLine(usize),
+    /// An unknown key of the file and its 1-based line.
+    KeyAtLine {
+        key: String,
+        line: usize,
+    },
     /// Note shown when the file cannot be parsed and the settings are disabled.
     FixFileByHand,
     /// Why the quick terminal section is disabled under Wayland.
@@ -517,8 +520,11 @@ pub enum Msg {
     NoShortcut,
     /// Shown while the next key press is captured as a shortcut.
     PressShortcut,
-    /// A captured shortcut is bound to this other action (its label).
-    AlreadyUsedBy(String),
+    /// A captured shortcut (its key names) is bound to this other action (its label).
+    AlreadyUsedBy {
+        shortcut: String,
+        action: String,
+    },
     /// Button binding a captured shortcut over the other action.
     Replace,
     /// Hint of the field filtering the shortcuts list by action name.
@@ -842,9 +848,91 @@ fn format(bundle: &Bundle, id: &str, args: &FluentArgs) -> Option<(String, Vec<F
     Some((text, errors))
 }
 
+/// A text shown in the interface. It is built only by [`text`], from a translated
+/// message, by [`UiText::user`], for content that is not a text of the application,
+/// or by [`UiText::symbol`]: a string literal does not become a label by mistake.
+///
+/// It reads as a `str` ([`Deref`](std::ops::Deref), [`Display`](std::fmt::Display))
+/// and turns back into a `String`, but no `String` turns into it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UiText(String);
+
+impl UiText {
+    /// Content that is not a text of the application, shown as is: a tab title, a
+    /// program, theme or font name, a command, a path, an error from the system.
+    pub fn user(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
+    /// A symbol written the same in every language, such as `×`.
+    pub fn symbol(symbol: &'static str) -> Self {
+        Self(symbol.to_owned())
+    }
+
+    /// This text after `prefix`, content that is not a text of the application either,
+    /// such as a file name and a line number.
+    pub fn after(self, prefix: impl Into<String>) -> Self {
+        let mut text = prefix.into();
+        text.push_str(&self.0);
+        Self(text)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::ops::Deref for UiText {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for UiText {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for UiText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<UiText> for String {
+    fn from(text: UiText) -> Self {
+        text.0
+    }
+}
+
+impl PartialEq<str> for UiText {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for UiText {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for UiText {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}
+
 /// Text of `msg` in `lang`, or in the first of its [fallbacks](Lang::fallbacks) that
 /// defines it.
-pub fn text(lang: Lang, msg: &Msg) -> String {
+pub fn text(lang: Lang, msg: &Msg) -> UiText {
     let (id, args) = fluent(msg);
     let found = lang.fallbacks().find_map(|lang| {
         format(&BUNDLES[lang as usize], id, &args).map(|formatted| (lang, formatted))
@@ -854,10 +942,10 @@ pub fn text(lang: Lang, msg: &Msg) -> String {
             if !errors.is_empty() {
                 log::warn!("i18n: {id} in {}: {errors:?}", lang.tag());
             }
-            text
+            UiText(text)
         }
         // The tests check that every message exists in every base language.
-        None => id.to_owned(),
+        None => UiText(id.to_owned()),
     }
 }
 
@@ -941,9 +1029,10 @@ fn fluent(msg: &Msg) -> (&'static str, FluentArgs<'_>) {
         Msg::ActiveScreen => "active-screen",
         Msg::PrimaryScreen => "primary-screen",
         Msg::UnknownKeys => "unknown-keys",
-        Msg::AtLine(line) => {
+        Msg::KeyAtLine { key, line } => {
+            args.set("key", key.as_str());
             args.set("line", *line);
-            "at-line"
+            "key-at-line"
         }
         Msg::FixFileByHand => "fix-file-by-hand",
         Msg::QuickTerminalUnavailableOnWayland => "quick-terminal-unavailable-on-wayland",
@@ -982,7 +1071,8 @@ fn fluent(msg: &Msg) -> (&'static str, FluentArgs<'_>) {
         Msg::RemoveShortcut => "remove-shortcut",
         Msg::NoShortcut => "no-shortcut",
         Msg::PressShortcut => "press-shortcut",
-        Msg::AlreadyUsedBy(action) => {
+        Msg::AlreadyUsedBy { shortcut, action } => {
+            args.set("shortcut", shortcut.as_str());
             args.set("action", action.as_str());
             "already-used-by"
         }
@@ -1526,7 +1616,7 @@ mod tests {
             Msg::Field(_) => 43,
             Msg::SystemMonospace => 44,
             Msg::UnknownKeys => 45,
-            Msg::AtLine(_) => 46,
+            Msg::KeyAtLine { .. } => 46,
             Msg::FixFileByHand => 47,
             Msg::CannotSave(_) => 48,
             Msg::NotANumber => 49,
@@ -1539,7 +1629,7 @@ mod tests {
             Msg::RemoveShortcut => 54,
             Msg::NoShortcut => 55,
             Msg::PressShortcut => 56,
-            Msg::AlreadyUsedBy(_) => 57,
+            Msg::AlreadyUsedBy { .. } => 57,
             Msg::Replace => 58,
             Msg::ThemeEditor => 69,
             Msg::EditedTheme => 70,
@@ -1822,7 +1912,10 @@ mod tests {
             Msg::ActiveScreen,
             Msg::PrimaryScreen,
             Msg::UnknownKeys,
-            Msg::AtLine(12),
+            Msg::KeyAtLine {
+                key: "font.sise".into(),
+                line: 12,
+            },
             Msg::FixFileByHand,
             Msg::QuickTerminalUnavailableOnWayland,
             Msg::QuickTerminalDisabled,
@@ -1846,7 +1939,10 @@ mod tests {
             Msg::RemoveShortcut,
             Msg::NoShortcut,
             Msg::PressShortcut,
-            Msg::AlreadyUsedBy("Copy".into()),
+            Msg::AlreadyUsedBy {
+                shortcut: "Ctrl+C".into(),
+                action: "Copy".into(),
+            },
             Msg::Replace,
             Msg::FilterActions,
             Msg::NoActionMatches,
@@ -2374,15 +2470,42 @@ mod tests {
     }
 
     #[test]
+    fn user_content_is_shown_as_is() {
+        for content in ["~/src", "  vim  ", "Ctrl+C", "", "été 🌞", "{ $tab }"] {
+            let text = UiText::user(content);
+            assert_eq!(text, content);
+            assert_eq!(text.as_str(), content);
+            assert_eq!(text.to_string(), content);
+            assert_eq!(String::from(text), content);
+        }
+        assert_eq!(UiText::user(String::from("Dark")), "Dark");
+        assert_eq!(UiText::symbol("×"), "×");
+    }
+
+    #[test]
+    fn a_text_after_user_content_keeps_both() {
+        let message = text(Lang::Fr, &Msg::Bell);
+        assert_eq!(
+            message.clone().after("config.toml:12: "),
+            format!("config.toml:12: {message}")
+        );
+        assert_eq!(UiText::user("b").after(""), "b");
+    }
+
+    #[test]
     fn messages_with_values_include_them() {
         assert_eq!(text(Lang::EnUs, &Msg::GoToTab(4)), "Go to tab 4");
+        let used = |action: &str| Msg::AlreadyUsedBy {
+            shortcut: "Ctrl+T".into(),
+            action: action.into(),
+        };
         assert_eq!(
-            text(Lang::EnUs, &Msg::AlreadyUsedBy("New tab".into())),
-            "Already used by New tab"
+            text(Lang::EnUs, &used("New tab")),
+            "Ctrl+T: Already used by New tab"
         );
         assert_eq!(
-            text(Lang::Fr, &Msg::AlreadyUsedBy("Nouvel onglet".into())),
-            "Déjà utilisé par Nouvel onglet"
+            text(Lang::Fr, &used("Nouvel onglet")),
+            "Ctrl+T : Déjà utilisé par Nouvel onglet"
         );
         assert_eq!(text(Lang::EnUs, &Msg::LinesHidden(1)), "1 line hidden");
         assert_eq!(text(Lang::EnUs, &Msg::LinesHidden(12)), "12 lines hidden");
@@ -2453,8 +2576,12 @@ mod tests {
             text(Lang::Fr, &Msg::AddShortcutHint),
             "Ajouter un raccourci"
         );
-        assert_eq!(text(Lang::EnUs, &Msg::AtLine(12)), "line 12");
-        assert_eq!(text(Lang::Fr, &Msg::AtLine(12)), "ligne 12");
+        let key = || Msg::KeyAtLine {
+            key: "font.sise".into(),
+            line: 12,
+        };
+        assert_eq!(text(Lang::EnUs, &key()), "font.sise (line 12)");
+        assert_eq!(text(Lang::Fr, &key()), "font.sise (ligne 12)");
         assert_eq!(text(Lang::EnUs, &Msg::AtLeast(6.0)), "Must be at least 6");
         assert_eq!(text(Lang::Fr, &Msg::AtMost(72.0)), "Doit valoir au plus 72");
         assert_eq!(

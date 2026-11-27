@@ -7,7 +7,7 @@
 use winit::keyboard::{Key, NamedKey};
 
 use super::tab_bar::UiMetrics;
-use crate::i18n::{self, CloseTarget, Lang, Msg};
+use crate::i18n::{self, CloseTarget, Lang, Msg, UiText};
 use crate::layout::Rect;
 use crate::terminal::PaneId;
 use crate::workspace::Workspace;
@@ -90,12 +90,12 @@ impl ConfirmClose {
     }
 
     /// The question, naming what closes.
-    pub fn title(&self, lang: Lang) -> String {
+    pub fn title(&self, lang: Lang) -> UiText {
         i18n::text(lang, &Msg::ConfirmCloseTitle(self.target.kind()))
     }
 
     /// The programs still running.
-    pub fn message(&self, lang: Lang) -> String {
+    pub fn message(&self, lang: Lang) -> UiText {
         i18n::text(lang, &Msg::ProgramsRunning(self.programs.clone()))
     }
 }
@@ -121,7 +121,7 @@ pub fn answer_for(key: &Key) -> Option<Answer> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Button {
     pub rect: Rect,
-    pub label: String,
+    pub label: UiText,
     /// Left edge of the label, centered in the button.
     pub label_x: f32,
     pub answer: Answer,
@@ -133,8 +133,8 @@ pub struct Button {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DialogLayout {
     pub rect: Rect,
-    pub title: String,
-    pub message: String,
+    pub title: UiText,
+    pub message: UiText,
     /// Left edge of the title and message lines.
     pub text_x: f32,
     pub title_y: f32,

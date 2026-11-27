@@ -957,8 +957,8 @@ mod tests {
     #[test]
     fn banner_goes_in_the_overlay_above_the_cursor() {
         let banner = Banner {
-            text: "oops".into(),
-            actions: vec!["x".into()],
+            text: crate::i18n::UiText::user("oops"),
+            actions: vec![crate::i18n::UiText::user("x")],
         };
         let mut f = frame(vec![vec![cell('a')]]);
         f.cursor = Some(FrameCursor {
@@ -999,7 +999,7 @@ mod tests {
     fn grid_is_drawn_at_the_pane_size_and_the_banner_at_the_base_size() {
         let large = GridSize::new(20.0);
         let banner = Banner {
-            text: "ok".into(),
+            text: crate::i18n::UiText::user("ok"),
             actions: Vec::new(),
         };
         // The pane's cells are twice as wide as the base cells the banner is laid out with.
@@ -1036,7 +1036,7 @@ mod tests {
     #[test]
     fn banner_spaces_draw_no_glyph() {
         let banner = Banner {
-            text: "a b".into(),
+            text: crate::i18n::UiText::user("a b"),
             actions: vec![],
         };
         let mut f = frame(vec![vec![cell(' ')]]);
@@ -1297,8 +1297,8 @@ mod tests {
     #[test]
     fn backgrounds_cursor_and_banner_stay_opaque() {
         let banner = Banner {
-            text: "oops".into(),
-            actions: vec!["x".into()],
+            text: crate::i18n::UiText::user("oops"),
+            actions: vec![crate::i18n::UiText::user("x")],
         };
         // Explicit background (also how the selection is drawn), cursor and banner.
         let mut row = vec![cell('a'), cell('b')];

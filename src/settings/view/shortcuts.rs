@@ -114,14 +114,14 @@ impl View {
                         .desired_width(FIELD_WIDTH),
                 );
                 if self.capturing == Some(Capture::Search) {
-                    if ui.button(label(Msg::Cancel)).clicked() {
+                    if ui.show_button(label(Msg::Cancel)).clicked() {
                         self.capturing = None;
                     }
                 } else if let ShortcutFilter::Shortcut { shortcut, .. } = self.filter {
                     if ui.add(chip(&shortcut.label())).clicked() {
                         self.set_filter(ShortcutFilter::None);
                     }
-                } else if ui.button(label(Msg::SearchShortcut)).clicked() {
+                } else if ui.show_button(label(Msg::SearchShortcut)).clicked() {
                     self.capturing = Some(Capture::Search);
                     self.conflict = None;
                 }
@@ -129,7 +129,7 @@ impl View {
             })
             .inner;
         if self.capturing == Some(Capture::Search) {
-            ui.label(RichText::new(label(Msg::PressShortcut)).weak());
+            ui.show_label(label(Msg::PressShortcut).weak());
         }
         if std::mem::take(&mut self.focus_filter) {
             response.request_focus();
@@ -166,9 +166,9 @@ impl View {
         ui.add_space(ui.spacing().item_spacing.y);
         let rows = model.shortcut_rows();
         let body = TextStyle::Body.resolve(ui.style());
-        let width = |text: String, font: &FontId| {
+        let width = |text: UiText, font: &FontId| {
             ui.painter()
-                .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
+                .layout_no_wrap(text.into(), font.clone(), Color32::PLACEHOLDER)
                 .size()
                 .x
         };
@@ -187,7 +187,7 @@ impl View {
                 ShortcutFilter::Shortcut { .. } => Msg::NoActionForShortcut,
                 _ => Msg::NoActionMatches,
             };
-            ui.label(RichText::new(label(empty)).weak());
+            ui.show_label(label(empty).weak());
             return;
         }
         let row_gap = ui.spacing().item_spacing.y;
@@ -316,22 +316,20 @@ impl View {
         changes: &mut Vec<Change>,
     ) {
         let label = |msg: Msg| i18n::text(lang, &msg);
-        let other = label(conflict.other.label());
         warn_label(
             ui,
-            &format!(
-                "{}: {}",
-                conflict.shortcut.label(),
-                label(Msg::AlreadyUsedBy(other))
-            ),
+            label(Msg::AlreadyUsedBy {
+                shortcut: conflict.shortcut.label(),
+                action: label(conflict.other.label()).into(),
+            }),
         );
         ui.horizontal(|ui| {
-            if ui.button(label(Msg::Replace)).clicked() {
+            if ui.show_button(label(Msg::Replace)).clicked() {
                 self.conflict = None;
                 self.mark_added(conflict.shortcut);
                 changes.extend(model.replace_shortcut(conflict.action, conflict.shortcut));
             }
-            if ui.button(label(Msg::Cancel)).clicked() {
+            if ui.show_button(label(Msg::Cancel)).clicked() {
                 self.conflict = None;
             }
         });
