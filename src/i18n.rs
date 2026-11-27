@@ -5,11 +5,25 @@
 //! the API of the code: [`fluent`] maps each variant to its Fluent identifier and
 //! arguments through an exhaustive `match`, and the tests check that every identifier
 //! exists in every file.
+//!
+//! Numbers and dates follow the conventions of the language through ICU4X: the
+//! numbers of the Fluent messages ([`text`]), the number fields of the settings
+//! ([`format_number`], [`parse_number`]) and the dates ([`format_datetime`]).
 
 use std::sync::LazyLock;
 
 use fluent_bundle::concurrent::FluentBundle;
-use fluent_bundle::{FluentArgs, FluentError, FluentResource};
+use fluent_bundle::memoizer::MemoizerKind;
+use fluent_bundle::{FluentArgs, FluentError, FluentResource, FluentValue};
+use icu_calendar::Gregorian;
+use icu_datetime::FixedCalendarDateTimeFormatter;
+use icu_datetime::fieldsets::{YMD, YMDT};
+use icu_datetime::input::DateTime;
+use icu_decimal::DecimalFormatter;
+use icu_decimal::input::Decimal;
+use icu_locale::Locale;
+use intl_memoizer::Memoizable;
+use intl_memoizer::concurrent::IntlLangMemoizer;
 use unic_langid::LanguageIdentifier;
 
 use crate::theme::{ColorGroup, ColorKey, NameError};
@@ -280,7 +294,7 @@ impl From<Option<std::process::ExitStatus>> for Exit {
 }
 
 /// A translatable label. Messages carrying a value have fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
     // Existing terminal actions.
     Copy,
@@ -386,9 +400,21 @@ pub enum Msg {
     /// An integer field holds a fractional number.
     NotAWholeNumber,
     /// A number field is below its minimum.
-    AtLeast(String),
+    AtLeast(f64),
     /// A number field is above its maximum.
-    AtMost(String),
+    AtMost(f64),
+    /// A duration below a minute, in seconds (`42 s`).
+    DurationSeconds(u64),
+    /// A duration below an hour, in minutes and seconds (`2 min 13 s`).
+    DurationMinutes {
+        minutes: u64,
+        seconds: u64,
+    },
+    /// A longer duration, in hours and minutes (`1 h 5 min`).
+    DurationHours {
+        hours: u64,
+        minutes: u64,
+    },
     /// Button setting the shortcut of an empty shortcut field.
     AddShortcut,
     /// Tooltip of the button adding a shortcut to an action.
@@ -532,10 +558,134 @@ fn bundle(lang: Lang) -> Bundle {
     let mut bundle = FluentBundle::new_concurrent(vec![id]);
     // No RTL in the interface, and the isolation marks would show in the grid font.
     bundle.set_use_isolating(false);
+    bundle.set_formatter(Some(format_fluent_number));
     bundle
         .add_resource(resource)
         .unwrap_or_else(|errors| panic!("i18n/{tag}.ftl: {errors:?}"));
     bundle
+}
+
+/// Formatter of the Fluent numbers: each [`FluentValue::Number`] is written in the
+/// locale of its bundle, with the formatter kept by the bundle's memoizer. The
+/// selection of a plural still reads the raw number; other values keep Fluent's text.
+fn format_fluent_number(value: &FluentValue, intls: &IntlLangMemoizer) -> Option<String> {
+    let FluentValue::Number(number) = value else {
+        return None;
+    };
+    // Fluent's text keeps the minimum fraction digits of the number.
+    let decimal: Decimal = number.as_string().parse().ok()?;
+    intls
+        .with_try_get_threadsafe::<NumberFormatter, _, _>((), |formatter| {
+            formatter.0.format_to_string(&decimal)
+        })
+        .ok()
+}
+
+/// Decimal formatter of a bundle's locale, built once by its memoizer.
+struct NumberFormatter(DecimalFormatter);
+
+impl Memoizable for NumberFormatter {
+    type Args = ();
+    type Error = ();
+
+    fn construct(lang: LanguageIdentifier, (): ()) -> Result<Self, ()> {
+        let locale: Locale = lang.to_string().parse().map_err(|_| ())?;
+        DecimalFormatter::try_new(locale.into(), Default::default())
+            .map(NumberFormatter)
+            .map_err(|_| ())
+    }
+}
+
+impl Lang {
+    /// ICU locale of the language, from its [tag](Lang::tag).
+    fn locale(self) -> Locale {
+        self.tag().parse().expect("valid language tag")
+    }
+}
+
+/// How a language writes numbers, from the formatting of a known number.
+struct NumberSymbols {
+    formatter: DecimalFormatter,
+    /// Between the integer part and the fraction (`.` in English, `,` in French).
+    decimal: String,
+    /// Between the groups of three digits (`,` in English, a narrow space in French).
+    group: String,
+}
+
+impl NumberSymbols {
+    fn new(lang: Lang) -> Self {
+        let formatter = DecimalFormatter::try_new(lang.locale().into(), Default::default())
+            .expect("decimal data of every language");
+        // Seven digits: some languages only group numbers of five digits or more.
+        let sample = formatter.format_to_string(&"1234567.8".parse().expect("valid decimal"));
+        let between = |before: char, after: char| -> String {
+            let start = sample.find(before).expect("digit in the sample") + before.len_utf8();
+            let end = sample[start..].find(after).expect("digit in the sample") + start;
+            sample[start..end].to_owned()
+        };
+        Self {
+            decimal: between('7', '8'),
+            group: between('1', '2'),
+            formatter,
+        }
+    }
+}
+
+/// The number symbols of every language, in [`Lang`] order, built on first use.
+static NUMBER_SYMBOLS: LazyLock<[NumberSymbols; LANGS.len()]> =
+    LazyLock::new(|| LANGS.map(NumberSymbols::new));
+
+/// `number` as `lang` writes it: `1,234.5` in English, `1 234,5` in French. It keeps
+/// the shortest digits that read back as `number`.
+pub fn format_number(lang: Lang, number: f64) -> String {
+    let symbols = &NUMBER_SYMBOLS[lang as usize];
+    match number.to_string().parse::<Decimal>() {
+        Ok(decimal) => symbols.formatter.format_to_string(&decimal),
+        // Infinite or NaN: no localized form.
+        Err(_) => number.to_string(),
+    }
+}
+
+/// A number typed in `lang`: the decimal separator of the language or a point, and
+/// the group separator of the language ignored (any space when it is a space). A
+/// point that groups the digits in the language is a group separator, not a decimal
+/// one. `None` when the text is not a number.
+pub fn parse_number(lang: Lang, text: &str) -> Option<f64> {
+    let symbols = &NUMBER_SYMBOLS[lang as usize];
+    let group_is_space = symbols.group.chars().all(char::is_whitespace);
+    let mut digits = text.trim().to_owned();
+    if group_is_space {
+        digits.retain(|c| !c.is_whitespace());
+    } else {
+        digits = digits.replace(&symbols.group, "");
+    }
+    let digits = digits
+        .replace(&symbols.decimal, ".")
+        .replace('\u{2212}', "-");
+    digits.parse().ok()
+}
+
+/// Date and time formatter of each language, in [`Lang`] order, built on first use.
+/// The Gregorian calendar is the one of every language of the interface, and fixing
+/// it leaves out the data of the others.
+#[cfg_attr(not(test), expect(dead_code, reason = "no date is shown yet"))]
+static DATETIME_FORMATTERS: LazyLock<
+    [FixedCalendarDateTimeFormatter<Gregorian, YMDT>; LANGS.len()],
+> = LazyLock::new(|| {
+    LANGS.map(|lang| {
+        FixedCalendarDateTimeFormatter::try_new(lang.locale().into(), YMD::medium().with_time_hm())
+            .expect("date data of every language")
+    })
+});
+
+/// `datetime` as `lang` writes it, with the date in medium length and the time in
+/// hours and minutes: `Jan 15, 2025, 4:09 PM` in English, `15 janv. 2025, 16:09` in
+/// French.
+#[cfg_attr(not(test), expect(dead_code, reason = "no date is shown yet"))]
+pub fn format_datetime(lang: Lang, datetime: &DateTime<Gregorian>) -> String {
+    DATETIME_FORMATTERS[lang as usize]
+        .format(datetime)
+        .to_string()
 }
 
 /// Text of the message `id` with `args` in `bundle`, and the formatting errors.
@@ -659,12 +809,26 @@ fn fluent(msg: &Msg) -> (&'static str, FluentArgs<'_>) {
         Msg::NotANumber => "not-a-number",
         Msg::NotAWholeNumber => "not-a-whole-number",
         Msg::AtLeast(min) => {
-            args.set("min", min.as_str());
+            args.set("min", *min);
             "at-least"
         }
         Msg::AtMost(max) => {
-            args.set("max", max.as_str());
+            args.set("max", *max);
             "at-most"
+        }
+        Msg::DurationSeconds(seconds) => {
+            args.set("s", *seconds);
+            "duration-seconds"
+        }
+        Msg::DurationMinutes { minutes, seconds } => {
+            args.set("min", *minutes);
+            args.set("s", *seconds);
+            "duration-minutes"
+        }
+        Msg::DurationHours { hours, minutes } => {
+            args.set("h", *hours);
+            args.set("min", *minutes);
+            "duration-hours"
         }
         Msg::AddShortcut => "add-shortcut",
         Msg::AddShortcutHint => "add-shortcut-hint",
@@ -1040,9 +1204,12 @@ mod tests {
             Msg::SearchStatusSuccess => 112,
             Msg::SearchStatusFailure => 113,
             Msg::QuickTerminalDisabled => 114,
+            Msg::DurationSeconds(_) => 115,
+            Msg::DurationMinutes { .. } => 116,
+            Msg::DurationHours { .. } => 117,
         }
     }
-    const VARIANT_COUNT: usize = 115;
+    const VARIANT_COUNT: usize = 118;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1131,8 +1298,17 @@ mod tests {
             Msg::CannotSave,
             Msg::NotANumber,
             Msg::NotAWholeNumber,
-            Msg::AtLeast("6".into()),
-            Msg::AtMost("72".into()),
+            Msg::AtLeast(6.0),
+            Msg::AtMost(72.0),
+            Msg::DurationSeconds(42),
+            Msg::DurationMinutes {
+                minutes: 2,
+                seconds: 13,
+            },
+            Msg::DurationHours {
+                hours: 1,
+                minutes: 5,
+            },
             Msg::AddShortcut,
             Msg::AddShortcutHint,
             Msg::ChangeShortcut,
@@ -1403,8 +1579,99 @@ mod tests {
             text(Lang::Fr, &Msg::ProgramsRunning(vec!["vim".into()])),
             "vim est toujours en cours d'exécution"
         );
-        // No digit grouping and no isolation marks around the values.
-        assert_eq!(text(Lang::EnUs, &Msg::GoToTab(12345)), "Go to tab 12345");
+        // The plural reads the raw number, the text shows it in the language.
+        assert_eq!(
+            text(Lang::Fr, &Msg::LinesHidden(1234)),
+            "1\u{202f}234 lignes masquées"
+        );
+        // No isolation marks around the values.
+        assert_eq!(text(Lang::EnUs, &Msg::GoToTab(12)), "Go to tab 12");
+    }
+
+    #[test]
+    fn numbers_are_written_in_the_format_of_the_language() {
+        assert_eq!(format_number(Lang::EnUs, 1234.5), "1,234.5");
+        assert_eq!(format_number(Lang::EnGb, 1234.5), "1,234.5");
+        assert_eq!(format_number(Lang::Fr, 1234.5), "1\u{202f}234,5");
+        assert_eq!(format_number(Lang::FrCa, 1234.5), "1\u{a0}234,5");
+        // The shortest digits, without trailing zeros.
+        assert_eq!(format_number(Lang::Fr, 0.9), "0,9");
+        assert_eq!(format_number(Lang::EnUs, 72.0), "72");
+        assert_eq!(format_number(Lang::EnUs, -3.0), "-3");
+    }
+
+    #[test]
+    fn numbers_of_the_messages_are_written_in_the_format_of_the_language() {
+        assert_eq!(
+            text(Lang::EnUs, &Msg::AtLeast(1234.5)),
+            "Must be at least 1,234.5"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::AtMost(1234.5)),
+            "Doit valoir au plus 1\u{202f}234,5"
+        );
+        assert_eq!(
+            text(Lang::Fr, &Msg::AtLeast(0.5)),
+            "Doit valoir au moins 0,5"
+        );
+    }
+
+    #[test]
+    fn typed_numbers_take_the_decimal_separator_of_the_language_or_a_point() {
+        assert_eq!(parse_number(Lang::Fr, "0,9"), Some(0.9));
+        assert_eq!(parse_number(Lang::Fr, "0.9"), Some(0.9));
+        assert_eq!(parse_number(Lang::EnUs, "0.9"), Some(0.9));
+        assert_eq!(parse_number(Lang::Fr, " -12 "), Some(-12.0));
+        assert_eq!(parse_number(Lang::Fr, "abc"), None);
+        assert_eq!(parse_number(Lang::Fr, ""), None);
+    }
+
+    #[test]
+    fn typed_numbers_ignore_the_group_separator_of_the_language() {
+        assert_eq!(parse_number(Lang::EnUs, "1,234.5"), Some(1234.5));
+        // A comma groups the digits in English.
+        assert_eq!(parse_number(Lang::EnUs, "1,5"), Some(15.0));
+        // Any space groups the digits in French, the one typed or the one shown.
+        for space in [" ", "\u{a0}", "\u{202f}"] {
+            assert_eq!(
+                parse_number(Lang::Fr, &format!("1{space}234,5")),
+                Some(1234.5)
+            );
+        }
+    }
+
+    #[test]
+    fn a_written_number_reads_back_in_every_language() {
+        for lang in LANGS {
+            for number in [0.0, 0.9, 6.5, 72.0, 1280.0, 100_000.0, 1234.5, -3.25] {
+                let written = format_number(lang, number);
+                assert_eq!(
+                    parse_number(lang, &written),
+                    Some(number),
+                    "{lang:?} {written}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dates_are_written_in_the_format_of_the_language() {
+        use icu_datetime::input::{Date, Time};
+        let datetime = DateTime {
+            date: Date::try_new_gregorian(2025, 1, 15).unwrap(),
+            time: Time::try_new(16, 9, 35, 0).unwrap(),
+        };
+        assert_eq!(
+            format_datetime(Lang::EnUs, &datetime),
+            "Jan 15, 2025, 4:09\u{202f}PM"
+        );
+        assert_eq!(format_datetime(Lang::Fr, &datetime), "15 janv. 2025, 16:09");
+        for lang in LANGS {
+            assert!(
+                format_datetime(lang, &datetime).contains("2025"),
+                "{lang:?}"
+            );
+        }
     }
 
     #[test]
@@ -1415,6 +1682,16 @@ mod tests {
             Msg::Section(SettingsSection::Notifications),
             Msg::Section(SettingsSection::QuickTerminal),
             Msg::Field(SettingsField::FontLigatures),
+            // Unit symbols, and numbers too small to be grouped.
+            Msg::DurationSeconds(42),
+            Msg::DurationMinutes {
+                minutes: 2,
+                seconds: 13,
+            },
+            Msg::DurationHours {
+                hours: 1,
+                minutes: 5,
+            },
         ];
         for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {
             assert_ne!(text(Lang::EnUs, &msg), text(Lang::Fr, &msg), "{msg:?}");
@@ -1503,14 +1780,8 @@ mod tests {
         );
         assert_eq!(text(Lang::EnUs, &Msg::AtLine(12)), "line 12");
         assert_eq!(text(Lang::Fr, &Msg::AtLine(12)), "ligne 12");
-        assert_eq!(
-            text(Lang::EnUs, &Msg::AtLeast("6".into())),
-            "Must be at least 6"
-        );
-        assert_eq!(
-            text(Lang::Fr, &Msg::AtMost("72".into())),
-            "Doit valoir au plus 72"
-        );
+        assert_eq!(text(Lang::EnUs, &Msg::AtLeast(6.0)), "Must be at least 6");
+        assert_eq!(text(Lang::Fr, &Msg::AtMost(72.0)), "Doit valoir au plus 72");
         assert_eq!(
             text(Lang::Fr, &Msg::Field(SettingsField::ThemeFollow)),
             "Suivre l'apparence du système"

@@ -49,6 +49,12 @@ egui-winit = { version = "0.37.0", default-features = false, features = ["clipbo
 egui-wgpu = { version = "0.37.0", default-features = false }
 fluent-bundle = "0.16.0"
 unic-langid = "0.9.6"
+icu_decimal = { version = "2.4.0", features = ["alloc"] }
+icu_datetime = "2.4.0"
+icu_locale = "2.4.0"
+intl-memoizer = "0.5.3"
+icu_calendar = "2.4.0"
+icu_provider = { version = "2.4.0", features = ["sync"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 sys-locale = "0.3.2"

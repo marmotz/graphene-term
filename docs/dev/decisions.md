@@ -40,6 +40,7 @@ Each entry states a technical choice and the reasons behind it. How the code wor
   - [Tabs and splits: binary split tree](#tabs-and-splits-binary-split-tree)
   - [Current directory and foreground program from `/proc`](#current-directory-and-foreground-program-from-proc)
   - [Translations in Fluent files](#translations-in-fluent-files)
+  - [Numbers and dates of the language: ICU4X](#numbers-and-dates-of-the-language-icu4x)
   - [Command palette: `nucleo-matcher` and a recent actions file](#command-palette-nucleo-matcher-and-a-recent-actions-file)
 - [Configuration](#configuration)
   - [Configuration parsed key by key](#configuration-parsed-key-by-key)
@@ -432,6 +433,29 @@ preferred language of the system settings (an app launched from Finder has no lo
 variable), with its region: a region without a variant gives the base language. The
 `language` setting takes BCP 47 tags (`en-US`, `fr-CA`), case ignored, and keeps `en` as
 an alias so that existing files stay valid.
+
+### Numbers and dates of the language: ICU4X
+
+Numbers and dates follow the conventions of the interface language through ICU4X 2.4
+(`icu_decimal`, `icu_datetime`, `icu_locale`), with its compiled data: the locale is
+parsed from `Lang::tag()`. Each bundle gets a `FluentBundle::set_formatter` hook that
+writes every `FluentValue::Number` with an `icu_decimal::DecimalFormatter`, built once per
+bundle by its `intl-memoizer`, while the plural still selects on the raw number
+(`1,234 lines hidden`, `1 234 lignes masquées`). Outside Fluent, `i18n::format_number`
+and `i18n::parse_number` write and read the number fields of the settings
+(`SettingsModel::set_lang`): a typed number takes the decimal separator of the language
+or a point, and the group separator of the language is ignored (any space when it is a
+space); a point that groups digits in the language stays a group separator. The file
+always keeps the point. The separators are read from the formatting of a seven-digit
+number, since `DecimalFormatter` does not expose its symbols. Durations
+(`notifications::format_duration`) are Fluent messages, so their numbers and units
+follow the language. `i18n::format_datetime` writes a Gregorian date and time
+(`FixedCalendarDateTimeFormatter`, medium date with hours and minutes), with no caller
+yet: fixing the calendar and the field set leaves the data of the others out of the
+binary. `icu_provider`'s `sync` feature makes the formatters `Sync`, as the bundles must
+be. ICU4X was chosen over hand-written separators per language: CLDR data covers every
+language added later, and Fluent's own `NUMBER` has no locale formatting in Rust. The
+release binary grows by about 120 KB (36.98 MB to 37.10 MB).
 
 ### Command palette: `nucleo-matcher` and a recent actions file
 

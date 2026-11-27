@@ -134,7 +134,7 @@ src/
                    whole word, 10 000 cap, frozen grid cache), current match navigation (pure)
   pane_search.rs   search bar state of a pane: field, toggles, matches, current match, focus,
                    search again on a new pane revision, key routing of a focused bar (pure)
-  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations, read from the Fluent files of `i18n/`
+  i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations, read from the Fluent files of `i18n/`; numbers and dates in the format of the language (ICU4X)
   input.rs         key -> bytes encoding, per-pane key resolution (editor command, shortcut, input), actions and their ids, paste wrapping
   keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)
   mouse.rs         mouse, focus and alternate scroll encoding, mouse routing between app and Graphene (pure)

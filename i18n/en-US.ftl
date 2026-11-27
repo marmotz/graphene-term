@@ -273,6 +273,19 @@ command-finished = Command finished
 command-failed = Command failed (code { $code })
 bell = Bell
 show-pane = Show pane
+# Duration of a command, in its two largest units; a zero last unit is left out.
+# $s: seconds.
+duration-seconds = { $s } s
+# $min: minutes, $s: seconds below a minute.
+duration-minutes = { $s ->
+    [0] { $min } min
+   *[other] { $min } min { $s } s
+}
+# $h: hours, $min: minutes below an hour.
+duration-hours = { $min ->
+    [0] { $h } h
+   *[other] { $h } h { $min } min
+}
 
 ## Program run by -E
 

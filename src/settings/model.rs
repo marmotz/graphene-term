@@ -14,7 +14,7 @@ use crate::config::{
     MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, QuickTerminalScreen, StartupMode, TabPosition,
     UpdateInterval,
 };
-use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
+use crate::i18n::{self, Lang, Msg, SettingsField as Field, SettingsSection as Section};
 use crate::input::Action;
 use crate::keybindings::{self, Keybindings, NONE_ACTION, Shortcut};
 use crate::palette::Palette;
@@ -114,12 +114,12 @@ pub enum ThemeOp {
 }
 
 /// Why a typed value is not written.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InputError {
     NotANumber,
     NotAWholeNumber,
-    AtLeast(String),
-    AtMost(String),
+    AtLeast(f64),
+    AtMost(f64),
 }
 
 impl InputError {
@@ -127,8 +127,8 @@ impl InputError {
         match self {
             InputError::NotANumber => Msg::NotANumber,
             InputError::NotAWholeNumber => Msg::NotAWholeNumber,
-            InputError::AtLeast(min) => Msg::AtLeast(min.clone()),
-            InputError::AtMost(max) => Msg::AtMost(max.clone()),
+            InputError::AtLeast(min) => Msg::AtLeast(*min),
+            InputError::AtMost(max) => Msg::AtMost(*max),
         }
     }
 }
@@ -345,24 +345,22 @@ pub fn monospace_families(db: &fontdb::Database) -> Vec<String> {
     families
 }
 
-/// Parses a typed number of `range`.
-fn parse_number(text: &str, range: NumberRange) -> Result<Value, InputError> {
-    let number: f64 = text
-        .trim()
-        .parse()
-        .ok()
-        .filter(|n: &f64| n.is_finite())
+/// Parses a number of `range` typed in `lang`: its decimal separator or a point, its
+/// group separator ignored ([`i18n::parse_number`]).
+fn parse_number(text: &str, range: NumberRange, lang: Lang) -> Result<Value, InputError> {
+    let number = i18n::parse_number(lang, text)
+        .filter(|n| n.is_finite())
         .ok_or(InputError::NotANumber)?;
     if range.integer && number.fract() != 0.0 {
         return Err(InputError::NotAWholeNumber);
     }
     if number < range.min {
-        return Err(InputError::AtLeast(range.min.to_string()));
+        return Err(InputError::AtLeast(range.min));
     }
     if let Some(max) = range.max
         && number > max
     {
-        return Err(InputError::AtMost(max.to_string()));
+        return Err(InputError::AtMost(max));
     }
     Ok(if range.integer {
         Value::Integer(number as i64)
@@ -405,6 +403,8 @@ pub struct SettingsModel {
     edited_is_built_in: bool,
     /// Whether the process runs under Wayland, where the quick terminal is unavailable.
     wayland: bool,
+    /// Language the number fields are written and typed in.
+    lang: Lang,
 }
 
 impl SettingsModel {
@@ -432,6 +432,7 @@ impl SettingsModel {
             edited_palette: theme::default_palette().clone(),
             edited_is_built_in: true,
             wayland: false,
+            lang: Lang::default(),
         };
         model.reload_edited_theme();
         model
@@ -622,6 +623,11 @@ impl SettingsModel {
         })
     }
 
+    /// Sets the language the number fields are written and typed in.
+    pub fn set_lang(&mut self, lang: Lang) {
+        self.lang = lang;
+    }
+
     /// Records whether the process runs under Wayland.
     pub fn set_wayland(&mut self, wayland: bool) {
         self.wayland = wayland;
@@ -715,12 +721,17 @@ impl SettingsModel {
         }
     }
 
-    /// Text of a choice, text or number field.
+    /// Text of a choice, text or number field. A number is written in the language
+    /// of the model ([`SettingsModel::set_lang`]); the file keeps the point.
     pub fn text(&self, field: Field) -> String {
         match self.value(field) {
             Value::Text(text) => text,
-            Value::Integer(n) => n.to_string(),
-            Value::Float(n) => (n as f32).to_string(),
+            Value::Integer(n) => i18n::format_number(self.lang, n as f64),
+            // At the precision the configuration keeps it, in its shortest digits.
+            Value::Float(n) => {
+                let shown = (n as f32).to_string().parse().unwrap_or(n);
+                i18n::format_number(self.lang, shown)
+            }
             Value::Bool(_) | Value::List(_) => String::new(),
         }
     }
@@ -805,7 +816,7 @@ impl SettingsModel {
             (Widget::Choice, Input::Choice(value))
             | (Widget::Text | Widget::Shortcut, Input::Text(value)) => Value::Text(value),
             (Widget::Toggle, Input::Toggle(on)) => Value::Bool(on),
-            (Widget::Number(range), Input::Text(text)) => parse_number(&text, range)?,
+            (Widget::Number(range), Input::Text(text)) => parse_number(&text, range, self.lang)?,
             (Widget::Slider { min, max, step }, Input::Number(number)) => {
                 Value::Float(((number / step).round() * step).clamp(min, max))
             }
@@ -1126,7 +1137,7 @@ bell = true
             (Field::FontFamily, "Fira Code"),
             (Field::FontSize, "16.5"),
             (Field::StartupMode, "maximized"),
-            (Field::WindowWidth, "1200"),
+            (Field::WindowWidth, "1,200"),
             (Field::WindowHeight, "700"),
             (Field::Padding, "4"),
             (Field::ScrollbackLines, "500"),
@@ -1268,7 +1279,7 @@ bell = true
                 Field::NotificationsCommandThreshold,
                 Input::Text("0".into())
             ),
-            Err(InputError::AtLeast("1".into()))
+            Err(InputError::AtLeast(1.0))
         );
         assert_eq!(
             m.edit(
@@ -1395,11 +1406,11 @@ bell = true
         );
         assert_eq!(
             m.edit(Field::QuickTerminalSize, Input::Text("9".into())),
-            Err(InputError::AtLeast("10".into()))
+            Err(InputError::AtLeast(10.0))
         );
         assert_eq!(
             m.edit(Field::QuickTerminalSize, Input::Text("101".into())),
-            Err(InputError::AtMost("100".into()))
+            Err(InputError::AtMost(100.0))
         );
         assert_eq!(
             m.edit(Field::QuickTerminalAnimation, Input::Text("0".into())),
@@ -1407,7 +1418,7 @@ bell = true
         );
         assert_eq!(
             m.edit(Field::QuickTerminalAnimation, Input::Text("1001".into())),
-            Err(InputError::AtMost("1000".into()))
+            Err(InputError::AtMost(1000.0))
         );
     }
 
@@ -1561,23 +1572,23 @@ bell = true
     fn numbers_out_of_range_are_rejected() {
         let m = model("");
         let cases = [
-            (Field::FontSize, "5.5", InputError::AtLeast("6".into())),
-            (Field::FontSize, "73", InputError::AtMost("72".into())),
+            (Field::FontSize, "5.5", InputError::AtLeast(6.0)),
+            (Field::FontSize, "73", InputError::AtMost(72.0)),
             (Field::FontSize, "big", InputError::NotANumber),
             (Field::FontSize, "NaN", InputError::NotANumber),
             (Field::FontSize, "", InputError::NotANumber),
-            (Field::WindowWidth, "0", InputError::AtLeast("1".into())),
+            (Field::WindowWidth, "0", InputError::AtLeast(1.0)),
             (Field::WindowHeight, "600.5", InputError::NotAWholeNumber),
             (
                 Field::WindowWidth,
                 "5000000000",
-                InputError::AtMost(u32::MAX.to_string()),
+                InputError::AtMost(f64::from(u32::MAX)),
             ),
-            (Field::Padding, "-1", InputError::AtLeast("0".into())),
+            (Field::Padding, "-1", InputError::AtLeast(0.0)),
             (
                 Field::ScrollbackLines,
                 "100001",
-                InputError::AtMost("100000".into()),
+                InputError::AtMost(100000.0),
             ),
         ];
         for (field, input, error) in cases {
@@ -1587,6 +1598,31 @@ bell = true
                 "{field:?} {input}"
             );
         }
+    }
+
+    #[test]
+    fn number_fields_are_written_and_typed_in_the_language_of_the_model() {
+        let mut m = model("[font]\nsize = 16.5\n[window]\nwidth = 1280");
+        m.set_lang(Lang::Fr);
+        assert_eq!(m.text(Field::FontSize), "16,5");
+        assert_eq!(m.text(Field::WindowWidth), "1\u{202f}280");
+        // The decimal separator of the language or a point; the file keeps the point.
+        for typed in ["13,5", "13.5"] {
+            assert_eq!(
+                m.edit(Field::FontSize, Input::Text(typed.into())),
+                Ok(set(&["font", "size"], Value::Float(13.5))),
+                "{typed}"
+            );
+        }
+        // The shown value reads back unchanged.
+        assert_eq!(
+            m.edit(Field::WindowWidth, Input::Text(m.text(Field::WindowWidth))),
+            Ok(vec![])
+        );
+        assert_eq!(
+            m.edit(Field::WindowWidth, Input::Text("1 920".into())),
+            Ok(set(&["window", "width"], Value::Integer(1920)))
+        );
     }
 
     #[test]

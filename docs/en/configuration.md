@@ -83,6 +83,9 @@ a hand edit.
 
 - **Keyboard shortcuts**: lists every action with its shortcuts. Click **+** after an
   action's shortcuts and press the new one to add it (`Escape` cancels), or remove one.
+- Numbers are shown in the format of the interface language (`1,280` in English,
+  `1 280` in French). Type them with its decimal separator or a point; group separators
+  are ignored, and the file always keeps the point.
 - Problems in the file are shown under the setting concerned; unknown settings are
   listed at the top.
 - While a file has a syntax error, the tab shows it and locks what depends on that
@@ -118,7 +121,7 @@ This is the complete list. Values shown are the defaults.
 
 | Setting    | Default  | Values                                                                 |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), any other language English (United States). A regional variant shows the text of its base language where it has none of its own. |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), any other language English (United States). A regional variant shows the text of its base language where it has none of its own. Numbers and durations follow the language too (`1,280` in English, `1 280` in French). |
 
 `language` is at the top of the file, before any section.
 

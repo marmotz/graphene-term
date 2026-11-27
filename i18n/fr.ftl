@@ -264,6 +264,15 @@ command-finished = Commande terminée
 command-failed = Commande échouée (code { $code })
 bell = Sonnerie
 show-pane = Afficher le panneau
+duration-seconds = { $s } s
+duration-minutes = { $s ->
+    [0] { $min } min
+   *[other] { $min } min { $s } s
+}
+duration-hours = { $min ->
+    [0] { $h } h
+   *[other] { $h } h { $min } min
+}
 
 ## Program run by -E
 

@@ -143,6 +143,7 @@ impl SettingsTab {
         appearance: Appearance,
     ) {
         self.model.refresh(config, errors, appearance);
+        self.model.set_lang(lang);
         self.view.reset_inputs();
         self.model
             .set_theme_choices(theme::available(Some(&self.dir), &config.theme.unlocked));

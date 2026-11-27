@@ -66,7 +66,7 @@ pub fn content(notice: &Notice, pane_title: Option<&str>, lang: Lang) -> (String
                 Status::Failure(code) => Msg::CommandFailed(*code),
                 _ => Msg::CommandFinished,
             };
-            let duration = format_duration(*duration);
+            let duration = format_duration(*duration, lang);
             let body = if command.is_empty() {
                 duration
             } else {
@@ -78,20 +78,22 @@ pub fn content(notice: &Notice, pane_title: Option<&str>, lang: Lang) -> (String
     }
 }
 
-/// `duration` in whole units: `42 s` below a minute, `2 min 13 s` below an hour, else
-/// `1 h 5 min`. A zero last unit is left out (`2 min`, `1 h`).
-pub fn format_duration(duration: Duration) -> String {
+/// `duration` in whole units, in `lang`: `42 s` below a minute, `2 min 13 s` below an
+/// hour, else `1 h 5 min`. A zero last unit is left out (`2 min`, `1 h`).
+pub fn format_duration(duration: Duration, lang: Lang) -> String {
     let seconds = duration.as_secs();
-    let (big, small, big_unit, small_unit) = match seconds {
-        0..60 => return format!("{seconds} s"),
-        60..3600 => (seconds / 60, seconds % 60, "min", "s"),
-        _ => (seconds / 3600, seconds % 3600 / 60, "h", "min"),
+    let msg = match seconds {
+        0..60 => Msg::DurationSeconds(seconds),
+        60..3600 => Msg::DurationMinutes {
+            minutes: seconds / 60,
+            seconds: seconds % 60,
+        },
+        _ => Msg::DurationHours {
+            hours: seconds / 3600,
+            minutes: seconds % 3600 / 60,
+        },
     };
-    if small == 0 {
-        format!("{big} {big_unit}")
-    } else {
-        format!("{big} {big_unit} {small} {small_unit}")
-    }
+    i18n::text(lang, &msg)
 }
 
 /// Resets the `unseen` count of `pane` once it is watched: the command closing the
@@ -252,7 +254,7 @@ mod tests {
 
     #[test]
     fn durations_are_written_in_their_two_largest_units() {
-        let format = |seconds| format_duration(Duration::from_secs(seconds));
+        let format = |seconds| format_duration(Duration::from_secs(seconds), Lang::EnUs);
         assert_eq!(format(0), "0 s");
         assert_eq!(format(59), "59 s");
         assert_eq!(format(60), "1 min");
@@ -261,7 +263,24 @@ mod tests {
         assert_eq!(format(3600), "1 h");
         assert_eq!(format(3600 + 5 * 60 + 59), "1 h 5 min");
         assert_eq!(format(26 * 3600), "26 h");
-        assert_eq!(format_duration(Duration::from_millis(12_900)), "12 s");
+        assert_eq!(
+            format_duration(Duration::from_millis(12_900), Lang::EnUs),
+            "12 s"
+        );
+    }
+
+    #[test]
+    fn durations_are_written_in_the_language() {
+        let format = |seconds, lang| format_duration(Duration::from_secs(seconds), lang);
+        for lang in LANGS {
+            assert_eq!(format(42, lang), "42 s", "{lang:?}");
+            assert_eq!(format(133, lang), "2 min 13 s", "{lang:?}");
+            assert_eq!(format(3600 + 5 * 60, lang), "1 h 5 min", "{lang:?}");
+        }
+        // Hours are numbers of the language: grouped in English, with a narrow
+        // no-break space in French.
+        assert_eq!(format(1234 * 3600, Lang::EnUs), "1,234 h");
+        assert_eq!(format(1234 * 3600, Lang::Fr), "1\u{202f}234 h");
     }
 
     #[test]

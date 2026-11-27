@@ -89,6 +89,9 @@ une modification à la main.
 - **Raccourcis clavier** : liste chaque action avec ses raccourcis. Cliquez sur **+**
   après les raccourcis d'une action puis appuyez sur le nouveau pour l'ajouter (`Échap`
   annule), ou supprimez-en un.
+- Les nombres s'affichent au format de la langue de l'interface (`1,280` en anglais,
+  `1 280` en français). Saisissez-les avec son séparateur décimal ou un point ; les
+  séparateurs de milliers sont ignorés, et le fichier garde toujours le point.
 - Les problèmes du fichier s'affichent sous le paramètre concerné ; les paramètres
   inconnus sont listés en haut.
 - Tant qu'un fichier contient une erreur de syntaxe, l'onglet l'affiche et verrouille
@@ -124,7 +127,7 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 
 | Paramètre  | Défaut   | Valeurs                                                                |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"en"` reste accepté pour `"en-US"`, et la casse est ignorée. `"auto"` suit la langue et la région du système : `fr_CA` donne le français (Canada), `fr_BE` le français, `en_GB` l'anglais (Royaume-Uni), toute autre langue l'anglais (États-Unis). Une variante régionale affiche le texte de sa langue de base là où elle n'a pas le sien. |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"en"` reste accepté pour `"en-US"`, et la casse est ignorée. `"auto"` suit la langue et la région du système : `fr_CA` donne le français (Canada), `fr_BE` le français, `en_GB` l'anglais (Royaume-Uni), toute autre langue l'anglais (États-Unis). Une variante régionale affiche le texte de sa langue de base là où elle n'a pas le sien. Les nombres et les durées suivent aussi la langue (`1,280` en anglais, `1 280` en français). |
 
 `language` se place en haut du fichier, avant toute section.
 
