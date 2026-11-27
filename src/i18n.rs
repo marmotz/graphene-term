@@ -582,7 +582,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         }
         Msg::QuickTerminalUnavailableOnWayland => "The quick terminal is not available on Wayland",
         Msg::QuickTerminalDisabled => {
-            "The quick terminal is disabled: turn it on to change these settings. The change applies the next time Graphene starts."
+            "Turn it on to change the settings below. Takes effect the next time Graphene starts."
         }
         Msg::CannotSave => "Cannot save the change",
         Msg::NotANumber => "Enter a number",
@@ -811,7 +811,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
             "Le quick terminal n'est pas disponible sous Wayland"
         }
         Msg::QuickTerminalDisabled => {
-            "Le quick terminal est désactivé : activez-le pour modifier ces réglages. Le changement s'applique au prochain démarrage de Graphene."
+            "Activez-le pour modifier les réglages ci-dessous. Prend effet au prochain démarrage de Graphene."
         }
         Msg::CannotSave => "Impossible d'enregistrer la modification",
         Msg::NotANumber => "Saisissez un nombre",

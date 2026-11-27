@@ -236,9 +236,6 @@ impl View {
                 file_problems(ui, lang, model, self.section);
                 ui.heading(label(Msg::Section(self.section)));
                 ui.separator();
-                if model.quick_terminal_disabled(self.section) {
-                    ui.label(label(Msg::QuickTerminalDisabled));
-                }
                 let enabled = model.locked(self.section).is_none()
                     && model.unavailable(self.section).is_none();
                 ui.add_enabled_ui(enabled, |ui| {
@@ -296,12 +293,15 @@ impl View {
             self.shortcuts(ui, lang, model, changes);
             return;
         }
+        if self.section == SettingsSection::QuickTerminal {
+            self.quick_terminal_switch(ui, lang, model, changes);
+        }
         Grid::new(("settings_fields", self.section))
             .num_columns(2)
             .spacing([16.0, 10.0])
             .show(ui, |ui| {
                 for &field in model::section_fields(self.section) {
-                    if !model.visible(field) {
+                    if !model.visible(field) || field == Field::QuickTerminalEnabled {
                         continue;
                     }
                     ui.label(i18n::text(lang, &Msg::Field(field)));
@@ -322,6 +322,36 @@ impl View {
         if self.section == SettingsSection::Theme {
             self.theme_editor(ui, lang, model, edits);
         }
+    }
+
+    /// The quick terminal switch, above the section's fields it turns on, with the
+    /// reason they are disabled while it is off.
+    fn quick_terminal_switch(
+        &mut self,
+        ui: &mut Ui,
+        lang: Lang,
+        model: &SettingsModel,
+        changes: &mut Vec<Change>,
+    ) {
+        let field = Field::QuickTerminalEnabled;
+        let mut on = model.on(field);
+        let text = RichText::new(i18n::text(lang, &Msg::Field(field))).strong();
+        if ui.checkbox(&mut on, text).changed() {
+            self.write_input(model, field, Input::Toggle(on), changes);
+        }
+        if model.quick_terminal_disabled(self.section) {
+            ui.indent("quick_terminal_disabled", |ui| {
+                ui.label(
+                    RichText::new(i18n::text(lang, &Msg::QuickTerminalDisabled))
+                        .weak()
+                        .small(),
+                );
+            });
+        }
+        for message in model.field_errors(field) {
+            error_label(ui, message);
+        }
+        ui.add_space(12.0);
     }
 
     fn field(
@@ -1162,6 +1192,38 @@ mod tests {
     }
 
     #[test]
+    fn the_quick_terminal_switch_heads_its_section_above_its_hint() {
+        let switch = i18n::text(Lang::Fr, &Msg::Field(Field::QuickTerminalEnabled)).into_owned();
+        let hint = i18n::text(Lang::Fr, &Msg::QuickTerminalDisabled).into_owned();
+        let next = model::section_fields(SettingsSection::QuickTerminal)
+            .iter()
+            .find(|&&field| field != Field::QuickTerminalEnabled)
+            .unwrap();
+        let next = i18n::text(Lang::Fr, &Msg::Field(*next)).into_owned();
+
+        let (texts, _) = section_texts(View::default(), SettingsSection::QuickTerminal, "");
+        assert_eq!(count(&texts, &switch), 1);
+        assert_eq!(count(&texts, &hint), 1);
+        let (switch_rect, hint_rect, next_rect) = (
+            rect_of(&texts, &switch),
+            rect_of(&texts, &hint),
+            rect_of(&texts, &next),
+        );
+        assert!(
+            switch_rect.bottom() <= hint_rect.top(),
+            "{switch_rect:?} vs {hint_rect:?}"
+        );
+        assert!(
+            hint_rect.bottom() < next_rect.top(),
+            "{hint_rect:?} vs {next_rect:?}"
+        );
+
+        let enabled = "[quick_terminal]\nenabled = true\n";
+        let (texts, _) = section_texts(View::default(), SettingsSection::QuickTerminal, enabled);
+        assert_eq!(count(&texts, &hint), 0);
+    }
+
+    #[test]
     fn a_captured_key_press_sets_the_quick_terminal_hotkey() {
         let model = model("");
         let mut view = View {
@@ -1639,9 +1701,19 @@ mod tests {
 
     /// The texts drawn by one frame of the shortcuts section of `view`, with their
     /// rects, and the screen width.
-    fn shortcut_texts(mut view: View) -> (Vec<(String, Rect)>, f32) {
-        view.section = SettingsSection::KeyboardShortcuts;
-        let model = model("");
+    fn shortcut_texts(view: View) -> (Vec<(String, Rect)>, f32) {
+        section_texts(view, SettingsSection::KeyboardShortcuts, "")
+    }
+
+    /// The texts drawn by one frame of `section` in `view` with the config `toml`,
+    /// with their rects, and the screen width.
+    fn section_texts(
+        mut view: View,
+        section: SettingsSection,
+        toml: &str,
+    ) -> (Vec<(String, Rect)>, f32) {
+        view.section = section;
+        let model = model(toml);
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             view.show(ui, Lang::Fr, &model);
