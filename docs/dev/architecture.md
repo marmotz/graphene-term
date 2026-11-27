@@ -759,7 +759,9 @@ width), drawn after every pane and the interface, unclipped, under the dialog. T
 and `Session::left_press` hit-tests the banner before starting a selection.
 
 The configuration error banner shows the first error of `config.toml` and the theme
-file ("(+N more)" when there are several); every error is also logged. A click hides it.
+file, with the count of the others when there are several (`Msg::MoreConfigErrors`, a
+plural), in the interface language; every error is also logged, in English. A click
+hides it.
 
 ### Images
 

@@ -146,7 +146,7 @@ at-line = line { $line }
 fix-file-by-hand = The file cannot be read: fix it by hand. The settings stay disabled until then.
 quick-terminal-unavailable-on-wayland = The quick terminal is not available on Wayland
 quick-terminal-disabled = Turn it on to change the settings below. Takes effect the next time Graphene starts.
-cannot-save = Cannot save the change
+cannot-save = Cannot save the change: { $error }
 not-a-number = Enter a number
 not-a-whole-number = Enter a whole number
 at-least = Must be at least { $min }
@@ -295,3 +295,47 @@ program-exited = { $exit ->
     [signal] Program ended (signal { $value }). Press any key to close.
    *[unknown] Program ended. Press any key to close.
 }
+
+## Configuration errors
+
+# The texts of the toml crate ($detail of config-syntax) and of the system ($detail of
+# the I/O errors) stay in English. Paths, names and values in backticks or quotes are
+# written as in the file.
+config-syntax = invalid syntax: { $detail }
+config-cannot-read = cannot read the file: { $detail }
+config-cannot-read-theme = cannot read the theme: { $detail }
+config-cannot-write = cannot write the file: { $detail }
+config-no-config-dir = cannot resolve the configuration file path
+config-unknown-key = unknown key `{ $path }`
+config-must-be-table = `{ $path }` must be a table
+config-keybindings-moved = keyboard shortcuts moved to { $file }
+# $reason: why the value is rejected; the previous value is kept.
+config-invalid-value = invalid value for `{ $path }`: { $reason ->
+    [not-a-number] not a number
+    [not-negative] must be a non-negative number
+    [at-least] must be at least { $min }
+    [greater-than-zero] must be greater than 0
+    [not-empty] must not be empty
+    [invalid-feature] invalid feature "{ $item }", expected "tag", "+tag", "-tag" or "tag=N" with a tag of 4 ASCII characters
+    [empty-screen] must not be empty, expected "active", "primary" or a screen name
+    [unknown-modifier] unknown modifier "{ $modifier }" in "{ $shortcut }"
+    [missing-key] missing key in "{ $shortcut }"
+    [unknown-key-name] unknown key "{ $key }" in "{ $shortcut }"
+    [unknown-action] unknown action "{ $action }"
+    [color-not-string] expected a "#rrggbb" string
+    [not-a-color] `{ $text }` is not a "#rrggbb" color
+   *[detail] { $detail }
+}
+config-out-of-range = `{ $path }`: { $value } is out of { $min } to { $max }, using { $used }
+config-above-maximum = `{ $path }`: { $value } is above the maximum, using { $max }
+# $expected: the accepted values, as written in the file.
+config-unknown-interval = `{ $path }`: invalid value "{ $value }", expected one of { $expected }; using "auto"
+config-unknown-theme = unknown theme `{ $name }`, using `{ $fallback }`
+config-theme-not-found = unknown theme `{ $name }`
+config-invalid-theme-name = invalid theme name `{ $name }`
+config-theme-exists = a theme named `{ $name }` already exists
+config-hotkey-no-key = the global hotkey "{ $hotkey }" has no key on this system
+config-hotkey-taken = the global hotkey "{ $hotkey }" is already used by another application
+config-hotkey-failed = cannot register the global hotkey: { $detail }
+# Banner of several errors: the first one ($first), then the count of the others.
+more-config-errors = { $first } (+{ $more } more)

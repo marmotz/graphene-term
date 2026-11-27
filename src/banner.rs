@@ -23,13 +23,13 @@ pub struct Banner {
 }
 
 impl Banner {
-    /// Banner reporting configuration errors: the first one, plus "(+N more)" when there are
-    /// several. `None` when there is no error.
-    pub fn config_errors(errors: &[ConfigError]) -> Option<Self> {
-        let first = errors.first()?;
+    /// Banner reporting configuration errors in `lang`: the first one, plus the count
+    /// of the others when there are several. `None` when there is no error.
+    pub fn config_errors(errors: &[ConfigError], lang: Lang) -> Option<Self> {
+        let first = errors.first()?.text(lang);
         let text = match errors.len() - 1 {
-            0 => first.to_string(),
-            more => format!("{first} (+{more} more)"),
+            0 => first,
+            more => i18n::text(lang, &Msg::MoreConfigErrors { first, more }),
         };
         Some(Self {
             text,
@@ -288,13 +288,14 @@ mod tests {
 
     use super::*;
 
-    fn error(line: usize, message: &str) -> ConfigError {
+    /// An unknown key `path` at `line` of `config.toml`.
+    fn error(line: usize, path: &str) -> ConfigError {
         ConfigError {
             file: PathBuf::from("/home/me/.config/graphene/config.toml"),
             line: Some(line),
             key: None,
-            kind: crate::config::ConfigErrorKind::InvalidValue,
-            message: message.to_owned(),
+            kind: crate::config::ConfigErrorKind::UnknownKey,
+            detail: Box::new(crate::i18n::ConfigMsg::UnknownKey(path.to_owned())),
         }
     }
 
@@ -305,25 +306,27 @@ mod tests {
 
     #[test]
     fn no_error_gives_no_banner() {
-        assert_eq!(Banner::config_errors(&[]), None);
+        assert_eq!(Banner::config_errors(&[], Lang::EnUs), None);
     }
 
     #[test]
     fn one_error_is_shown_as_is() {
-        let banner = Banner::config_errors(&[error(12, "unknown key `font.sise`")]).unwrap();
+        let banner = Banner::config_errors(&[error(12, "font.sise")], Lang::EnUs).unwrap();
         assert_eq!(banner.text, "config.toml:12: unknown key `font.sise`");
         assert!(banner.actions.is_empty());
+        let banner = Banner::config_errors(&[error(12, "font.sise")], Lang::Fr).unwrap();
+        assert_eq!(banner.text, "config.toml:12: clé inconnue `font.sise`");
     }
 
     #[test]
     fn several_errors_show_the_first_and_a_count() {
-        let banner = Banner::config_errors(&[
-            error(2, "unknown key `a`"),
-            error(5, "unknown key `b`"),
-            error(9, "unknown key `c`"),
-        ])
-        .unwrap();
+        let errors = [error(2, "a"), error(5, "b"), error(9, "c")];
+        let banner = Banner::config_errors(&errors, Lang::EnUs).unwrap();
         assert_eq!(banner.text, "config.toml:2: unknown key `a` (+2 more)");
+        let banner = Banner::config_errors(&errors, Lang::Fr).unwrap();
+        assert_eq!(banner.text, "config.toml:2: clé inconnue `a` (+2 autres)");
+        let banner = Banner::config_errors(&errors[..2], Lang::Fr).unwrap();
+        assert_eq!(banner.text, "config.toml:2: clé inconnue `a` (+1 autre)");
     }
 
     fn release(tag: &str) -> Release {
@@ -358,7 +361,7 @@ mod tests {
 
     #[test]
     fn config_banner_has_priority() {
-        let config = Banner::config_errors(&[error(2, "unknown key `a`")]).unwrap();
+        let config = Banner::config_errors(&[error(2, "a")], Lang::EnUs).unwrap();
         let mut update = UpdateBanner::default();
         update.set(Some(release("v0.2.0")));
         assert_eq!(

@@ -142,7 +142,7 @@ at-line = ligne { $line }
 fix-file-by-hand = Le fichier est illisible : corrigez-le à la main. Les paramètres restent désactivés d'ici là.
 quick-terminal-unavailable-on-wayland = Le quick terminal n'est pas disponible sous Wayland
 quick-terminal-disabled = Activez-le pour modifier les réglages ci-dessous. Prend effet au prochain démarrage de Graphene.
-cannot-save = Impossible d'enregistrer la modification
+cannot-save = Impossible d'enregistrer la modification : { $error }
 not-a-number = Saisissez un nombre
 not-a-whole-number = Saisissez un nombre entier
 at-least = Doit valoir au moins { $min }
@@ -280,4 +280,45 @@ program-exited = { $exit ->
     [code] Programme terminé (code { $value }). Appuyez sur une touche pour fermer.
     [signal] Programme terminé (signal { $value }). Appuyez sur une touche pour fermer.
    *[unknown] Programme terminé. Appuyez sur une touche pour fermer.
+}
+
+## Configuration errors
+
+config-syntax = syntaxe invalide : { $detail }
+config-cannot-read = impossible de lire le fichier : { $detail }
+config-cannot-read-theme = impossible de lire le thème : { $detail }
+config-cannot-write = impossible d'écrire le fichier : { $detail }
+config-no-config-dir = impossible de trouver le chemin du fichier de configuration
+config-unknown-key = clé inconnue `{ $path }`
+config-must-be-table = `{ $path }` doit être une table
+config-keybindings-moved = raccourcis clavier déplacés dans { $file }
+config-invalid-value = valeur invalide pour `{ $path }` : { $reason ->
+    [not-a-number] ce n'est pas un nombre
+    [not-negative] doit être un nombre positif ou nul
+    [at-least] doit valoir au moins { $min }
+    [greater-than-zero] doit être supérieur à 0
+    [not-empty] ne doit pas être vide
+    [invalid-feature] fonctionnalité invalide "{ $item }", attendu "tag", "+tag", "-tag" ou "tag=N" avec un tag de 4 caractères ASCII
+    [empty-screen] ne doit pas être vide, attendu "active", "primary" ou un nom d'écran
+    [unknown-modifier] modificateur inconnu "{ $modifier }" dans "{ $shortcut }"
+    [missing-key] touche manquante dans "{ $shortcut }"
+    [unknown-key-name] touche inconnue "{ $key }" dans "{ $shortcut }"
+    [unknown-action] action inconnue "{ $action }"
+    [color-not-string] texte "#rrggbb" attendu
+    [not-a-color] `{ $text }` n'est pas une couleur "#rrggbb"
+   *[detail] { $detail }
+}
+config-out-of-range = `{ $path }` : { $value } est hors de l'intervalle { $min } à { $max }, { $used } est utilisé
+config-above-maximum = `{ $path }` : { $value } dépasse le maximum, { $max } est utilisé
+config-unknown-interval = `{ $path }` : valeur invalide "{ $value }", valeurs possibles : { $expected } ; "auto" est utilisé
+config-unknown-theme = thème inconnu `{ $name }`, `{ $fallback }` est utilisé
+config-theme-not-found = thème inconnu `{ $name }`
+config-invalid-theme-name = nom de thème invalide `{ $name }`
+config-theme-exists = un thème nommé `{ $name }` existe déjà
+config-hotkey-no-key = le raccourci global "{ $hotkey }" n'a pas de touche sur ce système
+config-hotkey-taken = le raccourci global "{ $hotkey }" est déjà utilisé par une autre application
+config-hotkey-failed = impossible d'enregistrer le raccourci global : { $detail }
+more-config-errors = { $more ->
+    [one] { $first } (+{ $more } autre)
+   *[other] { $first } (+{ $more } autres)
 }

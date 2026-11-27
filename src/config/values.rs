@@ -156,17 +156,13 @@ impl FontFeatureList {
     /// Parses a list of features separated by spaces or commas: `tag` or `+tag` enables
     /// it, `-tag` disables it, `tag=N` sets the value `N`. A tag is 4 printable ASCII
     /// characters; the last occurrence of a tag wins. The error names the invalid item.
-    pub fn parse(text: &str) -> Result<Self, String> {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
         let mut features: Vec<(FeatureTag, u32)> = Vec::new();
         for item in text
             .split(|c: char| c.is_whitespace() || c == ',')
             .filter(|item| !item.is_empty())
         {
-            let invalid = || {
-                format!(
-                    "invalid feature \"{item}\", expected \"tag\", \"+tag\", \"-tag\" or \"tag=N\" with a tag of 4 ASCII characters"
-                )
-            };
+            let invalid = || ValueError::InvalidFeature(item.to_owned());
             let (tag, value) = match (item.strip_prefix('+'), item.strip_prefix('-')) {
                 (Some(tag), _) => (tag, 1),
                 (_, Some(tag)) => (tag, 0),
@@ -271,11 +267,9 @@ pub enum QuickTerminalScreen {
 
 impl QuickTerminalScreen {
     /// Reads a value of the file: `"active"`, `"primary"` or a non-empty screen name.
-    pub fn parse(value: &str) -> Result<Self, String> {
+    pub fn parse(value: &str) -> Result<Self, ValueError> {
         match value {
-            "" => Err(
-                "must not be empty, expected \"active\", \"primary\" or a screen name".to_owned(),
-            ),
+            "" => Err(ValueError::EmptyScreen),
             "active" => Ok(Self::Active),
             "primary" => Ok(Self::Primary),
             name => Ok(Self::Named(name.to_owned())),

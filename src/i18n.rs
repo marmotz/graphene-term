@@ -293,6 +293,93 @@ impl From<Option<std::process::ExitStatus>> for Exit {
     }
 }
 
+/// What is wrong with a configuration error, without its file nor its line (see
+/// [`crate::config::ConfigError`]). The texts the application does not write, the
+/// detail of the `toml` crate and of an [`std::io::Error`], stay in English after a
+/// translated prefix.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigMsg {
+    /// The file is not valid TOML, with the detail of the `toml` crate.
+    Syntax(String),
+    /// The file cannot be read, with the text of the I/O error.
+    CannotRead(String),
+    /// The theme file cannot be read, with the text of the I/O error.
+    CannotReadTheme(String),
+    /// The file cannot be written, with the text of the I/O error.
+    CannotWrite(String),
+    /// The configuration directory of the system is unknown.
+    NoConfigDir,
+    /// A key the application does not know, by its path.
+    UnknownKey(String),
+    /// A key, by its path, that holds a value instead of a table.
+    MustBeTable(String),
+    /// The keyboard shortcuts of `config.toml` now live in this file.
+    KeybindingsMoved(String),
+    /// The value of the key `path` is rejected: the previous value stays.
+    InvalidValue { path: String, reason: ValueError },
+    /// The value of the key `path` is out of `min..=max`: `used` is used instead.
+    OutOfRange {
+        path: String,
+        value: f64,
+        min: f64,
+        max: f64,
+        used: f64,
+    },
+    /// The value of the key `path` is above `max`, which is used instead.
+    AboveMaximum { path: String, value: f64, max: f64 },
+    /// The update interval `value` is not one of `expected`: `auto` is used.
+    UnknownInterval {
+        path: String,
+        value: String,
+        expected: String,
+    },
+    /// The configured theme does not exist: `fallback` is used.
+    UnknownTheme { name: String, fallback: String },
+    /// The theme edited does not exist.
+    ThemeNotFound(String),
+    /// The name is not a valid theme name.
+    InvalidThemeName(String),
+    /// A user theme of this name already exists.
+    ThemeExists(String),
+    /// The global hotkey has no key on this system.
+    HotkeyNoKey(String),
+    /// Another application already holds the global hotkey.
+    HotkeyTaken(String),
+    /// The global hotkey cannot be registered, with the system's detail.
+    HotkeyFailed(String),
+}
+
+/// Why the value of a configuration key is rejected ([`ConfigMsg::InvalidValue`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValueError {
+    /// The detail of the `toml` crate: wrong type, unknown variant.
+    Detail(String),
+    NotANumber,
+    NotNegative,
+    AtLeast(f64),
+    GreaterThanZero,
+    NotEmpty,
+    /// An OpenType feature of `font.features` that does not parse.
+    InvalidFeature(String),
+    /// `quick_terminal.screen` is empty.
+    EmptyScreen,
+    UnknownModifier {
+        modifier: String,
+        shortcut: String,
+    },
+    /// The shortcut has no key after its modifiers.
+    MissingKey(String),
+    UnknownKeyName {
+        key: String,
+        shortcut: String,
+    },
+    UnknownAction(String),
+    /// A color that is not a string.
+    ColorNotString,
+    /// A string that is not a `#rrggbb` color.
+    NotAColor(String),
+}
+
 /// A translatable label. Messages carrying a value have fields.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
@@ -393,8 +480,8 @@ pub enum Msg {
     /// Why the other quick terminal settings are disabled while it is turned off, and
     /// when turning it on applies.
     QuickTerminalDisabled,
-    /// Prefix of an error writing the file.
-    CannotSave,
+    /// An error writing the file, as written.
+    CannotSave(String),
     /// A number field holds text that is not a number.
     NotANumber,
     /// An integer field holds a fractional number.
@@ -517,6 +604,14 @@ pub enum Msg {
     // `-E`.
     /// Shown in the pane once its program ended: how, and that a key closes it.
     ProgramExited(Exit),
+    // Configuration errors.
+    /// What is wrong with a configuration file.
+    Config(ConfigMsg),
+    /// The first configuration error, as written, followed by the count of the others.
+    MoreConfigErrors {
+        first: String,
+        more: usize,
+    },
 }
 
 /// Every language, in [`Lang`] order.
@@ -805,7 +900,10 @@ fn fluent(msg: &Msg) -> (&'static str, FluentArgs<'_>) {
         Msg::FixFileByHand => "fix-file-by-hand",
         Msg::QuickTerminalUnavailableOnWayland => "quick-terminal-unavailable-on-wayland",
         Msg::QuickTerminalDisabled => "quick-terminal-disabled",
-        Msg::CannotSave => "cannot-save",
+        Msg::CannotSave(error) => {
+            args.set("error", error.as_str());
+            "cannot-save"
+        }
         Msg::NotANumber => "not-a-number",
         Msg::NotAWholeNumber => "not-a-whole-number",
         Msg::AtLeast(min) => {
@@ -929,8 +1027,161 @@ fn fluent(msg: &Msg) -> (&'static str, FluentArgs<'_>) {
             }
             "program-exited"
         }
+        Msg::Config(detail) => config_fluent(detail, &mut args),
+        Msg::MoreConfigErrors { first, more } => {
+            args.set("first", first.as_str());
+            args.set("more", *more);
+            "more-config-errors"
+        }
     };
     (id, args)
+}
+
+/// Fluent identifier of a configuration error, its arguments set in `args`.
+fn config_fluent<'a>(detail: &'a ConfigMsg, args: &mut FluentArgs<'a>) -> &'static str {
+    match detail {
+        ConfigMsg::Syntax(detail) => {
+            args.set("detail", detail.as_str());
+            "config-syntax"
+        }
+        ConfigMsg::CannotRead(detail) => {
+            args.set("detail", detail.as_str());
+            "config-cannot-read"
+        }
+        ConfigMsg::CannotReadTheme(detail) => {
+            args.set("detail", detail.as_str());
+            "config-cannot-read-theme"
+        }
+        ConfigMsg::CannotWrite(detail) => {
+            args.set("detail", detail.as_str());
+            "config-cannot-write"
+        }
+        ConfigMsg::NoConfigDir => "config-no-config-dir",
+        ConfigMsg::UnknownKey(path) => {
+            args.set("path", path.as_str());
+            "config-unknown-key"
+        }
+        ConfigMsg::MustBeTable(path) => {
+            args.set("path", path.as_str());
+            "config-must-be-table"
+        }
+        ConfigMsg::KeybindingsMoved(file) => {
+            args.set("file", file.as_str());
+            "config-keybindings-moved"
+        }
+        ConfigMsg::InvalidValue { path, reason } => {
+            args.set("path", path.as_str());
+            let reason = reason_fluent(reason, args);
+            args.set("reason", reason);
+            "config-invalid-value"
+        }
+        ConfigMsg::OutOfRange {
+            path,
+            value,
+            min,
+            max,
+            used,
+        } => {
+            args.set("path", path.as_str());
+            args.set("value", *value);
+            args.set("min", *min);
+            args.set("max", *max);
+            args.set("used", *used);
+            "config-out-of-range"
+        }
+        ConfigMsg::AboveMaximum { path, value, max } => {
+            args.set("path", path.as_str());
+            args.set("value", *value);
+            args.set("max", *max);
+            "config-above-maximum"
+        }
+        ConfigMsg::UnknownInterval {
+            path,
+            value,
+            expected,
+        } => {
+            args.set("path", path.as_str());
+            args.set("value", value.as_str());
+            args.set("expected", expected.as_str());
+            "config-unknown-interval"
+        }
+        ConfigMsg::UnknownTheme { name, fallback } => {
+            args.set("name", name.as_str());
+            args.set("fallback", fallback.as_str());
+            "config-unknown-theme"
+        }
+        ConfigMsg::ThemeNotFound(name) => {
+            args.set("name", name.as_str());
+            "config-theme-not-found"
+        }
+        ConfigMsg::InvalidThemeName(name) => {
+            args.set("name", name.as_str());
+            "config-invalid-theme-name"
+        }
+        ConfigMsg::ThemeExists(name) => {
+            args.set("name", name.as_str());
+            "config-theme-exists"
+        }
+        ConfigMsg::HotkeyNoKey(hotkey) => {
+            args.set("hotkey", hotkey.as_str());
+            "config-hotkey-no-key"
+        }
+        ConfigMsg::HotkeyTaken(hotkey) => {
+            args.set("hotkey", hotkey.as_str());
+            "config-hotkey-taken"
+        }
+        ConfigMsg::HotkeyFailed(detail) => {
+            args.set("detail", detail.as_str());
+            "config-hotkey-failed"
+        }
+    }
+}
+
+/// Selector key of a rejected value in `config-invalid-value`, its arguments set in
+/// `args`.
+fn reason_fluent<'a>(reason: &'a ValueError, args: &mut FluentArgs<'a>) -> &'static str {
+    match reason {
+        ValueError::Detail(detail) => {
+            args.set("detail", detail.as_str());
+            "detail"
+        }
+        ValueError::NotANumber => "not-a-number",
+        ValueError::NotNegative => "not-negative",
+        ValueError::AtLeast(min) => {
+            args.set("min", *min);
+            "at-least"
+        }
+        ValueError::GreaterThanZero => "greater-than-zero",
+        ValueError::NotEmpty => "not-empty",
+        ValueError::InvalidFeature(item) => {
+            args.set("item", item.as_str());
+            "invalid-feature"
+        }
+        ValueError::EmptyScreen => "empty-screen",
+        ValueError::UnknownModifier { modifier, shortcut } => {
+            args.set("modifier", modifier.as_str());
+            args.set("shortcut", shortcut.as_str());
+            "unknown-modifier"
+        }
+        ValueError::MissingKey(shortcut) => {
+            args.set("shortcut", shortcut.as_str());
+            "missing-key"
+        }
+        ValueError::UnknownKeyName { key, shortcut } => {
+            args.set("key", key.as_str());
+            args.set("shortcut", shortcut.as_str());
+            "unknown-key-name"
+        }
+        ValueError::UnknownAction(action) => {
+            args.set("action", action.as_str());
+            "unknown-action"
+        }
+        ValueError::ColorNotString => "color-not-string",
+        ValueError::NotAColor(text) => {
+            args.set("text", text.as_str());
+            "not-a-color"
+        }
+    }
 }
 
 /// Selector key of a direction in the Fluent files.
@@ -1149,7 +1400,7 @@ mod tests {
             Msg::UnknownKeys => 45,
             Msg::AtLine(_) => 46,
             Msg::FixFileByHand => 47,
-            Msg::CannotSave => 48,
+            Msg::CannotSave(_) => 48,
             Msg::NotANumber => 49,
             Msg::NotAWholeNumber => 50,
             Msg::AtLeast(_) => 51,
@@ -1207,9 +1458,132 @@ mod tests {
             Msg::DurationSeconds(_) => 115,
             Msg::DurationMinutes { .. } => 116,
             Msg::DurationHours { .. } => 117,
+            Msg::Config(_) => 118,
+            Msg::MoreConfigErrors { .. } => 119,
         }
     }
-    const VARIANT_COUNT: usize = 118;
+    const VARIANT_COUNT: usize = 120;
+
+    /// Index of the configuration error, through an exhaustive match: a new variant
+    /// fails to compile here until `config_messages` covers it.
+    fn config_index(detail: &ConfigMsg) -> usize {
+        match detail {
+            ConfigMsg::Syntax(_) => 0,
+            ConfigMsg::CannotRead(_) => 1,
+            ConfigMsg::CannotReadTheme(_) => 2,
+            ConfigMsg::CannotWrite(_) => 3,
+            ConfigMsg::UnknownKey(_) => 4,
+            ConfigMsg::MustBeTable(_) => 5,
+            ConfigMsg::KeybindingsMoved(_) => 6,
+            ConfigMsg::InvalidValue { .. } => 7,
+            ConfigMsg::OutOfRange { .. } => 8,
+            ConfigMsg::AboveMaximum { .. } => 9,
+            ConfigMsg::UnknownInterval { .. } => 10,
+            ConfigMsg::UnknownTheme { .. } => 11,
+            ConfigMsg::ThemeNotFound(_) => 12,
+            ConfigMsg::InvalidThemeName(_) => 13,
+            ConfigMsg::ThemeExists(_) => 14,
+            ConfigMsg::HotkeyNoKey(_) => 15,
+            ConfigMsg::HotkeyTaken(_) => 16,
+            ConfigMsg::HotkeyFailed(_) => 17,
+            ConfigMsg::NoConfigDir => 18,
+        }
+    }
+    const CONFIG_COUNT: usize = 19;
+
+    /// Index of the reason, through an exhaustive match: a new variant fails to
+    /// compile here until `reasons` covers it.
+    fn reason_index(reason: &ValueError) -> usize {
+        match reason {
+            ValueError::Detail(_) => 0,
+            ValueError::NotANumber => 1,
+            ValueError::NotNegative => 2,
+            ValueError::AtLeast(_) => 3,
+            ValueError::GreaterThanZero => 4,
+            ValueError::NotEmpty => 5,
+            ValueError::InvalidFeature(_) => 6,
+            ValueError::EmptyScreen => 7,
+            ValueError::UnknownModifier { .. } => 8,
+            ValueError::MissingKey(_) => 9,
+            ValueError::UnknownKeyName { .. } => 10,
+            ValueError::UnknownAction(_) => 11,
+            ValueError::ColorNotString => 12,
+            ValueError::NotAColor(_) => 13,
+        }
+    }
+    const REASON_COUNT: usize = 14;
+
+    /// Every reason of a rejected value.
+    fn reasons() -> Vec<ValueError> {
+        vec![
+            ValueError::Detail("invalid type: string, expected a boolean".into()),
+            ValueError::NotANumber,
+            ValueError::NotNegative,
+            ValueError::AtLeast(1.0),
+            ValueError::GreaterThanZero,
+            ValueError::NotEmpty,
+            ValueError::InvalidFeature("liga=x".into()),
+            ValueError::EmptyScreen,
+            ValueError::UnknownModifier {
+                modifier: "Hyper".into(),
+                shortcut: "Hyper+C".into(),
+            },
+            ValueError::MissingKey("Ctrl+".into()),
+            ValueError::UnknownKeyName {
+                key: "PgUp".into(),
+                shortcut: "Ctrl+PgUp".into(),
+            },
+            ValueError::UnknownAction("fly".into()),
+            ValueError::ColorNotString,
+            ValueError::NotAColor("#12".into()),
+        ]
+    }
+
+    /// Every configuration error, with every reason of a rejected value.
+    fn config_messages() -> Vec<ConfigMsg> {
+        let mut messages = vec![
+            ConfigMsg::Syntax("expected `]`".into()),
+            ConfigMsg::CannotRead("Permission denied (os error 13)".into()),
+            ConfigMsg::CannotReadTheme("Permission denied (os error 13)".into()),
+            ConfigMsg::CannotWrite("No space left on device (os error 28)".into()),
+            ConfigMsg::NoConfigDir,
+            ConfigMsg::UnknownKey("font.sise".into()),
+            ConfigMsg::MustBeTable("font".into()),
+            ConfigMsg::KeybindingsMoved("keybindings.toml".into()),
+            ConfigMsg::OutOfRange {
+                path: "font.size".into(),
+                value: 1234.5,
+                min: 6.0,
+                max: 72.0,
+                used: 72.0,
+            },
+            ConfigMsg::AboveMaximum {
+                path: "scrollback.lines".into(),
+                value: 2_000_000.0,
+                max: 1_000_000.0,
+            },
+            ConfigMsg::UnknownInterval {
+                path: "updates.interval".into(),
+                value: "hourly".into(),
+                expected: "\"auto\", \"daily\"".into(),
+            },
+            ConfigMsg::UnknownTheme {
+                name: "nope".into(),
+                fallback: "graphene-night".into(),
+            },
+            ConfigMsg::ThemeNotFound("nope".into()),
+            ConfigMsg::InvalidThemeName("a/b".into()),
+            ConfigMsg::ThemeExists("mine".into()),
+            ConfigMsg::HotkeyNoKey("Ctrl+€".into()),
+            ConfigMsg::HotkeyTaken("Ctrl+`".into()),
+            ConfigMsg::HotkeyFailed("no X11 connection".into()),
+        ];
+        messages.extend(reasons().into_iter().map(|reason| ConfigMsg::InvalidValue {
+            path: "font.size".into(),
+            reason,
+        }));
+        messages
+    }
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1295,7 +1669,7 @@ mod tests {
             Msg::FixFileByHand,
             Msg::QuickTerminalUnavailableOnWayland,
             Msg::QuickTerminalDisabled,
-            Msg::CannotSave,
+            Msg::CannotSave("config.toml: cannot write the file: denied".into()),
             Msg::NotANumber,
             Msg::NotAWholeNumber,
             Msg::AtLeast(6.0),
@@ -1342,6 +1716,10 @@ mod tests {
             Msg::ProgramExited(Exit::Code(1)),
             Msg::ProgramExited(Exit::Signal(9)),
             Msg::ProgramExited(Exit::Unknown),
+            Msg::MoreConfigErrors {
+                first: "config.toml:3: unknown key `a`".into(),
+                more: 2,
+            },
         ];
         messages.extend(DIRECTIONS.map(Msg::FocusPane));
         messages.extend(DIRECTIONS.map(Msg::ResizePane));
@@ -1353,6 +1731,7 @@ mod tests {
         messages.extend(
             [NameError::Empty, NameError::Invalid, NameError::Taken].map(Msg::ThemeNameError),
         );
+        messages.extend(config_messages().into_iter().map(Msg::Config));
         messages
     }
 
@@ -1405,6 +1784,70 @@ mod tests {
             covered[variant_index(&msg)] = true;
         }
         assert!(covered.iter().all(|&c| c), "missing variants: {covered:?}");
+    }
+
+    #[test]
+    fn config_messages_cover_every_error_and_every_reason() {
+        let mut covered = [false; CONFIG_COUNT];
+        for detail in config_messages() {
+            covered[config_index(&detail)] = true;
+        }
+        assert!(covered.iter().all(|&c| c), "missing errors: {covered:?}");
+        let mut covered = [false; REASON_COUNT];
+        for reason in reasons() {
+            covered[reason_index(&reason)] = true;
+        }
+        assert!(covered.iter().all(|&c| c), "missing reasons: {covered:?}");
+    }
+
+    #[test]
+    fn config_errors_are_translated_around_the_texts_of_other_crates() {
+        let syntax = Msg::Config(ConfigMsg::Syntax("expected `]`".into()));
+        assert_eq!(text(Lang::EnUs, &syntax), "invalid syntax: expected `]`");
+        assert_eq!(text(Lang::Fr, &syntax), "syntaxe invalide : expected `]`");
+        let range = Msg::Config(ConfigMsg::OutOfRange {
+            path: "font.size".into(),
+            value: 1234.5,
+            min: 6.0,
+            max: 72.0,
+            used: 72.0,
+        });
+        assert_eq!(
+            text(Lang::EnUs, &range),
+            "`font.size`: 1,234.5 is out of 6 to 72, using 72"
+        );
+        assert_eq!(
+            text(Lang::Fr, &range),
+            "`font.size` : 1\u{202f}234,5 est hors de l'intervalle 6 à 72, 72 est utilisé"
+        );
+        let color = Msg::Config(ConfigMsg::InvalidValue {
+            path: "colors.foreground".into(),
+            reason: ValueError::NotAColor("#12".into()),
+        });
+        assert_eq!(
+            text(Lang::EnUs, &color),
+            "invalid value for `colors.foreground`: `#12` is not a \"#rrggbb\" color"
+        );
+        assert_eq!(
+            text(Lang::EnGb, &color),
+            "invalid value for `colors.foreground`: `#12` is not a \"#rrggbb\" colour"
+        );
+        assert_eq!(
+            text(Lang::Fr, &color),
+            "valeur invalide pour `colors.foreground` : `#12` n'est pas une couleur \"#rrggbb\""
+        );
+    }
+
+    #[test]
+    fn the_count_of_the_other_config_errors_follows_the_plural_of_the_language() {
+        let more = |more| Msg::MoreConfigErrors {
+            first: "config.toml:2: e".into(),
+            more,
+        };
+        assert_eq!(text(Lang::EnUs, &more(1)), "config.toml:2: e (+1 more)");
+        assert_eq!(text(Lang::EnUs, &more(2)), "config.toml:2: e (+2 more)");
+        assert_eq!(text(Lang::Fr, &more(1)), "config.toml:2: e (+1 autre)");
+        assert_eq!(text(Lang::Fr, &more(2)), "config.toml:2: e (+2 autres)");
     }
 
     #[test]
@@ -1547,7 +1990,16 @@ mod tests {
     fn every_selector_value_has_its_own_text() {
         // A selector key missing from a file falls back to the default variant
         // silently: distinct texts show that each value has its own.
-        let groups: [Vec<Msg>; 7] = [
+        let groups: [Vec<Msg>; 8] = [
+            reasons()
+                .into_iter()
+                .map(|reason| {
+                    Msg::Config(ConfigMsg::InvalidValue {
+                        path: "a".into(),
+                        reason,
+                    })
+                })
+                .collect(),
             DIRECTIONS.map(Msg::FocusPane).to_vec(),
             DIRECTIONS.map(Msg::ResizePane).to_vec(),
             TARGETS.map(Msg::ConfirmCloseTitle).to_vec(),

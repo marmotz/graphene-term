@@ -434,6 +434,15 @@ variable), with its region: a region without a variant gives the base language. 
 `language` setting takes BCP 47 tags (`en-US`, `fr-CA`), case ignored, and keeps `en` as
 an alias so that existing files stay valid.
 
+Configuration errors are translated too: `ConfigError.detail` is an `i18n::ConfigMsg`
+(boxed, to keep the `Result`s that carry it small), shown by `Msg::Config`, and
+`ConfigError::text(lang)` prefixes it with the file name and line. A rejected value
+carries an `i18n::ValueError`, a selector of the single `config-invalid-value` message,
+so the parsers of the values (`Shortcut::parse`, `FontFeatureList::parse`...) return it
+instead of an English string. The texts the application does not write, the detail of
+the `toml` crate and of an `io::Error`, are inserted untranslated after a translated
+prefix. The logs keep English (`Lang::EnUs`).
+
 ### Numbers and dates of the language: ICU4X
 
 Numbers and dates follow the conventions of the interface language through ICU4X 2.4

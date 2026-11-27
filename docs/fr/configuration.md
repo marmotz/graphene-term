@@ -73,6 +73,11 @@ décrit chaque problème (cliquez dessus pour le masquer) :
 - un paramètre inconnu est ignoré ;
 - une erreur de syntaxe TOML fait ignorer tout le fichier jusqu'à sa correction.
 
+Le bandeau et l'onglet Paramètres écrivent ces erreurs dans la langue de l'interface
+(`language`). Le détail d'une erreur de syntaxe TOML et le texte d'une erreur du système
+(un fichier illisible ou impossible à écrire) restent en anglais, après un préfixe
+traduit.
+
 ## Onglet des paramètres
 
 Les paramètres sont le premier onglet de la fenêtre, l'icône de réglages au début de la
@@ -127,7 +132,7 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 
 | Paramètre  | Défaut   | Valeurs                                                                |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"en"` reste accepté pour `"en-US"`, et la casse est ignorée. `"auto"` suit la langue et la région du système : `fr_CA` donne le français (Canada), `fr_BE` le français, `en_GB` l'anglais (Royaume-Uni), toute autre langue l'anglais (États-Unis). Une variante régionale affiche le texte de sa langue de base là où elle n'a pas le sien. Les nombres et les durées suivent aussi la langue (`1,280` en anglais, `1 280` en français). |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"en"` reste accepté pour `"en-US"`, et la casse est ignorée. `"auto"` suit la langue et la région du système : `fr_CA` donne le français (Canada), `fr_BE` le français, `en_GB` l'anglais (Royaume-Uni), toute autre langue l'anglais (États-Unis). Une variante régionale affiche le texte de sa langue de base là où elle n'a pas le sien. Les nombres et les durées suivent aussi la langue (`1,280` en anglais, `1 280` en français), tout comme les erreurs de configuration. |
 
 `language` se place en haut du fichier, avant toute section.
 

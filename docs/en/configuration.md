@@ -70,6 +70,10 @@ describes each problem (click it to hide it):
 - an unknown setting is ignored;
 - a TOML syntax error ignores the whole file until it is fixed.
 
+The banner and the Settings tab write these errors in the interface language
+(`language`). The detail of a TOML syntax error and the text of a system error (a file
+that cannot be read or written) stay in English, after a translated prefix.
+
 ## Settings tab
 
 The settings are the first tab of the window, the sliders icon at the start of the tab
@@ -121,7 +125,7 @@ This is the complete list. Values shown are the defaults.
 
 | Setting    | Default  | Values                                                                 |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), any other language English (United States). A regional variant shows the text of its base language where it has none of its own. Numbers and durations follow the language too (`1,280` in English, `1 280` in French). |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), any other language English (United States). A regional variant shows the text of its base language where it has none of its own. Numbers and durations follow the language too (`1,280` in English, `1 280` in French), as do the configuration errors. |
 
 `language` is at the top of the file, before any section.
 

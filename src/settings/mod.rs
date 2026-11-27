@@ -258,7 +258,7 @@ impl SettingsTab {
                 self.model.edit_theme(&name);
             }
             if let Err(error) = result {
-                log::warn!("{error}");
+                log::warn!("{}", error.text(Lang::EnUs));
                 self.model.write_failed(&error);
             }
         }

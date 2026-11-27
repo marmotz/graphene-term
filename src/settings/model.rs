@@ -384,7 +384,7 @@ pub struct SettingsModel {
     config: Config,
     errors: LoadErrors,
     /// Error of the last write, cleared by the next write or reload.
-    write_error: Option<String>,
+    write_error: Option<ConfigError>,
     theme_choices: Vec<String>,
     font_families: Vec<String>,
     /// Names of the connected screens, offered by `quick_terminal.screen`.
@@ -557,7 +557,7 @@ impl SettingsModel {
 
     /// Records a failed write.
     pub fn write_failed(&mut self, error: &ConfigError) {
-        self.write_error = Some(error.to_string());
+        self.write_error = Some(error.clone());
     }
 
     /// The user and built-in themes.
@@ -657,8 +657,9 @@ impl SettingsModel {
             || !section_fields(Section::QuickTerminal).contains(&field)
     }
 
-    pub fn write_error(&self) -> Option<&str> {
-        self.write_error.as_deref()
+    /// The last failed write, in the language of the model.
+    pub fn write_error(&self) -> Option<String> {
+        self.write_error.as_ref().map(|error| error.text(self.lang))
     }
 
     /// Whether `field` is shown: the theme name without the appearance toggle, the
@@ -852,32 +853,36 @@ impl SettingsModel {
         }
     }
 
-    /// Messages of the configuration errors of `field`.
-    pub fn field_errors(&self, field: Field) -> Vec<&str> {
+    /// Messages of the configuration errors of `field`, in the language of the model.
+    pub fn field_errors(&self, field: Field) -> Vec<String> {
         let Some(path) = path(field).map(config::key_path) else {
             return Vec::new();
         };
         self.value_errors()
             .filter(|error| error.key.as_deref() == Some(path.as_str()))
-            .map(|error| error.message.as_str())
+            .map(|error| error.message(self.lang))
             .collect()
     }
 
     /// Messages of the configuration errors of `section` tied to no field (a section
     /// that is not a table, a keybinding).
-    pub fn section_errors(&self, section: Section) -> Vec<&str> {
+    pub fn section_errors(&self, section: Section) -> Vec<String> {
         self.value_errors()
             .filter(|error| {
                 let key = error.key.as_deref().unwrap_or_default();
                 field_of_key(key).is_none() && section_of_key(key) == Some(section)
             })
-            .map(|error| error.message.as_str())
+            .map(|error| error.message(self.lang))
             .collect()
     }
 
     /// Errors of the theme file and theme name, shown in the Theme section.
     pub fn theme_errors(&self) -> Vec<String> {
-        self.errors.theme.iter().map(ToString::to_string).collect()
+        self.errors
+            .theme
+            .iter()
+            .map(|error| error.text(self.lang))
+            .collect()
     }
 
     /// Unknown keys of the file, with their line.
@@ -897,7 +902,7 @@ impl SettingsModel {
                 let key = error.key.as_deref().unwrap_or_default();
                 field_of_key(key).is_none() && section_of_key(key).is_none()
             })
-            .map(ToString::to_string)
+            .map(|error| error.text(self.lang))
             .collect()
     }
 
@@ -1031,6 +1036,7 @@ mod tests {
 
     use super::*;
     use crate::config::{ConfigError, ConfigErrorKind};
+    use crate::i18n::{ConfigMsg, ValueError};
 
     fn file() -> PathBuf {
         PathBuf::from("/home/user/.config/graphene/config.toml")
@@ -1666,7 +1672,10 @@ bell = true
             line: Some(3),
             key: Some("colors.foreground".into()),
             kind: ConfigErrorKind::InvalidValue,
-            message: "invalid color".into(),
+            detail: Box::new(ConfigMsg::InvalidValue {
+                path: "colors.foreground".into(),
+                reason: ValueError::NotAColor("red".into()),
+            }),
         };
         let m = SettingsModel::new(
             &Config::default(),
@@ -1677,7 +1686,12 @@ bell = true
             None,
             Appearance::Dark,
         );
-        assert_eq!(m.theme_errors(), ["mine.toml:3: invalid color"]);
+        assert_eq!(
+            m.theme_errors(),
+            [
+                "mine.toml:3: invalid value for `colors.foreground`: `red` is not a \"#rrggbb\" color"
+            ]
+        );
         assert!(m.other_errors().is_empty());
         assert!(m.section_errors(Section::Theme).is_empty());
     }
@@ -1719,7 +1733,10 @@ bell = true
         let m = SettingsModel::new(
             &Config::default(),
             &LoadErrors {
-                config: vec![ConfigError::read(file(), "denied".into())],
+                config: vec![ConfigError::read(
+                    file(),
+                    ConfigMsg::CannotRead("denied".into()),
+                )],
                 theme: Vec::new(),
             },
             None,
@@ -1733,7 +1750,7 @@ bell = true
     fn a_file_locks_only_its_own_sections() {
         let keybindings_error = ConfigError::read(
             PathBuf::from("/home/user/.config/graphene/keybindings.toml"),
-            "denied".into(),
+            ConfigMsg::CannotRead("denied".into()),
         );
         let m = SettingsModel::new(
             &Config::default(),
@@ -1751,7 +1768,10 @@ bell = true
         let m = SettingsModel::new(
             &Config::default(),
             &LoadErrors {
-                config: vec![ConfigError::read(file(), "denied".into())],
+                config: vec![ConfigError::read(
+                    file(),
+                    ConfigMsg::CannotRead("denied".into()),
+                )],
                 theme: Vec::new(),
             },
             None,
@@ -1881,11 +1901,16 @@ bell = true
             line: None,
             key: None,
             kind: ConfigErrorKind::Write,
-            message: "cannot write the file: denied".into(),
+            detail: Box::new(ConfigMsg::CannotWrite("denied".into())),
         });
         assert_eq!(
-            m.write_error(),
+            m.write_error().as_deref(),
             Some("config.toml: cannot write the file: denied")
+        );
+        m.set_lang(Lang::Fr);
+        assert_eq!(
+            m.write_error().as_deref(),
+            Some("config.toml: impossible d'écrire le fichier : denied")
         );
         let (config, errors) = Config::parse("[font]\nsize = 20.0", m.config(), &file());
         m.written(config, errors);

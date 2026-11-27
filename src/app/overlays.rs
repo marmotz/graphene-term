@@ -325,10 +325,7 @@ impl Session {
     /// written.
     pub(super) fn write_theme(&mut self, name: &str) -> bool {
         let Some(file) = config::config_file() else {
-            let error = ConfigError::read(
-                PathBuf::from("config.toml"),
-                "cannot resolve the configuration file path".to_owned(),
-            );
+            let error = ConfigError::read(PathBuf::from("config.toml"), ConfigMsg::NoConfigDir);
             self.show_config_error(error);
             return false;
         };
@@ -382,8 +379,8 @@ impl Session {
     }
 
     pub(super) fn show_config_error(&mut self, error: ConfigError) {
-        log::warn!("{error}");
-        self.config_banner = Banner::config_errors(std::slice::from_ref(&error));
+        log::warn!("{}", error.text(Lang::EnUs));
+        self.config_banner = Banner::config_errors(std::slice::from_ref(&error), self.lang);
         self.relayout();
     }
 

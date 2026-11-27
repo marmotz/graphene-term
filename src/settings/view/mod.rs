@@ -282,7 +282,7 @@ impl View {
     fn section_body(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel, edits: &mut Edits) {
         let changes = &mut edits.changes;
         for message in model.section_errors(self.section) {
-            error_label(ui, message);
+            error_label(ui, &message);
         }
         if self.section == SettingsSection::Theme {
             for message in model.theme_errors() {
@@ -313,7 +313,7 @@ impl View {
                             error_label(ui, &i18n::text(lang, &error.msg()));
                         }
                         for message in model.field_errors(field) {
-                            error_label(ui, message);
+                            error_label(ui, &message);
                         }
                     });
                     ui.end_row();
@@ -349,7 +349,7 @@ impl View {
             });
         }
         for message in model.field_errors(field) {
-            error_label(ui, message);
+            error_label(ui, &message);
         }
         ui.add_space(12.0);
     }
@@ -680,7 +680,7 @@ fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: Settin
     let label = |msg: Msg| i18n::text(lang, &msg);
     let mut shown = false;
     if let Some(error) = model.locked(section) {
-        error_label(ui, &error.to_string());
+        error_label(ui, &error.text(lang));
         ui.label(error.file.display().to_string());
         ui.label(label(Msg::FixFileByHand));
         shown = true;
@@ -690,7 +690,7 @@ fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: Settin
         shown = true;
     }
     if let Some(error) = model.write_error() {
-        error_label(ui, &format!("{}: {error}", label(Msg::CannotSave)));
+        error_label(ui, &label(Msg::CannotSave(error)));
         shown = true;
     }
     let unknown = model.unknown_keys();

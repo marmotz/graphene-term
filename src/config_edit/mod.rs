@@ -11,6 +11,7 @@ use toml_edit::DocumentMut;
 
 use crate::atomic_file::write_atomic;
 use crate::config::{ConfigError, ConfigErrorKind, DEFAULT_CONFIG, DEFAULT_KEYBINDINGS, key_path};
+use crate::i18n::ConfigMsg;
 
 mod completion;
 mod migration;
@@ -148,7 +149,7 @@ impl ConfigEdit {
                 line: error.span().map(|span| line_of(text, span.start)),
                 key: None,
                 kind: ConfigErrorKind::Syntax,
-                message: error.message().trim_end().to_owned(),
+                detail: Box::new(ConfigMsg::Syntax(error.message().trim_end().to_owned())),
             }),
         }
     }
@@ -171,7 +172,7 @@ impl ConfigEdit {
                 line: None,
                 key: Some(name.clone()),
                 kind: ConfigErrorKind::InvalidValue,
-                message: format!("`{name}` must be a table"),
+                detail: Box::new(ConfigMsg::MustBeTable(name.to_owned())),
             }
         };
 
@@ -300,7 +301,7 @@ fn write_text(
 }
 
 fn read_error(file: &Path, error: &io::Error) -> ConfigError {
-    ConfigError::read(file.to_path_buf(), format!("cannot read the file: {error}"))
+    ConfigError::read(file.to_path_buf(), ConfigMsg::CannotRead(error.to_string()))
 }
 
 pub(crate) fn write_error(file: &Path, error: &io::Error) -> ConfigError {
@@ -309,7 +310,7 @@ pub(crate) fn write_error(file: &Path, error: &io::Error) -> ConfigError {
         line: None,
         key: None,
         kind: ConfigErrorKind::Write,
-        message: format!("cannot write the file: {error}"),
+        detail: Box::new(ConfigMsg::CannotWrite(error.to_string())),
     }
 }
 

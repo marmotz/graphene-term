@@ -475,7 +475,11 @@ impl App {
             self.start_hidden_quick();
         }
         self.sync_autostart(Some(hotkey::effective_autostart(&old.quick_terminal)));
-        let banner = hotkey::config_banner(&self.load_errors, self.hotkey_error.as_ref());
+        let banner = hotkey::config_banner(
+            &self.load_errors,
+            self.hotkey_error.as_ref(),
+            self.config.language.resolve(Lang::detect),
+        );
         self.config_banner = banner.clone();
         if let Some(settings) = self.session.as_mut().and_then(|s| s.settings.as_mut()) {
             settings.apply(
@@ -821,13 +825,19 @@ pub(super) fn with_theme(
     let (palette, theme_errors) = theme::load(name, config::config_dir().as_deref());
     let all: Vec<ConfigError> = errors.iter().chain(&theme_errors).cloned().collect();
     for error in &all {
-        log::warn!("{error}");
+        log::warn!("{}", error.text(Lang::EnUs));
     }
     let load_errors = LoadErrors {
         config: errors,
         theme: theme_errors,
     };
-    (config, palette, Banner::config_errors(&all), load_errors)
+    let lang = config.language.resolve(Lang::detect);
+    (
+        config,
+        palette,
+        Banner::config_errors(&all, lang),
+        load_errors,
+    )
 }
 
 pub fn run(
