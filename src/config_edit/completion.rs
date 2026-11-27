@@ -909,7 +909,7 @@ mod tests {
             (
                 None,
                 "language",
-                "Allowed values: \"auto\", \"en\", \"fr\".",
+                "Allowed values: \"auto\", \"en-US\", \"en-GB\", \"fr\", \"fr-CA\"",
             ),
             (
                 Some("window"),
