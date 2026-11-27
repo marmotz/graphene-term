@@ -118,7 +118,7 @@ This is the complete list. Values shown are the defaults.
 
 | Setting    | Default  | Values                                                                 |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en"`, `"fr"`: language of the interface (menus, palette, settings, banners). `"auto"` follows the system language: French when it is French, English otherwise. |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), any other language English (United States). A regional variant shows the text of its base language where it has none of its own. |
 
 `language` is at the top of the file, before any section.
 

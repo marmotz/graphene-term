@@ -1577,7 +1577,7 @@ mod tests {
         };
         let dialog = DialogLayout::new(
             &confirm,
-            Lang::En,
+            Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             metrics,
             |t| t.chars().count() as f32 * 8.0,
@@ -1649,7 +1649,7 @@ mod tests {
         let draw = |rename: &RenameTab| {
             let layout = RenameTabLayout::new(
                 rename,
-                Lang::En,
+                Lang::EnUs,
                 area(0.0, 0.0, 1000.0, 600.0),
                 metrics,
                 |t| t.chars().count() as f32 * 8.0,
@@ -1700,7 +1700,7 @@ mod tests {
             shortcut: shortcut.map(str::to_owned),
         };
         let mut palette = CommandPalette::new(
-            Lang::En,
+            Lang::EnUs,
             vec![
                 entry("Split right", Action::SplitRight, Some("Ctrl+Shift+E")),
                 entry("Split down", Action::SplitDown, None),
@@ -1714,7 +1714,7 @@ mod tests {
         };
         let layout = PaletteLayout::new(
             &palette,
-            Lang::En,
+            Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             metrics,
             |t| t.chars().count() as f32 * 8.0,
@@ -1774,10 +1774,10 @@ mod tests {
     fn empty_palette_query_shows_its_hint_dimmed() {
         use crate::chrome::command_palette::{CommandPalette, PaletteLayout};
         use crate::i18n::Lang;
-        let palette = CommandPalette::new(Lang::En, Vec::new(), Vec::new());
+        let palette = CommandPalette::new(Lang::EnUs, Vec::new(), Vec::new());
         let layout = PaletteLayout::new(
             &palette,
-            Lang::En,
+            Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             UiMetrics {
                 line_height: 18.0,

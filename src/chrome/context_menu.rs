@@ -886,7 +886,7 @@ mod tests {
     fn pane_menu_has_context_sensitive_block_zoom_and_close_entries() {
         let keys = Keybindings::default();
         let mut ctx = context();
-        let normal = pane_menu(&ctx, &keys, Lang::En);
+        let normal = pane_menu(&ctx, &keys, Lang::EnUs);
         assert!(!normal.iter().any(|item| matches!(
             item,
             Item::Entry {
@@ -909,7 +909,7 @@ mod tests {
         ctx.single_pane_tab = true;
         ctx.zoomed = true;
         ctx.only_tab = true;
-        let items = pane_menu(&ctx, &keys, Lang::En);
+        let items = pane_menu(&ctx, &keys, Lang::EnUs);
         assert!(matches!(
             entry_at(&items, "Copy block command"),
             Item::Entry { enabled: false, .. }
@@ -944,7 +944,7 @@ mod tests {
     fn tab_menu_keeps_clicked_index_and_respects_only_tab() {
         let mut ctx = context();
         ctx.only_tab = true;
-        let items = tab_menu(4, &ctx, &Keybindings::default(), Lang::En);
+        let items = tab_menu(4, &ctx, &Keybindings::default(), Lang::EnUs);
         assert!(matches!(
             entry_at(&items, "Close the tab"),
             Item::Entry {
@@ -967,7 +967,7 @@ mod tests {
     #[test]
     fn shortcut_labels_follow_rebinding() {
         let keys = Keybindings::new(&BTreeMap::from([("Ctrl+Shift+C".into(), "copy".into())]));
-        let items = pane_menu(&context(), &keys, Lang::En);
+        let items = pane_menu(&context(), &keys, Lang::EnUs);
         assert!(matches!(entry_at(&items, "Copy"), Item::Entry {
             shortcut: Some(shortcut),
             ..
@@ -1097,7 +1097,7 @@ mod tests {
     #[test]
     fn themes_that_fit_are_listed_without_more() {
         let themes = themes_named(5);
-        let items = theme_pages(&themes, 5, Lang::En);
+        let items = theme_pages(&themes, 5, Lang::EnUs);
         let (names, more) = page(&items);
         assert_eq!(names.len(), 5);
         assert!(more.is_none());
@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn themes_that_do_not_fit_continue_under_more() {
         let themes = themes_named(100);
-        let items = theme_pages(&themes, 30, Lang::En);
+        let items = theme_pages(&themes, 30, Lang::EnUs);
         let mut all = Vec::new();
         let mut pages = Vec::new();
         let mut current = Some(items.as_slice());
@@ -1147,7 +1147,7 @@ mod tests {
             (10.0, 10.0),
             vec![Item::Submenu {
                 label: "Themes".into(),
-                entries: theme_pages(&themes, rows, Lang::En),
+                entries: theme_pages(&themes, rows, Lang::EnUs),
             }],
         )
     }
@@ -1262,7 +1262,7 @@ mod tests {
                     None,
                     true,
                     Command::Action(Action::Quit),
-                    Lang::En,
+                    Lang::EnUs,
                 ),
                 Item::Submenu {
                     label: "Themes".into(),

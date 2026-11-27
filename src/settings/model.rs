@@ -1822,7 +1822,10 @@ bell = true
             Some("gone")
         );
         assert_eq!(values(Field::CursorShape), ["block", "beam", "underline"]);
-        assert_eq!(values(Field::Language), ["auto", "en", "fr"]);
+        assert_eq!(
+            values(Field::Language),
+            ["auto", "en-US", "en-GB", "fr", "fr-CA"]
+        );
         assert_eq!(
             values(Field::UpdatesInterval).len(),
             UpdateInterval::VALUES.len()

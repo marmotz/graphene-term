@@ -209,7 +209,7 @@ mod tests {
             line_height: 18.0,
             scale: 1.0,
         };
-        RenameTabLayout::new(rename, Lang::En, window, metrics, |t| {
+        RenameTabLayout::new(rename, Lang::EnUs, window, metrics, |t| {
             t.chars().count() as f32 * 8.0
         })
     }

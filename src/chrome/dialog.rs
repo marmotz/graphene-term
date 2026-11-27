@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn messages_for_one_program() {
         let dialog = confirm(Target::Pane(PaneId(1)), &["vim"]);
-        assert_eq!(dialog.title(Lang::En), "Close this pane?");
-        assert_eq!(dialog.message(Lang::En), "vim is still running");
+        assert_eq!(dialog.title(Lang::EnUs), "Close this pane?");
+        assert_eq!(dialog.message(Lang::EnUs), "vim is still running");
         assert_eq!(dialog.title(Lang::Fr), "Fermer ce panneau ?");
         assert_eq!(
             dialog.message(Lang::Fr),
@@ -289,9 +289,9 @@ mod tests {
     #[test]
     fn messages_for_several_programs() {
         let dialog = confirm(Target::Window, &["vim", "cargo"]);
-        assert_eq!(dialog.title(Lang::En), "Close the window?");
+        assert_eq!(dialog.title(Lang::EnUs), "Close the window?");
         assert_eq!(
-            dialog.message(Lang::En),
+            dialog.message(Lang::EnUs),
             "2 programs are still running: vim, cargo"
         );
         assert_eq!(dialog.title(Lang::Fr), "Fermer la fenêtre ?");
@@ -300,7 +300,7 @@ mod tests {
             "2 programmes sont toujours en cours d'exécution : vim, cargo"
         );
         let tab = confirm(Target::Tab(vec![PaneId(1)]), &["vim", "cargo"]);
-        assert_eq!(tab.title(Lang::En), "Close this tab?");
+        assert_eq!(tab.title(Lang::EnUs), "Close this tab?");
         assert_eq!(tab.title(Lang::Fr), "Fermer cet onglet ?");
     }
 
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn the_box_is_centered_with_cancel_then_close_on_the_right() {
         let dialog = confirm(Target::Pane(PaneId(0)), &["vim"]);
-        let layout = DialogLayout::new(&dialog, Lang::En, window(1000.0, 600.0), METRICS, width);
+        let layout = DialogLayout::new(&dialog, Lang::EnUs, window(1000.0, 600.0), METRICS, width);
         assert_eq!(layout.rect.width, MIN_WIDTH);
         assert_eq!(layout.rect.x, 340.0);
         assert_eq!(
@@ -425,11 +425,11 @@ mod tests {
         let programs: Vec<String> = (0..10).map(|i| format!("program{i}")).collect();
         let names: Vec<&str> = programs.iter().map(String::as_str).collect();
         let dialog = confirm(Target::Window, &names);
-        let wide = DialogLayout::new(&dialog, Lang::En, window(2000.0, 600.0), METRICS, width);
-        let message = width(&dialog.message(Lang::En));
+        let wide = DialogLayout::new(&dialog, Lang::EnUs, window(2000.0, 600.0), METRICS, width);
+        let message = width(&dialog.message(Lang::EnUs));
         assert_eq!(wide.rect.width, message + 2.0 * PADDING);
         assert_eq!(wide.text_width, message);
-        let narrow = DialogLayout::new(&dialog, Lang::En, window(500.0, 600.0), METRICS, width);
+        let narrow = DialogLayout::new(&dialog, Lang::EnUs, window(500.0, 600.0), METRICS, width);
         assert_eq!(narrow.rect.width, 500.0 - 2.0 * MARGIN);
         assert_eq!(narrow.rect.x, MARGIN);
     }
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn hits_find_the_buttons_and_the_box() {
         let dialog = confirm(Target::Pane(PaneId(0)), &["vim"]);
-        let layout = DialogLayout::new(&dialog, Lang::En, window(1000.0, 600.0), METRICS, width);
+        let layout = DialogLayout::new(&dialog, Lang::EnUs, window(1000.0, 600.0), METRICS, width);
         let center = |r: Rect| (r.x + r.width / 2.0, r.y + r.height / 2.0);
         let (x, y) = center(layout.buttons[0].rect);
         assert_eq!(layout.hit(x, y), Some(DialogHit::Button(Answer::Cancel)));

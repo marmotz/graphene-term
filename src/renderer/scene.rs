@@ -753,7 +753,7 @@ mod tests {
             ligature_break: None,
             background: BG,
             banner: None,
-            lang: crate::i18n::Lang::En,
+            lang: crate::i18n::Lang::EnUs,
             images: Vec::new(),
             progress_colors: PROGRESS_COLORS,
             progress_thickness: 2.0,

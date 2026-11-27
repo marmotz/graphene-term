@@ -197,11 +197,11 @@ mod tests {
     fn a_program_notification_falls_back_to_the_pane_title_then_the_app_name() {
         let osc9 = program(None, "build done");
         assert_eq!(
-            content(&osc9, Some("~/src"), Lang::En),
+            content(&osc9, Some("~/src"), Lang::EnUs),
             ("~/src".into(), "build done".into())
         );
         assert_eq!(
-            content(&osc9, None, Lang::En),
+            content(&osc9, None, Lang::EnUs),
             ("Graphene".into(), "build done".into())
         );
         let osc777 = program(Some("CI"), "green");
@@ -217,7 +217,7 @@ mod tests {
             content(
                 &finished("cargo build", Status::Success, 133),
                 None,
-                Lang::En
+                Lang::EnUs
             ),
             ("Command finished".into(), "cargo build · 2 min 13 s".into())
         );
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn a_finished_command_without_command_line_shows_only_its_duration() {
         assert_eq!(
-            content(&finished("", Status::Success, 75), Some("zsh"), Lang::En).1,
+            content(&finished("", Status::Success, 75), Some("zsh"), Lang::EnUs).1,
             "1 min 15 s"
         );
     }

@@ -4,7 +4,8 @@
 ## to change it. A missing setting takes its default value; an invalid value or an
 ## unknown key is reported and ignored.
 
-## Allowed values: "auto", "en", "fr".
+## Allowed values: "auto", "en-US", "en-GB", "fr", "fr-CA" ("en" is an alias of "en-US",
+## case is ignored). "auto" follows the system language and region.
 # language = "auto"
 
 # [font]

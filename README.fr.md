@@ -64,7 +64,8 @@ décommenter la ligne ci-dessous.
   [configuration](docs/fr/configuration.md).
 - **Huit thèmes intégrés**, vos propres fichiers de thème, un éditeur de thème, et des
   thèmes qui suivent le mode clair/sombre du système : [thèmes](docs/fr/themes.md).
-- **Interface en anglais et en français**, selon la langue du système :
+- **Interface en anglais et en français**, avec leurs variantes britannique et
+  canadienne, selon la langue et la région du système :
   [paramètre de langue](docs/fr/configuration.md#général).
 
 ## Comparatif

@@ -124,7 +124,7 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 
 | Paramètre  | Défaut   | Valeurs                                                                |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en"`, `"fr"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"auto"` suit la langue du système : français quand elle est française, anglais sinon. |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"en"` reste accepté pour `"en-US"`, et la casse est ignorée. `"auto"` suit la langue et la région du système : `fr_CA` donne le français (Canada), `fr_BE` le français, `en_GB` l'anglais (Royaume-Uni), toute autre langue l'anglais (États-Unis). Une variante régionale affiche le texte de sa langue de base là où elle n'a pas le sien. |
 
 `language` se place en haut du fichier, avant toute section.
 

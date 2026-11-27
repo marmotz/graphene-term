@@ -14,12 +14,19 @@ use unic_langid::LanguageIdentifier;
 
 use crate::theme::{ColorGroup, ColorKey, NameError};
 
-/// Language of the user interface.
+/// Language of the user interface. A regional variant only defines the texts that
+/// differ from its [`Lang::parent`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Lang {
+    /// English (United States), the reference every other language falls back to.
     #[default]
-    En,
+    EnUs,
+    /// English (United Kingdom).
+    EnGb,
+    /// French.
     Fr,
+    /// French (Canada).
+    FrCa,
 }
 
 impl Lang {
@@ -41,8 +48,10 @@ impl Lang {
     }
 
     /// Language of the first non-empty locale value, in POSIX precedence order. The
-    /// language is the part before `_` and `.` (`fr_FR.UTF-8` gives `fr`): `fr` gives
-    /// French, anything else, or no value at all, English.
+    /// language is the part before `_` or `-`, the region the part after it, without
+    /// the encoding and modifier (`fr_CA.UTF-8` gives `fr` and `CA`). A region without
+    /// a variant gives the base language (`fr_BE` gives French), and an unknown
+    /// language, or no value at all, English (United States).
     pub fn from_locale(
         lc_all: Option<&str>,
         lc_messages: Option<&str>,
@@ -64,16 +73,47 @@ impl Lang {
             .flatten()
             .find(|value| !value.is_empty());
         let Some(locale) = locale else {
-            return Lang::En;
+            return Lang::EnUs;
         };
-        let language = locale
-            .split(['_', '-', '.', '@'])
-            .next()
-            .unwrap_or_default();
+        let name = locale.split(['.', '@']).next().unwrap_or_default();
+        let mut subtags = name.split(['_', '-']);
+        let language = subtags.next().unwrap_or_default();
+        // The region follows the language, after an optional script (`zh-Hant-TW`).
+        let has_region = |region: &str| {
+            subtags
+                .clone()
+                .any(|subtag| subtag.eq_ignore_ascii_case(region))
+        };
         if language.eq_ignore_ascii_case("fr") {
-            Lang::Fr
+            if has_region("CA") {
+                Lang::FrCa
+            } else {
+                Lang::Fr
+            }
+        } else if language.eq_ignore_ascii_case("en") && has_region("GB") {
+            Lang::EnGb
         } else {
-            Lang::En
+            Lang::EnUs
+        }
+    }
+
+    /// Language a missing text falls back to before English (United States): the base
+    /// language of a regional variant, `None` for a base language.
+    pub fn parent(self) -> Option<Lang> {
+        match self {
+            Lang::EnGb => Some(Lang::EnUs),
+            Lang::FrCa => Some(Lang::Fr),
+            Lang::EnUs | Lang::Fr => None,
+        }
+    }
+
+    /// BCP 47 tag of the language (`fr-CA`), also the name of its file in `i18n/`.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Lang::EnUs => "en-US",
+            Lang::EnGb => "en-GB",
+            Lang::Fr => "fr",
+            Lang::FrCa => "fr-CA",
         }
     }
 }
@@ -453,25 +493,26 @@ pub enum Msg {
     ProgramExited(Exit),
 }
 
-/// Every language, for tests that must cover each of them.
-#[cfg(test)]
-pub const LANGS: [Lang; 2] = [Lang::En, Lang::Fr];
+/// Every language, in [`Lang`] order.
+pub const LANGS: [Lang; 4] = [Lang::EnUs, Lang::EnGb, Lang::Fr, Lang::FrCa];
 
 impl Lang {
-    /// BCP 47 tag of the language, also the name of its file in `i18n/`.
-    fn tag(self) -> &'static str {
-        match self {
-            Lang::En => "en-US",
-            Lang::Fr => "fr",
-        }
-    }
-
     /// Fluent source of the language, embedded in the binary.
     fn source(self) -> &'static str {
         match self {
-            Lang::En => include_str!("../i18n/en-US.ftl"),
+            Lang::EnUs => include_str!("../i18n/en-US.ftl"),
+            Lang::EnGb => include_str!("../i18n/en-GB.ftl"),
             Lang::Fr => include_str!("../i18n/fr.ftl"),
+            Lang::FrCa => include_str!("../i18n/fr-CA.ftl"),
         }
+    }
+
+    /// Languages searched for a text, in order: this one, its parent, then English
+    /// (United States).
+    fn fallbacks(self) -> impl Iterator<Item = Lang> {
+        let parent = self.parent();
+        let reference = (self != Lang::EnUs && parent != Some(Lang::EnUs)).then_some(Lang::EnUs);
+        [Some(self), parent, reference].into_iter().flatten()
     }
 }
 
@@ -479,7 +520,7 @@ type Bundle = FluentBundle<FluentResource>;
 
 /// The bundle of every language, in [`Lang`] order, parsed on first use. The
 /// concurrent bundle is `Sync`: notifications are formatted on another thread.
-static BUNDLES: LazyLock<[Bundle; 2]> = LazyLock::new(|| [Lang::En, Lang::Fr].map(bundle));
+static BUNDLES: LazyLock<[Bundle; LANGS.len()]> = LazyLock::new(|| LANGS.map(bundle));
 
 /// Bundle of `lang`, from its embedded file. A file that does not parse panics: the
 /// tests parse every file, so it cannot ship.
@@ -508,17 +549,21 @@ fn format(bundle: &Bundle, id: &str, args: &FluentArgs) -> Option<(String, Vec<F
     Some((text, errors))
 }
 
-/// Text of `msg` in `lang`.
+/// Text of `msg` in `lang`, or in the first of its [fallbacks](Lang::fallbacks) that
+/// defines it.
 pub fn text(lang: Lang, msg: &Msg) -> String {
     let (id, args) = fluent(msg);
-    match format(&BUNDLES[lang as usize], id, &args) {
-        Some((text, errors)) => {
+    let found = lang.fallbacks().find_map(|lang| {
+        format(&BUNDLES[lang as usize], id, &args).map(|formatted| (lang, formatted))
+    });
+    match found {
+        Some((lang, (text, errors))) => {
             if !errors.is_empty() {
                 log::warn!("i18n: {id} in {}: {errors:?}", lang.tag());
             }
             text
         }
-        // The tests check that every message exists in every language.
+        // The tests check that every message exists in every base language.
         None => id.to_owned(),
     }
 }
@@ -1138,15 +1183,15 @@ mod tests {
     #[test]
     fn program_exited_texts_tell_how_and_that_a_key_closes() {
         assert_eq!(
-            text(Lang::En, &Msg::ProgramExited(Exit::Code(0))),
+            text(Lang::EnUs, &Msg::ProgramExited(Exit::Code(0))),
             "Program ended (code 0). Press any key to close."
         );
         assert_eq!(
-            text(Lang::En, &Msg::ProgramExited(Exit::Signal(9))),
+            text(Lang::EnUs, &Msg::ProgramExited(Exit::Signal(9))),
             "Program ended (signal 9). Press any key to close."
         );
         assert_eq!(
-            text(Lang::En, &Msg::ProgramExited(Exit::Unknown)),
+            text(Lang::EnUs, &Msg::ProgramExited(Exit::Unknown)),
             "Program ended. Press any key to close."
         );
         assert_eq!(
@@ -1210,8 +1255,8 @@ mod tests {
     }
 
     #[test]
-    fn every_message_is_in_the_file_of_every_language_and_formats_without_error() {
-        for lang in LANGS {
+    fn every_message_is_in_the_file_of_every_base_language_and_formats_without_error() {
+        for lang in LANGS.into_iter().filter(|lang| lang.parent().is_none()) {
             // A bundle of this file alone: a message missing from it is not hidden by
             // the bundle of another language.
             let bundle = bundle(lang);
@@ -1227,7 +1272,7 @@ mod tests {
 
     #[test]
     fn no_file_defines_an_identifier_unknown_to_the_reference() {
-        let reference = message_ids(Lang::En);
+        let reference = message_ids(Lang::EnUs);
         for lang in LANGS {
             for id in message_ids(lang) {
                 assert!(
@@ -1241,7 +1286,7 @@ mod tests {
     #[test]
     fn every_identifier_of_the_reference_is_used_by_a_message() {
         let used: Vec<_> = all_messages().iter().map(|msg| fluent(msg).0).collect();
-        for id in message_ids(Lang::En) {
+        for id in message_ids(Lang::EnUs) {
             assert!(used.contains(&id), "{id} of en-US.ftl has no Msg");
         }
     }
@@ -1258,6 +1303,68 @@ mod tests {
                 "{lang:?}: {first:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_message_of_a_variant_formats_without_error_and_differs_from_its_parent() {
+        for lang in LANGS {
+            let Some(parent) = lang.parent() else {
+                continue;
+            };
+            let bundle = bundle(lang);
+            let ids = message_ids(lang);
+            assert!(!ids.is_empty(), "{lang:?} defines no message");
+            for msg in all_messages() {
+                let (id, args) = fluent(&msg);
+                if !ids.contains(&id) {
+                    continue;
+                }
+                let (_, errors) = format(&bundle, id, &args).expect("defined");
+                assert!(errors.is_empty(), "{lang:?} {msg:?}: {errors:?}");
+            }
+            // A variant only keeps its differences: the rest falls back.
+            for id in &ids {
+                let differs = all_messages()
+                    .iter()
+                    .filter(|msg| fluent(msg).0 == *id)
+                    .any(|msg| text(lang, msg) != text(parent, msg));
+                assert!(differs, "{id} of {lang:?} is the same as in {parent:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_text_missing_from_a_variant_falls_back_to_its_parent() {
+        assert_eq!(text(Lang::EnGb, &Msg::Copy), text(Lang::EnUs, &Msg::Copy));
+        assert_eq!(text(Lang::FrCa, &Msg::Copy), text(Lang::Fr, &Msg::Copy));
+        assert_eq!(text(Lang::FrCa, &Msg::CloseTab), "Fermer l'onglet");
+        // The variant's own texts win over the parent's.
+        assert_eq!(
+            text(Lang::EnGb, &Msg::KeepTextColor),
+            "Keep the text colour"
+        );
+        assert_eq!(
+            text(Lang::FrCa, &Msg::ConfirmCloseTitle(CloseTarget::Pane)),
+            "Fermer ce panneau?"
+        );
+    }
+
+    #[test]
+    fn a_language_falls_back_to_its_parent_then_to_english() {
+        let chain = |lang: Lang| lang.fallbacks().collect::<Vec<_>>();
+        assert_eq!(chain(Lang::EnUs), [Lang::EnUs]);
+        assert_eq!(chain(Lang::EnGb), [Lang::EnGb, Lang::EnUs]);
+        assert_eq!(chain(Lang::Fr), [Lang::Fr, Lang::EnUs]);
+        assert_eq!(chain(Lang::FrCa), [Lang::FrCa, Lang::Fr, Lang::EnUs]);
+    }
+
+    #[test]
+    fn languages_are_listed_in_their_order_with_their_tag() {
+        for (i, lang) in LANGS.into_iter().enumerate() {
+            assert_eq!(lang as usize, i, "{lang:?}");
+        }
+        let tags: Vec<_> = LANGS.map(Lang::tag).to_vec();
+        assert_eq!(tags, ["en-US", "en-GB", "fr", "fr-CA"]);
     }
 
     #[test]
@@ -1290,14 +1397,14 @@ mod tests {
     #[test]
     fn plurals_follow_the_rules_of_the_language() {
         // French takes the singular for 0, English the plural.
-        assert_eq!(text(Lang::En, &Msg::LinesHidden(0)), "0 lines hidden");
+        assert_eq!(text(Lang::EnUs, &Msg::LinesHidden(0)), "0 lines hidden");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(0)), "0 ligne masquée");
         assert_eq!(
             text(Lang::Fr, &Msg::ProgramsRunning(vec!["vim".into()])),
             "vim est toujours en cours d'exécution"
         );
         // No digit grouping and no isolation marks around the values.
-        assert_eq!(text(Lang::En, &Msg::GoToTab(12345)), "Go to tab 12345");
+        assert_eq!(text(Lang::EnUs, &Msg::GoToTab(12345)), "Go to tab 12345");
     }
 
     #[test]
@@ -1310,27 +1417,27 @@ mod tests {
             Msg::Field(SettingsField::FontLigatures),
         ];
         for msg in all_messages().into_iter().filter(|msg| !same.contains(msg)) {
-            assert_ne!(text(Lang::En, &msg), text(Lang::Fr, &msg), "{msg:?}");
+            assert_ne!(text(Lang::EnUs, &msg), text(Lang::Fr, &msg), "{msg:?}");
         }
     }
 
     #[test]
     fn messages_with_values_include_them() {
-        assert_eq!(text(Lang::En, &Msg::GoToTab(4)), "Go to tab 4");
+        assert_eq!(text(Lang::EnUs, &Msg::GoToTab(4)), "Go to tab 4");
         assert_eq!(
-            text(Lang::En, &Msg::AlreadyUsedBy("New tab".into())),
+            text(Lang::EnUs, &Msg::AlreadyUsedBy("New tab".into())),
             "Already used by New tab"
         );
         assert_eq!(
             text(Lang::Fr, &Msg::AlreadyUsedBy("Nouvel onglet".into())),
             "Déjà utilisé par Nouvel onglet"
         );
-        assert_eq!(text(Lang::En, &Msg::LinesHidden(1)), "1 line hidden");
-        assert_eq!(text(Lang::En, &Msg::LinesHidden(12)), "12 lines hidden");
+        assert_eq!(text(Lang::EnUs, &Msg::LinesHidden(1)), "1 line hidden");
+        assert_eq!(text(Lang::EnUs, &Msg::LinesHidden(12)), "12 lines hidden");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(1)), "1 ligne masquée");
         assert_eq!(text(Lang::Fr, &Msg::LinesHidden(12)), "12 lignes masquées");
         assert_eq!(
-            text(Lang::En, &Msg::CommandFailed(2)),
+            text(Lang::EnUs, &Msg::CommandFailed(2)),
             "Command failed (code 2)"
         );
         assert_eq!(
@@ -1349,12 +1456,12 @@ mod tests {
             "Onglet 2 > panneau 3 : vim"
         );
         assert_eq!(
-            text(Lang::En, &Msg::ProgramsRunning(vec!["vim".into()])),
+            text(Lang::EnUs, &Msg::ProgramsRunning(vec!["vim".into()])),
             "vim is still running"
         );
         assert_eq!(
             text(
-                Lang::En,
+                Lang::EnUs,
                 &Msg::ProgramsRunning(vec!["vim".into(), "cargo".into()])
             ),
             "2 programs are still running: vim, cargo"
@@ -1367,10 +1474,13 @@ mod tests {
 
     #[test]
     fn settings_texts() {
-        assert_eq!(text(Lang::En, &Msg::OpenSettings), "Settings");
+        assert_eq!(text(Lang::EnUs, &Msg::OpenSettings), "Settings");
         assert_eq!(text(Lang::Fr, &Msg::OpenSettings), "Paramètres");
         assert_eq!(
-            text(Lang::En, &Msg::Section(SettingsSection::KeyboardShortcuts)),
+            text(
+                Lang::EnUs,
+                &Msg::Section(SettingsSection::KeyboardShortcuts)
+            ),
             "Keyboard shortcuts"
         );
         assert_eq!(
@@ -1386,15 +1496,15 @@ mod tests {
             labels.dedup();
             assert_eq!(labels.len(), SettingsSection::ALL.len(), "{lang:?}");
         }
-        assert_eq!(text(Lang::En, &Msg::AddShortcutHint), "Add shortcut");
+        assert_eq!(text(Lang::EnUs, &Msg::AddShortcutHint), "Add shortcut");
         assert_eq!(
             text(Lang::Fr, &Msg::AddShortcutHint),
             "Ajouter un raccourci"
         );
-        assert_eq!(text(Lang::En, &Msg::AtLine(12)), "line 12");
+        assert_eq!(text(Lang::EnUs, &Msg::AtLine(12)), "line 12");
         assert_eq!(text(Lang::Fr, &Msg::AtLine(12)), "ligne 12");
         assert_eq!(
-            text(Lang::En, &Msg::AtLeast("6".into())),
+            text(Lang::EnUs, &Msg::AtLeast("6".into())),
             "Must be at least 6"
         );
         assert_eq!(
@@ -1422,16 +1532,16 @@ mod tests {
             "Supprimer le thème mine ? Son fichier est effacé."
         );
         assert_eq!(
-            text(Lang::En, &Msg::ThemeNameError(NameError::Invalid)),
+            text(Lang::EnUs, &Msg::ThemeNameError(NameError::Invalid)),
             "A name cannot contain / or \\ nor start with a dot"
         );
     }
 
     #[test]
     fn tab_and_quit_action_texts() {
-        assert_eq!(text(Lang::En, &Msg::CloseTab), "Close the tab");
+        assert_eq!(text(Lang::EnUs, &Msg::CloseTab), "Close the tab");
         assert_eq!(text(Lang::Fr, &Msg::CloseTab), "Fermer l'onglet");
-        assert_eq!(text(Lang::En, &Msg::Quit), "Quit Graphene");
+        assert_eq!(text(Lang::EnUs, &Msg::Quit), "Quit Graphene");
         assert_eq!(text(Lang::Fr, &Msg::Quit), "Quitter Graphene");
     }
 
@@ -1441,7 +1551,27 @@ mod tests {
         assert_eq!(Lang::from_locale(None, None, Some("fr")), Lang::Fr);
         assert_eq!(Lang::from_locale(None, None, Some("fr.UTF-8")), Lang::Fr);
         assert_eq!(Lang::from_locale(None, None, Some("fr_BE@euro")), Lang::Fr);
-        assert_eq!(Lang::from_locale(None, None, Some("en_US.UTF-8")), Lang::En);
+        assert_eq!(
+            Lang::from_locale(None, None, Some("en_US.UTF-8")),
+            Lang::EnUs
+        );
+    }
+
+    #[test]
+    fn detect_reads_the_region_of_a_regional_variant() {
+        let detect = |locale| Lang::from_locale(None, None, Some(locale));
+        assert_eq!(detect("fr_CA.UTF-8"), Lang::FrCa);
+        assert_eq!(detect("fr-CA"), Lang::FrCa);
+        assert_eq!(detect("fr_ca"), Lang::FrCa);
+        assert_eq!(detect("fr_CA@euro"), Lang::FrCa);
+        assert_eq!(detect("en_GB"), Lang::EnGb);
+        assert_eq!(detect("en_GB.UTF-8"), Lang::EnGb);
+        // A region without a variant gives the base language.
+        assert_eq!(detect("fr_BE"), Lang::Fr);
+        assert_eq!(detect("en_AU"), Lang::EnUs);
+        // The region belongs to the language: `CA` alone is not French.
+        assert_eq!(detect("en_CA"), Lang::EnUs);
+        assert_eq!(detect("de_GB"), Lang::EnUs);
     }
 
     #[test]
@@ -1449,9 +1579,9 @@ mod tests {
         let fr = Some("fr_FR.UTF-8");
         let de = Some("de_DE.UTF-8");
         assert_eq!(Lang::from_locale(fr, de, de), Lang::Fr);
-        assert_eq!(Lang::from_locale(de, fr, fr), Lang::En);
+        assert_eq!(Lang::from_locale(de, fr, fr), Lang::EnUs);
         assert_eq!(Lang::from_locale(None, fr, de), Lang::Fr);
-        assert_eq!(Lang::from_locale(None, de, fr), Lang::En);
+        assert_eq!(Lang::from_locale(None, de, fr), Lang::EnUs);
         assert_eq!(Lang::from_locale(None, None, fr), Lang::Fr);
     }
 
@@ -1474,25 +1604,28 @@ mod tests {
         );
         assert_eq!(
             Lang::from_locale_or_system(Some(""), None, Some(""), Some("fr-CA")),
-            Lang::Fr
+            Lang::FrCa
         );
         assert_eq!(
             Lang::from_locale_or_system(None, None, None, Some("en-US")),
-            Lang::En
+            Lang::EnUs
         );
         // A locale variable wins over the system language.
         assert_eq!(
             Lang::from_locale_or_system(None, None, Some("en_US.UTF-8"), Some("fr-FR")),
-            Lang::En
+            Lang::EnUs
         );
     }
 
     #[test]
     fn detect_falls_back_to_english() {
-        assert_eq!(Lang::from_locale(None, None, None), Lang::En);
-        assert_eq!(Lang::from_locale(Some(""), None, Some("")), Lang::En);
-        assert_eq!(Lang::from_locale(None, None, Some("C")), Lang::En);
-        assert_eq!(Lang::from_locale(None, None, Some("POSIX")), Lang::En);
-        assert_eq!(Lang::from_locale(None, None, Some("de_DE.UTF-8")), Lang::En);
+        assert_eq!(Lang::from_locale(None, None, None), Lang::EnUs);
+        assert_eq!(Lang::from_locale(Some(""), None, Some("")), Lang::EnUs);
+        assert_eq!(Lang::from_locale(None, None, Some("C")), Lang::EnUs);
+        assert_eq!(Lang::from_locale(None, None, Some("POSIX")), Lang::EnUs);
+        assert_eq!(
+            Lang::from_locale(None, None, Some("de_DE.UTF-8")),
+            Lang::EnUs
+        );
     }
 }

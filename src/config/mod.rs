@@ -314,14 +314,47 @@ mod tests {
     #[test]
     fn auto_language_is_the_detected_one() {
         assert_eq!(Language::Auto.resolve(|| Lang::Fr), Lang::Fr);
-        assert_eq!(Language::Auto.resolve(|| Lang::En), Lang::En);
+        assert_eq!(Language::Auto.resolve(|| Lang::EnUs), Lang::EnUs);
     }
 
     #[test]
     fn forced_language_ignores_the_locale() {
         let detect = || panic!("the locale is not read for a forced language");
-        assert_eq!(Language::En.resolve(detect), Lang::En);
+        assert_eq!(Language::EnUs.resolve(detect), Lang::EnUs);
+        assert_eq!(Language::EnGb.resolve(detect), Lang::EnGb);
         assert_eq!(Language::Fr.resolve(detect), Lang::Fr);
+        assert_eq!(Language::FrCa.resolve(detect), Lang::FrCa);
+    }
+
+    #[test]
+    fn language_values_are_bcp47_tags_with_en_as_an_alias_and_case_ignored() {
+        let names: Vec<_> = Language::VALUES.map(|(name, _)| name).to_vec();
+        assert_eq!(names, ["auto", "en-US", "en-GB", "fr", "fr-CA"]);
+        for (name, language) in [
+            ("en", Language::EnUs),
+            ("EN", Language::EnUs),
+            ("en-us", Language::EnUs),
+            ("EN-gb", Language::EnGb),
+            ("FR", Language::Fr),
+            ("fr-ca", Language::FrCa),
+            ("Auto", Language::Auto),
+        ] {
+            let (config, errors) = parse(&format!("language = \"{name}\""));
+            assert_eq!((config.language, errors), (language, vec![]), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_language_is_an_error_listing_the_accepted_values() {
+        let (config, errors) = parse("language = \"fr_CA\"");
+        assert_eq!(config.language, Language::Auto);
+        assert_eq!(errors.len(), 1);
+        let message = &errors[0].message;
+        assert!(message.contains("`fr_CA`"), "{message}");
+        assert!(
+            message.contains("`en-US`, `en-GB`, `fr`, `fr-CA`"),
+            "{message}"
+        );
     }
 
     fn parse(text: &str) -> (Config, Vec<ConfigError>) {

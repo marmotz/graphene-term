@@ -412,21 +412,26 @@ confirmation.
 ### Translations in Fluent files
 
 Interface labels are an `i18n::Msg` enum, the API of the code. Their texts live in one
-Fluent file per language under `i18n/` (`en-US.ftl`, the reference, and `fr.ftl`),
+Fluent file per language under `i18n/` (`en-US.ftl`, the reference, `fr.ftl`, and the
+regional variants `en-GB.ftl` and `fr-CA.ftl`),
 embedded by `include_str!` and parsed once into `fluent_bundle::concurrent::FluentBundle`s
 (`Sync`: notifications are formatted on another thread), with Unicode isolation marks
 turned off since the interface has no right-to-left text. One exhaustive `match`
 (`i18n::fluent`) gives the identifier and the arguments of each variant, so a new variant
 does not compile until it has an identifier; the tests then require that identifier in
-the file of every language, formatting without error, and reject any identifier unknown
-to `en-US.ftl`. Each file starts with a `## Status: reviewed` or `## Status: unreviewed`
+the file of every base language, formatting without error, and reject any identifier
+unknown to `en-US.ftl`. A regional variant (`Lang::EnGb`, `Lang::FrCa`) only holds the
+messages that differ from its `Lang::parent()`, and a test rejects a copied one:
+`i18n::text` looks the message up in the language, then its parent, then `en-US`. Each file starts with a `## Status: reviewed` or `## Status: unreviewed`
 line. Fluent was chosen over gettext and a TOML table: CLDR plurals and selectors
 (direction, close target, settings field...) are written in the file, the syntax reads
 without knowing Rust, and translation tools handle it. Generating `Msg` from `en-US.ftl`
 in a `build.rs` was rejected: the generated code is harder to read and review. The
 language is read from `LC_ALL`, `LC_MESSAGES` then `LANG`, then on macOS the first
 preferred language of the system settings (an app launched from Finder has no locale
-variable).
+variable), with its region: a region without a variant gives the base language. The
+`language` setting takes BCP 47 tags (`en-US`, `fr-CA`), case ignored, and keeps `en` as
+an alias so that existing files stay valid.
 
 ### Command palette: `nucleo-matcher` and a recent actions file
 

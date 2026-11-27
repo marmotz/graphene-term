@@ -4,12 +4,12 @@
 
 ## Internationalisation (i18n)  ·  [overview](features/i18n/overview.md)
 
-_tâches créées — voir [technical.md](features/i18n/technical.md)_ — 1/7 tasks done
+_tâches créées — voir [technical.md](features/i18n/technical.md)_ — 2/7 tasks done
 
 | Done | Issue                                                       | Title                                                            | Blocked by       |
 |------|-------------------------------------------------------------|------------------------------------------------------------------|------------------|
 | [x]  | [#243](https://github.com/marmotz/graphene-term/issues/243) | feat(i18n): move UI texts to Fluent files                        | —                |
-| [ ]  | [#244](https://github.com/marmotz/graphene-term/issues/244) | feat(i18n): regional variants en-US, en-GB, fr-CA with fallback  | #243             |
+| [x]  | [#244](https://github.com/marmotz/graphene-term/issues/244) | feat(i18n): regional variants en-US, en-GB, fr-CA with fallback  | #243             |
 | [ ]  | [#245](https://github.com/marmotz/graphene-term/issues/245) | feat(i18n): locale-aware numbers, durations and dates            | #244             |
 | [ ]  | [#246](https://github.com/marmotz/graphene-term/issues/246) | feat(i18n): translate configuration errors                       | #243             |
 | [ ]  | [#247](https://github.com/marmotz/graphene-term/issues/247) | feat(i18n): translated labels in settings choice lists           | #244             |

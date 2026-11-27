@@ -1360,7 +1360,7 @@ mod tests {
             ligature_break: None,
             background: BLACK,
             banner: None,
-            lang: crate::i18n::Lang::En,
+            lang: crate::i18n::Lang::EnUs,
             images: Vec::new(),
             progress_colors: crate::progress::ProgressColors {
                 normal: WHITE,
@@ -1407,7 +1407,7 @@ mod tests {
             ligature_break: None,
             background: BLACK,
             banner: None,
-            lang: crate::i18n::Lang::En,
+            lang: crate::i18n::Lang::EnUs,
             images: Vec::new(),
             progress_colors: crate::progress::ProgressColors {
                 normal: WHITE,
@@ -1458,7 +1458,7 @@ mod tests {
             ligature_break: None,
             background: BLACK,
             banner: None,
-            lang: crate::i18n::Lang::En,
+            lang: crate::i18n::Lang::EnUs,
             images: Vec::new(),
             progress_colors: crate::progress::ProgressColors {
                 normal: WHITE,
@@ -1520,7 +1520,7 @@ mod tests {
             ligature_break: None,
             background: BLACK,
             banner: None,
-            lang: crate::i18n::Lang::En,
+            lang: crate::i18n::Lang::EnUs,
             images: Vec::new(),
             progress_colors: crate::progress::ProgressColors {
                 normal: WHITE,
@@ -1589,7 +1589,7 @@ mod tests {
             ligature_break: None,
             background: BLACK,
             banner: None,
-            lang: crate::i18n::Lang::En,
+            lang: crate::i18n::Lang::EnUs,
             images: Vec::new(),
             progress_colors: crate::progress::ProgressColors {
                 normal: WHITE,

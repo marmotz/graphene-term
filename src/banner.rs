@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn update_banner_text_and_actions() {
-        let banner = Banner::update(&release("v0.2.0"), Lang::En);
+        let banner = Banner::update(&release("v0.2.0"), Lang::EnUs);
         assert_eq!(banner.text, "Graphene v0.2.0 is available");
         assert_eq!(
             banner.actions,
@@ -362,15 +362,21 @@ mod tests {
         let mut update = UpdateBanner::default();
         update.set(Some(release("v0.2.0")));
         assert_eq!(
-            Shown::pick(Some(&config), &update, Lang::En),
+            Shown::pick(Some(&config), &update, Lang::EnUs),
             Some(Shown::Config(config.clone()))
         );
         // Once the error banner is gone, the update banner shows.
         assert_eq!(
-            Shown::pick(None, &update, Lang::En),
-            Some(Shown::Update(Banner::update(&release("v0.2.0"), Lang::En)))
+            Shown::pick(None, &update, Lang::EnUs),
+            Some(Shown::Update(Banner::update(
+                &release("v0.2.0"),
+                Lang::EnUs
+            )))
         );
-        assert_eq!(Shown::pick(None, &UpdateBanner::default(), Lang::En), None);
+        assert_eq!(
+            Shown::pick(None, &UpdateBanner::default(), Lang::EnUs),
+            None
+        );
     }
 
     #[test]
@@ -426,7 +432,7 @@ mod tests {
 
     #[test]
     fn update_banner_targets_are_hit_tested() {
-        let banner = Banner::update(&release("v0.2.0"), Lang::En);
+        let banner = Banner::update(&release("v0.2.0"), Lang::EnUs);
         let layout = BannerLayout::new(&banner, CELL, 2000.0);
         for (index, target) in layout.actions.iter().enumerate() {
             let (x, y) = (target.x + target.width / 2.0, target.y + 1.0);
@@ -499,7 +505,7 @@ mod tests {
             text: "a".to_owned(),
             actions: Vec::new(),
         };
-        let long = Banner::update(&release("v0.2.0"), Lang::En);
+        let long = Banner::update(&release("v0.2.0"), Lang::EnUs);
         let height = BannerLayout::height(CELL);
         assert_eq!(height, 30.0);
         assert_eq!(BannerLayout::new(&short, CELL, 800.0).rect.height, height);

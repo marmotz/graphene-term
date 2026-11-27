@@ -2,23 +2,55 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// Value of the `language` setting: a BCP 47 tag, case ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
     /// Follows `LANG`.
     #[default]
     Auto,
-    En,
+    EnUs,
+    EnGb,
     Fr,
+    FrCa,
 }
 
 impl Language {
     /// Accepted values, in the order shown to the user.
-    pub const VALUES: [(&'static str, Language); 3] = [
+    pub const VALUES: [(&'static str, Language); 5] = [
         ("auto", Language::Auto),
-        ("en", Language::En),
+        ("en-US", Language::EnUs),
+        ("en-GB", Language::EnGb),
         ("fr", Language::Fr),
+        ("fr-CA", Language::FrCa),
     ];
+
+    /// Former value of `en-US`, still accepted so that existing files stay valid.
+    const ALIASES: [(&'static str, Language); 1] = [("en", Language::EnUs)];
+
+    /// Value named `name`, case ignored, aliases included.
+    fn from_name(name: &str) -> Option<Self> {
+        Self::VALUES
+            .iter()
+            .chain(&Self::ALIASES)
+            .find(|(value, _)| value.eq_ignore_ascii_case(name))
+            .map(|&(_, language)| language)
+    }
+}
+
+impl<'de> Deserialize<'de> for Language {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        const NAMES: [&str; Language::VALUES.len()] = {
+            let mut names = [""; Language::VALUES.len()];
+            let mut i = 0;
+            while i < names.len() {
+                names[i] = Language::VALUES[i].0;
+                i += 1;
+            }
+            names
+        };
+        let name = String::deserialize(deserializer)?;
+        Self::from_name(&name).ok_or_else(|| serde::de::Error::unknown_variant(&name, &NAMES))
+    }
 }
 
 impl Language {
@@ -27,8 +59,10 @@ impl Language {
     pub fn resolve(self, detected: impl FnOnce() -> Lang) -> Lang {
         match self {
             Language::Auto => detected(),
-            Language::En => Lang::En,
+            Language::EnUs => Lang::EnUs,
+            Language::EnGb => Lang::EnGb,
             Language::Fr => Lang::Fr,
+            Language::FrCa => Lang::FrCa,
         }
     }
 }

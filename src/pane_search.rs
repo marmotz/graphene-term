@@ -482,7 +482,7 @@ mod tests {
     fn the_view_shows_the_counter_and_the_selector_labels() {
         let mut session = session();
         let mut state = SearchState::new();
-        let view = state.view(true, Lang::En);
+        let view = state.view(true, Lang::EnUs);
         assert_eq!(
             (view.counter.as_str(), view.placeholder.as_str()),
             ("", "Search")
@@ -492,7 +492,7 @@ mod tests {
 
         typed(&mut state, &mut session, "foo");
         state.step(true);
-        assert_eq!(state.view(true, Lang::En).counter, "2/3");
+        assert_eq!(state.view(true, Lang::EnUs).counter, "2/3");
         state.next_zone();
         state.next_status();
         let view = state.view(false, Lang::Fr);
@@ -503,7 +503,7 @@ mod tests {
         assert!(view.zone_active && view.status_active && !view.filters);
 
         typed(&mut state, &mut session, "zzz");
-        assert_eq!(state.view(true, Lang::En).counter, "0/0");
+        assert_eq!(state.view(true, Lang::EnUs).counter, "0/0");
         state.regex = true;
         typed(&mut state, &mut session, "(");
         let view = state.view(true, Lang::Fr);

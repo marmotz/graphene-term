@@ -50,10 +50,10 @@ pub fn find(query: &str) -> Option<Secret> {
 /// The page about the Answer in `lang`, opened by [`Secret::Answer`].
 pub fn answer_url(lang: Lang) -> &'static str {
     match lang {
-        Lang::En => {
+        Lang::EnUs | Lang::EnGb => {
             "https://en.wikipedia.org/wiki/Phrases_from_The_Hitchhiker%27s_Guide_to_the_Galaxy#The_Answer_to_the_Ultimate_Question_of_Life,_the_Universe,_and_Everything_is_42"
         }
-        Lang::Fr => {
+        Lang::Fr | Lang::FrCa => {
             "https://fr.wikipedia.org/wiki/La_grande_question_sur_la_vie,_l%27Univers_et_le_reste"
         }
     }
@@ -88,6 +88,6 @@ mod tests {
             assert!(url.contains("wikipedia.org/wiki/"), "{lang:?}");
         }
         assert!(answer_url(Lang::Fr).starts_with("https://fr."));
-        assert!(answer_url(Lang::En).starts_with("https://en."));
+        assert!(answer_url(Lang::EnUs).starts_with("https://en."));
     }
 }
