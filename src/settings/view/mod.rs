@@ -236,6 +236,9 @@ impl View {
                 file_problems(ui, lang, model, self.section);
                 ui.heading(label(Msg::Section(self.section)));
                 ui.separator();
+                if model.quick_terminal_disabled(self.section) {
+                    ui.label(label(Msg::QuickTerminalDisabled));
+                }
                 let enabled = model.locked(self.section).is_none()
                     && model.unavailable(self.section).is_none();
                 ui.add_enabled_ui(enabled, |ui| {
@@ -303,7 +306,9 @@ impl View {
                     }
                     ui.label(i18n::text(lang, &Msg::Field(field)));
                     ui.vertical(|ui| {
-                        self.field(ui, lang, model, field, changes);
+                        ui.add_enabled_ui(model.field_enabled(field), |ui| {
+                            self.field(ui, lang, model, field, changes);
+                        });
                         if let Some(error) = self.input_errors.get(&field) {
                             error_label(ui, &i18n::text(lang, &error.msg()));
                         }
@@ -1137,6 +1142,23 @@ mod tests {
         };
         let (key, physical) = letter("d", KeyCode::KeyD);
         assert_eq!(view.captured_key(&model, &key, physical, CTRL_ALT).len(), 1);
+    }
+
+    #[test]
+    fn the_quick_terminal_switch_writes_its_key() {
+        let model = model("");
+        let mut view = View::default();
+        let mut changes = Vec::new();
+        view.write_input(
+            &model,
+            Field::QuickTerminalEnabled,
+            Input::Toggle(true),
+            &mut changes,
+        );
+        assert_eq!(
+            changes,
+            vec![set(&["quick_terminal", "enabled"], Value::Bool(true))]
+        );
     }
 
     #[test]

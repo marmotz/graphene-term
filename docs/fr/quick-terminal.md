@@ -9,13 +9,18 @@ vous l'avez laissé.
 
 ## Activer le quick terminal
 
-Le quick terminal est désactivé par défaut. Activez-le avec la clé `enabled` de la
-section [`[quick_terminal]`](configuration.md#quick_terminal) :
+Le quick terminal est désactivé par défaut. Activez-le avec **Activer le quick
+terminal**, en tête de la section **Quick terminal** de
+l'[onglet des paramètres](configuration.md#onglet-des-paramètres), ou avec la clé
+`enabled` de la section [`[quick_terminal]`](configuration.md#quick_terminal) :
 
 ```toml
 [quick_terminal]
 enabled = true
 ```
+
+Tant qu'il est désactivé, les autres réglages de cette section sont grisés, avec une
+note qui explique pourquoi ; ils redeviennent modifiables dès que vous l'activez.
 
 Tant qu'il est désactivé, Graphene ne lance jamais le quick terminal : ni la première
 fenêtre que vous ouvrez, ni le raccourci global, ni l'entrée de démarrage de session, et

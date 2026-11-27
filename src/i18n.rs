@@ -157,6 +157,7 @@ pub enum SettingsField {
     NotificationsCommandFinished,
     NotificationsCommandThreshold,
     NotificationsBell,
+    QuickTerminalEnabled,
     QuickTerminalHotkey,
     QuickTerminalEdge,
     QuickTerminalSize,
@@ -168,7 +169,7 @@ pub enum SettingsField {
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 34] = [
+    pub const ALL: [SettingsField; 35] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -196,6 +197,7 @@ impl SettingsField {
         SettingsField::NotificationsCommandFinished,
         SettingsField::NotificationsCommandThreshold,
         SettingsField::NotificationsBell,
+        SettingsField::QuickTerminalEnabled,
         SettingsField::QuickTerminalHotkey,
         SettingsField::QuickTerminalEdge,
         SettingsField::QuickTerminalSize,
@@ -328,6 +330,9 @@ pub enum Msg {
     FixFileByHand,
     /// Why the quick terminal section is disabled under Wayland.
     QuickTerminalUnavailableOnWayland,
+    /// Why the other quick terminal settings are disabled while it is turned off, and
+    /// when turning it on applies.
+    QuickTerminalDisabled,
     /// Prefix of an error writing the file.
     CannotSave,
     /// A number field holds text that is not a number.
@@ -558,6 +563,7 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             SettingsField::NotificationsCommandFinished => "Notify when a long command finishes",
             SettingsField::NotificationsCommandThreshold => "Long command threshold (seconds)",
             SettingsField::NotificationsBell => "Notify on terminal bell",
+            SettingsField::QuickTerminalEnabled => "Enable the quick terminal",
             SettingsField::QuickTerminalHotkey => "Global shortcut",
             SettingsField::QuickTerminalEdge => "Screen edge",
             SettingsField::QuickTerminalSize => "Size (% of the screen)",
@@ -575,6 +581,9 @@ fn english(msg: &Msg) -> Cow<'static, str> {
             "The file cannot be read: fix it by hand. The settings stay disabled until then."
         }
         Msg::QuickTerminalUnavailableOnWayland => "The quick terminal is not available on Wayland",
+        Msg::QuickTerminalDisabled => {
+            "The quick terminal is disabled: turn it on to change these settings. The change applies the next time Graphene starts."
+        }
         Msg::CannotSave => "Cannot save the change",
         Msg::NotANumber => "Enter a number",
         Msg::NotAWholeNumber => "Enter a whole number",
@@ -781,6 +790,7 @@ fn french(msg: &Msg) -> Cow<'static, str> {
                 "Seuil d'une commande longue (secondes)"
             }
             SettingsField::NotificationsBell => "Signaler la sonnerie du terminal",
+            SettingsField::QuickTerminalEnabled => "Activer le quick terminal",
             SettingsField::QuickTerminalHotkey => "Raccourci global",
             SettingsField::QuickTerminalEdge => "Bord de l'écran",
             SettingsField::QuickTerminalSize => "Taille (% de l'écran)",
@@ -799,6 +809,9 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         }
         Msg::QuickTerminalUnavailableOnWayland => {
             "Le quick terminal n'est pas disponible sous Wayland"
+        }
+        Msg::QuickTerminalDisabled => {
+            "Le quick terminal est désactivé : activez-le pour modifier ces réglages. Le changement s'applique au prochain démarrage de Graphene."
         }
         Msg::CannotSave => "Impossible d'enregistrer la modification",
         Msg::NotANumber => "Saisissez un nombre",
@@ -1121,9 +1134,10 @@ mod tests {
             Msg::SearchStatusAll => 111,
             Msg::SearchStatusSuccess => 112,
             Msg::SearchStatusFailure => 113,
+            Msg::QuickTerminalDisabled => 114,
         }
     }
-    const VARIANT_COUNT: usize = 114;
+    const VARIANT_COUNT: usize = 115;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1208,6 +1222,7 @@ mod tests {
             Msg::AtLine(12),
             Msg::FixFileByHand,
             Msg::QuickTerminalUnavailableOnWayland,
+            Msg::QuickTerminalDisabled,
             Msg::CannotSave,
             Msg::NotANumber,
             Msg::NotAWholeNumber,

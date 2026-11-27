@@ -8,13 +8,18 @@ while it is hidden, and it comes back at once, as you left it.
 
 ## Enable the quick terminal
 
-The quick terminal is disabled by default. Turn it on with the `enabled` key of the
+The quick terminal is disabled by default. Turn it on with **Enable the quick
+terminal**, at the top of the **Quick terminal** section of the
+[settings tab](configuration.md#settings-tab), or with the `enabled` key of the
 [`[quick_terminal]`](configuration.md#quick_terminal) section:
 
 ```toml
 [quick_terminal]
 enabled = true
 ```
+
+While it is off, the other settings of that section are disabled, with a note
+explaining why; they can be changed again as soon as you turn it on.
 
 While it is disabled, Graphene never starts the quick terminal: neither the first window
 you open, nor the global shortcut, nor the login entry, and `graphene --quick-toggle`
