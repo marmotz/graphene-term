@@ -198,6 +198,7 @@ impl Reader<'_> {
                 }
             }),
             ("notifications", "bell") => self.set(value, key_segments, path, &mut config.notifications.bell, &previous.notifications.bell, Checked::Valid),
+            ("quick_terminal", "enabled") => self.set(value, key_segments, path, &mut config.quick_terminal.enabled, &previous.quick_terminal.enabled, Checked::Valid),
             ("quick_terminal", "hotkey") => self.set(value, key_segments, path, &mut config.quick_terminal.hotkey, &previous.quick_terminal.hotkey, |hotkey: String| {
                 if hotkey.is_empty() {
                     return Checked::Valid(hotkey);

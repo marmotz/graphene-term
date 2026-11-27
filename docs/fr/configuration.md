@@ -245,6 +245,7 @@ pour la commande qui l'affiche.
 
 | Paramètre            | Défaut     | Valeurs                                                                                    |
 |----------------------|------------|--------------------------------------------------------------------------------------------|
+| `enabled`            | `false`    | `true` ou `false`. Autoriser Graphene à démarrer le quick terminal. Tant qu'il vaut `false`, il n'est jamais lancé et `graphene --quick-toggle` échoue. S'applique au prochain démarrage de Graphene. |
 | `hotkey`             | `""`       | Raccourci global natif qui affiche ou masque le quick terminal, écrit comme un [raccourci clavier](#raccourcis-clavier) (`"Ctrl+F12"`). Vide : aucun. |
 | `edge`               | `"top"`    | Bord de l'écran d'où il glisse : `"top"`, `"bottom"`, `"left"` ou `"right"`.               |
 | `size`               | `40`       | Pourcentage de l'écran, de 10 à 100 : la hauteur pour `top` et `bottom`, la largeur pour `left` et `right`. L'autre dimension prend tout l'écran. |
