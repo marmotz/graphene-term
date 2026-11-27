@@ -16,7 +16,7 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 
 use crate::appearance::Appearance;
-use crate::i18n::Lang;
+use crate::i18n::{self, ConfigMsg, Lang, Msg, UiText, ValueError};
 use crate::keybindings;
 
 mod error;
@@ -166,7 +166,7 @@ impl Config {
                     error.span(),
                     None,
                     ConfigErrorKind::Syntax,
-                    error.message().trim_end().to_owned(),
+                    ConfigMsg::Syntax(error.message().trim_end().to_owned()),
                 );
                 return (previous.clone(), reader.errors, reader.unknown_keys);
             }
@@ -188,7 +188,7 @@ impl Config {
                     Some(key.span()),
                     Some(key_path(&[name])),
                     ConfigErrorKind::Moved,
-                    format!("`[keybindings]` moved to {KEYBINDINGS_FILE}"),
+                    ConfigMsg::KeybindingsMoved(KEYBINDINGS_FILE.to_owned()),
                 ),
                 "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
                 | "updates" | "notifications" | "quick_terminal" => {
@@ -197,7 +197,7 @@ impl Config {
                             Some(value.span()),
                             Some(key_path(&[name])),
                             ConfigErrorKind::InvalidValue,
-                            format!("`{name}` must be a table"),
+                            ConfigMsg::MustBeTable(name.to_owned()),
                         );
                         continue;
                     };
@@ -210,7 +210,6 @@ impl Config {
                     name,
                     matches!(value.get_ref(), DeValue::Table(_)),
                     Some(key.span()),
-                    format!("unknown key `{name}`"),
                 ),
             }
         }
@@ -244,7 +243,7 @@ impl Config {
                     error.span(),
                     None,
                     ConfigErrorKind::Syntax,
-                    error.message().trim_end().to_owned(),
+                    ConfigMsg::Syntax(error.message().trim_end().to_owned()),
                 );
                 return (
                     previous.keybindings.clone(),
@@ -263,7 +262,6 @@ impl Config {
                     name,
                     matches!(value.get_ref(), DeValue::Table(_)),
                     Some(key.span()),
-                    format!("unknown key `{name}`"),
                 );
                 continue;
             }
@@ -272,7 +270,7 @@ impl Config {
                     Some(value.span()),
                     Some(key_path(&[name])),
                     ConfigErrorKind::InvalidValue,
-                    format!("`{name}` must be a table"),
+                    ConfigMsg::MustBeTable(name.to_owned()),
                 );
                 continue;
             };
@@ -314,14 +312,56 @@ mod tests {
     #[test]
     fn auto_language_is_the_detected_one() {
         assert_eq!(Language::Auto.resolve(|| Lang::Fr), Lang::Fr);
-        assert_eq!(Language::Auto.resolve(|| Lang::En), Lang::En);
+        assert_eq!(Language::Auto.resolve(|| Lang::EnUs), Lang::EnUs);
     }
 
     #[test]
     fn forced_language_ignores_the_locale() {
         let detect = || panic!("the locale is not read for a forced language");
-        assert_eq!(Language::En.resolve(detect), Lang::En);
+        assert_eq!(Language::EnUs.resolve(detect), Lang::EnUs);
+        assert_eq!(Language::EnGb.resolve(detect), Lang::EnGb);
         assert_eq!(Language::Fr.resolve(detect), Lang::Fr);
+        assert_eq!(Language::FrCa.resolve(detect), Lang::FrCa);
+        assert_eq!(Language::Es.resolve(detect), Lang::Es);
+        assert_eq!(Language::De.resolve(detect), Lang::De);
+        assert_eq!(Language::It.resolve(detect), Lang::It);
+    }
+
+    #[test]
+    fn language_values_are_bcp47_tags_with_en_as_an_alias_and_case_ignored() {
+        let names: Vec<_> = Language::VALUES.map(|(name, _)| name).to_vec();
+        assert_eq!(
+            names,
+            ["auto", "en-US", "en-GB", "fr", "fr-CA", "es", "de", "it"]
+        );
+        for (name, language) in [
+            ("en", Language::EnUs),
+            ("EN", Language::EnUs),
+            ("en-us", Language::EnUs),
+            ("EN-gb", Language::EnGb),
+            ("FR", Language::Fr),
+            ("fr-ca", Language::FrCa),
+            ("es", Language::Es),
+            ("DE", Language::De),
+            ("It", Language::It),
+            ("Auto", Language::Auto),
+        ] {
+            let (config, errors) = parse(&format!("language = \"{name}\""));
+            assert_eq!((config.language, errors), (language, vec![]), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_language_is_an_error_listing_the_accepted_values() {
+        let (config, errors) = parse("language = \"fr_CA\"");
+        assert_eq!(config.language, Language::Auto);
+        assert_eq!(errors.len(), 1);
+        let message = &errors[0].message(Lang::EnUs);
+        assert!(message.contains("`fr_CA`"), "{message}");
+        assert!(
+            message.contains("`en-US`, `en-GB`, `fr`, `fr-CA`, `es`, `de`, `it`"),
+            "{message}"
+        );
     }
 
     fn parse(text: &str) -> (Config, Vec<ConfigError>) {
@@ -799,7 +839,7 @@ autostart = true
     fn invalid_font_feature_is_named_in_the_error() {
         for item in ["ss1", "ss012", "+ss01=2", "cv05=x", "cv05=-1", "zéro", "-"] {
             let error = FontFeatureList::parse(&format!("ss01 {item}")).unwrap_err();
-            assert!(error.contains(&format!("\"{item}\"")), "{item}: {error}");
+            assert_eq!(error, ValueError::InvalidFeature(item.to_owned()), "{item}");
         }
     }
 
@@ -836,9 +876,9 @@ autostart = true
         assert_eq!(errors[0].kind, ConfigErrorKind::InvalidValue);
         assert_eq!(errors[0].key.as_deref(), Some("font.features"));
         assert!(
-            errors[0].message.contains("\"bad\""),
+            errors[0].message(Lang::EnUs).contains("\"bad\""),
             "{}",
-            errors[0].message
+            errors[0].message(Lang::EnUs)
         );
     }
 
@@ -907,9 +947,11 @@ autostart = true
     fn unknown_keys_are_reported_with_their_line() {
         let (config, errors) = parse("colour = 1\n\n[font]\nsise = 12\nsize = 12\n[nope]\n");
         assert_eq!(config.font.size, 12.0);
+        let messages: Vec<_> = errors.iter().map(|e| e.message(Lang::EnUs)).collect();
         let lines: Vec<_> = errors
             .iter()
-            .map(|e| (e.line, e.message.as_str()))
+            .zip(&messages)
+            .map(|(e, message)| (e.line, message.as_str()))
             .collect();
         assert_eq!(
             lines,
@@ -946,7 +988,7 @@ autostart = true
         assert_eq!(errors[0].line, Some(2));
         assert!(
             errors[0]
-                .message
+                .message(Lang::EnUs)
                 .starts_with("invalid value for `window.startup_mode`")
         );
     }
@@ -965,13 +1007,13 @@ autostart = true
         assert_eq!(errors[0].line, Some(2));
         assert!(
             errors[0]
-                .message
+                .message(Lang::EnUs)
                 .starts_with("invalid value for `window.width`")
         );
         assert_eq!(errors[1].line, Some(6));
         assert!(
             errors[1]
-                .message
+                .message(Lang::EnUs)
                 .starts_with("invalid value for `cursor.shape`")
         );
         assert_eq!(errors[1].file, file());
@@ -990,7 +1032,7 @@ autostart = true
         let (config, errors) = parse("font = 12\n");
         assert_eq!(config, Config::default());
         assert_eq!(errors[0].line, Some(1));
-        assert_eq!(errors[0].message, "`font` must be a table");
+        assert_eq!(errors[0].message(Lang::EnUs), "`font` must be a table");
     }
 
     fn keys(errors: &[ConfigError]) -> Vec<(Option<&str>, ConfigErrorKind)> {
@@ -1043,7 +1085,7 @@ autostart = true
         );
         // The banner text keeps the unquoted path.
         assert_eq!(
-            errors[0].to_string(),
+            errors[0].text(Lang::EnUs),
             "keybindings.toml:2: invalid value for `keybindings.Ctrl+Q`: unknown action \"not_an_action\""
         );
     }
@@ -1065,13 +1107,13 @@ autostart = true
 
     #[test]
     fn read_error_has_no_key_path() {
-        let error = ConfigError::read(file(), "cannot read the file: denied".to_owned());
+        let error = ConfigError::read(file(), ConfigMsg::CannotRead("denied".into()));
         assert_eq!(
             (error.key.as_deref(), error.kind),
             (None, ConfigErrorKind::Read)
         );
         assert_eq!(
-            error.to_string(),
+            error.text(Lang::EnUs),
             "config.toml: cannot read the file: denied"
         );
     }
@@ -1111,13 +1153,44 @@ autostart = true
         let (config, errors) = parse("[window]\nbackground_opacity = 1.5\n");
         assert_eq!(config.window.background_opacity, 1.0);
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("1.5 is out of 0.0..=1.0"));
+        assert!(
+            errors[0]
+                .message(Lang::EnUs)
+                .contains("1.5 is out of 0 to 1, using 1")
+        );
         let (config, errors) = parse("[window]\nbackground_opacity = -0.5\n");
         assert_eq!(config.window.background_opacity, 0.0);
         assert_eq!(errors.len(), 1);
         let (config, errors) = parse("[window]\nbackground_opacity = 0\n");
         assert_eq!(config.window.background_opacity, 0.0);
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn errors_are_written_in_the_language_asked_with_its_numbers() {
+        let (_, errors) =
+            parse("[scrollback]\nlines = 250000\n[window]\nbackground_opacity = 0.9\nwidth = 0\n");
+        let texts = |lang| errors.iter().map(|e| e.text(lang)).collect::<Vec<_>>();
+        assert_eq!(
+            texts(Lang::EnUs),
+            [
+                "config.toml:2: `scrollback.lines`: 250,000 is above the maximum, using 100,000",
+                "config.toml:5: invalid value for `window.width`: must be greater than 0",
+            ]
+        );
+        assert_eq!(
+            texts(Lang::Fr),
+            [
+                "config.toml:2: `scrollback.lines` : 250\u{202f}000 dépasse le maximum, 100\u{202f}000 est utilisé",
+                "config.toml:5: valeur invalide pour `window.width` : doit être supérieur à 0",
+            ]
+        );
+        // A value of the file keeps the digits it is written with.
+        let (_, errors) = parse("[font]\nsize = 0.9\n");
+        assert_eq!(
+            errors[0].message(Lang::EnUs),
+            "`font.size`: 0.9 is out of 6 to 72, using 6"
+        );
     }
 
     #[test]
@@ -1130,9 +1203,9 @@ autostart = true
             assert_eq!(config.window.background_opacity, 0.7);
             assert_eq!(errors.len(), 1);
             assert!(
-                errors[0].message.contains("not a number"),
+                errors[0].message(Lang::EnUs).contains("not a number"),
                 "{}",
-                errors[0].message
+                errors[0].message(Lang::EnUs)
             );
         }
     }
@@ -1186,7 +1259,7 @@ autostart = true
             ])
         );
         assert!(unknown.is_empty());
-        let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        let messages: Vec<UiText> = errors.iter().map(|e| e.text(Lang::EnUs)).collect();
         assert_eq!(
             messages,
             [
@@ -1237,8 +1310,8 @@ autostart = true
         );
         assert_eq!(errors[0].line, Some(1));
         assert_eq!(
-            errors[0].to_string(),
-            "config.toml:1: `[keybindings]` moved to keybindings.toml"
+            errors[0].text(Lang::EnUs),
+            "config.toml:1: keyboard shortcuts moved to keybindings.toml"
         );
     }
 
@@ -1246,7 +1319,7 @@ autostart = true
     fn error_display_shows_file_name_and_line() {
         let (_, errors) = parse("\n[font]\nsise = 1\n");
         assert_eq!(
-            errors[0].to_string(),
+            errors[0].text(Lang::EnUs),
             "config.toml:3: unknown key `font.sise`"
         );
     }
@@ -1283,10 +1356,10 @@ autostart = true
         assert_eq!(errors[0].line, Some(2));
         assert!(
             errors[0]
-                .message
+                .message(Lang::EnUs)
                 .starts_with("`updates.interval`: invalid value \"5h\""),
             "{}",
-            errors[0].message
+            errors[0].message(Lang::EnUs)
         );
     }
 }

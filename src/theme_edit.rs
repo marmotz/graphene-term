@@ -15,6 +15,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 use crate::atomic_file;
 use crate::config::{ConfigError, ConfigErrorKind};
 use crate::config_edit::{self, ConfigEdit};
+use crate::i18n::ConfigMsg;
 use crate::theme::{self, ColorKey};
 
 /// Sets `key` of the user theme `name` to `color` (`None` writes `""`, which only means
@@ -80,7 +81,7 @@ fn theme_file(config_dir: &Path, name: &str) -> Result<PathBuf, ConfigError> {
         line: None,
         key: None,
         kind: ConfigErrorKind::InvalidValue,
-        message: format!("invalid theme name `{name}`"),
+        detail: Box::new(ConfigMsg::InvalidThemeName(name.to_owned())),
     })
 }
 
@@ -94,7 +95,7 @@ fn source_text(config_dir: &Path, name: &str) -> Result<(String, PathBuf), Confi
         Err(error) => {
             return Err(ConfigError::read(
                 file,
-                format!("cannot read the theme: {error}"),
+                ConfigMsg::CannotReadTheme(error.to_string()),
             ));
         }
     }
@@ -105,7 +106,7 @@ fn source_text(config_dir: &Path, name: &str) -> Result<(String, PathBuf), Confi
                 PathBuf::from(format!("{name}.toml")),
             )
         })
-        .ok_or_else(|| ConfigError::read(file, format!("unknown theme `{name}`")))
+        .ok_or_else(|| ConfigError::read(file, ConfigMsg::ThemeNotFound(name.to_owned())))
 }
 
 /// `text` without its leading comment block, unless that block holds a licence, which
@@ -147,7 +148,7 @@ fn exists_error(file: &Path, name: &str) -> ConfigError {
         line: None,
         key: None,
         kind: ConfigErrorKind::Write,
-        message: format!("a theme named `{name}` already exists"),
+        detail: Box::new(ConfigMsg::ThemeExists(name.to_owned())),
     }
 }
 

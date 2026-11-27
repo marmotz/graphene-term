@@ -7,29 +7,35 @@
 use semver::Version;
 
 use crate::config::ConfigError;
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::layout::{CellSize, Rect};
 use crate::update::{self, Release};
 
 /// Label of the action closing the update banner for the session.
-const CLOSE_LABEL: &str = "×";
+const CLOSE_SYMBOL: &str = "×";
 
 /// Content of the banner: a message followed by clickable actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Banner {
-    pub text: String,
+    pub text: UiText,
     /// Labels of the click targets, drawn after the text, left to right.
-    pub actions: Vec<String>,
+    pub actions: Vec<UiText>,
 }
 
 impl Banner {
-    /// Banner reporting configuration errors: the first one, plus "(+N more)" when there are
-    /// several. `None` when there is no error.
-    pub fn config_errors(errors: &[ConfigError]) -> Option<Self> {
-        let first = errors.first()?;
+    /// Banner reporting configuration errors in `lang`: the first one, plus the count
+    /// of the others when there are several. `None` when there is no error.
+    pub fn config_errors(errors: &[ConfigError], lang: Lang) -> Option<Self> {
+        let first = errors.first()?.text(lang);
         let text = match errors.len() - 1 {
-            0 => first.to_string(),
-            more => format!("{first} (+{more} more)"),
+            0 => first,
+            more => i18n::text(
+                lang,
+                &Msg::MoreConfigErrors {
+                    first: first.into(),
+                    more,
+                },
+            ),
         };
         Some(Self {
             text,
@@ -42,13 +48,13 @@ impl Banner {
     /// Banner announcing `release`, with its actions in [`UpdateAction`] order.
     pub fn update(release: &Release, lang: Lang) -> Self {
         Self {
-            text: i18n::text(lang, &Msg::UpdateAvailable(release.tag.clone())).into_owned(),
+            text: i18n::text(lang, &Msg::UpdateAvailable(release.tag.clone())),
             actions: UpdateAction::ALL
                 .iter()
                 .map(|action| match action {
-                    UpdateAction::Open => i18n::text(lang, &Msg::OpenRelease).into_owned(),
-                    UpdateAction::Ignore => i18n::text(lang, &Msg::IgnoreVersion).into_owned(),
-                    UpdateAction::Close => CLOSE_LABEL.to_owned(),
+                    UpdateAction::Open => i18n::text(lang, &Msg::OpenRelease),
+                    UpdateAction::Ignore => i18n::text(lang, &Msg::IgnoreVersion),
+                    UpdateAction::Close => UiText::symbol(CLOSE_SYMBOL),
                 })
                 .collect(),
         }
@@ -214,7 +220,7 @@ impl BannerLayout {
         let mut texts = vec![PlacedText {
             x,
             y: margin,
-            text: banner.text.clone(),
+            text: banner.text.to_string(),
         }];
         x += text_width(&banner.text);
         let mut actions = Vec::with_capacity(banner.actions.len());
@@ -223,7 +229,7 @@ impl BannerLayout {
             texts.push(PlacedText {
                 x,
                 y: margin,
-                text: label.clone(),
+                text: label.to_string(),
             });
             // The target extends half a gap around the label, over the full banner height.
             actions.push(PixelRect {
@@ -288,13 +294,14 @@ mod tests {
 
     use super::*;
 
-    fn error(line: usize, message: &str) -> ConfigError {
+    /// An unknown key `path` at `line` of `config.toml`.
+    fn error(line: usize, path: &str) -> ConfigError {
         ConfigError {
             file: PathBuf::from("/home/me/.config/graphene/config.toml"),
             line: Some(line),
             key: None,
-            kind: crate::config::ConfigErrorKind::InvalidValue,
-            message: message.to_owned(),
+            kind: crate::config::ConfigErrorKind::UnknownKey,
+            detail: Box::new(crate::i18n::ConfigMsg::UnknownKey(path.to_owned())),
         }
     }
 
@@ -305,25 +312,27 @@ mod tests {
 
     #[test]
     fn no_error_gives_no_banner() {
-        assert_eq!(Banner::config_errors(&[]), None);
+        assert_eq!(Banner::config_errors(&[], Lang::EnUs), None);
     }
 
     #[test]
     fn one_error_is_shown_as_is() {
-        let banner = Banner::config_errors(&[error(12, "unknown key `font.sise`")]).unwrap();
+        let banner = Banner::config_errors(&[error(12, "font.sise")], Lang::EnUs).unwrap();
         assert_eq!(banner.text, "config.toml:12: unknown key `font.sise`");
         assert!(banner.actions.is_empty());
+        let banner = Banner::config_errors(&[error(12, "font.sise")], Lang::Fr).unwrap();
+        assert_eq!(banner.text, "config.toml:12: clé inconnue `font.sise`");
     }
 
     #[test]
     fn several_errors_show_the_first_and_a_count() {
-        let banner = Banner::config_errors(&[
-            error(2, "unknown key `a`"),
-            error(5, "unknown key `b`"),
-            error(9, "unknown key `c`"),
-        ])
-        .unwrap();
+        let errors = [error(2, "a"), error(5, "b"), error(9, "c")];
+        let banner = Banner::config_errors(&errors, Lang::EnUs).unwrap();
         assert_eq!(banner.text, "config.toml:2: unknown key `a` (+2 more)");
+        let banner = Banner::config_errors(&errors, Lang::Fr).unwrap();
+        assert_eq!(banner.text, "config.toml:2: clé inconnue `a` (+2 autres)");
+        let banner = Banner::config_errors(&errors[..2], Lang::Fr).unwrap();
+        assert_eq!(banner.text, "config.toml:2: clé inconnue `a` (+1 autre)");
     }
 
     fn release(tag: &str) -> Release {
@@ -335,7 +344,7 @@ mod tests {
 
     #[test]
     fn update_banner_text_and_actions() {
-        let banner = Banner::update(&release("v0.2.0"), Lang::En);
+        let banner = Banner::update(&release("v0.2.0"), Lang::EnUs);
         assert_eq!(banner.text, "Graphene v0.2.0 is available");
         assert_eq!(
             banner.actions,
@@ -358,19 +367,25 @@ mod tests {
 
     #[test]
     fn config_banner_has_priority() {
-        let config = Banner::config_errors(&[error(2, "unknown key `a`")]).unwrap();
+        let config = Banner::config_errors(&[error(2, "a")], Lang::EnUs).unwrap();
         let mut update = UpdateBanner::default();
         update.set(Some(release("v0.2.0")));
         assert_eq!(
-            Shown::pick(Some(&config), &update, Lang::En),
+            Shown::pick(Some(&config), &update, Lang::EnUs),
             Some(Shown::Config(config.clone()))
         );
         // Once the error banner is gone, the update banner shows.
         assert_eq!(
-            Shown::pick(None, &update, Lang::En),
-            Some(Shown::Update(Banner::update(&release("v0.2.0"), Lang::En)))
+            Shown::pick(None, &update, Lang::EnUs),
+            Some(Shown::Update(Banner::update(
+                &release("v0.2.0"),
+                Lang::EnUs
+            )))
         );
-        assert_eq!(Shown::pick(None, &UpdateBanner::default(), Lang::En), None);
+        assert_eq!(
+            Shown::pick(None, &UpdateBanner::default(), Lang::EnUs),
+            None
+        );
     }
 
     #[test]
@@ -426,7 +441,7 @@ mod tests {
 
     #[test]
     fn update_banner_targets_are_hit_tested() {
-        let banner = Banner::update(&release("v0.2.0"), Lang::En);
+        let banner = Banner::update(&release("v0.2.0"), Lang::EnUs);
         let layout = BannerLayout::new(&banner, CELL, 2000.0);
         for (index, target) in layout.actions.iter().enumerate() {
             let (x, y) = (target.x + target.width / 2.0, target.y + 1.0);
@@ -439,7 +454,7 @@ mod tests {
     #[test]
     fn layout_spans_the_window_top() {
         let banner = Banner {
-            text: "hello".into(),
+            text: UiText::user("hello"),
             actions: Vec::new(),
         };
         let layout = BannerLayout::new(&banner, CELL, 800.0);
@@ -466,8 +481,8 @@ mod tests {
     #[test]
     fn actions_follow_the_text() {
         let banner = Banner {
-            text: "abc".into(),
-            actions: vec!["open".into(), "x".into()],
+            text: UiText::user("abc"),
+            actions: vec![UiText::user("open"), UiText::user("x")],
         };
         let layout = BannerLayout::new(&banner, CELL, 800.0);
         // Text from 20 to 50, then a 20 px gap before each action.
@@ -482,8 +497,8 @@ mod tests {
     #[test]
     fn hit_testing() {
         let banner = Banner {
-            text: "abc".into(),
-            actions: vec!["open".into(), "x".into()],
+            text: UiText::user("abc"),
+            actions: vec![UiText::user("open"), UiText::user("x")],
         };
         let layout = BannerLayout::new(&banner, CELL, 800.0);
         assert_eq!(layout.hit(30.0, 10.0), Some(BannerHit::Body));
@@ -496,10 +511,10 @@ mod tests {
     #[test]
     fn layout_height_does_not_depend_on_the_text() {
         let short = Banner {
-            text: "a".to_owned(),
+            text: UiText::user("a"),
             actions: Vec::new(),
         };
-        let long = Banner::update(&release("v0.2.0"), Lang::En);
+        let long = Banner::update(&release("v0.2.0"), Lang::EnUs);
         let height = BannerLayout::height(CELL);
         assert_eq!(height, 30.0);
         assert_eq!(BannerLayout::new(&short, CELL, 800.0).rect.height, height);

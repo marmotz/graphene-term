@@ -545,9 +545,9 @@ mod tests {
             assert!(!Action::ALL[..index].contains(action), "{action:?} twice");
         }
         // Each label is a distinct text.
-        let mut labels: Vec<String> = Action::ALL
+        let mut labels: Vec<_> = Action::ALL
             .into_iter()
-            .map(|a| crate::i18n::text(crate::i18n::Lang::En, &a.label()).into_owned())
+            .map(|a| crate::i18n::text(crate::i18n::Lang::EnUs, &a.label()))
             .collect();
         labels.sort();
         labels.dedup();

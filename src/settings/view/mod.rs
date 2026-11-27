@@ -2,6 +2,7 @@
 //! top and the selected section's fields.
 
 mod shortcuts;
+mod text;
 mod theme_editor;
 
 use std::collections::BTreeMap;
@@ -15,8 +16,9 @@ use egui::{
 };
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
+use self::text::{Style, Texts};
 use super::model::{self, Change, Input, InputError, SettingsModel, ThemeOp, Widget};
-use crate::i18n::{self, Lang, Msg, SettingsField as Field, SettingsSection};
+use crate::i18n::{self, Lang, Msg, SettingsField as Field, SettingsSection, UiText};
 use crate::input::Action;
 use crate::keybindings::Shortcut;
 use crate::theme::{ColorGroup, ColorKey, NameError, format_color, parse_color};
@@ -206,7 +208,7 @@ impl View {
 
     /// Draws one frame; returns what to write.
     pub fn show(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel) -> Edits {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let mut edits = Edits::default();
         Panel::left("settings_sections")
             .resizable(false)
@@ -216,7 +218,7 @@ impl View {
                 for section in SettingsSection::ALL {
                     let selected = self.section == section;
                     if ui
-                        .selectable_label(selected, label(Msg::Section(section)))
+                        .show_selectable(selected, label(Msg::Section(section)))
                         .clicked()
                         && !selected
                         && let Some(op) = self.select_section(section)
@@ -234,7 +236,7 @@ impl View {
         CentralPanel::default().show(ui, |ui| {
             ScrollArea::vertical().show(ui, |ui| {
                 file_problems(ui, lang, model, self.section);
-                ui.heading(label(Msg::Section(self.section)));
+                ui.show_heading(label(Msg::Section(self.section)));
                 ui.separator();
                 let enabled = model.locked(self.section).is_none()
                     && model.unavailable(self.section).is_none();
@@ -286,7 +288,7 @@ impl View {
         }
         if self.section == SettingsSection::Theme {
             for message in model.theme_errors() {
-                error_label(ui, &message);
+                error_label(ui, message);
             }
         }
         if self.section == SettingsSection::KeyboardShortcuts {
@@ -304,13 +306,13 @@ impl View {
                     if !model.visible(field) || field == Field::QuickTerminalEnabled {
                         continue;
                     }
-                    ui.label(i18n::text(lang, &Msg::Field(field)));
+                    ui.show_label(i18n::text(lang, &Msg::Field(field)));
                     ui.vertical(|ui| {
                         ui.add_enabled_ui(model.field_enabled(field), |ui| {
                             self.field(ui, lang, model, field, changes);
                         });
                         if let Some(error) = self.input_errors.get(&field) {
-                            error_label(ui, &i18n::text(lang, &error.msg()));
+                            error_label(ui, i18n::text(lang, &error.msg()));
                         }
                         for message in model.field_errors(field) {
                             error_label(ui, message);
@@ -341,11 +343,7 @@ impl View {
         }
         if model.quick_terminal_disabled(self.section) {
             ui.indent("quick_terminal_disabled", |ui| {
-                ui.label(
-                    RichText::new(i18n::text(lang, &Msg::QuickTerminalDisabled))
-                        .weak()
-                        .small(),
-                );
+                ui.show_label(i18n::text(lang, &Msg::QuickTerminalDisabled).weak().small());
             });
         }
         for message in model.field_errors(field) {
@@ -444,14 +442,14 @@ impl View {
         model: &SettingsModel,
         field: Field,
     ) -> Option<Input> {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let text = model.text(field);
         let capturing = self.capturing == Some(Capture::Field(field));
         let mut input = None;
         ui.horizontal(|ui| {
             if text.is_empty() {
                 if !capturing {
-                    ui.label(RichText::new(label(Msg::NoShortcut)).weak());
+                    ui.show_label(label(Msg::NoShortcut).weak());
                 }
             } else {
                 let shortcut =
@@ -466,7 +464,7 @@ impl View {
                 }
             }
             if capturing {
-                if ui.button(label(Msg::Cancel)).clicked() {
+                if ui.show_button(label(Msg::Cancel)).clicked() {
                     self.capturing = None;
                 }
             } else {
@@ -475,14 +473,14 @@ impl View {
                 } else {
                     Msg::ChangeShortcut
                 };
-                if ui.button(label(start)).clicked() {
+                if ui.show_button(label(start)).clicked() {
                     self.capturing = Some(Capture::Field(field));
                     self.conflict = None;
                 }
             }
         });
         if capturing {
-            ui.label(RichText::new(label(Msg::PressShortcut)).weak());
+            ui.show_label(label(Msg::PressShortcut).weak());
         }
         input
     }
@@ -570,10 +568,11 @@ fn choice(ui: &mut Ui, lang: Lang, model: &SettingsModel, field: Field) -> Optio
     let current = model.text(field);
     let choices = model.choices(field);
     let label_of = |choice: &model::Choice| match &choice.label {
-        Some(msg) => i18n::text(lang, msg).into_owned(),
-        None => choice.value.clone(),
+        Some(msg) => i18n::text(lang, msg),
+        // A font, theme or screen name.
+        None => UiText::user(choice.value.clone()),
     };
-    let labels: Vec<String> = choices.iter().map(label_of).collect();
+    let labels: Vec<UiText> = choices.iter().map(label_of).collect();
     let selected = choices
         .iter()
         .position(|choice| choice.value == current)
@@ -601,7 +600,7 @@ fn choice(ui: &mut Ui, lang: Lang, model: &SettingsModel, field: Field) -> Optio
             for (index, choice) in choices.iter().enumerate() {
                 let found = search.found == Some(index);
                 let response =
-                    ui.selectable_label(choice.value == current || found, &labels[index]);
+                    ui.show_selectable(choice.value == current || found, labels[index].clone());
                 if found && moved {
                     response.scroll_to_me(Some(Align::Center));
                 }
@@ -629,7 +628,11 @@ fn theme_selector(ui: &mut Ui, model: &SettingsModel) -> Option<String> {
         .selected_text(edited)
         .show_ui(ui, |ui| {
             for name in model.theme_choices() {
-                if ui.selectable_label(name == edited, name).clicked() && name != edited {
+                if ui
+                    .show_selectable(name == edited, UiText::user(name.clone()))
+                    .clicked()
+                    && name != edited
+                {
                     picked = Some(name.clone());
                 }
             }
@@ -654,7 +657,7 @@ impl Search {
     /// Adds `typed` at `now` to the search, after a pause starting over; returns
     /// whether a choice was found by it. A search finding nothing keeps the last
     /// found choice.
-    fn type_text(&mut self, typed: &str, now: f64, labels: &[String]) -> bool {
+    fn type_text(&mut self, typed: &str, now: f64, labels: &[UiText]) -> bool {
         if typed.is_empty() {
             return false;
         }
@@ -677,36 +680,39 @@ impl Search {
 /// The problems of the files: why `section` is locked, a failed write, unknown keys and
 /// errors tied to no section.
 fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: SettingsSection) {
-    let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+    let label = |msg: Msg| i18n::text(lang, &msg);
     let mut shown = false;
     if let Some(error) = model.locked(section) {
-        error_label(ui, &error.to_string());
-        ui.label(error.file.display().to_string());
-        ui.label(label(Msg::FixFileByHand));
+        error_label(ui, error.text(lang));
+        ui.show_label(UiText::user(error.file.display().to_string()));
+        ui.show_label(label(Msg::FixFileByHand));
         shown = true;
     }
     if let Some(reason) = model.unavailable(section) {
-        warn_label(ui, &label(reason));
+        warn_label(ui, label(reason));
         shown = true;
     }
     if let Some(error) = model.write_error() {
-        error_label(ui, &format!("{}: {error}", label(Msg::CannotSave)));
+        error_label(ui, label(Msg::CannotSave(error.into())));
         shown = true;
     }
     let unknown = model.unknown_keys();
     if !unknown.is_empty() {
-        ui.strong(label(Msg::UnknownKeys));
+        ui.show_label(label(Msg::UnknownKeys).strong());
         for (key, line) in unknown {
             let text = match line {
-                Some(line) => format!("{key} ({})", label(Msg::AtLine(line))),
-                None => key.to_owned(),
+                Some(line) => label(Msg::KeyAtLine {
+                    key: key.to_owned(),
+                    line,
+                }),
+                None => UiText::user(key),
             };
-            warn_label(ui, &text);
+            warn_label(ui, text);
         }
         shown = true;
     }
     for message in model.other_errors() {
-        error_label(ui, &message);
+        error_label(ui, message);
         shown = true;
     }
     if shown {
@@ -714,14 +720,14 @@ fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: Settin
     }
 }
 
-fn error_label(ui: &mut Ui, text: &str) {
+fn error_label(ui: &mut Ui, text: UiText) {
     let color = ui.visuals().error_fg_color;
-    ui.label(RichText::new(text).color(color));
+    ui.show_label(text.color(color));
 }
 
-fn warn_label(ui: &mut Ui, text: &str) {
+fn warn_label(ui: &mut Ui, text: UiText) {
     let color = ui.visuals().warn_fg_color;
-    ui.label(RichText::new(text).color(color));
+    ui.show_label(text.color(color));
 }
 
 /// The `Graphene <version>` text shown at the bottom of the sections sidebar.
@@ -1193,13 +1199,13 @@ mod tests {
 
     #[test]
     fn the_quick_terminal_switch_heads_its_section_above_its_hint() {
-        let switch = i18n::text(Lang::Fr, &Msg::Field(Field::QuickTerminalEnabled)).into_owned();
-        let hint = i18n::text(Lang::Fr, &Msg::QuickTerminalDisabled).into_owned();
+        let switch = i18n::text(Lang::Fr, &Msg::Field(Field::QuickTerminalEnabled));
+        let hint = i18n::text(Lang::Fr, &Msg::QuickTerminalDisabled);
         let next = model::section_fields(SettingsSection::QuickTerminal)
             .iter()
             .find(|&&field| field != Field::QuickTerminalEnabled)
             .unwrap();
-        let next = i18n::text(Lang::Fr, &Msg::Field(*next)).into_owned();
+        let next = i18n::text(Lang::Fr, &Msg::Field(*next));
 
         let (texts, _) = section_texts(View::default(), SettingsSection::QuickTerminal, "");
         assert_eq!(count(&texts, &switch), 1);
@@ -1348,8 +1354,8 @@ mod tests {
         assert!(view.added.is_empty(), "nothing written before Replace");
     }
 
-    fn labels(names: &[&str]) -> Vec<String> {
-        names.iter().map(|name| (*name).to_owned()).collect()
+    fn labels(names: &[&str]) -> Vec<UiText> {
+        names.iter().map(|name| UiText::user(*name)).collect()
     }
 
     #[test]

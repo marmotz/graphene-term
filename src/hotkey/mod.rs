@@ -20,37 +20,44 @@ use std::sync::Arc;
 
 use winit::keyboard::{ModifiersState, NamedKey};
 
+use crate::i18n::{self, ConfigMsg, Lang, Msg, ValueError};
 use crate::keybindings::{KeyId, Shortcut};
 
 /// What a press of the hotkey runs. It is called from the hotkey thread on X11.
 pub type OnPress = Arc<dyn Fn() + Send + Sync>;
 
 /// Why the hotkey cannot be registered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum HotkeyError {
     /// The key has no code on this platform or keyboard.
     NoEquivalent(String),
     /// Another application already holds the shortcut.
     Taken(String),
-    /// Any other failure, described.
+    /// The shortcut does not parse.
+    Invalid(ValueError),
+    /// Any other failure, described by the system.
     Failed(String),
 }
 
+impl HotkeyError {
+    /// The configuration error of `quick_terminal.hotkey` it is reported as.
+    pub fn detail(&self) -> ConfigMsg {
+        match self {
+            Self::NoEquivalent(hotkey) => ConfigMsg::HotkeyNoKey(hotkey.clone()),
+            Self::Taken(hotkey) => ConfigMsg::HotkeyTaken(hotkey.clone()),
+            Self::Invalid(reason) => ConfigMsg::InvalidValue {
+                path: "quick_terminal.hotkey".to_owned(),
+                reason: reason.clone(),
+            },
+            Self::Failed(detail) => ConfigMsg::HotkeyFailed(detail.clone()),
+        }
+    }
+}
+
+/// In English, for the logs.
 impl fmt::Display for HotkeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoEquivalent(hotkey) => {
-                write!(
-                    f,
-                    "the global hotkey \"{hotkey}\" has no key on this system"
-                )
-            }
-            Self::Taken(hotkey) => write!(
-                f,
-                "the global hotkey \"{hotkey}\" is already used by another application"
-            ),
-            Self::Failed(reason) => write!(f, "cannot register the global hotkey: {reason}"),
-        }
+        f.write_str(&i18n::text(Lang::EnUs, &Msg::Config(self.detail())))
     }
 }
 
@@ -91,7 +98,7 @@ impl Hotkey {
         if text.is_empty() {
             return Ok(());
         }
-        let shortcut = Shortcut::parse(text).map_err(HotkeyError::Failed)?;
+        let shortcut = Shortcut::parse(text).map_err(HotkeyError::Invalid)?;
         self.register(text, shortcut)?;
         self.current = text.to_owned();
         Ok(())

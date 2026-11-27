@@ -11,7 +11,7 @@ mod macos;
 use std::time::Duration;
 
 use crate::config::NotificationsConfig;
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::signals;
 use crate::terminal::PaneId;
 use crate::timeline::{PaneNotice, Status};
@@ -51,12 +51,13 @@ pub fn watched(focused: bool, active_pane: Option<PaneId>, pane: PaneId) -> bool
 
 /// Title and body of the notification of `notice`, in `lang`. `pane_title` is the
 /// title of the pane the notice comes from, if it has one.
-pub fn content(notice: &Notice, pane_title: Option<&str>, lang: Lang) -> (String, String) {
-    let pane_title = || pane_title.unwrap_or(APP_NAME).to_owned();
+pub fn content(notice: &Notice, pane_title: Option<&str>, lang: Lang) -> (UiText, UiText) {
+    let pane_title = || UiText::user(pane_title.unwrap_or(APP_NAME));
     match notice {
-        Notice::Pane(PaneNotice::Program(signals::Notice::Program { title, body })) => {
-            (title.clone().unwrap_or_else(pane_title), body.clone())
-        }
+        Notice::Pane(PaneNotice::Program(signals::Notice::Program { title, body })) => (
+            title.clone().map_or_else(pane_title, UiText::user),
+            UiText::user(body.clone()),
+        ),
         Notice::Pane(PaneNotice::CommandFinished {
             command,
             status,
@@ -66,32 +67,34 @@ pub fn content(notice: &Notice, pane_title: Option<&str>, lang: Lang) -> (String
                 Status::Failure(code) => Msg::CommandFailed(*code),
                 _ => Msg::CommandFinished,
             };
-            let duration = format_duration(*duration);
+            let duration = format_duration(*duration, lang);
             let body = if command.is_empty() {
                 duration
             } else {
-                format!("{command} · {duration}")
+                duration.after(format!("{command} · "))
             };
-            (i18n::text(lang, &title).into_owned(), body)
+            (i18n::text(lang, &title), body)
         }
-        Notice::Bell => (pane_title(), i18n::text(lang, &Msg::Bell).into_owned()),
+        Notice::Bell => (pane_title(), i18n::text(lang, &Msg::Bell)),
     }
 }
 
-/// `duration` in whole units: `42 s` below a minute, `2 min 13 s` below an hour, else
-/// `1 h 5 min`. A zero last unit is left out (`2 min`, `1 h`).
-pub fn format_duration(duration: Duration) -> String {
+/// `duration` in whole units, in `lang`: `42 s` below a minute, `2 min 13 s` below an
+/// hour, else `1 h 5 min`. A zero last unit is left out (`2 min`, `1 h`).
+pub fn format_duration(duration: Duration, lang: Lang) -> UiText {
     let seconds = duration.as_secs();
-    let (big, small, big_unit, small_unit) = match seconds {
-        0..60 => return format!("{seconds} s"),
-        60..3600 => (seconds / 60, seconds % 60, "min", "s"),
-        _ => (seconds / 3600, seconds % 3600 / 60, "h", "min"),
+    let msg = match seconds {
+        0..60 => Msg::DurationSeconds(seconds),
+        60..3600 => Msg::DurationMinutes {
+            minutes: seconds / 60,
+            seconds: seconds % 60,
+        },
+        _ => Msg::DurationHours {
+            hours: seconds / 3600,
+            minutes: seconds % 3600 / 60,
+        },
     };
-    if small == 0 {
-        format!("{big} {big_unit}")
-    } else {
-        format!("{big} {big_unit} {small} {small_unit}")
-    }
+    i18n::text(lang, &msg)
 }
 
 /// Resets the `unseen` count of `pane` once it is watched: the command closing the
@@ -126,6 +129,12 @@ impl Badge {
 mod tests {
     use super::*;
     use crate::i18n::LANGS;
+
+    /// [`content`] as plain strings, to compare with literals.
+    fn shown(notice: &Notice, pane_title: Option<&str>, lang: Lang) -> (String, String) {
+        let (title, body) = content(notice, pane_title, lang);
+        (title.into(), body.into())
+    }
 
     fn config() -> NotificationsConfig {
         NotificationsConfig {
@@ -197,16 +206,16 @@ mod tests {
     fn a_program_notification_falls_back_to_the_pane_title_then_the_app_name() {
         let osc9 = program(None, "build done");
         assert_eq!(
-            content(&osc9, Some("~/src"), Lang::En),
+            shown(&osc9, Some("~/src"), Lang::EnUs),
             ("~/src".into(), "build done".into())
         );
         assert_eq!(
-            content(&osc9, None, Lang::En),
+            shown(&osc9, None, Lang::EnUs),
             ("Graphene".into(), "build done".into())
         );
         let osc777 = program(Some("CI"), "green");
         assert_eq!(
-            content(&osc777, Some("~/src"), Lang::Fr),
+            shown(&osc777, Some("~/src"), Lang::Fr),
             ("CI".into(), "green".into())
         );
     }
@@ -214,19 +223,19 @@ mod tests {
     #[test]
     fn a_finished_command_tells_its_status_command_and_duration() {
         assert_eq!(
-            content(
+            shown(
                 &finished("cargo build", Status::Success, 133),
                 None,
-                Lang::En
+                Lang::EnUs
             ),
             ("Command finished".into(), "cargo build · 2 min 13 s".into())
         );
         assert_eq!(
-            content(&finished("make", Status::Failure(2), 12), None, Lang::Fr),
+            shown(&finished("make", Status::Failure(2), 12), None, Lang::Fr),
             ("Commande échouée (code 2)".into(), "make · 12 s".into())
         );
         assert_eq!(
-            content(&finished("make", Status::Unknown, 12), None, Lang::Fr),
+            shown(&finished("make", Status::Unknown, 12), None, Lang::Fr),
             ("Commande terminée".into(), "make · 12 s".into())
         );
     }
@@ -234,7 +243,7 @@ mod tests {
     #[test]
     fn a_finished_command_without_command_line_shows_only_its_duration() {
         assert_eq!(
-            content(&finished("", Status::Success, 75), Some("zsh"), Lang::En).1,
+            shown(&finished("", Status::Success, 75), Some("zsh"), Lang::EnUs).1,
             "1 min 15 s"
         );
     }
@@ -242,17 +251,17 @@ mod tests {
     #[test]
     fn a_bell_is_titled_by_its_pane() {
         assert_eq!(
-            content(&Notice::Bell, Some("vim"), Lang::Fr),
+            shown(&Notice::Bell, Some("vim"), Lang::Fr),
             ("vim".into(), "Sonnerie".into())
         );
         for lang in LANGS {
-            assert_eq!(content(&Notice::Bell, None, lang).0, "Graphene");
+            assert_eq!(shown(&Notice::Bell, None, lang).0, "Graphene");
         }
     }
 
     #[test]
     fn durations_are_written_in_their_two_largest_units() {
-        let format = |seconds| format_duration(Duration::from_secs(seconds));
+        let format = |seconds| format_duration(Duration::from_secs(seconds), Lang::EnUs);
         assert_eq!(format(0), "0 s");
         assert_eq!(format(59), "59 s");
         assert_eq!(format(60), "1 min");
@@ -261,7 +270,24 @@ mod tests {
         assert_eq!(format(3600), "1 h");
         assert_eq!(format(3600 + 5 * 60 + 59), "1 h 5 min");
         assert_eq!(format(26 * 3600), "26 h");
-        assert_eq!(format_duration(Duration::from_millis(12_900)), "12 s");
+        assert_eq!(
+            format_duration(Duration::from_millis(12_900), Lang::EnUs),
+            "12 s"
+        );
+    }
+
+    #[test]
+    fn durations_are_written_in_the_language() {
+        let format = |seconds, lang| format_duration(Duration::from_secs(seconds), lang);
+        for lang in LANGS {
+            assert_eq!(format(42, lang), "42 s", "{lang:?}");
+            assert_eq!(format(133, lang), "2 min 13 s", "{lang:?}");
+            assert_eq!(format(3600 + 5 * 60, lang), "1 h 5 min", "{lang:?}");
+        }
+        // Hours are numbers of the language: grouped in English, with a narrow
+        // no-break space in French.
+        assert_eq!(format(1234 * 3600, Lang::EnUs), "1,234 h");
+        assert_eq!(format(1234 * 3600, Lang::Fr), "1\u{202f}234 h");
     }
 
     #[test]

@@ -39,7 +39,8 @@ Each entry states a technical choice and the reasons behind it. How the code wor
 - [Interface](#interface)
   - [Tabs and splits: binary split tree](#tabs-and-splits-binary-split-tree)
   - [Current directory and foreground program from `/proc`](#current-directory-and-foreground-program-from-proc)
-  - [Own translation table](#own-translation-table)
+  - [Translations in Fluent files](#translations-in-fluent-files)
+  - [Numbers and dates of the language: ICU4X](#numbers-and-dates-of-the-language-icu4x)
   - [Command palette: `nucleo-matcher` and a recent actions file](#command-palette-nucleo-matcher-and-a-recent-actions-file)
 - [Configuration](#configuration)
   - [Configuration parsed key by key](#configuration-parsed-key-by-key)
@@ -409,14 +410,84 @@ per frame. On macOS the current directory comes from
 either; the foreground program lookup returns nothing there, so closing never asks for
 confirmation.
 
-### Own translation table
+### Translations in Fluent files
 
-Interface labels are an `i18n::Msg` enum translated by one exhaustive `match` per
-language (English, French; English is the fallback), the language read from
-`LC_ALL`, `LC_MESSAGES` then `LANG`, then on macOS the first preferred language of the
-system settings (an app launched from Finder has no locale variable). A missing translation does not compile, and no
-runtime dependency or resource file is needed. Fluent would only pay off with many
-languages and translators outside the code.
+Interface labels are an `i18n::Msg` enum, the API of the code. Their texts live in one
+Fluent file per language under `i18n/` (`en-US.ftl`, the reference, `fr.ftl`, and the
+regional variants `en-GB.ftl` and `fr-CA.ftl`, then `es.ftl`, `de.ftl` and `it.ftl`,
+translated by AI and marked `unreviewed`, see `i18n/CONTRIBUTING.md`),
+embedded by `include_str!` and parsed once into `fluent_bundle::concurrent::FluentBundle`s
+(`Sync`: notifications are formatted on another thread), with Unicode isolation marks
+turned off since the interface has no right-to-left text. One exhaustive `match`
+(`i18n::fluent`) gives the identifier and the arguments of each variant, so a new variant
+does not compile until it has an identifier; the tests then require that identifier in
+the file of every base language, formatting without error, and reject any identifier
+unknown to `en-US.ftl`. A regional variant (`Lang::EnGb`, `Lang::FrCa`) only holds the
+messages that differ from its `Lang::parent()`, and a test rejects a copied one:
+`i18n::text` looks the message up in the language, then its parent, then `en-US`. Each file starts with a `## Status: reviewed` or `## Status: unreviewed`
+line. Fluent was chosen over gettext and a TOML table: CLDR plurals and selectors
+(direction, close target, settings field...) are written in the file, the syntax reads
+without knowing Rust, and translation tools handle it. Generating `Msg` from `en-US.ftl`
+in a `build.rs` was rejected: the generated code is harder to read and review. The
+language is read from `LC_ALL`, `LC_MESSAGES` then `LANG`, then on macOS the first
+preferred language of the system settings (an app launched from Finder has no locale
+variable), with its region: a region without a variant gives the base language
+(`es_MX` gives Spanish). The
+`language` setting takes BCP 47 tags (`en-US`, `fr-CA`), case ignored, and keeps `en` as
+an alias so that existing files stay valid.
+
+The entries of the choice lists of the settings are labelled by an `i18n::ChoiceMsg`
+(one variant per enum of `config`, built from its `VALUES`); the value written to the
+file stays the raw one. Language names come from `i18n/languages.ftl`, added to every
+bundle so that a language reads the same in all of them (`Français (Canada)`); only
+`auto` is translated. A test rejects a language file that defines one of these names.
+
+Configuration errors are translated too: `ConfigError.detail` is an `i18n::ConfigMsg`
+(boxed, to keep the `Result`s that carry it small), shown by `Msg::Config`, and
+`ConfigError::text(lang)` prefixes it with the file name and line. A rejected value
+carries an `i18n::ValueError`, a selector of the single `config-invalid-value` message,
+so the parsers of the values (`Shortcut::parse`, `FontFeatureList::parse`...) return it
+instead of an English string. The texts the application does not write, the detail of
+the `toml` crate and of an `io::Error`, are inserted untranslated after a translated
+prefix. The logs keep English (`Lang::EnUs`).
+
+A hardcoded text is refused by the types. The display fields (`Banner.text` and
+`actions`, `context_menu::Item.label`, `command_palette::Entry.label`, the title, message
+and buttons of `dialog`, the texts of the search bar, the title and body of the
+notifications) are an `i18n::UiText`, which only `i18n::text` builds from a message,
+`UiText::user` from content the application does not write (tab title, program, theme
+or font name, command, path) and `UiText::symbol` from a symbol (`×`); it reads as a
+`str` and turns into a `String`, but no `String` turns into it, so a literal does not
+compile there. egui's `Ui::label`, `button`, `heading`, `selectable_label` and `strong`
+take any `&str`: `clippy.toml` lists them in `disallowed-methods` (CI runs
+`cargo clippy -- -D warnings`), and the Settings view calls the wrappers of
+`settings/view/text.rs` (`Texts::show_label`...), which take a `UiText` styled through
+`Style` (`weak`, `strong`, `small`...). A test scanning the code for literals was
+rejected: false positives, and easy to get around. Key names of shortcuts (`Ctrl+T`)
+stay English, as written in the `keybindings` file.
+
+### Numbers and dates of the language: ICU4X
+
+Numbers and dates follow the conventions of the interface language through ICU4X 2.4
+(`icu_decimal`, `icu_datetime`, `icu_locale`), with its compiled data: the locale is
+parsed from `Lang::tag()`. Each bundle gets a `FluentBundle::set_formatter` hook that
+writes every `FluentValue::Number` with an `icu_decimal::DecimalFormatter`, built once per
+bundle by its `intl-memoizer`, while the plural still selects on the raw number
+(`1,234 lines hidden`, `1 234 lignes masquées`). Outside Fluent, `i18n::format_number`
+and `i18n::parse_number` write and read the number fields of the settings
+(`SettingsModel::set_lang`): a typed number takes the decimal separator of the language
+or a point, and the group separator of the language is ignored (any space when it is a
+space); a point that groups digits in the language stays a group separator. The file
+always keeps the point. The separators are read from the formatting of a seven-digit
+number, since `DecimalFormatter` does not expose its symbols. Durations
+(`notifications::format_duration`) are Fluent messages, so their numbers and units
+follow the language. `i18n::format_datetime` writes a Gregorian date and time
+(`FixedCalendarDateTimeFormatter`, medium date with hours and minutes), with no caller
+yet: fixing the calendar and the field set leaves the data of the others out of the
+binary. `icu_provider`'s `sync` feature makes the formatters `Sync`, as the bundles must
+be. ICU4X was chosen over hand-written separators per language: CLDR data covers every
+language added later, and Fluent's own `NUMBER` has no locale formatting in Rust. The
+release binary grows by about 120 KB (36.98 MB to 37.10 MB).
 
 ### Command palette: `nucleo-matcher` and a recent actions file
 

@@ -57,7 +57,9 @@ uncomment the line below.
   notification: [configuration](docs/en/configuration.md).
 - **Eight built-in themes**, your own theme files, a theme editor, and themes that follow
   the system light/dark mode: [themes](docs/en/themes.md).
-- **Interface in English and French**, following the system language:
+- **Interface in English and French**, with their British and Canadian variants, and in
+  Spanish, German and Italian (translated by AI, not reviewed yet), following the system
+  language and region, numbers, configuration errors and settings lists included:
   [language setting](docs/en/configuration.md#general).
 
 ## Comparison

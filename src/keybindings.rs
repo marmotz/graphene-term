@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
-use crate::i18n::Direction;
+use crate::i18n::{self, ConfigMsg, Direction, Lang, Msg, ValueError};
 use crate::input::Action;
 
 /// Action name that removes a shortcut, so its key goes to the shell.
@@ -174,7 +174,7 @@ impl Shortcut {
     }
 
     /// Parses a shortcut written as in the configuration file (`Ctrl+Shift+C`).
-    pub fn parse(text: &str) -> Result<Shortcut, String> {
+    pub fn parse(text: &str) -> Result<Shortcut, ValueError> {
         // `+` is both the separator and a key: `Ctrl++`, `+`.
         let (mods_text, key_text) = if text == "+" {
             ("", "+")
@@ -191,20 +191,28 @@ impl Shortcut {
                     "shift" => ModifiersState::SHIFT,
                     "alt" => ModifiersState::ALT,
                     "super" => ModifiersState::SUPER,
-                    _ => return Err(format!("unknown modifier \"{part}\" in \"{text}\"")),
+                    _ => {
+                        return Err(ValueError::UnknownModifier {
+                            modifier: part.to_owned(),
+                            shortcut: text.to_owned(),
+                        });
+                    }
                 };
             }
         }
         let mut chars = key_text.chars();
         let key = match (chars.next(), chars.next()) {
-            (None, _) => return Err(format!("missing key in \"{text}\"")),
+            (None, _) => return Err(ValueError::MissingKey(text.to_owned())),
             (Some(' '), None) => KeyId::Named(NamedKey::Space),
             (Some(c), None) => return Ok(Shortcut::character(c, mods)),
             _ => NAMED_KEYS
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case(key_text))
                 .map(|&(_, key)| KeyId::Named(key))
-                .ok_or_else(|| format!("unknown key \"{key_text}\" in \"{text}\""))?,
+                .ok_or_else(|| ValueError::UnknownKeyName {
+                    key: key_text.to_owned(),
+                    shortcut: text.to_owned(),
+                })?,
         };
         Ok(Shortcut { key, mods })
     }
@@ -317,12 +325,13 @@ pub fn default_action(shortcut: Shortcut) -> Option<Action> {
 }
 
 /// Parses one `"keys" = "action"` entry of the configuration; `None` for `"none"`.
-pub fn parse_binding(keys: &str, action: &str) -> Result<(Shortcut, Option<Action>), String> {
+pub fn parse_binding(keys: &str, action: &str) -> Result<(Shortcut, Option<Action>), ValueError> {
     let shortcut = Shortcut::parse(keys)?;
     if action == NONE_ACTION {
         return Ok((shortcut, None));
     }
-    let action = Action::from_id(action).ok_or_else(|| format!("unknown action \"{action}\""))?;
+    let action =
+        Action::from_id(action).ok_or_else(|| ValueError::UnknownAction(action.to_owned()))?;
     Ok((shortcut, Some(action)))
 }
 
@@ -362,7 +371,16 @@ impl Keybindings {
                 Ok((shortcut, None)) => {
                     actions.remove(&shortcut);
                 }
-                Err(message) => log::warn!("keybinding \"{keys}\" skipped: {message}"),
+                Err(reason) => log::warn!(
+                    "keybinding \"{keys}\" skipped: {}",
+                    i18n::text(
+                        Lang::EnUs,
+                        &Msg::Config(ConfigMsg::InvalidValue {
+                            path: crate::config::key_path(&["keybindings", keys]),
+                            reason,
+                        })
+                    )
+                ),
             }
         }
         configured.append(&mut order);
@@ -982,14 +1000,20 @@ mod tests {
         assert_eq!(parse("Ctrl+é").as_deref(), Ok("Ctrl+É"));
         assert_eq!(
             parse("Ctrl+Hyper+C"),
-            Err("unknown modifier \"Hyper\" in \"Ctrl+Hyper+C\"".to_owned())
+            Err(ValueError::UnknownModifier {
+                modifier: "Hyper".into(),
+                shortcut: "Ctrl+Hyper+C".into(),
+            })
         );
         assert_eq!(
             parse("Ctrl+PgUp"),
-            Err("unknown key \"PgUp\" in \"Ctrl+PgUp\"".to_owned())
+            Err(ValueError::UnknownKeyName {
+                key: "PgUp".into(),
+                shortcut: "Ctrl+PgUp".into(),
+            })
         );
-        assert_eq!(parse("Ctrl+"), Err("missing key in \"Ctrl+\"".to_owned()));
-        assert_eq!(parse(""), Err("missing key in \"\"".to_owned()));
+        assert_eq!(parse("Ctrl+"), Err(ValueError::MissingKey("Ctrl+".into())));
+        assert_eq!(parse(""), Err(ValueError::MissingKey(String::new())));
         assert!(parse("Ctrl++C").is_err());
     }
 
@@ -1157,7 +1181,7 @@ mod tests {
         assert_eq!(parse_binding("Ctrl+T", "none").map(|(_, a)| a), Ok(None));
         assert_eq!(
             parse_binding("Ctrl+T", "not_an_action"),
-            Err("unknown action \"not_an_action\"".to_owned())
+            Err(ValueError::UnknownAction("not_an_action".into()))
         );
         assert!(parse_binding("Hyper+T", "copy").is_err());
     }

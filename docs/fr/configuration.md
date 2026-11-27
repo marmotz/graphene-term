@@ -73,6 +73,11 @@ décrit chaque problème (cliquez dessus pour le masquer) :
 - un paramètre inconnu est ignoré ;
 - une erreur de syntaxe TOML fait ignorer tout le fichier jusqu'à sa correction.
 
+Le bandeau et l'onglet Paramètres écrivent ces erreurs dans la langue de l'interface
+(`language`). Le détail d'une erreur de syntaxe TOML et le texte d'une erreur du système
+(un fichier illisible ou impossible à écrire) restent en anglais, après un préfixe
+traduit.
+
 ## Onglet des paramètres
 
 Les paramètres sont le premier onglet de la fenêtre, l'icône de réglages au début de la
@@ -89,6 +94,13 @@ une modification à la main.
 - **Raccourcis clavier** : liste chaque action avec ses raccourcis. Cliquez sur **+**
   après les raccourcis d'une action puis appuyez sur le nouveau pour l'ajouter (`Échap`
   annule), ou supprimez-en un.
+- Les nombres s'affichent au format de la langue de l'interface (`1,280` en anglais,
+  `1 280` en français). Saisissez-les avec son séparateur décimal ou un point ; les
+  séparateurs de milliers sont ignorés, et le fichier garde toujours le point.
+- Les listes affichent leurs valeurs par leur nom dans la langue de l'interface
+  (**Barre** pour `beam`, **Tous les 2 jours** pour `2d`) ; le fichier garde la valeur.
+  Les langues sont nommées dans leur propre langue (**English (UK)**), quelle que soit
+  la langue de l'interface.
 - Les problèmes du fichier s'affichent sous le paramètre concerné ; les paramètres
   inconnus sont listés en haut.
 - Tant qu'un fichier contient une erreur de syntaxe, l'onglet l'affiche et verrouille
@@ -124,7 +136,7 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 
 | Paramètre  | Défaut   | Valeurs                                                                |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en"`, `"fr"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"auto"` suit la langue du système : français quand elle est française, anglais sinon. |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`, `"es"`, `"de"`, `"it"` : langue de l'interface (menus, palette, paramètres, bandeaux). `"en"` reste accepté pour `"en-US"`, et la casse est ignorée. `"auto"` suit la langue et la région du système : `fr_CA` donne le français (Canada), `fr_BE` le français, `en_GB` l'anglais (Royaume-Uni), `es_*`, `de_*` et `it_*` l'espagnol, l'allemand et l'italien quelle que soit la région (`es_MX` donne l'espagnol), toute autre langue l'anglais (États-Unis). Les textes espagnols, allemands et italiens sont traduits par IA et pas encore relus : voir [Traduire Graphene](../../i18n/CONTRIBUTING.md) (en anglais) pour en corriger un. Une variante régionale affiche le texte de sa langue de base là où elle n'a pas le sien. Les nombres et les durées suivent aussi la langue (`1,280` en anglais, `1 280` en français), tout comme les erreurs de configuration. |
 
 `language` se place en haut du fichier, avant toute section.
 

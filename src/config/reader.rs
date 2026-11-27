@@ -24,21 +24,20 @@ impl Reader<'_> {
         key: &str,
         whole_section: bool,
         span: Option<Range<usize>>,
-        message: String,
     ) {
         let path = section.map_or_else(|| key.to_owned(), |section| format!("{section}.{key}"));
         let segments: Vec<&str> = section.into_iter().chain([key]).collect();
         self.unknown_keys.push(UnknownConfigKey {
             section: section.map(str::to_owned),
             key: key.to_owned(),
-            path,
+            path: path.clone(),
             whole_section,
         });
         self.error(
             span,
             Some(key_path(&segments)),
             ConfigErrorKind::UnknownKey,
-            message,
+            ConfigMsg::UnknownKey(path),
         );
     }
 
@@ -47,7 +46,7 @@ impl Reader<'_> {
         span: Option<Range<usize>>,
         key: Option<String>,
         kind: ConfigErrorKind,
-        message: String,
+        detail: ConfigMsg,
     ) {
         let line = span.map(|span| {
             let end = span.start.min(self.text.len());
@@ -62,7 +61,7 @@ impl Reader<'_> {
             line,
             key,
             kind,
-            message,
+            detail: Box::new(detail),
         });
     }
 
@@ -79,31 +78,38 @@ impl Reader<'_> {
     ) {
         let checked = match T::deserialize(ValueDeserializer::from(value.clone())) {
             Ok(raw) => check(raw),
-            Err(error) => Checked::Invalid(error.message().trim_end().to_owned()),
+            Err(error) => {
+                Checked::Invalid(ValueError::Detail(error.message().trim_end().to_owned()))
+            }
         };
         match checked {
             Checked::Valid(v) => *target = v,
-            Checked::Clamped(v, message) => {
+            Checked::Clamped(v, clamp) => {
                 self.error(
                     Some(value.span()),
                     Some(key_path(key)),
                     ConfigErrorKind::InvalidValue,
-                    format!("`{path}`: {message}"),
+                    clamp.at(path),
                 );
                 *target = v;
             }
-            Checked::Invalid(message) => {
+            Checked::Invalid(reason) => {
                 self.error(
                     Some(value.span()),
                     Some(key_path(key)),
                     ConfigErrorKind::InvalidValue,
-                    format!("invalid value for `{path}`: {message}"),
+                    ConfigMsg::InvalidValue {
+                        path: path.to_owned(),
+                        reason,
+                    },
                 );
                 *target = previous.clone();
             }
         }
     }
 
+    // One line per key, as a table: rustfmt would spread each over several.
+    #[rustfmt::skip]
     pub(super) fn read_section_key(
         &mut self,
         section: &str,
@@ -123,19 +129,19 @@ impl Reader<'_> {
             }),
             ("font", "size") => self.set(value, key_segments, path, &mut config.font.size, &previous.font.size, |size: f32| {
                 if !size.is_finite() {
-                    Checked::Invalid("not a number".to_owned())
+                    Checked::Invalid(ValueError::NotANumber)
                 } else if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&size) {
                     Checked::Valid(size)
                 } else {
                     let clamped = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-                    Checked::Clamped(clamped, format!("{size} is out of {MIN_FONT_SIZE}..={MAX_FONT_SIZE}, using {clamped}"))
+                    Checked::Clamped(clamped, Clamp::out_of_range(number(size), number(MIN_FONT_SIZE), number(MAX_FONT_SIZE), number(clamped)))
                 }
             }),
             ("font", "ligatures") => self.set(value, key_segments, path, &mut config.font.ligatures, &previous.font.ligatures, Checked::Valid),
             ("font", "features") => self.set(value, key_segments, path, &mut config.font.features, &previous.font.features, |features: String| {
                 match FontFeatureList::parse(&features) {
                     Ok(features) => Checked::Valid(features),
-                    Err(message) => Checked::Invalid(message),
+                    Err(reason) => Checked::Invalid(reason),
                 }
             }),
             ("window", "startup_mode") => self.set(value, key_segments, path, &mut config.window.startup_mode, &previous.window.startup_mode, Checked::Valid),
@@ -145,26 +151,26 @@ impl Reader<'_> {
                 if padding.is_finite() && padding >= 0.0 {
                     Checked::Valid(padding)
                 } else {
-                    Checked::Invalid("must be a non-negative number".to_owned())
+                    Checked::Invalid(ValueError::NotNegative)
                 }
             }),
             ("window", "progress") => self.set(value, key_segments, path, &mut config.window.progress, &previous.window.progress, Checked::Valid),
             ("window", "restore_session") => self.set(value, key_segments, path, &mut config.window.restore_session, &previous.window.restore_session, Checked::Valid),
             ("window", "background_opacity") => self.set(value, key_segments, path, &mut config.window.background_opacity, &previous.window.background_opacity, |opacity: f32| {
                 if !opacity.is_finite() {
-                    Checked::Invalid("not a number".to_owned())
+                    Checked::Invalid(ValueError::NotANumber)
                 } else if (0.0..=1.0).contains(&opacity) {
                     Checked::Valid(opacity)
                 } else {
                     let clamped = opacity.clamp(0.0, 1.0);
-                    Checked::Clamped(clamped, format!("{opacity} is out of 0.0..=1.0, using {clamped}"))
+                    Checked::Clamped(clamped, Clamp::out_of_range(number(opacity), 0.0, 1.0, number(clamped)))
                 }
             }),
             ("scrollback", "lines") => self.set(value, key_segments, path, &mut config.scrollback_lines, &previous.scrollback_lines, |lines: usize| {
                 if lines <= MAX_SCROLLBACK_LINES {
                     Checked::Valid(lines)
                 } else {
-                    Checked::Clamped(MAX_SCROLLBACK_LINES, format!("{lines} is above the maximum, using {MAX_SCROLLBACK_LINES}"))
+                    Checked::Clamped(MAX_SCROLLBACK_LINES, Clamp::AboveMaximum { value: lines as f64, max: MAX_SCROLLBACK_LINES as f64 })
                 }
             }),
             ("cursor", "shape") => self.set(value, key_segments, path, &mut config.cursor.shape, &previous.cursor.shape, Checked::Valid),
@@ -184,7 +190,7 @@ impl Reader<'_> {
                     Some(interval) => Checked::Valid(interval),
                     None => {
                         let names: Vec<_> = UpdateInterval::VALUES.iter().map(|(name, _)| format!("\"{name}\"")).collect();
-                        Checked::Clamped(UpdateInterval::Auto, format!("invalid value \"{interval}\", expected one of {}; using \"auto\"", names.join(", ")))
+                        Checked::Clamped(UpdateInterval::Auto, Clamp::UnknownInterval { value: interval, expected: names.join(", ") })
                     }
                 }
             }),
@@ -194,7 +200,7 @@ impl Reader<'_> {
                 if seconds >= 1 {
                     Checked::Valid(seconds)
                 } else {
-                    Checked::Invalid("must be at least 1".to_owned())
+                    Checked::Invalid(ValueError::AtLeast(1.0))
                 }
             }),
             ("notifications", "bell") => self.set(value, key_segments, path, &mut config.notifications.bell, &previous.notifications.bell, Checked::Valid),
@@ -205,7 +211,7 @@ impl Reader<'_> {
                 }
                 match keybindings::Shortcut::parse(&hotkey) {
                     Ok(_) => Checked::Valid(hotkey),
-                    Err(message) => Checked::Invalid(message),
+                    Err(reason) => Checked::Invalid(reason),
                 }
             }),
             ("quick_terminal", "edge") => self.set(value, key_segments, path, &mut config.quick_terminal.edge, &previous.quick_terminal.edge, Checked::Valid),
@@ -214,20 +220,20 @@ impl Reader<'_> {
                     Checked::Valid(size)
                 } else {
                     let clamped = size.clamp(MIN_QUICK_TERMINAL_SIZE, MAX_QUICK_TERMINAL_SIZE);
-                    Checked::Clamped(clamped, format!("{size} is out of {MIN_QUICK_TERMINAL_SIZE}..={MAX_QUICK_TERMINAL_SIZE}, using {clamped}"))
+                    Checked::Clamped(clamped, Clamp::out_of_range(f64::from(size), f64::from(MIN_QUICK_TERMINAL_SIZE), f64::from(MAX_QUICK_TERMINAL_SIZE), f64::from(clamped)))
                 }
             }),
             ("quick_terminal", "screen") => self.set(value, key_segments, path, &mut config.quick_terminal.screen, &previous.quick_terminal.screen, |screen: String| {
                 match QuickTerminalScreen::parse(&screen) {
                     Ok(screen) => Checked::Valid(screen),
-                    Err(message) => Checked::Invalid(message),
+                    Err(reason) => Checked::Invalid(reason),
                 }
             }),
             ("quick_terminal", "animation_ms") => self.set(value, key_segments, path, &mut config.quick_terminal.animation_ms, &previous.quick_terminal.animation_ms, |ms: u32| {
                 if ms <= MAX_QUICK_TERMINAL_ANIMATION_MS {
                     Checked::Valid(ms)
                 } else {
-                    Checked::Clamped(MAX_QUICK_TERMINAL_ANIMATION_MS, format!("{ms} is above the maximum, using {MAX_QUICK_TERMINAL_ANIMATION_MS}"))
+                    Checked::Clamped(MAX_QUICK_TERMINAL_ANIMATION_MS, Clamp::AboveMaximum { value: f64::from(ms), max: f64::from(MAX_QUICK_TERMINAL_ANIMATION_MS) })
                 }
             }),
             ("quick_terminal", "hide_on_focus_loss") => self.set(value, key_segments, path, &mut config.quick_terminal.hide_on_focus_loss, &previous.quick_terminal.hide_on_focus_loss, Checked::Valid),
@@ -238,7 +244,7 @@ impl Reader<'_> {
                 self.set(value, key_segments, path, &mut action, &previous_action, |action: String| {
                     match keybindings::parse_binding(keys, &action) {
                         Ok(_) => Checked::Valid(Some(action)),
-                        Err(message) => Checked::Invalid(message),
+                        Err(reason) => Checked::Invalid(reason),
                     }
                 });
                 if let Some(action) = action {
@@ -250,7 +256,6 @@ impl Reader<'_> {
                 name,
                 matches!(value.get_ref(), DeValue::Table(_)),
                 Some(key.span()),
-                format!("unknown key `{path}`"),
             ),
         }
     }
@@ -260,17 +265,77 @@ impl Reader<'_> {
 pub(super) enum Checked<T> {
     Valid(T),
     /// Out of range: brought back into range, with an error.
-    Clamped(T, String),
+    Clamped(T, Clamp),
     /// Rejected: the previous value stays, with an error.
-    Invalid(String),
+    Invalid(ValueError),
+}
+
+/// How a value was brought back into range ([`Checked::Clamped`]).
+pub(super) enum Clamp {
+    OutOfRange {
+        value: f64,
+        min: f64,
+        max: f64,
+        used: f64,
+    },
+    AboveMaximum {
+        value: f64,
+        max: f64,
+    },
+    UnknownInterval {
+        value: String,
+        expected: String,
+    },
+}
+
+impl Clamp {
+    fn out_of_range(value: f64, min: f64, max: f64, used: f64) -> Self {
+        Self::OutOfRange {
+            value,
+            min,
+            max,
+            used,
+        }
+    }
+
+    /// The error of the key `path`.
+    fn at(self, path: &str) -> ConfigMsg {
+        let path = path.to_owned();
+        match self {
+            Self::OutOfRange {
+                value,
+                min,
+                max,
+                used,
+            } => ConfigMsg::OutOfRange {
+                path,
+                value,
+                min,
+                max,
+                used,
+            },
+            Self::AboveMaximum { value, max } => ConfigMsg::AboveMaximum { path, value, max },
+            Self::UnknownInterval { value, expected } => ConfigMsg::UnknownInterval {
+                path,
+                value,
+                expected,
+            },
+        }
+    }
+}
+
+/// `value` with the digits it is written with: `0.9_f32` is `0.9`, not the
+/// `0.8999999761581421` of its exact `f64`.
+fn number(value: f32) -> f64 {
+    value.to_string().parse().unwrap_or(f64::from(value))
 }
 
 impl<T> Checked<T> {
     pub(super) fn map<U>(self, f: impl FnOnce(T) -> U) -> Checked<U> {
         match self {
             Checked::Valid(v) => Checked::Valid(f(v)),
-            Checked::Clamped(v, message) => Checked::Clamped(f(v), message),
-            Checked::Invalid(message) => Checked::Invalid(message),
+            Checked::Clamped(v, clamp) => Checked::Clamped(f(v), clamp),
+            Checked::Invalid(reason) => Checked::Invalid(reason),
         }
     }
 }
@@ -279,13 +344,13 @@ pub(super) fn positive_size(size: u32) -> Checked<u32> {
     if size > 0 {
         Checked::Valid(size)
     } else {
-        Checked::Invalid("must be greater than 0".to_owned())
+        Checked::Invalid(ValueError::GreaterThanZero)
     }
 }
 
 pub(super) fn non_empty(name: String) -> Checked<String> {
     if name.is_empty() {
-        Checked::Invalid("must not be empty".to_owned())
+        Checked::Invalid(ValueError::NotEmpty)
     } else {
         Checked::Valid(name)
     }

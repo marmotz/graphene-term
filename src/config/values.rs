@@ -2,33 +2,81 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// Value of the `language` setting: a BCP 47 tag, case ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
     /// Follows `LANG`.
     #[default]
     Auto,
-    En,
+    EnUs,
+    EnGb,
     Fr,
+    FrCa,
+    Es,
+    De,
+    It,
 }
 
 impl Language {
     /// Accepted values, in the order shown to the user.
-    pub const VALUES: [(&'static str, Language); 3] = [
+    pub const VALUES: [(&'static str, Language); 8] = [
         ("auto", Language::Auto),
-        ("en", Language::En),
+        ("en-US", Language::EnUs),
+        ("en-GB", Language::EnGb),
         ("fr", Language::Fr),
+        ("fr-CA", Language::FrCa),
+        ("es", Language::Es),
+        ("de", Language::De),
+        ("it", Language::It),
     ];
+
+    /// Former value of `en-US`, still accepted so that existing files stay valid.
+    const ALIASES: [(&'static str, Language); 1] = [("en", Language::EnUs)];
+
+    /// Value named `name`, case ignored, aliases included.
+    fn from_name(name: &str) -> Option<Self> {
+        Self::VALUES
+            .iter()
+            .chain(&Self::ALIASES)
+            .find(|(value, _)| value.eq_ignore_ascii_case(name))
+            .map(|&(_, language)| language)
+    }
+}
+
+impl<'de> Deserialize<'de> for Language {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        const NAMES: [&str; Language::VALUES.len()] = {
+            let mut names = [""; Language::VALUES.len()];
+            let mut i = 0;
+            while i < names.len() {
+                names[i] = Language::VALUES[i].0;
+                i += 1;
+            }
+            names
+        };
+        let name = String::deserialize(deserializer)?;
+        Self::from_name(&name).ok_or_else(|| serde::de::Error::unknown_variant(&name, &NAMES))
+    }
 }
 
 impl Language {
     /// Language of the interface: the forced one, or `detected` (the locale's) for
     /// `auto`.
     pub fn resolve(self, detected: impl FnOnce() -> Lang) -> Lang {
+        self.lang().unwrap_or_else(detected)
+    }
+
+    /// The forced language; `None` for `auto`.
+    pub fn lang(self) -> Option<Lang> {
         match self {
-            Language::Auto => detected(),
-            Language::En => Lang::En,
-            Language::Fr => Lang::Fr,
+            Language::Auto => None,
+            Language::EnUs => Some(Lang::EnUs),
+            Language::EnGb => Some(Lang::EnGb),
+            Language::Fr => Some(Lang::Fr),
+            Language::FrCa => Some(Lang::FrCa),
+            Language::Es => Some(Lang::Es),
+            Language::De => Some(Lang::De),
+            Language::It => Some(Lang::It),
         }
     }
 }
@@ -122,17 +170,13 @@ impl FontFeatureList {
     /// Parses a list of features separated by spaces or commas: `tag` or `+tag` enables
     /// it, `-tag` disables it, `tag=N` sets the value `N`. A tag is 4 printable ASCII
     /// characters; the last occurrence of a tag wins. The error names the invalid item.
-    pub fn parse(text: &str) -> Result<Self, String> {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
         let mut features: Vec<(FeatureTag, u32)> = Vec::new();
         for item in text
             .split(|c: char| c.is_whitespace() || c == ',')
             .filter(|item| !item.is_empty())
         {
-            let invalid = || {
-                format!(
-                    "invalid feature \"{item}\", expected \"tag\", \"+tag\", \"-tag\" or \"tag=N\" with a tag of 4 ASCII characters"
-                )
-            };
+            let invalid = || ValueError::InvalidFeature(item.to_owned());
             let (tag, value) = match (item.strip_prefix('+'), item.strip_prefix('-')) {
                 (Some(tag), _) => (tag, 1),
                 (_, Some(tag)) => (tag, 0),
@@ -237,11 +281,9 @@ pub enum QuickTerminalScreen {
 
 impl QuickTerminalScreen {
     /// Reads a value of the file: `"active"`, `"primary"` or a non-empty screen name.
-    pub fn parse(value: &str) -> Result<Self, String> {
+    pub fn parse(value: &str) -> Result<Self, ValueError> {
         match value {
-            "" => Err(
-                "must not be empty, expected \"active\", \"primary\" or a screen name".to_owned(),
-            ),
+            "" => Err(ValueError::EmptyScreen),
             "active" => Ok(Self::Active),
             "primary" => Ok(Self::Primary),
             name => Ok(Self::Named(name.to_owned())),

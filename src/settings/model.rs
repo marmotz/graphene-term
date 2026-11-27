@@ -14,7 +14,9 @@ use crate::config::{
     MIN_QUICK_TERMINAL_SIZE, QuickTerminalEdge, QuickTerminalScreen, StartupMode, TabPosition,
     UpdateInterval,
 };
-use crate::i18n::{Msg, SettingsField as Field, SettingsSection as Section};
+use crate::i18n::{
+    self, ChoiceMsg, Lang, Msg, SettingsField as Field, SettingsSection as Section, UiText,
+};
 use crate::input::Action;
 use crate::keybindings::{self, Keybindings, NONE_ACTION, Shortcut};
 use crate::palette::Palette;
@@ -114,12 +116,12 @@ pub enum ThemeOp {
 }
 
 /// Why a typed value is not written.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InputError {
     NotANumber,
     NotAWholeNumber,
-    AtLeast(String),
-    AtMost(String),
+    AtLeast(f64),
+    AtMost(f64),
 }
 
 impl InputError {
@@ -127,8 +129,8 @@ impl InputError {
         match self {
             InputError::NotANumber => Msg::NotANumber,
             InputError::NotAWholeNumber => Msg::NotAWholeNumber,
-            InputError::AtLeast(min) => Msg::AtLeast(min.clone()),
-            InputError::AtMost(max) => Msg::AtMost(max.clone()),
+            InputError::AtLeast(min) => Msg::AtLeast(*min),
+            InputError::AtMost(max) => Msg::AtMost(*max),
         }
     }
 }
@@ -323,12 +325,14 @@ fn name_of<T: PartialEq + Copy>(values: &[(&'static str, T)], value: T) -> &'sta
         .map_or("", |(name, _)| name)
 }
 
-fn names<T>(values: &[(&'static str, T)]) -> Vec<Choice> {
+/// Entries of the `values` of an enum: the value written to the file, shown by its
+/// translated label.
+fn names<T: Copy + Into<ChoiceMsg>>(values: &[(&'static str, T)]) -> Vec<Choice> {
     values
         .iter()
-        .map(|(name, _)| Choice {
-            value: (*name).to_owned(),
-            label: None,
+        .map(|&(name, value)| Choice {
+            value: name.to_owned(),
+            label: Some(Msg::Choice(value.into())),
         })
         .collect()
 }
@@ -345,24 +349,22 @@ pub fn monospace_families(db: &fontdb::Database) -> Vec<String> {
     families
 }
 
-/// Parses a typed number of `range`.
-fn parse_number(text: &str, range: NumberRange) -> Result<Value, InputError> {
-    let number: f64 = text
-        .trim()
-        .parse()
-        .ok()
-        .filter(|n: &f64| n.is_finite())
+/// Parses a number of `range` typed in `lang`: its decimal separator or a point, its
+/// group separator ignored ([`i18n::parse_number`]).
+fn parse_number(text: &str, range: NumberRange, lang: Lang) -> Result<Value, InputError> {
+    let number = i18n::parse_number(lang, text)
+        .filter(|n| n.is_finite())
         .ok_or(InputError::NotANumber)?;
     if range.integer && number.fract() != 0.0 {
         return Err(InputError::NotAWholeNumber);
     }
     if number < range.min {
-        return Err(InputError::AtLeast(range.min.to_string()));
+        return Err(InputError::AtLeast(range.min));
     }
     if let Some(max) = range.max
         && number > max
     {
-        return Err(InputError::AtMost(max.to_string()));
+        return Err(InputError::AtMost(max));
     }
     Ok(if range.integer {
         Value::Integer(number as i64)
@@ -386,7 +388,7 @@ pub struct SettingsModel {
     config: Config,
     errors: LoadErrors,
     /// Error of the last write, cleared by the next write or reload.
-    write_error: Option<String>,
+    write_error: Option<ConfigError>,
     theme_choices: Vec<String>,
     font_families: Vec<String>,
     /// Names of the connected screens, offered by `quick_terminal.screen`.
@@ -405,6 +407,8 @@ pub struct SettingsModel {
     edited_is_built_in: bool,
     /// Whether the process runs under Wayland, where the quick terminal is unavailable.
     wayland: bool,
+    /// Language the number fields are written and typed in.
+    lang: Lang,
 }
 
 impl SettingsModel {
@@ -432,6 +436,7 @@ impl SettingsModel {
             edited_palette: theme::default_palette().clone(),
             edited_is_built_in: true,
             wayland: false,
+            lang: Lang::default(),
         };
         model.reload_edited_theme();
         model
@@ -556,7 +561,7 @@ impl SettingsModel {
 
     /// Records a failed write.
     pub fn write_failed(&mut self, error: &ConfigError) {
-        self.write_error = Some(error.to_string());
+        self.write_error = Some(error.clone());
     }
 
     /// The user and built-in themes.
@@ -622,6 +627,11 @@ impl SettingsModel {
         })
     }
 
+    /// Sets the language the number fields are written and typed in.
+    pub fn set_lang(&mut self, lang: Lang) {
+        self.lang = lang;
+    }
+
     /// Records whether the process runs under Wayland.
     pub fn set_wayland(&mut self, wayland: bool) {
         self.wayland = wayland;
@@ -651,8 +661,9 @@ impl SettingsModel {
             || !section_fields(Section::QuickTerminal).contains(&field)
     }
 
-    pub fn write_error(&self) -> Option<&str> {
-        self.write_error.as_deref()
+    /// The last failed write, in the language of the model.
+    pub fn write_error(&self) -> Option<UiText> {
+        self.write_error.as_ref().map(|error| error.text(self.lang))
     }
 
     /// Whether `field` is shown: the theme name without the appearance toggle, the
@@ -715,12 +726,17 @@ impl SettingsModel {
         }
     }
 
-    /// Text of a choice, text or number field.
+    /// Text of a choice, text or number field. A number is written in the language
+    /// of the model ([`SettingsModel::set_lang`]); the file keeps the point.
     pub fn text(&self, field: Field) -> String {
         match self.value(field) {
             Value::Text(text) => text,
-            Value::Integer(n) => n.to_string(),
-            Value::Float(n) => (n as f32).to_string(),
+            Value::Integer(n) => i18n::format_number(self.lang, n as f64),
+            // At the precision the configuration keeps it, in its shortest digits.
+            Value::Float(n) => {
+                let shown = (n as f32).to_string().parse().unwrap_or(n);
+                i18n::format_number(self.lang, shown)
+            }
             Value::Bool(_) | Value::List(_) => String::new(),
         }
     }
@@ -805,7 +821,7 @@ impl SettingsModel {
             (Widget::Choice, Input::Choice(value))
             | (Widget::Text | Widget::Shortcut, Input::Text(value)) => Value::Text(value),
             (Widget::Toggle, Input::Toggle(on)) => Value::Bool(on),
-            (Widget::Number(range), Input::Text(text)) => parse_number(&text, range)?,
+            (Widget::Number(range), Input::Text(text)) => parse_number(&text, range, self.lang)?,
             (Widget::Slider { min, max, step }, Input::Number(number)) => {
                 Value::Float(((number / step).round() * step).clamp(min, max))
             }
@@ -841,32 +857,36 @@ impl SettingsModel {
         }
     }
 
-    /// Messages of the configuration errors of `field`.
-    pub fn field_errors(&self, field: Field) -> Vec<&str> {
+    /// Messages of the configuration errors of `field`, in the language of the model.
+    pub fn field_errors(&self, field: Field) -> Vec<UiText> {
         let Some(path) = path(field).map(config::key_path) else {
             return Vec::new();
         };
         self.value_errors()
             .filter(|error| error.key.as_deref() == Some(path.as_str()))
-            .map(|error| error.message.as_str())
+            .map(|error| error.message(self.lang))
             .collect()
     }
 
     /// Messages of the configuration errors of `section` tied to no field (a section
     /// that is not a table, a keybinding).
-    pub fn section_errors(&self, section: Section) -> Vec<&str> {
+    pub fn section_errors(&self, section: Section) -> Vec<UiText> {
         self.value_errors()
             .filter(|error| {
                 let key = error.key.as_deref().unwrap_or_default();
                 field_of_key(key).is_none() && section_of_key(key) == Some(section)
             })
-            .map(|error| error.message.as_str())
+            .map(|error| error.message(self.lang))
             .collect()
     }
 
     /// Errors of the theme file and theme name, shown in the Theme section.
-    pub fn theme_errors(&self) -> Vec<String> {
-        self.errors.theme.iter().map(ToString::to_string).collect()
+    pub fn theme_errors(&self) -> Vec<UiText> {
+        self.errors
+            .theme
+            .iter()
+            .map(|error| error.text(self.lang))
+            .collect()
     }
 
     /// Unknown keys of the file, with their line.
@@ -880,13 +900,13 @@ impl SettingsModel {
     }
 
     /// Value errors tied to neither a field nor a section.
-    pub fn other_errors(&self) -> Vec<String> {
+    pub fn other_errors(&self) -> Vec<UiText> {
         self.value_errors()
             .filter(|error| {
                 let key = error.key.as_deref().unwrap_or_default();
                 field_of_key(key).is_none() && section_of_key(key).is_none()
             })
-            .map(ToString::to_string)
+            .map(|error| error.text(self.lang))
             .collect()
     }
 
@@ -1020,6 +1040,7 @@ mod tests {
 
     use super::*;
     use crate::config::{ConfigError, ConfigErrorKind};
+    use crate::i18n::{ConfigMsg, ValueError};
 
     fn file() -> PathBuf {
         PathBuf::from("/home/user/.config/graphene/config.toml")
@@ -1126,7 +1147,7 @@ bell = true
             (Field::FontFamily, "Fira Code"),
             (Field::FontSize, "16.5"),
             (Field::StartupMode, "maximized"),
-            (Field::WindowWidth, "1200"),
+            (Field::WindowWidth, "1,200"),
             (Field::WindowHeight, "700"),
             (Field::Padding, "4"),
             (Field::ScrollbackLines, "500"),
@@ -1268,7 +1289,7 @@ bell = true
                 Field::NotificationsCommandThreshold,
                 Input::Text("0".into())
             ),
-            Err(InputError::AtLeast("1".into()))
+            Err(InputError::AtLeast(1.0))
         );
         assert_eq!(
             m.edit(
@@ -1395,11 +1416,11 @@ bell = true
         );
         assert_eq!(
             m.edit(Field::QuickTerminalSize, Input::Text("9".into())),
-            Err(InputError::AtLeast("10".into()))
+            Err(InputError::AtLeast(10.0))
         );
         assert_eq!(
             m.edit(Field::QuickTerminalSize, Input::Text("101".into())),
-            Err(InputError::AtMost("100".into()))
+            Err(InputError::AtMost(100.0))
         );
         assert_eq!(
             m.edit(Field::QuickTerminalAnimation, Input::Text("0".into())),
@@ -1407,7 +1428,7 @@ bell = true
         );
         assert_eq!(
             m.edit(Field::QuickTerminalAnimation, Input::Text("1001".into())),
-            Err(InputError::AtMost("1000".into()))
+            Err(InputError::AtMost(1000.0))
         );
     }
 
@@ -1561,23 +1582,23 @@ bell = true
     fn numbers_out_of_range_are_rejected() {
         let m = model("");
         let cases = [
-            (Field::FontSize, "5.5", InputError::AtLeast("6".into())),
-            (Field::FontSize, "73", InputError::AtMost("72".into())),
+            (Field::FontSize, "5.5", InputError::AtLeast(6.0)),
+            (Field::FontSize, "73", InputError::AtMost(72.0)),
             (Field::FontSize, "big", InputError::NotANumber),
             (Field::FontSize, "NaN", InputError::NotANumber),
             (Field::FontSize, "", InputError::NotANumber),
-            (Field::WindowWidth, "0", InputError::AtLeast("1".into())),
+            (Field::WindowWidth, "0", InputError::AtLeast(1.0)),
             (Field::WindowHeight, "600.5", InputError::NotAWholeNumber),
             (
                 Field::WindowWidth,
                 "5000000000",
-                InputError::AtMost(u32::MAX.to_string()),
+                InputError::AtMost(f64::from(u32::MAX)),
             ),
-            (Field::Padding, "-1", InputError::AtLeast("0".into())),
+            (Field::Padding, "-1", InputError::AtLeast(0.0)),
             (
                 Field::ScrollbackLines,
                 "100001",
-                InputError::AtMost("100000".into()),
+                InputError::AtMost(100000.0),
             ),
         ];
         for (field, input, error) in cases {
@@ -1587,6 +1608,31 @@ bell = true
                 "{field:?} {input}"
             );
         }
+    }
+
+    #[test]
+    fn number_fields_are_written_and_typed_in_the_language_of_the_model() {
+        let mut m = model("[font]\nsize = 16.5\n[window]\nwidth = 1280");
+        m.set_lang(Lang::Fr);
+        assert_eq!(m.text(Field::FontSize), "16,5");
+        assert_eq!(m.text(Field::WindowWidth), "1\u{202f}280");
+        // The decimal separator of the language or a point; the file keeps the point.
+        for typed in ["13,5", "13.5"] {
+            assert_eq!(
+                m.edit(Field::FontSize, Input::Text(typed.into())),
+                Ok(set(&["font", "size"], Value::Float(13.5))),
+                "{typed}"
+            );
+        }
+        // The shown value reads back unchanged.
+        assert_eq!(
+            m.edit(Field::WindowWidth, Input::Text(m.text(Field::WindowWidth))),
+            Ok(vec![])
+        );
+        assert_eq!(
+            m.edit(Field::WindowWidth, Input::Text("1 920".into())),
+            Ok(set(&["window", "width"], Value::Integer(1920)))
+        );
     }
 
     #[test]
@@ -1630,7 +1676,10 @@ bell = true
             line: Some(3),
             key: Some("colors.foreground".into()),
             kind: ConfigErrorKind::InvalidValue,
-            message: "invalid color".into(),
+            detail: Box::new(ConfigMsg::InvalidValue {
+                path: "colors.foreground".into(),
+                reason: ValueError::NotAColor("red".into()),
+            }),
         };
         let m = SettingsModel::new(
             &Config::default(),
@@ -1641,7 +1690,12 @@ bell = true
             None,
             Appearance::Dark,
         );
-        assert_eq!(m.theme_errors(), ["mine.toml:3: invalid color"]);
+        assert_eq!(
+            m.theme_errors(),
+            [
+                "mine.toml:3: invalid value for `colors.foreground`: `red` is not a \"#rrggbb\" color"
+            ]
+        );
         assert!(m.other_errors().is_empty());
         assert!(m.section_errors(Section::Theme).is_empty());
     }
@@ -1683,7 +1737,10 @@ bell = true
         let m = SettingsModel::new(
             &Config::default(),
             &LoadErrors {
-                config: vec![ConfigError::read(file(), "denied".into())],
+                config: vec![ConfigError::read(
+                    file(),
+                    ConfigMsg::CannotRead("denied".into()),
+                )],
                 theme: Vec::new(),
             },
             None,
@@ -1697,7 +1754,7 @@ bell = true
     fn a_file_locks_only_its_own_sections() {
         let keybindings_error = ConfigError::read(
             PathBuf::from("/home/user/.config/graphene/keybindings.toml"),
-            "denied".into(),
+            ConfigMsg::CannotRead("denied".into()),
         );
         let m = SettingsModel::new(
             &Config::default(),
@@ -1715,7 +1772,10 @@ bell = true
         let m = SettingsModel::new(
             &Config::default(),
             &LoadErrors {
-                config: vec![ConfigError::read(file(), "denied".into())],
+                config: vec![ConfigError::read(
+                    file(),
+                    ConfigMsg::CannotRead("denied".into()),
+                )],
                 theme: Vec::new(),
             },
             None,
@@ -1822,10 +1882,63 @@ bell = true
             Some("gone")
         );
         assert_eq!(values(Field::CursorShape), ["block", "beam", "underline"]);
-        assert_eq!(values(Field::Language), ["auto", "en", "fr"]);
+        assert_eq!(
+            values(Field::Language),
+            ["auto", "en-US", "en-GB", "fr", "fr-CA", "es", "de", "it"]
+        );
         assert_eq!(
             values(Field::UpdatesInterval).len(),
             UpdateInterval::VALUES.len()
+        );
+    }
+
+    #[test]
+    fn enum_choices_write_their_value_and_show_a_translated_label() {
+        let m = model("[cursor]\nshape = \"beam\"\n");
+        let choices = m.choices(Field::CursorShape);
+        let shown = |lang| -> Vec<UiText> {
+            choices
+                .iter()
+                .map(|choice| i18n::text(lang, choice.label.as_ref().expect("label")))
+                .collect()
+        };
+        assert_eq!(shown(Lang::EnUs), ["Block", "Beam", "Underline"]);
+        assert_eq!(shown(Lang::Fr), ["Bloc", "Barre", "Soulignement"]);
+        // The value written to the file does not change.
+        assert_eq!(m.text(Field::CursorShape), "beam");
+        assert_eq!(
+            m.edit(Field::CursorShape, Input::Choice("underline".into())),
+            Ok(set(&["cursor", "shape"], text("underline")))
+        );
+        for field in [
+            Field::Language,
+            Field::StartupMode,
+            Field::TabPosition,
+            Field::UpdatesInterval,
+            Field::QuickTerminalEdge,
+        ] {
+            assert!(
+                m.choices(field).iter().all(|choice| choice.label.is_some()),
+                "{field:?}"
+            );
+        }
+        let languages: Vec<_> = m
+            .choices(Field::Language)
+            .iter()
+            .map(|choice| i18n::text(Lang::Fr, choice.label.as_ref().expect("label")))
+            .collect();
+        assert_eq!(
+            languages,
+            [
+                "Langue du système",
+                "English (US)",
+                "English (UK)",
+                "Français",
+                "Français (Canada)",
+                "Español",
+                "Deutsch",
+                "Italiano"
+            ]
         );
     }
 
@@ -1842,11 +1955,16 @@ bell = true
             line: None,
             key: None,
             kind: ConfigErrorKind::Write,
-            message: "cannot write the file: denied".into(),
+            detail: Box::new(ConfigMsg::CannotWrite("denied".into())),
         });
         assert_eq!(
-            m.write_error(),
+            m.write_error().as_deref(),
             Some("config.toml: cannot write the file: denied")
+        );
+        m.set_lang(Lang::Fr);
+        assert_eq!(
+            m.write_error().as_deref(),
+            Some("config.toml: impossible d'écrire le fichier : denied")
         );
         let (config, errors) = Config::parse("[font]\nsize = 20.0", m.config(), &file());
         m.written(config, errors);

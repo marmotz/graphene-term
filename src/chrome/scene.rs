@@ -14,6 +14,7 @@ use super::search_bar::SearchBarLayout;
 use super::tab_bar::TabBarLayout;
 use super::tooltip::TooltipLayout;
 use crate::easter_eggs::art::ArtLayout;
+use crate::i18n::UiText;
 use crate::layout::Rect;
 use crate::palette::UiColors;
 use crate::progress::{ProgressBar, ProgressColors};
@@ -141,7 +142,7 @@ fn draw_menu_rows(rows: &[MenuRow], colors: &UiColors, srgb_target: bool, ui: &m
         }
         if let Some(label) = &row.label {
             ui.overlay_texts.push(UiTextItem {
-                text: label.clone(),
+                text: label.to_string(),
                 x: row.text_x,
                 y: row.text_y,
                 color: if row.active_theme {
@@ -342,7 +343,7 @@ fn rename_tab(rename: &RenameTabLayout, colors: &UiColors, srgb_target: bool, ui
     }
     ui.overlay_rects.push(rect(rename.caret, text));
     ui.overlay_texts.push(UiTextItem {
-        text: rename.heading.clone(),
+        text: rename.heading.to_string(),
         x: rename.heading_x,
         y: rename.heading_y,
         color: color(colors.tab_inactive_text),
@@ -453,7 +454,7 @@ fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         (&dialog.message, dialog.message_y),
     ] {
         ui.overlay_texts.push(UiTextItem {
-            text: line.clone(),
+            text: line.to_string(),
             x: dialog.text_x,
             y,
             color: text,
@@ -469,7 +470,7 @@ fn dialog(dialog: &DialogLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
         };
         ui.overlay_rects.push(rect(button.rect, fill));
         ui.overlay_texts.push(UiTextItem {
-            text: button.label.clone(),
+            text: button.label.to_string(),
             x: button.label_x,
             y: dialog.label_y,
             color: label,
@@ -563,7 +564,7 @@ fn tabs(bar: &TabBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLay
         });
         // The glyph is about half the line height wide: centered in its square.
         ui.texts.push(UiTextItem {
-            text: CLOSE.to_owned(),
+            text: UiText::symbol(CLOSE).into(),
             x: (tab.close.x + tab.close.width / 4.0).round(),
             y: tab.title_y,
             color: text,
@@ -682,7 +683,7 @@ fn pane_bar(bar: &PaneBarLayout, colors: &UiColors, srgb_target: bool, ui: &mut 
     });
     // The glyph is about half the line height wide: centered in its square.
     ui.texts.push(UiTextItem {
-        text: CLOSE.to_owned(),
+        text: UiText::symbol(CLOSE).into(),
         x: (bar.close.x + bar.close.width / 4.0).round(),
         y: bar.title_y,
         color: text,
@@ -1577,7 +1578,7 @@ mod tests {
         };
         let dialog = DialogLayout::new(
             &confirm,
-            Lang::En,
+            Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             metrics,
             |t| t.chars().count() as f32 * 8.0,
@@ -1649,7 +1650,7 @@ mod tests {
         let draw = |rename: &RenameTab| {
             let layout = RenameTabLayout::new(
                 rename,
-                Lang::En,
+                Lang::EnUs,
                 area(0.0, 0.0, 1000.0, 600.0),
                 metrics,
                 |t| t.chars().count() as f32 * 8.0,
@@ -1696,11 +1697,11 @@ mod tests {
         };
         let entry = |label: &str, action, shortcut: Option<&str>| Entry {
             command: Command::Action(action),
-            label: label.to_owned(),
+            label: UiText::user(label),
             shortcut: shortcut.map(str::to_owned),
         };
         let mut palette = CommandPalette::new(
-            Lang::En,
+            Lang::EnUs,
             vec![
                 entry("Split right", Action::SplitRight, Some("Ctrl+Shift+E")),
                 entry("Split down", Action::SplitDown, None),
@@ -1714,7 +1715,7 @@ mod tests {
         };
         let layout = PaletteLayout::new(
             &palette,
-            Lang::En,
+            Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             metrics,
             |t| t.chars().count() as f32 * 8.0,
@@ -1774,10 +1775,10 @@ mod tests {
     fn empty_palette_query_shows_its_hint_dimmed() {
         use crate::chrome::command_palette::{CommandPalette, PaletteLayout};
         use crate::i18n::Lang;
-        let palette = CommandPalette::new(Lang::En, Vec::new(), Vec::new());
+        let palette = CommandPalette::new(Lang::EnUs, Vec::new(), Vec::new());
         let layout = PaletteLayout::new(
             &palette,
-            Lang::En,
+            Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             UiMetrics {
                 line_height: 18.0,
@@ -1823,7 +1824,7 @@ mod tests {
         let mut menu = ContextMenu::new(
             (20.0, 20.0),
             vec![Item::Entry {
-                label: "Copy".into(),
+                label: UiText::user("Copy"),
                 shortcut: Some("Ctrl+C".into()),
                 enabled: true,
                 command: Command::Action(Action::Copy),
@@ -1947,14 +1948,14 @@ mod tests {
             caret: 4,
             selected: false,
             focused: true,
-            placeholder: "Search".to_owned(),
-            counter: if invalid { "Invalid regex" } else { "1/2" }.to_owned(),
+            placeholder: UiText::user("Search"),
+            counter: UiText::user(if invalid { "Invalid regex" } else { "1/2" }),
             invalid,
             case_sensitive: false,
             regex: true,
             whole_word: false,
-            zone: "All".to_owned(),
-            status: "Any".to_owned(),
+            zone: UiText::user("All"),
+            status: UiText::user("Any"),
             filters: false,
             zone_active: false,
             status_active: false,

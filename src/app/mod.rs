@@ -73,7 +73,7 @@ use crate::easter_eggs::{
 use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;
-use crate::i18n::{self, Exit, Lang, Msg};
+use crate::i18n::{self, ConfigMsg, Exit, Lang, Msg};
 use crate::input::{self, Action, Delivery};
 use crate::input_editor;
 use crate::keybindings::Keybindings;

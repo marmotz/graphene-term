@@ -143,6 +143,7 @@ impl SettingsTab {
         appearance: Appearance,
     ) {
         self.model.refresh(config, errors, appearance);
+        self.model.set_lang(lang);
         self.view.reset_inputs();
         self.model
             .set_theme_choices(theme::available(Some(&self.dir), &config.theme.unlocked));
@@ -257,7 +258,7 @@ impl SettingsTab {
                 self.model.edit_theme(&name);
             }
             if let Err(error) = result {
-                log::warn!("{error}");
+                log::warn!("{}", error.text(Lang::EnUs));
                 self.model.write_failed(&error);
             }
         }

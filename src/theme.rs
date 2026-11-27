@@ -14,6 +14,7 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
 use crate::config::{CONFIG_FILE, ConfigError, ConfigErrorKind};
+use crate::i18n::{ConfigMsg, ValueError};
 use crate::palette::{Palette, build_indexed};
 
 /// Theme used when the configured one cannot be found.
@@ -408,7 +409,7 @@ pub fn load(name: &str, config_dir: Option<&Path>) -> (Palette, Vec<ConfigError>
                     base.clone(),
                     vec![ConfigError::read(
                         file,
-                        format!("cannot read the theme: {error}"),
+                        ConfigMsg::CannotReadTheme(error.to_string()),
                     )],
                 );
             }
@@ -427,7 +428,10 @@ pub fn load(name: &str, config_dir: Option<&Path>) -> (Palette, Vec<ConfigError>
             line: None,
             key: None,
             kind: ConfigErrorKind::InvalidValue,
-            message: format!("unknown theme `{name}`, using `{DEFAULT_THEME}`"),
+            detail: Box::new(ConfigMsg::UnknownTheme {
+                name: name.to_owned(),
+                fallback: DEFAULT_THEME.to_owned(),
+            }),
         }],
     )
 }
@@ -447,7 +451,7 @@ pub fn parse(text: &str, base: &Palette, file: &Path) -> (Palette, Vec<ConfigErr
                 error.span(),
                 None,
                 ConfigErrorKind::Syntax,
-                error.message().trim_end().to_owned(),
+                ConfigMsg::Syntax(error.message().trim_end().to_owned()),
             );
             return (base.clone(), reader.errors);
         }
@@ -530,7 +534,7 @@ impl<'a> Reader<'a> {
         span: Option<Range<usize>>,
         key: Option<&str>,
         kind: ConfigErrorKind,
-        message: String,
+        detail: ConfigMsg,
     ) {
         let line = span.map(|span| {
             let end = span.start.min(self.text.len());
@@ -545,7 +549,7 @@ impl<'a> Reader<'a> {
             line,
             key: key.map(str::to_owned),
             kind,
-            message,
+            detail: Box::new(detail),
         });
     }
 
@@ -554,7 +558,7 @@ impl<'a> Reader<'a> {
             Some(key.span()),
             Some(path),
             ConfigErrorKind::UnknownKey,
-            format!("unknown key `{path}`"),
+            ConfigMsg::UnknownKey(path.to_owned()),
         );
     }
 
@@ -570,7 +574,7 @@ impl<'a> Reader<'a> {
                     Some(value.span()),
                     Some(path),
                     ConfigErrorKind::InvalidValue,
-                    format!("`{path}` must be a table"),
+                    ConfigMsg::MustBeTable(path.to_owned()),
                 );
                 None
             }
@@ -585,7 +589,10 @@ impl<'a> Reader<'a> {
                     Some(value.span()),
                     Some(path),
                     ConfigErrorKind::InvalidValue,
-                    format!("invalid value for `{path}`: expected a \"#rrggbb\" string"),
+                    ConfigMsg::InvalidValue {
+                        path: path.to_owned(),
+                        reason: ValueError::ColorNotString,
+                    },
                 );
                 None
             }
@@ -603,7 +610,10 @@ impl<'a> Reader<'a> {
                 Some(value.span()),
                 Some(path),
                 ConfigErrorKind::InvalidValue,
-                format!("invalid value for `{path}`: `{text}` is not a \"#rrggbb\" color"),
+                ConfigMsg::InvalidValue {
+                    path: path.to_owned(),
+                    reason: ValueError::NotAColor(text.to_owned()),
+                },
             ),
         }
     }
@@ -660,6 +670,7 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Lang;
     use crate::palette::UiColors;
 
     fn rgb(hex: u32) -> Rgb {
@@ -938,7 +949,10 @@ banner = "#000000"
         assert_eq!(p.foreground, night.foreground);
         assert_eq!(p.background, night.background);
         assert_eq!(p.selection_foreground, None);
-        let lines: Vec<_> = errors.iter().map(|e| (e.line, e.message.clone())).collect();
+        let lines: Vec<_> = errors
+            .iter()
+            .map(|e| (e.line, String::from(e.message(Lang::EnUs))))
+            .collect();
         assert_eq!(
             lines,
             vec![
@@ -994,7 +1008,7 @@ banner = "#000000"
     fn section_that_is_not_a_table_is_reported() {
         let (_, errors) = parse_on_default("colors = 1\n[ui]\n");
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].message, "`colors` must be a table");
+        assert_eq!(errors[0].message(Lang::EnUs), "`colors` must be a table");
     }
 
     #[test]
@@ -1185,7 +1199,7 @@ banner = "#000000"
             assert_eq!(errors.len(), 1, "{name}");
             assert_eq!(errors[0].file, dir.join(CONFIG_FILE));
             assert_eq!(
-                errors[0].message,
+                errors[0].message(Lang::EnUs),
                 format!("unknown theme `{name}`, using `graphene-night`")
             );
         }

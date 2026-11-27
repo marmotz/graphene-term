@@ -4,7 +4,7 @@ use winit::keyboard::{Key, NamedKey};
 
 use super::tab_bar::UiMetrics;
 use crate::block_actions::Part;
-use crate::i18n::{self, Lang, Msg};
+use crate::i18n::{self, Lang, Msg, UiText};
 use crate::input::Action;
 use crate::keybindings::Keybindings;
 use crate::layout::Rect;
@@ -33,13 +33,13 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Entry {
-        label: String,
+        label: UiText,
         shortcut: Option<String>,
         enabled: bool,
         command: Command,
     },
     Submenu {
-        label: String,
+        label: UiText,
         entries: Vec<Item>,
     },
     Separator,
@@ -77,7 +77,7 @@ fn entry(
     lang: Lang,
 ) -> Item {
     Item::Entry {
-        label: i18n::text(lang, &label).into_owned(),
+        label: i18n::text(lang, &label),
         shortcut,
         enabled,
         command,
@@ -102,7 +102,7 @@ fn action(
 
 fn themes(context: &MenuContext<'_>, lang: Lang) -> Item {
     Item::Submenu {
-        label: i18n::text(lang, &Msg::Themes).into_owned(),
+        label: i18n::text(lang, &Msg::Themes),
         entries: theme_pages(context.themes, context.theme_rows, lang),
     }
 }
@@ -111,7 +111,7 @@ fn themes(context: &MenuContext<'_>, lang: Lang) -> Item {
 /// row is a "More..." submenu holding the next ones, and so on.
 fn theme_pages(themes: &[String], rows: usize, lang: Lang) -> Vec<Item> {
     let entry = |theme: &String| Item::Entry {
-        label: theme.clone(),
+        label: UiText::user(theme.clone()),
         shortcut: None,
         enabled: true,
         command: Command::Theme(theme.clone()),
@@ -123,7 +123,7 @@ fn theme_pages(themes: &[String], rows: usize, lang: Lang) -> Vec<Item> {
     let (page, rest) = themes.split_at(rows - 1);
     let mut items = page.iter().map(entry).collect::<Vec<_>>();
     items.push(Item::Submenu {
-        label: i18n::text(lang, &Msg::MoreThemes).into_owned(),
+        label: i18n::text(lang, &Msg::MoreThemes),
         entries: theme_pages(rest, rows, lang),
     });
     items
@@ -562,7 +562,7 @@ fn move_selectable(items: &[Item], selected: Option<usize>, delta: isize) -> Opt
 pub struct MenuRow {
     pub rect: Rect,
     pub index: usize,
-    pub label: Option<String>,
+    pub label: Option<UiText>,
     pub text_x: f32,
     pub text_y: f32,
     pub max_width: f32,
@@ -886,7 +886,7 @@ mod tests {
     fn pane_menu_has_context_sensitive_block_zoom_and_close_entries() {
         let keys = Keybindings::default();
         let mut ctx = context();
-        let normal = pane_menu(&ctx, &keys, Lang::En);
+        let normal = pane_menu(&ctx, &keys, Lang::EnUs);
         assert!(!normal.iter().any(|item| matches!(
             item,
             Item::Entry {
@@ -909,7 +909,7 @@ mod tests {
         ctx.single_pane_tab = true;
         ctx.zoomed = true;
         ctx.only_tab = true;
-        let items = pane_menu(&ctx, &keys, Lang::En);
+        let items = pane_menu(&ctx, &keys, Lang::EnUs);
         assert!(matches!(
             entry_at(&items, "Copy block command"),
             Item::Entry { enabled: false, .. }
@@ -944,7 +944,7 @@ mod tests {
     fn tab_menu_keeps_clicked_index_and_respects_only_tab() {
         let mut ctx = context();
         ctx.only_tab = true;
-        let items = tab_menu(4, &ctx, &Keybindings::default(), Lang::En);
+        let items = tab_menu(4, &ctx, &Keybindings::default(), Lang::EnUs);
         assert!(matches!(
             entry_at(&items, "Close the tab"),
             Item::Entry {
@@ -967,7 +967,7 @@ mod tests {
     #[test]
     fn shortcut_labels_follow_rebinding() {
         let keys = Keybindings::new(&BTreeMap::from([("Ctrl+Shift+C".into(), "copy".into())]));
-        let items = pane_menu(&context(), &keys, Lang::En);
+        let items = pane_menu(&context(), &keys, Lang::EnUs);
         assert!(matches!(entry_at(&items, "Copy"), Item::Entry {
             shortcut: Some(shortcut),
             ..
@@ -978,14 +978,14 @@ mod tests {
     fn keyboard_navigation_skips_disabled_entries_and_separators() {
         let items = vec![
             Item::Entry {
-                label: "disabled".into(),
+                label: UiText::user("disabled"),
                 shortcut: None,
                 enabled: false,
                 command: Command::Action(Action::Copy),
             },
             Item::Separator,
             Item::Entry {
-                label: "enabled".into(),
+                label: UiText::user("enabled"),
                 shortcut: None,
                 enabled: true,
                 command: Command::Action(Action::Paste),
@@ -1005,15 +1005,15 @@ mod tests {
             (0.0, 0.0),
             vec![
                 Item::Entry {
-                    label: "Copy".into(),
+                    label: UiText::user("Copy"),
                     shortcut: None,
                     enabled: true,
                     command: Command::Action(Action::Copy),
                 },
                 Item::Submenu {
-                    label: "Themes".into(),
+                    label: UiText::user("Themes"),
                     entries: vec![Item::Entry {
-                        label: "Night".into(),
+                        label: UiText::user("Night"),
                         shortcut: None,
                         enabled: true,
                         command: Command::Theme("Night".into()),
@@ -1046,7 +1046,7 @@ mod tests {
         let menu = ContextMenu::new(
             (98.0, 98.0),
             vec![Item::Entry {
-                label: "Copy".into(),
+                label: UiText::user("Copy"),
                 shortcut: None,
                 enabled: true,
                 command: Command::Action(Action::Copy),
@@ -1097,7 +1097,7 @@ mod tests {
     #[test]
     fn themes_that_fit_are_listed_without_more() {
         let themes = themes_named(5);
-        let items = theme_pages(&themes, 5, Lang::En);
+        let items = theme_pages(&themes, 5, Lang::EnUs);
         let (names, more) = page(&items);
         assert_eq!(names.len(), 5);
         assert!(more.is_none());
@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn themes_that_do_not_fit_continue_under_more() {
         let themes = themes_named(100);
-        let items = theme_pages(&themes, 30, Lang::En);
+        let items = theme_pages(&themes, 30, Lang::EnUs);
         let mut all = Vec::new();
         let mut pages = Vec::new();
         let mut current = Some(items.as_slice());
@@ -1146,8 +1146,8 @@ mod tests {
         ContextMenu::new(
             (10.0, 10.0),
             vec![Item::Submenu {
-                label: "Themes".into(),
-                entries: theme_pages(&themes, rows, Lang::En),
+                label: UiText::user("Themes"),
+                entries: theme_pages(&themes, rows, Lang::EnUs),
             }],
         )
     }
@@ -1249,7 +1249,7 @@ mod tests {
 
     fn theme_menu() -> ContextMenu {
         let theme = |name: &str| Item::Entry {
-            label: name.into(),
+            label: UiText::user(name),
             shortcut: None,
             enabled: true,
             command: Command::Theme(name.into()),
@@ -1262,10 +1262,10 @@ mod tests {
                     None,
                     true,
                     Command::Action(Action::Quit),
-                    Lang::En,
+                    Lang::EnUs,
                 ),
                 Item::Submenu {
-                    label: "Themes".into(),
+                    label: UiText::user("Themes"),
                     entries: vec![theme("Dark"), theme("Light")],
                 },
             ],
@@ -1335,9 +1335,9 @@ mod tests {
         let menu = ContextMenu::from_context(
             (0.0, 0.0),
             vec![Item::Submenu {
-                label: "Themes".into(),
+                label: UiText::user("Themes"),
                 entries: vec![Item::Entry {
-                    label: "Dark".into(),
+                    label: UiText::user("Dark"),
                     shortcut: None,
                     enabled: true,
                     command: Command::Theme("Dark".into()),

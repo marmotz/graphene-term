@@ -70,6 +70,10 @@ describes each problem (click it to hide it):
 - an unknown setting is ignored;
 - a TOML syntax error ignores the whole file until it is fixed.
 
+The banner and the Settings tab write these errors in the interface language
+(`language`). The detail of a TOML syntax error and the text of a system error (a file
+that cannot be read or written) stay in English, after a translated prefix.
+
 ## Settings tab
 
 The settings are the first tab of the window, the sliders icon at the start of the tab
@@ -83,6 +87,12 @@ a hand edit.
 
 - **Keyboard shortcuts**: lists every action with its shortcuts. Click **+** after an
   action's shortcuts and press the new one to add it (`Escape` cancels), or remove one.
+- Numbers are shown in the format of the interface language (`1,280` in English,
+  `1 280` in French). Type them with its decimal separator or a point; group separators
+  are ignored, and the file always keeps the point.
+- Lists show their values by name in the interface language (**Beam** for `beam`,
+  **Every 2 days** for `2d`); the file keeps the value. Languages are named in
+  themselves (**Français (Canada)**), whatever the interface language.
 - Problems in the file are shown under the setting concerned; unknown settings are
   listed at the top.
 - While a file has a syntax error, the tab shows it and locks what depends on that
@@ -118,7 +128,7 @@ This is the complete list. Values shown are the defaults.
 
 | Setting    | Default  | Values                                                                 |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en"`, `"fr"`: language of the interface (menus, palette, settings, banners). `"auto"` follows the system language: French when it is French, English otherwise. |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`, `"es"`, `"de"`, `"it"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), `es_*`, `de_*` and `it_*` Spanish, German and Italian whatever the region (`es_MX` gives Spanish), any other language English (United States). The Spanish, German and Italian texts are translated by AI and not reviewed yet: see [Translating Graphene](../../i18n/CONTRIBUTING.md) to fix one. A regional variant shows the text of its base language where it has none of its own. Numbers and durations follow the language too (`1,280` in English, `1 280` in French), as do the configuration errors. |
 
 `language` is at the top of the file, before any section.
 

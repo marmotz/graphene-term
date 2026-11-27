@@ -38,12 +38,16 @@ pub(super) fn hotkey_config_error(error: &HotkeyError) -> ConfigError {
         line: None,
         key: Some("quick_terminal.hotkey".to_owned()),
         kind: config::ConfigErrorKind::InvalidValue,
-        message: error.to_string(),
+        detail: Box::new(error.detail()),
     }
 }
 
 /// The configuration banner: the errors of the files, then the hotkey's.
-pub(super) fn config_banner(load: &LoadErrors, hotkey: Option<&ConfigError>) -> Option<Banner> {
+pub(super) fn config_banner(
+    load: &LoadErrors,
+    hotkey: Option<&ConfigError>,
+    lang: Lang,
+) -> Option<Banner> {
     let all: Vec<ConfigError> = load
         .config
         .iter()
@@ -51,7 +55,7 @@ pub(super) fn config_banner(load: &LoadErrors, hotkey: Option<&ConfigError>) -> 
         .chain(hotkey)
         .cloned()
         .collect();
-    Banner::config_errors(&all)
+    Banner::config_errors(&all, lang)
 }
 
 impl App {
@@ -84,7 +88,11 @@ impl App {
     /// Shows the configuration banner of the current errors, the hotkey's included: the
     /// hidden quick terminal shows it at its next appearance.
     pub(super) fn refresh_config_banner(&mut self) {
-        let banner = config_banner(&self.load_errors, self.hotkey_error.as_ref());
+        let banner = config_banner(
+            &self.load_errors,
+            self.hotkey_error.as_ref(),
+            self.config.language.resolve(Lang::detect),
+        );
         self.config_banner = banner.clone();
         if let Some(session) = self.session.as_mut() {
             session.config_banner = banner;
@@ -213,25 +221,36 @@ mod tests {
         assert_eq!(error.kind, config::ConfigErrorKind::InvalidValue);
         assert!(
             error
-                .to_string()
+                .text(Lang::EnUs)
                 .ends_with("the global hotkey \"Ctrl+`\" is already used by another application")
         );
+        assert!(error.text(Lang::Fr).ends_with(
+            "le raccourci global \"Ctrl+`\" est déjà utilisé par une autre application"
+        ));
     }
 
     #[test]
     fn banner_shows_the_file_errors_first_then_the_hotkey() {
         let hotkey = hotkey_config_error(&HotkeyError::Taken("Ctrl+`".into()));
         let none = LoadErrors::default();
-        assert_eq!(config_banner(&none, None), None);
-        let alone = config_banner(&none, Some(&hotkey)).unwrap();
-        assert_eq!(alone.text, hotkey.to_string());
+        assert_eq!(config_banner(&none, None, Lang::EnUs), None);
+        let alone = config_banner(&none, Some(&hotkey), Lang::EnUs).unwrap();
+        assert_eq!(alone.text, hotkey.text(Lang::EnUs));
 
-        let file = ConfigError::read(PathBuf::from("config.toml"), "unreadable".into());
+        let file = ConfigError::read(
+            PathBuf::from("config.toml"),
+            ConfigMsg::CannotRead("denied".into()),
+        );
         let load = LoadErrors {
             config: vec![file.clone()],
             theme: Vec::new(),
         };
-        let both = config_banner(&load, Some(&hotkey)).unwrap();
-        assert_eq!(both.text, format!("{file} (+1 more)"));
+        let both = config_banner(&load, Some(&hotkey), Lang::EnUs).unwrap();
+        assert_eq!(both.text, format!("{} (+1 more)", file.text(Lang::EnUs)));
+        let both = config_banner(&load, Some(&hotkey), Lang::Fr).unwrap();
+        assert_eq!(
+            both.text,
+            "config.toml: impossible de lire le fichier : denied (+1 autre)"
+        );
     }
 }

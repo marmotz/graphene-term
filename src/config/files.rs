@@ -43,7 +43,7 @@ pub(super) fn reload_config_file(dir: &Path, previous: &Config) -> (Config, Vec<
             previous.clone(),
             vec![ConfigError::read(
                 file,
-                format!("cannot read the file: {error}"),
+                ConfigMsg::CannotRead(error.to_string()),
             )],
         ),
     }
@@ -64,7 +64,7 @@ pub(super) fn reload_keybindings_file(
             previous.keybindings.clone(),
             vec![ConfigError::read(
                 file,
-                format!("cannot read the file: {error}"),
+                ConfigMsg::CannotRead(error.to_string()),
             )],
         ),
     }
@@ -126,7 +126,7 @@ pub(super) fn migrate_keybindings_section(dir: &Path) -> (Option<String>, Vec<Co
             line: None,
             key: Some(key_path(&["keybindings"])),
             kind: ConfigErrorKind::Moved,
-            message: format!("keyboard shortcuts moved to {KEYBINDINGS_FILE}"),
+            detail: Box::new(ConfigMsg::KeybindingsMoved(KEYBINDINGS_FILE.to_owned())),
         }]
     } else {
         Vec::new()
@@ -165,7 +165,7 @@ pub(super) fn load_config_file(dir: &Path) -> (Config, Vec<ConfigError>) {
             Config::default(),
             vec![ConfigError::read(
                 file,
-                format!("cannot read the file: {error}"),
+                ConfigMsg::CannotRead(error.to_string()),
             )],
         ),
     }
@@ -208,7 +208,7 @@ pub(super) fn load_keybindings_file(
             BTreeMap::new(),
             vec![ConfigError::read(
                 file,
-                format!("cannot read the file: {error}"),
+                ConfigMsg::CannotRead(error.to_string()),
             )],
         ),
     }
@@ -431,7 +431,7 @@ mod tests {
         );
         assert_eq!(errors[0].file, dir.join(CONFIG_FILE));
         assert_eq!(
-            errors[0].message,
+            errors[0].message(Lang::EnUs),
             "keyboard shortcuts moved to keybindings.toml"
         );
         assert_eq!(config.font.size, 9.0);

@@ -74,7 +74,7 @@ mod tests {
             ligature_break: None,
             background: color,
             banner: None,
-            lang: Lang::En,
+            lang: Lang::EnUs,
             images: Vec::new(),
             progress_colors: crate::progress::ProgressColors {
                 normal: color,

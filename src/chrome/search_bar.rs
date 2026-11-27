@@ -7,6 +7,7 @@
 //! for its text; the counter and the buttons always stay.
 
 use super::tab_bar::UiMetrics;
+use crate::i18n::UiText;
 use crate::layout::Rect;
 use crate::terminal::PaneId;
 
@@ -58,17 +59,17 @@ pub struct SearchBarView {
     /// The bar has the keyboard: its caret is shown.
     pub focused: bool,
     /// Shown in the empty field.
-    pub placeholder: String,
+    pub placeholder: UiText,
     /// Match counter, or the invalid regex message.
-    pub counter: String,
+    pub counter: UiText,
     /// The query is not a valid regex: the counter and the border take the error color.
     pub invalid: bool,
     pub case_sensitive: bool,
     pub regex: bool,
     pub whole_word: bool,
     /// Labels of the zone and status selectors.
-    pub zone: String,
-    pub status: String,
+    pub zone: UiText,
+    pub status: UiText,
     /// The selectors filter something: the history is split into blocks. Greyed out
     /// otherwise.
     pub filters: bool,
@@ -233,7 +234,7 @@ impl SearchBarLayout {
         let text_width = (field.width - 2.0 * text_padding).max(0.0);
         let placeholder = view.text.is_empty();
         let (text, caret_offset) = if placeholder {
-            (view.placeholder.clone(), 0.0)
+            (view.placeholder.to_string(), 0.0)
         } else {
             let caret = view.caret.min(view.text.len());
             // Drop characters from the start until the text before the caret fits.
@@ -268,7 +269,7 @@ impl SearchBarLayout {
             text_width,
             caret,
             selection,
-            counter: view.counter.clone(),
+            counter: view.counter.to_string(),
             counter_x,
             invalid: view.invalid,
             focused: view.focused,
@@ -324,14 +325,14 @@ mod tests {
             caret: 5,
             selected: false,
             focused: true,
-            placeholder: "Search".to_owned(),
-            counter: "2/7".to_owned(),
+            placeholder: UiText::user("Search"),
+            counter: UiText::user("2/7"),
             invalid: false,
             case_sensitive: true,
             regex: false,
             whole_word: false,
-            zone: "All".to_owned(),
-            status: "Any".to_owned(),
+            zone: UiText::user("All"),
+            status: UiText::user("Any"),
             filters: true,
             zone_active: false,
             status_active: false,

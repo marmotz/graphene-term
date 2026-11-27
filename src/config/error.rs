@@ -12,7 +12,9 @@ pub struct ConfigError {
     /// for an error not tied to a key (syntax or read error).
     pub key: Option<String>,
     pub kind: ConfigErrorKind,
-    pub message: String,
+    /// What is wrong, translated by [`ConfigError::message`]. Boxed: it is the
+    /// largest part of the error, which `Result`s carry.
+    pub detail: Box<ConfigMsg>,
 }
 
 /// What a [`ConfigError`] is about.
@@ -34,14 +36,33 @@ pub enum ConfigErrorKind {
 
 impl ConfigError {
     /// An error reading `file`, tied to no line nor key.
-    pub fn read(file: PathBuf, message: String) -> Self {
+    pub fn read(file: PathBuf, detail: ConfigMsg) -> Self {
         Self {
             file,
             line: None,
             key: None,
             kind: ConfigErrorKind::Read,
-            message,
+            detail: Box::new(detail),
         }
+    }
+
+    /// What is wrong, in `lang`, without the file nor the line.
+    pub fn message(&self, lang: Lang) -> UiText {
+        i18n::text(lang, &Msg::Config((*self.detail).clone()))
+    }
+
+    /// The error in `lang`, after the name of its file and its line when known:
+    /// `config.toml:12: unknown key `font.sise``.
+    pub fn text(&self, lang: Lang) -> UiText {
+        let name = self.file.file_name().map_or_else(
+            || self.file.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let location = match self.line {
+            Some(line) => format!("{name}:{line}: "),
+            None => format!("{name}: "),
+        };
+        self.message(lang).after(location)
     }
 }
 
@@ -64,17 +85,4 @@ pub fn key_path(segments: &[&str]) -> String {
         })
         .collect::<Vec<_>>()
         .join(".")
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = self.file.file_name().map_or_else(
-            || self.file.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        match self.line {
-            Some(line) => write!(f, "{name}:{line}: {}", self.message),
-            None => write!(f, "{name}: {}", self.message),
-        }
-    }
 }
