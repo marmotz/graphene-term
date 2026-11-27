@@ -1,14 +1,6 @@
-<!-- backlog-sync 2026-11-26T20:02Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
+<!-- backlog-sync 2026-11-27T19:29Z — GENERATED, do not hand-edit. Regenerate: skill backlog-sync -->
 
 # Backlog
-
-## Garder la fenêtre ouverte après `-e`  ·  [overview](features/execute-hold/overview.md)
-
-_terminé — voir [technical.md](features/execute-hold/technical.md)_ — 1/1 tasks done
-
-| Done | Issue                                                       | Title                                          | Blocked by |
-|------|-------------------------------------------------------------|------------------------------------------------|------------|
-| [x]  | [#266](https://github.com/marmotz/graphene-term/issues/266) | Keep the window open after the program with -E | —          |
 
 ## Internationalisation (i18n)  ·  [overview](features/i18n/overview.md)
 
@@ -35,14 +27,6 @@ _tâches créées — voir [technical.md](features/ime-input/technical.md)_ — 
 | [ ]  | [#171](https://github.com/marmotz/graphene-term/issues/171) | [Rendu] Affichage de la composition au curseur et fenêtre de suggestions | #170       |
 | [ ]  | [#172](https://github.com/marmotz/graphene-term/issues/172) | [Palette] Saisie IME dans la palette de commandes                        | #171       |
 | [ ]  | [#173](https://github.com/marmotz/graphene-term/issues/173) | [Docs] Documenter la saisie IME et vérifier les plateformes              | #171, #172 |
-
-## Inline "+" button to add a keybinding  ·  [overview](features/keybinding-add-button-inline/overview.md)
-
-_terminé, voir [technical.md](features/keybinding-add-button-inline/technical.md)_ — 1/1 tasks done
-
-| Done | Issue                                                       | Title                                             | Blocked by |
-|------|-------------------------------------------------------------|---------------------------------------------------|------------|
-| [x]  | [#273](https://github.com/marmotz/graphene-term/issues/273) | Inline "+" button to add a keybinding in settings | —          |
 
 ## Protocole clavier kitty ·  [overview](features/kitty-keyboard-protocol/overview.md)
 
@@ -74,50 +58,23 @@ _tâches créées — voir [technical.md](features/multiplexing/technical.md)_ �
 | [ ]  | [#213](https://github.com/marmotz/graphene-term/issues/213) | Multiplexage : icône de barre de menus sous macOS                      | #206       |
 | [ ]  | [#215](https://github.com/marmotz/graphene-term/issues/215) | Multiplexage : images kitty par fichier temporaire ou mémoire partagée | #205, #208 |
 
-## Per-pane font size ·  [overview](features/pane-font-size/overview.md)
+## Activation du quick terminal ·  [overview](features/quick-terminal-toggle/overview.md)
 
-_terminé — voir [technical.md](features/pane-font-size/technical.md)_ — 4/4 tasks done
+_tâches créées — voir [technical.md](features/quick-terminal-toggle/technical.md)_ — 0/3 tasks done
 
-| Done | Issue                                                       | Title                                                                 | Blocked by |
-|------|-------------------------------------------------------------|-----------------------------------------------------------------------|------------|
-| [x]  | [#256](https://github.com/marmotz/graphene-term/issues/256) | feat(pane-font-size): glyph cache keyed by font size                  | —          |
-| [x]  | [#257](https://github.com/marmotz/graphene-term/issues/257) | feat(pane-font-size): per-pane font offset and keyboard actions       | #256       |
-| [x]  | [#258](https://github.com/marmotz/graphene-term/issues/258) | feat(pane-font-size): Ctrl+wheel changes the hovered pane's font size | #257       |
-| [x]  | [#259](https://github.com/marmotz/graphene-term/issues/259) | feat(pane-font-size): restore each pane's font size with the session  | #257       |
-
-## Quick terminal (mode Quake)  ·  [overview](features/quick-terminal/overview.md)
-
-_terminé — voir [technical.md](features/quick-terminal/technical.md)_ — 5/5 tasks done
-
-| Done | Issue                                                       | Title                                                                        | Blocked by       |
-|------|-------------------------------------------------------------|------------------------------------------------------------------------------|------------------|
-| [x]  | [#233](https://github.com/marmotz/graphene-term/issues/233) | feat(quick-terminal): restore the quick terminal with the session            | #230, #231, #214 |
-| [x]  | [#229](https://github.com/marmotz/graphene-term/issues/229) | feat(quick-terminal): quick_terminal configuration and settings section      | —                |
-| [x]  | [#230](https://github.com/marmotz/graphene-term/issues/230) | feat(quick-terminal): quick process, toggle command and window placement     | #229             |
-| [x]  | [#231](https://github.com/marmotz/graphene-term/issues/231) | feat(quick-terminal): slide animation, hide on focus loss and reset on close | #230             |
-| [x]  | [#232](https://github.com/marmotz/graphene-term/issues/232) | feat(quick-terminal): native global hotkey and hidden startup                | #229, #230       |
-
-## Recherche dans l'historique ·  [overview](features/scrollback-search/overview.md)
-
-_tâches créées — voir [technical.md](features/scrollback-search/technical.md)_ — 0/7 tasks done
-
-| Done | Issue                                                       | Title                                                   | Blocked by       |
-|------|-------------------------------------------------------------|---------------------------------------------------------|------------------|
-| [ ]  | [#200](https://github.com/marmotz/graphene-term/issues/200) | [Recherche] Déplacer le pliage de bloc sur Ctrl+Shift+Z | —                |
-| [ ]  | [#201](https://github.com/marmotz/graphene-term/issues/201) | [Recherche] Couleurs de thème des occurrences           | —                |
-| [ ]  | [#202](https://github.com/marmotz/graphene-term/issues/202) | [Recherche] Moteur de recherche dans la timeline        | —                |
-| [ ]  | [#203](https://github.com/marmotz/graphene-term/issues/203) | [Recherche] Rendre visible une ligne d'un bloc          | —                |
-| [ ]  | [#212](https://github.com/marmotz/graphene-term/issues/212) | [Recherche] Barre de recherche du pane                  | #200, #202, #203 |
-| [ ]  | [#216](https://github.com/marmotz/graphene-term/issues/216) | [Recherche] Surlignage des occurrences                  | #201, #202, #212 |
-| [ ]  | [#218](https://github.com/marmotz/graphene-term/issues/218) | [Recherche] Documentation                               | #212, #216       |
+| Done | Issue                                                       | Title                                                      | Blocked by |
+|------|-------------------------------------------------------------|------------------------------------------------------------|------------|
+| [ ]  | [#275](https://github.com/marmotz/graphene-term/issues/275) | Add the quick_terminal.enabled setting                     | —          |
+| [ ]  | [#276](https://github.com/marmotz/graphene-term/issues/276) | Gate the quick terminal launches on quick_terminal.enabled | #275       |
+| [ ]  | [#277](https://github.com/marmotz/graphene-term/issues/277) | Add the quick terminal switch to the settings window       | #275       |
 
 ## Bugs
 
-### Quick terminal crashes when closed after changing the settings  ·  [overview](bugs/quick-terminal-crash-after-settings-change/overview.md)
+### La navigation entre blocs ne peut pas sélectionner le bloc en cours ·  [overview](bugs/block-navigation-skips-current-block/overview.md)
 
-_terminé — voir [technical.md](bugs/quick-terminal-crash-after-settings-change/technical.md)_ — 2/2 tasks done
+_tâches créées — voir [technical.md](bugs/block-navigation-skips-current-block/technical.md)_ — 0/2 tasks done
 
-| Done | Issue                                                       | Title                                                                  | Blocked by |
-|------|-------------------------------------------------------------|------------------------------------------------------------------------|------------|
-| [x]  | [#267](https://github.com/marmotz/graphene-term/issues/267) | fix(settings): paint the settings tab at the size of the render target | —          |
-| [x]  | [#268](https://github.com/marmotz/graphene-term/issues/268) | fix(renderer): log uncaptured GPU errors instead of panicking          | —          |
+| Done | Issue                                                       | Title                                                | Blocked by |
+|------|-------------------------------------------------------------|------------------------------------------------------|------------|
+| [ ]  | [#279](https://github.com/marmotz/graphene-term/issues/279) | Block navigation: select the current block           | —          |
+| [ ]  | [#280](https://github.com/marmotz/graphene-term/issues/280) | Block actions: copy the command of the current block | #279       |

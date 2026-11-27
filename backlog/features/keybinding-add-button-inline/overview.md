@@ -1,6 +1,6 @@
 # Inline "+" button to add a keybinding
 
-**Statut** : terminé, voir [technical.md](technical.md)
+**Statut** : tâches créées, voir [technical.md](technical.md)
 
 ## Contexte
 
