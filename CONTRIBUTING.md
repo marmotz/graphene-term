@@ -46,6 +46,12 @@ cargo test
 - When you change a user-visible behaviour, update the
   [user documentation](docs/en/README.md) in English and French.
 
+## Translations
+
+The texts of the interface are in the Fluent files of [`i18n/`](i18n/). To review a
+language, fix a translation or mark a language as reviewed, see
+[Translating Graphene](i18n/CONTRIBUTING.md).
+
 ## Branches and pull requests
 
 - `develop` is the default branch: create your branch from `develop` and open your

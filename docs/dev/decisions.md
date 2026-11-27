@@ -414,7 +414,8 @@ confirmation.
 
 Interface labels are an `i18n::Msg` enum, the API of the code. Their texts live in one
 Fluent file per language under `i18n/` (`en-US.ftl`, the reference, `fr.ftl`, and the
-regional variants `en-GB.ftl` and `fr-CA.ftl`),
+regional variants `en-GB.ftl` and `fr-CA.ftl`, then `es.ftl`, `de.ftl` and `it.ftl`,
+translated by AI and marked `unreviewed`, see `i18n/CONTRIBUTING.md`),
 embedded by `include_str!` and parsed once into `fluent_bundle::concurrent::FluentBundle`s
 (`Sync`: notifications are formatted on another thread), with Unicode isolation marks
 turned off since the interface has no right-to-left text. One exhaustive `match`
@@ -430,7 +431,8 @@ without knowing Rust, and translation tools handle it. Generating `Msg` from `en
 in a `build.rs` was rejected: the generated code is harder to read and review. The
 language is read from `LC_ALL`, `LC_MESSAGES` then `LANG`, then on macOS the first
 preferred language of the system settings (an app launched from Finder has no locale
-variable), with its region: a region without a variant gives the base language. The
+variable), with its region: a region without a variant gives the base language
+(`es_MX` gives Spanish). The
 `language` setting takes BCP 47 tags (`en-US`, `fr-CA`), case ignored, and keeps `en` as
 an alias so that existing files stay valid.
 

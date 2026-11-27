@@ -12,16 +12,22 @@ pub enum Language {
     EnGb,
     Fr,
     FrCa,
+    Es,
+    De,
+    It,
 }
 
 impl Language {
     /// Accepted values, in the order shown to the user.
-    pub const VALUES: [(&'static str, Language); 5] = [
+    pub const VALUES: [(&'static str, Language); 8] = [
         ("auto", Language::Auto),
         ("en-US", Language::EnUs),
         ("en-GB", Language::EnGb),
         ("fr", Language::Fr),
         ("fr-CA", Language::FrCa),
+        ("es", Language::Es),
+        ("de", Language::De),
+        ("it", Language::It),
     ];
 
     /// Former value of `en-US`, still accepted so that existing files stay valid.
@@ -68,6 +74,9 @@ impl Language {
             Language::EnGb => Some(Lang::EnGb),
             Language::Fr => Some(Lang::Fr),
             Language::FrCa => Some(Lang::FrCa),
+            Language::Es => Some(Lang::Es),
+            Language::De => Some(Lang::De),
+            Language::It => Some(Lang::It),
         }
     }
 }

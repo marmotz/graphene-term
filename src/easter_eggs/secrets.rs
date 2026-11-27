@@ -47,10 +47,11 @@ pub fn find(query: &str) -> Option<Secret> {
         .find(|secret| secret.keyword().eq_ignore_ascii_case(query))
 }
 
-/// The page about the Answer in `lang`, opened by [`Secret::Answer`].
+/// The page about the Answer in `lang`, opened by [`Secret::Answer`]. A language
+/// without its own page opens the English one.
 pub fn answer_url(lang: Lang) -> &'static str {
     match lang {
-        Lang::EnUs | Lang::EnGb => {
+        Lang::EnUs | Lang::EnGb | Lang::Es | Lang::De | Lang::It => {
             "https://en.wikipedia.org/wiki/Phrases_from_The_Hitchhiker%27s_Guide_to_the_Galaxy#The_Answer_to_the_Ultimate_Question_of_Life,_the_Universe,_and_Everything_is_42"
         }
         Lang::Fr | Lang::FrCa => {

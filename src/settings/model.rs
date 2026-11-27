@@ -1884,7 +1884,7 @@ bell = true
         assert_eq!(values(Field::CursorShape), ["block", "beam", "underline"]);
         assert_eq!(
             values(Field::Language),
-            ["auto", "en-US", "en-GB", "fr", "fr-CA"]
+            ["auto", "en-US", "en-GB", "fr", "fr-CA", "es", "de", "it"]
         );
         assert_eq!(
             values(Field::UpdatesInterval).len(),
@@ -1934,7 +1934,10 @@ bell = true
                 "English (US)",
                 "English (UK)",
                 "Français",
-                "Français (Canada)"
+                "Français (Canada)",
+                "Español",
+                "Deutsch",
+                "Italiano"
             ]
         );
     }

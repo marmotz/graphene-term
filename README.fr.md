@@ -65,8 +65,9 @@ décommenter la ligne ci-dessous.
 - **Huit thèmes intégrés**, vos propres fichiers de thème, un éditeur de thème, et des
   thèmes qui suivent le mode clair/sombre du système : [thèmes](docs/fr/themes.md).
 - **Interface en anglais et en français**, avec leurs variantes britannique et
-  canadienne, selon la langue et la région du système, nombres, erreurs de
-  configuration et listes des paramètres compris :
+  canadienne, et en espagnol, allemand et italien (traduits par IA, pas encore relus),
+  selon la langue et la région du système, nombres, erreurs de configuration et listes
+  des paramètres compris :
   [paramètre de langue](docs/fr/configuration.md#général).
 
 ## Comparatif

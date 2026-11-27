@@ -6,3 +6,6 @@ language-en-US = English (US)
 language-en-GB = English (UK)
 language-fr = Français
 language-fr-CA = Français (Canada)
+language-es = Español
+language-de = Deutsch
+language-it = Italiano

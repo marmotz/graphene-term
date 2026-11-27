@@ -44,6 +44,12 @@ pub enum Lang {
     Fr,
     /// French (Canada).
     FrCa,
+    /// Spanish.
+    Es,
+    /// German.
+    De,
+    /// Italian.
+    It,
 }
 
 impl Lang {
@@ -109,6 +115,12 @@ impl Lang {
             }
         } else if language.eq_ignore_ascii_case("en") && has_region("GB") {
             Lang::EnGb
+        } else if language.eq_ignore_ascii_case("es") {
+            Lang::Es
+        } else if language.eq_ignore_ascii_case("de") {
+            Lang::De
+        } else if language.eq_ignore_ascii_case("it") {
+            Lang::It
         } else {
             Lang::EnUs
         }
@@ -120,7 +132,7 @@ impl Lang {
         match self {
             Lang::EnGb => Some(Lang::EnUs),
             Lang::FrCa => Some(Lang::Fr),
-            Lang::EnUs | Lang::Fr => None,
+            Lang::EnUs | Lang::Fr | Lang::Es | Lang::De | Lang::It => None,
         }
     }
 
@@ -131,6 +143,9 @@ impl Lang {
             Lang::EnGb => "en-GB",
             Lang::Fr => "fr",
             Lang::FrCa => "fr-CA",
+            Lang::Es => "es",
+            Lang::De => "de",
+            Lang::It => "it",
         }
     }
 }
@@ -659,7 +674,15 @@ choice_from!(
 );
 
 /// Every language, in [`Lang`] order.
-pub const LANGS: [Lang; 4] = [Lang::EnUs, Lang::EnGb, Lang::Fr, Lang::FrCa];
+pub const LANGS: [Lang; 7] = [
+    Lang::EnUs,
+    Lang::EnGb,
+    Lang::Fr,
+    Lang::FrCa,
+    Lang::Es,
+    Lang::De,
+    Lang::It,
+];
 
 impl Lang {
     /// Fluent source of the language, embedded in the binary.
@@ -669,6 +692,9 @@ impl Lang {
             Lang::EnGb => include_str!("../i18n/en-GB.ftl"),
             Lang::Fr => include_str!("../i18n/fr.ftl"),
             Lang::FrCa => include_str!("../i18n/fr-CA.ftl"),
+            Lang::Es => include_str!("../i18n/es.ftl"),
+            Lang::De => include_str!("../i18n/de.ftl"),
+            Lang::It => include_str!("../i18n/it.ftl"),
         }
     }
 
@@ -1252,6 +1278,9 @@ fn language_id(lang: Lang) -> &'static str {
         Lang::EnGb => "language-en-GB",
         Lang::Fr => "language-fr",
         Lang::FrCa => "language-fr-CA",
+        Lang::Es => "language-es",
+        Lang::De => "language-de",
+        Lang::It => "language-it",
     }
 }
 
@@ -2192,10 +2221,16 @@ mod tests {
             assert_eq!(name(lang, Language::EnGb), "English (UK)");
             assert_eq!(name(lang, Language::Fr), "Français");
             assert_eq!(name(lang, Language::FrCa), "Français (Canada)");
+            assert_eq!(name(lang, Language::Es), "Español");
+            assert_eq!(name(lang, Language::De), "Deutsch");
+            assert_eq!(name(lang, Language::It), "Italiano");
         }
         // `auto` is translated.
         assert_eq!(name(Lang::EnUs, Language::Auto), "System language");
         assert_eq!(name(Lang::Fr, Language::Auto), "Langue du système");
+        assert_eq!(name(Lang::Es, Language::Auto), "Idioma del sistema");
+        assert_eq!(name(Lang::De, Language::Auto), "Systemsprache");
+        assert_eq!(name(Lang::It, Language::Auto), "Lingua del sistema");
     }
 
     #[test]
@@ -2292,7 +2327,7 @@ mod tests {
             assert_eq!(lang as usize, i, "{lang:?}");
         }
         let tags: Vec<_> = LANGS.map(Lang::tag).to_vec();
-        assert_eq!(tags, ["en-US", "en-GB", "fr", "fr-CA"]);
+        assert_eq!(tags, ["en-US", "en-GB", "fr", "fr-CA", "es", "de", "it"]);
     }
 
     #[test]
@@ -2350,6 +2385,16 @@ mod tests {
             text(Lang::Fr, &Msg::LinesHidden(1234)),
             "1\u{202f}234 lignes masquées"
         );
+        // Spanish, German and Italian take the plural for 0, like English.
+        assert_eq!(text(Lang::Es, &Msg::LinesHidden(1)), "1 línea oculta");
+        assert_eq!(text(Lang::Es, &Msg::LinesHidden(0)), "0 líneas ocultas");
+        assert_eq!(text(Lang::De, &Msg::LinesHidden(1)), "1 Zeile ausgeblendet");
+        assert_eq!(
+            text(Lang::De, &Msg::LinesHidden(0)),
+            "0 Zeilen ausgeblendet"
+        );
+        assert_eq!(text(Lang::It, &Msg::LinesHidden(1)), "1 riga nascosta");
+        assert_eq!(text(Lang::It, &Msg::LinesHidden(0)), "0 righe nascoste");
         // No isolation marks around the values.
         assert_eq!(text(Lang::EnUs, &Msg::GoToTab(12)), "Go to tab 12");
     }
@@ -2360,6 +2405,12 @@ mod tests {
         assert_eq!(format_number(Lang::EnGb, 1234.5), "1,234.5");
         assert_eq!(format_number(Lang::Fr, 1234.5), "1\u{202f}234,5");
         assert_eq!(format_number(Lang::FrCa, 1234.5), "1\u{a0}234,5");
+        // Spanish and Italian only group from five digits.
+        assert_eq!(format_number(Lang::Es, 1234.5), "1234,5");
+        assert_eq!(format_number(Lang::Es, 12345.5), "12.345,5");
+        assert_eq!(format_number(Lang::De, 1234.5), "1.234,5");
+        assert_eq!(format_number(Lang::It, 1234.5), "1234,5");
+        assert_eq!(format_number(Lang::It, 12345.5), "12.345,5");
         // The shortest digits, without trailing zeros.
         assert_eq!(format_number(Lang::Fr, 0.9), "0,9");
         assert_eq!(format_number(Lang::EnUs, 72.0), "72");
@@ -2644,7 +2695,29 @@ mod tests {
         assert_eq!(detect("en_AU"), Lang::EnUs);
         // The region belongs to the language: `CA` alone is not French.
         assert_eq!(detect("en_CA"), Lang::EnUs);
-        assert_eq!(detect("de_GB"), Lang::EnUs);
+        assert_eq!(detect("de_GB"), Lang::De);
+    }
+
+    #[test]
+    fn detect_reads_spanish_german_and_italian_whatever_the_region() {
+        let detect = |locale| Lang::from_locale(None, None, Some(locale));
+        for (locale, lang) in [
+            ("es_ES.UTF-8", Lang::Es),
+            ("es_MX", Lang::Es),
+            ("es-419", Lang::Es),
+            ("ES", Lang::Es),
+            ("de_DE.UTF-8", Lang::De),
+            ("de_AT", Lang::De),
+            ("de-CH", Lang::De),
+            ("it_IT.UTF-8", Lang::It),
+            ("it_CH@euro", Lang::It),
+        ] {
+            assert_eq!(detect(locale), lang, "{locale}");
+        }
+        assert_eq!(
+            Lang::from_locale_or_system(None, None, None, Some("de-DE")),
+            Lang::De
+        );
     }
 
     #[test]
@@ -2652,9 +2725,9 @@ mod tests {
         let fr = Some("fr_FR.UTF-8");
         let de = Some("de_DE.UTF-8");
         assert_eq!(Lang::from_locale(fr, de, de), Lang::Fr);
-        assert_eq!(Lang::from_locale(de, fr, fr), Lang::EnUs);
+        assert_eq!(Lang::from_locale(de, fr, fr), Lang::De);
         assert_eq!(Lang::from_locale(None, fr, de), Lang::Fr);
-        assert_eq!(Lang::from_locale(None, de, fr), Lang::EnUs);
+        assert_eq!(Lang::from_locale(None, de, fr), Lang::De);
         assert_eq!(Lang::from_locale(None, None, fr), Lang::Fr);
     }
 
@@ -2697,7 +2770,7 @@ mod tests {
         assert_eq!(Lang::from_locale(None, None, Some("C")), Lang::EnUs);
         assert_eq!(Lang::from_locale(None, None, Some("POSIX")), Lang::EnUs);
         assert_eq!(
-            Lang::from_locale(None, None, Some("de_DE.UTF-8")),
+            Lang::from_locale(None, None, Some("ja_JP.UTF-8")),
             Lang::EnUs
         );
     }

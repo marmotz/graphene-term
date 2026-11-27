@@ -128,7 +128,7 @@ This is the complete list. Values shown are the defaults.
 
 | Setting    | Default  | Values                                                                 |
 |------------|----------|------------------------------------------------------------------------|
-| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), any other language English (United States). A regional variant shows the text of its base language where it has none of its own. Numbers and durations follow the language too (`1,280` in English, `1 280` in French), as do the configuration errors. |
+| `language` | `"auto"` | `"auto"`, `"en-US"`, `"en-GB"`, `"fr"`, `"fr-CA"`, `"es"`, `"de"`, `"it"`: language of the interface (menus, palette, settings, banners). `"en"` is still accepted for `"en-US"`, and case is ignored. `"auto"` follows the system language and region: `fr_CA` gives French (Canada), `fr_BE` French, `en_GB` English (United Kingdom), `es_*`, `de_*` and `it_*` Spanish, German and Italian whatever the region (`es_MX` gives Spanish), any other language English (United States). The Spanish, German and Italian texts are translated by AI and not reviewed yet: see [Translating Graphene](../../i18n/CONTRIBUTING.md) to fix one. A regional variant shows the text of its base language where it has none of its own. Numbers and durations follow the language too (`1,280` in English, `1 280` in French), as do the configuration errors. |
 
 `language` is at the top of the file, before any section.
 

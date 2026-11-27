@@ -322,12 +322,18 @@ mod tests {
         assert_eq!(Language::EnGb.resolve(detect), Lang::EnGb);
         assert_eq!(Language::Fr.resolve(detect), Lang::Fr);
         assert_eq!(Language::FrCa.resolve(detect), Lang::FrCa);
+        assert_eq!(Language::Es.resolve(detect), Lang::Es);
+        assert_eq!(Language::De.resolve(detect), Lang::De);
+        assert_eq!(Language::It.resolve(detect), Lang::It);
     }
 
     #[test]
     fn language_values_are_bcp47_tags_with_en_as_an_alias_and_case_ignored() {
         let names: Vec<_> = Language::VALUES.map(|(name, _)| name).to_vec();
-        assert_eq!(names, ["auto", "en-US", "en-GB", "fr", "fr-CA"]);
+        assert_eq!(
+            names,
+            ["auto", "en-US", "en-GB", "fr", "fr-CA", "es", "de", "it"]
+        );
         for (name, language) in [
             ("en", Language::EnUs),
             ("EN", Language::EnUs),
@@ -335,6 +341,9 @@ mod tests {
             ("EN-gb", Language::EnGb),
             ("FR", Language::Fr),
             ("fr-ca", Language::FrCa),
+            ("es", Language::Es),
+            ("DE", Language::De),
+            ("It", Language::It),
             ("Auto", Language::Auto),
         ] {
             let (config, errors) = parse(&format!("language = \"{name}\""));
@@ -350,7 +359,7 @@ mod tests {
         let message = &errors[0].message(Lang::EnUs);
         assert!(message.contains("`fr_CA`"), "{message}");
         assert!(
-            message.contains("`en-US`, `en-GB`, `fr`, `fr-CA`"),
+            message.contains("`en-US`, `en-GB`, `fr`, `fr-CA`, `es`, `de`, `it`"),
             "{message}"
         );
     }
