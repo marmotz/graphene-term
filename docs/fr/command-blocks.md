@@ -68,8 +68,9 @@ leur écran n'est pas découpé en blocs.
 Le bloc en cours, le dernier du pane (la commande qui tourne ou l'invite en attente de
 saisie), se sélectionne aussi : `Ctrl+Shift+PageDown` y mène depuis le dernier bloc
 terminé, et le sélectionne directement quand aucun bloc ne l'est. Sur le bloc en cours,
-`Ctrl+Shift+PageDown` ne fait plus rien. Sa sortie ne se copie qu'une fois la commande
-terminée.
+`Ctrl+Shift+PageDown` ne fait plus rien. Pendant que sa commande tourne, sa commande se
+copie, mais sa sortie seulement une fois la commande terminée. À l'invite, il n'a rien à
+copier.
 
 Le bloc sélectionné est celui sur lequel agissent les raccourcis de copie et de repli.
 Sans bloc sélectionné, ils agissent sur le dernier bloc terminé.

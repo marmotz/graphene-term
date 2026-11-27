@@ -66,8 +66,9 @@ split into blocks.
 The current block, the last one of the pane (the running command or the prompt waiting
 for input), can be selected too: `Ctrl+Shift+PageDown` moves to it from the last
 finished block, and selects it directly when no block is selected. On the current
-block, `Ctrl+Shift+PageDown` does nothing more. Its output can only be copied once the
-command has finished.
+block, `Ctrl+Shift+PageDown` does nothing more. While its command runs, its command can
+be copied, but its output only once the command has finished. At the prompt, it has
+nothing to copy.
 
 The selected block is the one the copy and fold shortcuts act on. Without a selected
 block, they act on the last finished block.

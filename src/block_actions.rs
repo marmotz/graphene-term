@@ -7,7 +7,7 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::Term;
 
 use crate::selection::clean_copied_text;
-use crate::timeline::{BlockId, Timeline};
+use crate::timeline::{BlockId, Phase, Timeline};
 
 /// Direction of a block navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,8 +74,8 @@ pub fn neighbour(
     Some(found.unwrap_or(selected))
 }
 
-/// Cleaned text of finished block `id`: its command, then its output. `None` when both
-/// are empty.
+/// Cleaned text of block `id`: its command, then its output. `None` when both are
+/// empty.
 pub fn block_text(timeline: &Timeline, id: BlockId) -> Option<String> {
     let parts: Vec<String> = [Part::Command, Part::Output]
         .into_iter()
@@ -84,22 +84,31 @@ pub fn block_text(timeline: &Timeline, id: BlockId) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
-/// Cleaned text of one part of finished block `id`, `None` when that part is empty. The
-/// command is the one its `start` signal carried, or the last header row (where the
-/// command was typed) when the signal carried none.
+/// Cleaned text of one part of block `id`, `None` when that part is empty. The command
+/// is the one its `start` signal carried, or the last header row (where the command was
+/// typed) when the signal carried none. The current block has a command once it runs,
+/// none at the prompt, and never an output: it is frozen only when the command ends.
 pub fn text(timeline: &Timeline, id: BlockId, part: Part) -> Option<String> {
-    let block = timeline.block(id)?;
-    let text = match part {
-        Part::Command if !block.command.is_empty() => block.command.clone(),
-        Part::Command => {
-            let last = block.header.bottommost_line();
-            rows_text(&block.header, last, last)
+    let current = timeline.current();
+    let (command, header, output) = if id == current.id {
+        if current.phase == Phase::Prompt {
+            return None;
         }
-        Part::Output => rows_text(
-            &block.output,
-            block.output.topmost_line(),
-            block.output.bottommost_line(),
-        ),
+        (&current.command, current.header.as_ref()?, None)
+    } else {
+        let block = timeline.block(id)?;
+        (&block.command, &block.header, Some(&block.output))
+    };
+    let text = match part {
+        Part::Command if !command.is_empty() => command.clone(),
+        Part::Command => {
+            let last = header.bottommost_line();
+            rows_text(header, last, last)
+        }
+        Part::Output => {
+            let output = output?;
+            rows_text(output, output.topmost_line(), output.bottommost_line())
+        }
     };
     Some(clean_copied_text(&text)).filter(|text| !text.is_empty())
 }
@@ -258,13 +267,47 @@ mod tests {
         let timeline = &three_blocks().timeline;
         // Block 2 printed nothing.
         assert_eq!(text(timeline, BlockId(2), Part::Output), None);
-        // The current block and unknown blocks are no targets.
-        assert_eq!(text(timeline, BlockId(3), Part::Command), None);
+        // Unknown blocks have no text.
         assert_eq!(block_text(timeline, BlockId(42)), None);
 
         // Blank output rows only.
         let mut session = Session::new(1000);
         session.command("blank", &["   ", ""], 0);
         assert_eq!(text(&session.timeline, BlockId(0), Part::Output), None);
+    }
+
+    #[test]
+    fn running_block_copies_its_command_but_not_its_output() {
+        let mut session = Session::new(1000);
+        session.feed(&format!("$ make\r\n{}building\r\n", start("make")));
+        let timeline = &session.timeline;
+        let current = timeline.current().id;
+        assert_eq!(
+            text(timeline, current, Part::Command).as_deref(),
+            Some("make")
+        );
+        assert_eq!(text(timeline, current, Part::Output), None);
+        assert_eq!(block_text(timeline, current).as_deref(), Some("make"));
+    }
+
+    #[test]
+    fn running_block_command_falls_back_to_the_last_header_row() {
+        let mut session = Session::new(1000);
+        session.feed(&format!("~/dev\r\n$ make  \r\n{}", start("")));
+        let timeline = &session.timeline;
+        assert_eq!(
+            text(timeline, timeline.current().id, Part::Command).as_deref(),
+            Some("$ make")
+        );
+    }
+
+    #[test]
+    fn prompt_has_no_text() {
+        let timeline = &three_blocks().timeline;
+        let current = timeline.current().id;
+        for part in [Part::Command, Part::Output] {
+            assert_eq!(text(timeline, current, part), None);
+        }
+        assert_eq!(block_text(timeline, current), None);
     }
 }

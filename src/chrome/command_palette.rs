@@ -767,7 +767,7 @@ mod tests {
     use super::*;
     use crate::i18n::Direction;
     use crate::layout::CellSize;
-    use crate::timeline::testing::Session;
+    use crate::timeline::testing::{Session, start};
     use crate::workspace::DIVIDER_THICKNESS;
 
     fn entry(label: &str, action: Action) -> Entry {
@@ -1292,6 +1292,21 @@ mod tests {
         let current = timeline.current().id;
         let on_current = PaneContext::read(timeline, term, Some(current), false);
         assert!(on_current.previous_block && !on_current.next_block);
+        // At the prompt, the current block has nothing to copy but folds.
+        assert!(!on_current.copy_command && !on_current.copy_output);
+        assert!(on_current.toggle_fold);
+    }
+
+    #[test]
+    fn pane_context_copies_the_command_of_a_selected_running_block() {
+        let mut session = Session::sized(20, 10, 1000);
+        session.command("one", &["1"], 0);
+        session.feed(&format!("$ make\r\n{}building\r\n", start("make")));
+        let (timeline, term) = (&session.timeline, &session.term);
+        let current = timeline.current().id;
+        let running = PaneContext::read(timeline, term, Some(current), false);
+        assert!(running.copy_command && !running.copy_output);
+        assert!(running.toggle_fold);
     }
 
     #[test]

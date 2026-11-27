@@ -644,7 +644,8 @@ Renderer::render(pane frames, interface rects)
   (`block_actions::block_text`: command line, then output) goes to the primary
   selection and to `Ctrl+Shift+C`. `Ctrl+Shift+Alt+C` / `O` copy the command (the
   signal's command line, or the last header row) / the output; an empty part leaves the
-  clipboard untouched.
+  clipboard untouched. The current block has a command once it runs (from `Current`),
+  none at the prompt, and never an output (frozen only at `end`).
 - Copy with images (`Pane::copy_content`, `clipboard.rs`): copied text never holds the
   image placeholders (`clean_copied_text` strips `U+10EEEE` and its diacritics). When
   the text selection covers exactly one image placement
