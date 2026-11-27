@@ -1223,10 +1223,13 @@ mod tests {
     }
 
     #[test]
-    fn pane_context_of_an_empty_session_allows_only_the_search() {
+    fn pane_context_of_an_empty_session_allows_the_search_and_the_navigation() {
         let session = Session::new(1000);
+        // A navigation selects the current block, the only one.
         let search = PaneContext {
             search: true,
+            previous_block: true,
+            next_block: true,
             ..PaneContext::default()
         };
         let context = PaneContext::read(&session.timeline, &session.term, None, false);
@@ -1239,6 +1242,10 @@ mod tests {
                 ..search
             }
         );
+        // Once selected, it stays selected either way.
+        let current = Some(session.timeline.current().id);
+        let context = PaneContext::read(&session.timeline, &session.term, current, false);
+        assert!(!context.previous_block && !context.next_block);
     }
 
     #[test]
@@ -1278,9 +1285,13 @@ mod tests {
 
         let on_last = PaneContext::read(timeline, term, Some(last), false);
         assert!(on_last.copy);
-        assert!(on_last.previous_block && !on_last.next_block);
+        // The current block comes after the last finished one.
+        assert!(on_last.previous_block && on_last.next_block);
         let on_first = PaneContext::read(timeline, term, Some(first), false);
         assert!(!on_first.previous_block && on_first.next_block);
+        let current = timeline.current().id;
+        let on_current = PaneContext::read(timeline, term, Some(current), false);
+        assert!(on_current.previous_block && !on_current.next_block);
     }
 
     #[test]

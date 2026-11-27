@@ -634,10 +634,12 @@ Renderer::render(pane frames, interface rects)
   parts with a line break, then `clean_copied_text`. The `SelectionSnapshot` applies to
   the live grid only; a selection reaching the live grid is dropped when that grid is
   detached into a block.
-- Block actions (`block_actions`, finished blocks only): the target block is the
-  selected one, otherwise the last finished block. A margin click or
-  `Ctrl+Shift+PageUp/PageDown` (neighbour block, the last finished block on the first
-  press, scrolled into view by `view::reveal`) select a block: the session keeps it as
+- Block actions (`block_actions`): the selectable blocks are the finished ones, then
+  the current one (`Timeline::contains`). The target block is the selected one,
+  otherwise the last finished block. A margin click or `Ctrl+Shift+PageUp/PageDown`
+  (neighbour block, the current block coming after the last finished one; without a
+  selection, `PageUp` gives the last finished block and `PageDown` the current one;
+  scrolled into view by `view::reveal`) select a block: the session keeps it as
   `selected_block`, its card is `selected` (`card_selected` color), and its text
   (`block_actions::block_text`: command line, then output) goes to the primary
   selection and to `Ctrl+Shift+C`. `Ctrl+Shift+Alt+C` / `O` copy the command (the

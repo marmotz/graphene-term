@@ -219,6 +219,11 @@ impl Timeline {
         self.blocks.iter().find(|block| block.id == id)
     }
 
+    /// Whether `id` is a block of this timeline: a finished block or the current one.
+    pub fn contains(&self, id: BlockId) -> bool {
+        id == self.current.id || self.block(id).is_some()
+    }
+
     pub fn block_mut(&mut self, id: BlockId) -> Option<&mut Block> {
         self.blocks.iter_mut().find(|block| block.id == id)
     }
@@ -778,6 +783,17 @@ mod tests {
         let frozen = detach(&mut session.term, 100);
         assert_eq!(frozen.screen_lines(), 1);
         assert_eq!(content_rows(frozen.grid()), 0);
+    }
+
+    #[test]
+    fn contains_finished_blocks_and_the_current_one() {
+        let mut session = Session::new(100);
+        session.command("ls", &["a"], 0);
+        session.feed("$ ");
+        let timeline = &session.timeline;
+        assert!(timeline.contains(BlockId(0)));
+        assert!(timeline.contains(timeline.current().id));
+        assert!(!timeline.contains(BlockId(42)));
     }
 
     #[test]

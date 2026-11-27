@@ -372,7 +372,7 @@ pub fn retain(old: &Match, matches: &[Match]) -> Option<usize> {
 }
 
 fn known_block(timeline: &Timeline, id: BlockId) -> bool {
-    timeline.current().id == id || timeline.block(id).is_some()
+    timeline.contains(id)
 }
 
 fn alternate<L>(term: &Term<L>) -> bool {

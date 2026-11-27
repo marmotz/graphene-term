@@ -231,7 +231,7 @@ impl Frame {
         cursor_visible: bool,
         selected_block: Option<BlockId>,
     ) -> Self {
-        let selected_block = selected_block.filter(|id| timeline.block(*id).is_some());
+        let selected_block = selected_block.filter(|id| timeline.contains(*id));
         let content = live.renderable_content();
         let overrides = content.colors;
         let columns = live.columns();
@@ -1433,9 +1433,14 @@ mod tests {
         let session = two_blocks();
         let frame = capture_selected(&session, Some(BlockId(7)));
         assert!(frame.cards.iter().all(|card| !card.selected));
-        // The current block is not a finished one.
+    }
+
+    #[test]
+    fn selected_current_block_marks_its_card() {
+        let session = two_blocks();
         let frame = capture_selected(&session, Some(session.timeline.current().id));
-        assert!(frame.cards.iter().all(|card| !card.selected));
+        let selected: Vec<_> = frame.cards.iter().map(|card| card.selected).collect();
+        assert_eq!(selected, [false, false, true]);
     }
 
     #[test]
