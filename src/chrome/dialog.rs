@@ -91,12 +91,12 @@ impl ConfirmClose {
 
     /// The question, naming what closes.
     pub fn title(&self, lang: Lang) -> String {
-        i18n::text(lang, &Msg::ConfirmCloseTitle(self.target.kind())).into_owned()
+        i18n::text(lang, &Msg::ConfirmCloseTitle(self.target.kind()))
     }
 
     /// The programs still running.
     pub fn message(&self, lang: Lang) -> String {
-        i18n::text(lang, &Msg::ProgramsRunning(self.programs.clone())).into_owned()
+        i18n::text(lang, &Msg::ProgramsRunning(self.programs.clone()))
     }
 }
 
@@ -170,8 +170,8 @@ impl DialogLayout {
         let title = dialog.title(lang);
         let message = dialog.message(lang);
         let labels = [
-            (Answer::Cancel, i18n::text(lang, &Msg::Cancel).into_owned()),
-            (Answer::Close, i18n::text(lang, &Msg::Close).into_owned()),
+            (Answer::Cancel, i18n::text(lang, &Msg::Cancel)),
+            (Answer::Close, i18n::text(lang, &Msg::Close)),
         ];
         let button_width = labels
             .iter()

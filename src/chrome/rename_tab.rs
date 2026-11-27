@@ -136,7 +136,7 @@ impl RenameTabLayout {
                 width,
                 height: 2.0 * row_height + 2.0 * padding,
             },
-            heading: i18n::text(lang, &Msg::RenameTab).into_owned(),
+            heading: i18n::text(lang, &Msg::RenameTab),
             heading_x,
             heading_y,
             input,

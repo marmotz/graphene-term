@@ -206,7 +206,7 @@ impl View {
 
     /// Draws one frame; returns what to write.
     pub fn show(&mut self, ui: &mut Ui, lang: Lang, model: &SettingsModel) -> Edits {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let mut edits = Edits::default();
         Panel::left("settings_sections")
             .resizable(false)
@@ -444,7 +444,7 @@ impl View {
         model: &SettingsModel,
         field: Field,
     ) -> Option<Input> {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let text = model.text(field);
         let capturing = self.capturing == Some(Capture::Field(field));
         let mut input = None;
@@ -570,7 +570,7 @@ fn choice(ui: &mut Ui, lang: Lang, model: &SettingsModel, field: Field) -> Optio
     let current = model.text(field);
     let choices = model.choices(field);
     let label_of = |choice: &model::Choice| match &choice.label {
-        Some(msg) => i18n::text(lang, msg).into_owned(),
+        Some(msg) => i18n::text(lang, msg),
         None => choice.value.clone(),
     };
     let labels: Vec<String> = choices.iter().map(label_of).collect();
@@ -677,7 +677,7 @@ impl Search {
 /// The problems of the files: why `section` is locked, a failed write, unknown keys and
 /// errors tied to no section.
 fn file_problems(ui: &mut Ui, lang: Lang, model: &SettingsModel, section: SettingsSection) {
-    let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+    let label = |msg: Msg| i18n::text(lang, &msg);
     let mut shown = false;
     if let Some(error) = model.locked(section) {
         error_label(ui, &error.to_string());
@@ -1193,13 +1193,13 @@ mod tests {
 
     #[test]
     fn the_quick_terminal_switch_heads_its_section_above_its_hint() {
-        let switch = i18n::text(Lang::Fr, &Msg::Field(Field::QuickTerminalEnabled)).into_owned();
-        let hint = i18n::text(Lang::Fr, &Msg::QuickTerminalDisabled).into_owned();
+        let switch = i18n::text(Lang::Fr, &Msg::Field(Field::QuickTerminalEnabled));
+        let hint = i18n::text(Lang::Fr, &Msg::QuickTerminalDisabled);
         let next = model::section_fields(SettingsSection::QuickTerminal)
             .iter()
             .find(|&&field| field != Field::QuickTerminalEnabled)
             .unwrap();
-        let next = i18n::text(Lang::Fr, &Msg::Field(*next)).into_owned();
+        let next = i18n::text(Lang::Fr, &Msg::Field(*next));
 
         let (texts, _) = section_texts(View::default(), SettingsSection::QuickTerminal, "");
         assert_eq!(count(&texts, &switch), 1);

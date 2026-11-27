@@ -234,7 +234,7 @@ pub fn entries<P: TitleSource>(
         .filter(|&action| available(action, workspace, geometry, context))
         .map(|action| Entry {
             command: Command::Action(action),
-            label: i18n::text(lang, &action.label()).into_owned(),
+            label: i18n::text(lang, &action.label()),
             shortcut: keybindings.label(action),
         })
         .collect();
@@ -251,8 +251,7 @@ pub fn entries<P: TitleSource>(
                     tab: index + 1,
                     title,
                 },
-            )
-            .into_owned(),
+            ),
             shortcut,
         });
         if tab.is_single() {
@@ -269,8 +268,7 @@ pub fn entries<P: TitleSource>(
                         pane: number + 1,
                         title,
                     },
-                )
-                .into_owned(),
+                ),
                 shortcut: None,
             });
         }
@@ -460,7 +458,7 @@ impl CommandPalette {
         scored.sort_by_key(|(key, _)| *key);
         self.secret = secrets::find(self.query.text()).map(|secret| Entry {
             command: Command::Secret(secret),
-            label: i18n::text(self.lang, &secret.label()).into_owned(),
+            label: i18n::text(self.lang, &secret.label()),
             shortcut: None,
         });
         let secret = self.secret.as_ref().map(|_| Match {
@@ -629,7 +627,7 @@ impl PaletteLayout {
         let input_text_y = input.y + row_padding;
         let placeholder = palette.query().is_empty();
         let input_text = if placeholder {
-            i18n::text(lang, &Msg::PalettePlaceholder).into_owned()
+            i18n::text(lang, &Msg::PalettePlaceholder)
         } else {
             palette.query().to_owned()
         };

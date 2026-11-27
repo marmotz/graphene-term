@@ -1,10 +1,16 @@
 //! UI translations: the language of the user interface and the text of every label.
 //!
-//! English and French are shipped, English is the fallback. Each language has one
-//! exhaustive `match`, so adding a [`Msg`] variant fails to compile until every
-//! language translates it.
+//! The texts live in one Fluent file per language under `i18n/`, embedded in the
+//! binary: `en-US.ftl` is the reference, `fr.ftl` the French translation. [`Msg`] is
+//! the API of the code: [`fluent`] maps each variant to its Fluent identifier and
+//! arguments through an exhaustive `match`, and the tests check that every identifier
+//! exists in every file.
 
-use std::borrow::Cow;
+use std::sync::LazyLock;
+
+use fluent_bundle::concurrent::FluentBundle;
+use fluent_bundle::{FluentArgs, FluentError, FluentResource};
+use unic_langid::LanguageIdentifier;
 
 use crate::theme::{ColorGroup, ColorKey, NameError};
 
@@ -451,555 +457,409 @@ pub enum Msg {
 #[cfg(test)]
 pub const LANGS: [Lang; 2] = [Lang::En, Lang::Fr];
 
+impl Lang {
+    /// BCP 47 tag of the language, also the name of its file in `i18n/`.
+    fn tag(self) -> &'static str {
+        match self {
+            Lang::En => "en-US",
+            Lang::Fr => "fr",
+        }
+    }
+
+    /// Fluent source of the language, embedded in the binary.
+    fn source(self) -> &'static str {
+        match self {
+            Lang::En => include_str!("../i18n/en-US.ftl"),
+            Lang::Fr => include_str!("../i18n/fr.ftl"),
+        }
+    }
+}
+
+type Bundle = FluentBundle<FluentResource>;
+
+/// The bundle of every language, in [`Lang`] order, parsed on first use. The
+/// concurrent bundle is `Sync`: notifications are formatted on another thread.
+static BUNDLES: LazyLock<[Bundle; 2]> = LazyLock::new(|| [Lang::En, Lang::Fr].map(bundle));
+
+/// Bundle of `lang`, from its embedded file. A file that does not parse panics: the
+/// tests parse every file, so it cannot ship.
+fn bundle(lang: Lang) -> Bundle {
+    let tag = lang.tag();
+    let id: LanguageIdentifier = tag.parse().expect("valid language tag");
+    let resource = FluentResource::try_new(lang.source().to_owned())
+        .unwrap_or_else(|(_, errors)| panic!("i18n/{tag}.ftl: {errors:?}"));
+    let mut bundle = FluentBundle::new_concurrent(vec![id]);
+    // No RTL in the interface, and the isolation marks would show in the grid font.
+    bundle.set_use_isolating(false);
+    bundle
+        .add_resource(resource)
+        .unwrap_or_else(|errors| panic!("i18n/{tag}.ftl: {errors:?}"));
+    bundle
+}
+
+/// Text of the message `id` with `args` in `bundle`, and the formatting errors.
+/// `None` when the bundle has no such message.
+fn format(bundle: &Bundle, id: &str, args: &FluentArgs) -> Option<(String, Vec<FluentError>)> {
+    let pattern = bundle.get_message(id)?.value()?;
+    let mut errors = Vec::new();
+    let text = bundle
+        .format_pattern(pattern, Some(args), &mut errors)
+        .into_owned();
+    Some((text, errors))
+}
+
 /// Text of `msg` in `lang`.
-pub fn text(lang: Lang, msg: &Msg) -> Cow<'static, str> {
-    match lang {
-        Lang::En => english(msg),
-        Lang::Fr => french(msg),
+pub fn text(lang: Lang, msg: &Msg) -> String {
+    let (id, args) = fluent(msg);
+    match format(&BUNDLES[lang as usize], id, &args) {
+        Some((text, errors)) => {
+            if !errors.is_empty() {
+                log::warn!("i18n: {id} in {}: {errors:?}", lang.tag());
+            }
+            text
+        }
+        // The tests check that every message exists in every language.
+        None => id.to_owned(),
     }
 }
 
-fn english(msg: &Msg) -> Cow<'static, str> {
-    let text = match msg {
-        Msg::Copy => "Copy",
-        Msg::Paste => "Paste",
-        Msg::ScrollPageUp => "Scroll up one page",
-        Msg::ScrollPageDown => "Scroll down one page",
-        Msg::ScrollToTop => "Scroll to top",
-        Msg::ScrollToBottom => "Scroll to bottom",
-        Msg::FontSizeIncrease => "Increase font size",
-        Msg::FontSizeDecrease => "Decrease font size",
-        Msg::FontSizeReset => "Reset font size",
-        Msg::FontSizeResetAll => "Reset font size in all panes",
-        Msg::PreviousBlock => "Previous command block",
-        Msg::NextBlock => "Next command block",
-        Msg::CopyCommand => "Copy block command",
-        Msg::CopyOutput => "Copy block output",
-        Msg::ToggleFold => "Fold / unfold block",
-        Msg::ToggleFoldAll => "Fold / unfold all blocks",
-        Msg::OpenSearch => "Search the history",
-        Msg::SearchPlaceholder => "Search",
-        Msg::InvalidRegex => "Invalid regex",
-        Msg::SearchZoneBoth => "All",
-        Msg::SearchZoneCommand => "Commands",
-        Msg::SearchZoneOutput => "Output",
-        Msg::SearchStatusAll => "Any",
-        Msg::SearchStatusSuccess => "Success",
-        Msg::SearchStatusFailure => "Failure",
-        Msg::NewTab => "New tab",
-        Msg::CloseTab => "Close the tab",
-        Msg::ClosePane => "Close pane",
-        Msg::NextTab => "Next tab",
-        Msg::PreviousTab => "Previous tab",
-        Msg::GoToTab(tab) => return format!("Go to tab {tab}").into(),
-        Msg::SplitRight => "Split right",
-        Msg::SplitDown => "Split down",
-        Msg::FocusPane(direction) => match direction {
-            Direction::Left => "Focus pane on the left",
-            Direction::Right => "Focus pane on the right",
-            Direction::Up => "Focus pane above",
-            Direction::Down => "Focus pane below",
-        },
-        Msg::ResizePane(direction) => match direction {
-            Direction::Left => "Resize pane to the left",
-            Direction::Right => "Resize pane to the right",
-            Direction::Up => "Resize pane upwards",
-            Direction::Down => "Resize pane downwards",
-        },
-        Msg::NextPane => "Next pane",
-        Msg::PreviousPane => "Previous pane",
-        Msg::ToggleZoom => "Zoom / unzoom pane",
-        Msg::ToggleBroadcastAll => "Broadcast input to all panes / stop",
-        Msg::ZoomPane => "Zoom the pane",
-        Msg::UnzoomPane => "Unzoom the pane",
-        Msg::SplitVertical => "Split vertically",
-        Msg::SplitHorizontal => "Split horizontally",
-        Msg::Themes => "Themes",
-        Msg::MoreThemes => "More...",
-        Msg::FoldBlock => "Fold block",
-        Msg::UnfoldBlock => "Unfold block",
-        Msg::CommandPalette => "Command palette",
-        Msg::OpenSettings => "Settings",
-        Msg::Quit => "Quit Graphene",
-        Msg::Section(section) => match section {
-            SettingsSection::Font => "Font",
-            SettingsSection::Window => "Window",
-            SettingsSection::Scrollback => "Scrollback",
-            SettingsSection::Cursor => "Cursor",
-            SettingsSection::Selection => "Selection",
-            SettingsSection::Tabs => "Tabs",
-            SettingsSection::Language => "Language",
-            SettingsSection::Theme => "Theme",
-            SettingsSection::KeyboardShortcuts => "Keyboard shortcuts",
-            SettingsSection::Notifications => "Notifications",
-            SettingsSection::QuickTerminal => "Quick terminal",
-            SettingsSection::Updates => "Updates",
-        },
-        Msg::Field(field) => match field {
-            SettingsField::Language => "Language",
-            SettingsField::FontFamily => "Family",
-            SettingsField::FontSize => "Size",
-            SettingsField::FontLigatures => "Ligatures",
-            SettingsField::FontFeatures => "OpenType features",
-            SettingsField::StartupMode => "Startup mode",
-            SettingsField::WindowWidth => "Width",
-            SettingsField::WindowHeight => "Height",
-            SettingsField::Padding => "Padding",
-            SettingsField::BackgroundOpacity => "Background opacity",
-            SettingsField::WindowProgress => "Show program progress",
-            SettingsField::RestoreSession => "Restore the session at launch",
-            SettingsField::ScrollbackLines => "Lines kept",
-            SettingsField::CursorShape => "Shape",
-            SettingsField::CursorBlinking => "Blinking",
-            SettingsField::WordSeparators => "Word separators",
-            SettingsField::TabPosition => "Position",
-            SettingsField::ThemeFollow => "Follow the system appearance",
-            SettingsField::ThemeName => "Theme",
-            SettingsField::ThemeLight => "Light theme",
-            SettingsField::ThemeDark => "Dark theme",
-            SettingsField::UpdatesCheck => "Check for updates",
-            SettingsField::UpdatesInterval => "Check interval",
-            SettingsField::NotificationsProgram => "Notifications from programs",
-            SettingsField::NotificationsCommandFinished => "Notify when a long command finishes",
-            SettingsField::NotificationsCommandThreshold => "Long command threshold (seconds)",
-            SettingsField::NotificationsBell => "Notify on terminal bell",
-            SettingsField::QuickTerminalEnabled => "Enable the quick terminal",
-            SettingsField::QuickTerminalHotkey => "Global shortcut",
-            SettingsField::QuickTerminalEdge => "Screen edge",
-            SettingsField::QuickTerminalSize => "Size (% of the screen)",
-            SettingsField::QuickTerminalScreen => "Screen",
-            SettingsField::QuickTerminalAnimation => "Slide duration (ms)",
-            SettingsField::QuickTerminalHideOnFocusLoss => "Hide when the focus is lost",
-            SettingsField::QuickTerminalAutostart => "Start with the session",
-        },
-        Msg::SystemMonospace => "System monospace",
-        Msg::ActiveScreen => "Screen under the mouse cursor",
-        Msg::PrimaryScreen => "Primary screen",
-        Msg::UnknownKeys => "Unknown keys",
-        Msg::AtLine(line) => return format!("line {line}").into(),
-        Msg::FixFileByHand => {
-            "The file cannot be read: fix it by hand. The settings stay disabled until then."
+/// Fluent identifier of `msg` and its arguments. Exhaustive: a new [`Msg`] variant
+/// fails to compile here until it gets an identifier, and the tests then require it
+/// in the file of every language.
+fn fluent(msg: &Msg) -> (&'static str, FluentArgs<'_>) {
+    let mut args = FluentArgs::new();
+    let id = match msg {
+        Msg::Copy => "copy",
+        Msg::Paste => "paste",
+        Msg::ScrollPageUp => "scroll-page-up",
+        Msg::ScrollPageDown => "scroll-page-down",
+        Msg::ScrollToTop => "scroll-to-top",
+        Msg::ScrollToBottom => "scroll-to-bottom",
+        Msg::FontSizeIncrease => "font-size-increase",
+        Msg::FontSizeDecrease => "font-size-decrease",
+        Msg::FontSizeReset => "font-size-reset",
+        Msg::FontSizeResetAll => "font-size-reset-all",
+        Msg::PreviousBlock => "previous-block",
+        Msg::NextBlock => "next-block",
+        Msg::CopyCommand => "copy-command",
+        Msg::CopyOutput => "copy-output",
+        Msg::ToggleFold => "toggle-fold",
+        Msg::ToggleFoldAll => "toggle-fold-all",
+        Msg::OpenSearch => "open-search",
+        Msg::SearchPlaceholder => "search-placeholder",
+        Msg::InvalidRegex => "invalid-regex",
+        Msg::SearchZoneBoth => "search-zone-both",
+        Msg::SearchZoneCommand => "search-zone-command",
+        Msg::SearchZoneOutput => "search-zone-output",
+        Msg::SearchStatusAll => "search-status-all",
+        Msg::SearchStatusSuccess => "search-status-success",
+        Msg::SearchStatusFailure => "search-status-failure",
+        Msg::NewTab => "new-tab",
+        Msg::CloseTab => "close-tab",
+        Msg::ClosePane => "close-pane",
+        Msg::NextTab => "next-tab",
+        Msg::PreviousTab => "previous-tab",
+        Msg::GoToTab(tab) => {
+            args.set("tab", *tab);
+            "go-to-tab"
         }
-        Msg::QuickTerminalUnavailableOnWayland => "The quick terminal is not available on Wayland",
-        Msg::QuickTerminalDisabled => {
-            "Turn it on to change the settings below. Takes effect the next time Graphene starts."
+        Msg::SplitRight => "split-right",
+        Msg::SplitDown => "split-down",
+        Msg::FocusPane(direction) => {
+            args.set("direction", direction_key(*direction));
+            "focus-pane"
         }
-        Msg::CannotSave => "Cannot save the change",
-        Msg::NotANumber => "Enter a number",
-        Msg::NotAWholeNumber => "Enter a whole number",
-        Msg::AtLeast(min) => return format!("Must be at least {min}").into(),
-        Msg::AtMost(max) => return format!("Must be at most {max}").into(),
-        Msg::AddShortcut => "Add",
-        Msg::AddShortcutHint => "Add shortcut",
-        Msg::ChangeShortcut => "Change",
-        Msg::RemoveShortcut => "Remove this shortcut",
-        Msg::NoShortcut => "No shortcut",
-        Msg::PressShortcut => "Press a shortcut · Esc to cancel",
-        Msg::AlreadyUsedBy(action) => return format!("Already used by {action}").into(),
-        Msg::Replace => "Replace",
-        Msg::FilterActions => "Filter actions",
-        Msg::NoActionMatches => "No action matches",
-        Msg::SearchShortcut => "Find a shortcut",
-        Msg::NoActionForShortcut => "No action uses this shortcut",
-        Msg::ThemeEditor => "Theme editor",
-        Msg::ThemeEditorIntro => {
-            "Change the colors of your own themes. Built-in themes cannot be changed: duplicate one to get a copy you can edit."
+        Msg::ResizePane(direction) => {
+            args.set("direction", direction_key(*direction));
+            "resize-pane"
         }
-        Msg::ThemeColorsHint => {
-            "Click a swatch to pick a color, or type or paste its #rrggbb code. Each change is saved to the theme file right away."
+        Msg::NextPane => "next-pane",
+        Msg::PreviousPane => "previous-pane",
+        Msg::ToggleZoom => "toggle-zoom",
+        Msg::ToggleBroadcastAll => "toggle-broadcast-all",
+        Msg::ZoomPane => "zoom-pane",
+        Msg::UnzoomPane => "unzoom-pane",
+        Msg::SplitVertical => "split-vertical",
+        Msg::SplitHorizontal => "split-horizontal",
+        Msg::Themes => "themes",
+        Msg::MoreThemes => "more-themes",
+        Msg::FoldBlock => "fold-block",
+        Msg::UnfoldBlock => "unfold-block",
+        Msg::CommandPalette => "command-palette",
+        Msg::EqualisePanes => "equalise-panes",
+        Msg::DetachPane => "detach-pane",
+        Msg::RenameTab => "rename-tab",
+        Msg::OpenSettings => "open-settings",
+        Msg::Quit => "quit",
+        Msg::Section(section) => {
+            args.set("section", section_key(*section));
+            "settings-section"
         }
-        Msg::InvalidHexColor => "Enter a color as #rrggbb",
-        Msg::OpenThemesFolder => "Open the themes folder",
-        Msg::EditedTheme => "Theme to edit",
-        Msg::Duplicate => "Duplicate",
-        Msg::Rename => "Rename",
-        Msg::Delete => "Delete",
-        Msg::NewThemeName => "New name",
-        Msg::Confirm => "Confirm",
+        Msg::Field(field) => {
+            args.set("field", field_key(*field));
+            "settings-field"
+        }
+        Msg::SystemMonospace => "system-monospace",
+        Msg::ActiveScreen => "active-screen",
+        Msg::PrimaryScreen => "primary-screen",
+        Msg::UnknownKeys => "unknown-keys",
+        Msg::AtLine(line) => {
+            args.set("line", *line);
+            "at-line"
+        }
+        Msg::FixFileByHand => "fix-file-by-hand",
+        Msg::QuickTerminalUnavailableOnWayland => "quick-terminal-unavailable-on-wayland",
+        Msg::QuickTerminalDisabled => "quick-terminal-disabled",
+        Msg::CannotSave => "cannot-save",
+        Msg::NotANumber => "not-a-number",
+        Msg::NotAWholeNumber => "not-a-whole-number",
+        Msg::AtLeast(min) => {
+            args.set("min", min.as_str());
+            "at-least"
+        }
+        Msg::AtMost(max) => {
+            args.set("max", max.as_str());
+            "at-most"
+        }
+        Msg::AddShortcut => "add-shortcut",
+        Msg::AddShortcutHint => "add-shortcut-hint",
+        Msg::ChangeShortcut => "change-shortcut",
+        Msg::RemoveShortcut => "remove-shortcut",
+        Msg::NoShortcut => "no-shortcut",
+        Msg::PressShortcut => "press-shortcut",
+        Msg::AlreadyUsedBy(action) => {
+            args.set("action", action.as_str());
+            "already-used-by"
+        }
+        Msg::Replace => "replace",
+        Msg::FilterActions => "filter-actions",
+        Msg::NoActionMatches => "no-action-matches",
+        Msg::SearchShortcut => "search-shortcut",
+        Msg::NoActionForShortcut => "no-action-for-shortcut",
+        Msg::ThemeEditor => "theme-editor",
+        Msg::ThemeEditorIntro => "theme-editor-intro",
+        Msg::ThemeColorsHint => "theme-colors-hint",
+        Msg::InvalidHexColor => "invalid-hex-color",
+        Msg::OpenThemesFolder => "open-themes-folder",
+        Msg::EditedTheme => "edited-theme",
+        Msg::Duplicate => "duplicate",
+        Msg::Rename => "rename",
+        Msg::Delete => "delete",
+        Msg::NewThemeName => "new-theme-name",
+        Msg::Confirm => "confirm",
         Msg::ConfirmDeleteTheme(name) => {
-            return format!("Delete the theme {name}? Its file is removed.").into();
+            args.set("name", name.as_str());
+            "confirm-delete-theme"
         }
-        Msg::BuiltInTheme => {
-            "This built-in theme cannot be changed. Click Duplicate to create a copy you can edit."
+        Msg::BuiltInTheme => "built-in-theme",
+        Msg::KeepTextColor => "keep-text-color",
+        Msg::ThemeColorGroup(group) => {
+            args.set("group", color_group_key(*group));
+            "theme-color-group"
         }
-        Msg::KeepTextColor => "Keep the text color",
-        Msg::ThemeColorGroup(group) => match group {
-            ColorGroup::Terminal => "Terminal colors",
-            ColorGroup::Normal => "Normal ANSI colors",
-            ColorGroup::Bright => "Bright ANSI colors",
-            ColorGroup::Interface => "Interface colors",
-        },
-        Msg::ThemeColor(key) => english_color(*key),
-        Msg::ThemeNameError(error) => match error {
-            NameError::Empty => "Enter a name",
-            NameError::Invalid => "A name cannot contain / or \\ nor start with a dot",
-            NameError::Taken => "A theme with this name already exists",
-        },
-        Msg::EqualisePanes => "Equalise panes",
-        Msg::DetachPane => "Move pane to a new tab",
-        Msg::RenameTab => "Rename the tab",
-        Msg::PalettePlaceholder => "Type a command, a tab or a pane",
-        Msg::SecretAnswer => "The Answer to the Ultimate Question",
-        Msg::SecretAuthor => "marmotz on GitHub",
-        Msg::SecretGraphene => "Graphene",
-        Msg::TabEntry { tab, title } => return format!("Tab {tab}: {title}").into(),
+        Msg::ThemeColor(key) => {
+            args.set("key", color_key(*key));
+            "theme-color"
+        }
+        Msg::ThemeNameError(error) => {
+            args.set("error", name_error_key(*error));
+            "theme-name-error"
+        }
+        Msg::PalettePlaceholder => "palette-placeholder",
+        Msg::SecretAnswer => "secret-answer",
+        Msg::SecretAuthor => "secret-author",
+        Msg::SecretGraphene => "secret-graphene",
+        Msg::TabEntry { tab, title } => {
+            args.set("tab", *tab);
+            args.set("title", title.as_str());
+            "tab-entry"
+        }
         Msg::PaneEntry { tab, pane, title } => {
-            return format!("Tab {tab} > pane {pane}: {title}").into();
+            args.set("tab", *tab);
+            args.set("pane", *pane);
+            args.set("title", title.as_str());
+            "pane-entry"
         }
-        Msg::ConfirmCloseTitle(target) => match target {
-            CloseTarget::Pane => "Close this pane?",
-            CloseTarget::Tab => "Close this tab?",
-            CloseTarget::Window => "Close the window?",
-        },
+        Msg::ConfirmCloseTitle(target) => {
+            args.set("target", close_target_key(*target));
+            "confirm-close-title"
+        }
         Msg::ProgramsRunning(programs) => {
-            return match programs.as_slice() {
-                [program] => format!("{program} is still running"),
-                _ => format!(
-                    "{} programs are still running: {}",
-                    programs.len(),
-                    programs.join(", ")
-                ),
+            args.set("count", programs.len());
+            args.set("programs", programs.join(", "));
+            "programs-running"
+        }
+        Msg::Close => "close",
+        Msg::Cancel => "cancel",
+        Msg::UpdateAvailable(tag) => {
+            args.set("tag", tag.as_str());
+            "update-available"
+        }
+        Msg::OpenRelease => "open-release",
+        Msg::IgnoreVersion => "ignore-version",
+        Msg::LinesHidden(rows) => {
+            args.set("rows", *rows);
+            "lines-hidden"
+        }
+        Msg::CommandFinished => "command-finished",
+        Msg::CommandFailed(code) => {
+            args.set("code", *code);
+            "command-failed"
+        }
+        Msg::Bell => "bell",
+        Msg::ShowPane => "show-pane",
+        Msg::ProgramExited(exit) => {
+            let (kind, value) = match exit {
+                Exit::Code(code) => ("code", Some(*code)),
+                Exit::Signal(signal) => ("signal", Some(*signal)),
+                Exit::Unknown => ("unknown", None),
+            };
+            args.set("exit", kind);
+            if let Some(value) = value {
+                args.set("value", value);
             }
-            .into();
-        }
-        Msg::Close => "Close",
-        Msg::Cancel => "Cancel",
-        Msg::UpdateAvailable(tag) => return format!("Graphene {tag} is available").into(),
-        Msg::OpenRelease => "Open release",
-        Msg::IgnoreVersion => "Ignore this version",
-        Msg::LinesHidden(1) => "1 line hidden",
-        Msg::LinesHidden(rows) => return format!("{rows} lines hidden").into(),
-        Msg::CommandFinished => "Command finished",
-        Msg::CommandFailed(code) => return format!("Command failed (code {code})").into(),
-        Msg::Bell => "Bell",
-        Msg::ShowPane => "Show pane",
-        Msg::ProgramExited(Exit::Code(code)) => {
-            return format!("Program ended (code {code}). Press any key to close.").into();
-        }
-        Msg::ProgramExited(Exit::Signal(signal)) => {
-            return format!("Program ended (signal {signal}). Press any key to close.").into();
-        }
-        Msg::ProgramExited(Exit::Unknown) => "Program ended. Press any key to close.",
-    };
-    Cow::Borrowed(text)
-}
-
-fn french(msg: &Msg) -> Cow<'static, str> {
-    let text = match msg {
-        Msg::Copy => "Copier",
-        Msg::Paste => "Coller",
-        Msg::ScrollPageUp => "Remonter d'une page",
-        Msg::ScrollPageDown => "Descendre d'une page",
-        Msg::ScrollToTop => "Aller tout en haut",
-        Msg::ScrollToBottom => "Aller tout en bas",
-        Msg::FontSizeIncrease => "Agrandir la police",
-        Msg::FontSizeDecrease => "Réduire la police",
-        Msg::FontSizeReset => "Taille de police par défaut",
-        Msg::FontSizeResetAll => "Taille de police par défaut dans tous les panes",
-        Msg::PreviousBlock => "Bloc de commande précédent",
-        Msg::NextBlock => "Bloc de commande suivant",
-        Msg::CopyCommand => "Copier la commande du bloc",
-        Msg::CopyOutput => "Copier la sortie du bloc",
-        Msg::ToggleFold => "Replier / déplier le bloc",
-        Msg::ToggleFoldAll => "Replier / déplier tous les blocs",
-        Msg::OpenSearch => "Rechercher dans l'historique",
-        Msg::SearchPlaceholder => "Rechercher",
-        Msg::InvalidRegex => "Regex invalide",
-        Msg::SearchZoneBoth => "Tout",
-        Msg::SearchZoneCommand => "Commandes",
-        Msg::SearchZoneOutput => "Sorties",
-        Msg::SearchStatusAll => "Tous",
-        Msg::SearchStatusSuccess => "Succès",
-        Msg::SearchStatusFailure => "Échecs",
-        Msg::NewTab => "Nouvel onglet",
-        Msg::CloseTab => "Fermer l'onglet",
-        Msg::ClosePane => "Fermer le panneau",
-        Msg::NextTab => "Onglet suivant",
-        Msg::PreviousTab => "Onglet précédent",
-        Msg::GoToTab(tab) => return format!("Aller à l'onglet {tab}").into(),
-        Msg::SplitRight => "Diviser à droite",
-        Msg::SplitDown => "Diviser en bas",
-        Msg::FocusPane(direction) => match direction {
-            Direction::Left => "Aller au panneau de gauche",
-            Direction::Right => "Aller au panneau de droite",
-            Direction::Up => "Aller au panneau du haut",
-            Direction::Down => "Aller au panneau du bas",
-        },
-        Msg::ResizePane(direction) => match direction {
-            Direction::Left => "Redimensionner le panneau vers la gauche",
-            Direction::Right => "Redimensionner le panneau vers la droite",
-            Direction::Up => "Redimensionner le panneau vers le haut",
-            Direction::Down => "Redimensionner le panneau vers le bas",
-        },
-        Msg::NextPane => "Panneau suivant",
-        Msg::PreviousPane => "Panneau précédent",
-        Msg::ToggleZoom => "Agrandir / réduire le panneau",
-        Msg::ToggleBroadcastAll => "Diffuser la saisie à tous les panneaux / arrêter",
-        Msg::ZoomPane => "Agrandir le panneau",
-        Msg::UnzoomPane => "Réduire le panneau",
-        Msg::SplitVertical => "Diviser verticalement",
-        Msg::SplitHorizontal => "Diviser horizontalement",
-        Msg::Themes => "Thèmes",
-        Msg::MoreThemes => "Plus...",
-        Msg::FoldBlock => "Replier le bloc",
-        Msg::UnfoldBlock => "Déplier le bloc",
-        Msg::CommandPalette => "Palette de commandes",
-        Msg::OpenSettings => "Paramètres",
-        Msg::Quit => "Quitter Graphene",
-        Msg::Section(section) => match section {
-            SettingsSection::Font => "Police",
-            SettingsSection::Window => "Fenêtre",
-            SettingsSection::Scrollback => "Historique",
-            SettingsSection::Cursor => "Curseur",
-            SettingsSection::Selection => "Sélection",
-            SettingsSection::Tabs => "Onglets",
-            SettingsSection::Language => "Langue",
-            SettingsSection::Theme => "Thème",
-            SettingsSection::KeyboardShortcuts => "Raccourcis clavier",
-            SettingsSection::Notifications => "Notifications",
-            SettingsSection::QuickTerminal => "Quick terminal",
-            SettingsSection::Updates => "Mises à jour",
-        },
-        Msg::Field(field) => match field {
-            SettingsField::Language => "Langue",
-            SettingsField::FontFamily => "Famille",
-            SettingsField::FontSize => "Taille",
-            SettingsField::FontLigatures => "Ligatures",
-            SettingsField::FontFeatures => "Fonctionnalités OpenType",
-            SettingsField::StartupMode => "Mode au démarrage",
-            SettingsField::WindowWidth => "Largeur",
-            SettingsField::WindowHeight => "Hauteur",
-            SettingsField::Padding => "Marge intérieure",
-            SettingsField::BackgroundOpacity => "Opacité du fond",
-            SettingsField::WindowProgress => "Afficher la progression des programmes",
-            SettingsField::RestoreSession => "Restaurer la session au lancement",
-            SettingsField::ScrollbackLines => "Lignes conservées",
-            SettingsField::CursorShape => "Forme",
-            SettingsField::CursorBlinking => "Clignotement",
-            SettingsField::WordSeparators => "Séparateurs de mots",
-            SettingsField::TabPosition => "Emplacement",
-            SettingsField::ThemeFollow => "Suivre l'apparence du système",
-            SettingsField::ThemeName => "Thème",
-            SettingsField::ThemeLight => "Thème clair",
-            SettingsField::ThemeDark => "Thème sombre",
-            SettingsField::UpdatesCheck => "Rechercher les mises à jour",
-            SettingsField::UpdatesInterval => "Intervalle de recherche",
-            SettingsField::NotificationsProgram => "Notifications des programmes",
-            SettingsField::NotificationsCommandFinished => "Signaler la fin d'une commande longue",
-            SettingsField::NotificationsCommandThreshold => {
-                "Seuil d'une commande longue (secondes)"
-            }
-            SettingsField::NotificationsBell => "Signaler la sonnerie du terminal",
-            SettingsField::QuickTerminalEnabled => "Activer le quick terminal",
-            SettingsField::QuickTerminalHotkey => "Raccourci global",
-            SettingsField::QuickTerminalEdge => "Bord de l'écran",
-            SettingsField::QuickTerminalSize => "Taille (% de l'écran)",
-            SettingsField::QuickTerminalScreen => "Écran",
-            SettingsField::QuickTerminalAnimation => "Durée du glissement (ms)",
-            SettingsField::QuickTerminalHideOnFocusLoss => "Masquer à la perte du focus",
-            SettingsField::QuickTerminalAutostart => "Démarrer avec la session",
-        },
-        Msg::SystemMonospace => "Monospace du système",
-        Msg::ActiveScreen => "Écran sous le pointeur de la souris",
-        Msg::PrimaryScreen => "Écran principal",
-        Msg::UnknownKeys => "Clés inconnues",
-        Msg::AtLine(line) => return format!("ligne {line}").into(),
-        Msg::FixFileByHand => {
-            "Le fichier est illisible : corrigez-le à la main. Les paramètres restent désactivés d'ici là."
-        }
-        Msg::QuickTerminalUnavailableOnWayland => {
-            "Le quick terminal n'est pas disponible sous Wayland"
-        }
-        Msg::QuickTerminalDisabled => {
-            "Activez-le pour modifier les réglages ci-dessous. Prend effet au prochain démarrage de Graphene."
-        }
-        Msg::CannotSave => "Impossible d'enregistrer la modification",
-        Msg::NotANumber => "Saisissez un nombre",
-        Msg::NotAWholeNumber => "Saisissez un nombre entier",
-        Msg::AtLeast(min) => return format!("Doit valoir au moins {min}").into(),
-        Msg::AtMost(max) => return format!("Doit valoir au plus {max}").into(),
-        Msg::AddShortcut => "Ajouter",
-        Msg::AddShortcutHint => "Ajouter un raccourci",
-        Msg::ChangeShortcut => "Modifier",
-        Msg::RemoveShortcut => "Supprimer ce raccourci",
-        Msg::NoShortcut => "Aucun raccourci",
-        Msg::PressShortcut => "Appuyez sur un raccourci · Échap pour annuler",
-        Msg::AlreadyUsedBy(action) => return format!("Déjà utilisé par {action}").into(),
-        Msg::Replace => "Remplacer",
-        Msg::FilterActions => "Filtrer les actions",
-        Msg::NoActionMatches => "Aucune action ne correspond",
-        Msg::SearchShortcut => "Rechercher un raccourci",
-        Msg::NoActionForShortcut => "Aucune action n'utilise ce raccourci",
-        Msg::ThemeEditor => "Éditeur de thème",
-        Msg::ThemeEditorIntro => {
-            "Modifiez les couleurs de vos propres thèmes. Les thèmes intégrés ne sont pas modifiables : dupliquez-en un pour obtenir une copie modifiable."
-        }
-        Msg::ThemeColorsHint => {
-            "Cliquez sur une pastille pour choisir une couleur, ou saisissez ou collez son code #rrggbb. Chaque changement est enregistré aussitôt dans le fichier du thème."
-        }
-        Msg::InvalidHexColor => "Saisissez une couleur au format #rrggbb",
-        Msg::OpenThemesFolder => "Ouvrir le dossier des thèmes",
-        Msg::EditedTheme => "Thème à modifier",
-        Msg::Duplicate => "Dupliquer",
-        Msg::Rename => "Renommer",
-        Msg::Delete => "Supprimer",
-        Msg::NewThemeName => "Nouveau nom",
-        Msg::Confirm => "Valider",
-        Msg::ConfirmDeleteTheme(name) => {
-            return format!("Supprimer le thème {name} ? Son fichier est effacé.").into();
-        }
-        Msg::BuiltInTheme => {
-            "Ce thème intégré n'est pas modifiable. Cliquez sur Dupliquer pour en créer une copie modifiable."
-        }
-        Msg::KeepTextColor => "Garder la couleur du texte",
-        Msg::ThemeColorGroup(group) => match group {
-            ColorGroup::Terminal => "Couleurs du terminal",
-            ColorGroup::Normal => "Couleurs ANSI normales",
-            ColorGroup::Bright => "Couleurs ANSI vives",
-            ColorGroup::Interface => "Couleurs de l'interface",
-        },
-        Msg::ThemeColor(key) => french_color(*key),
-        Msg::ThemeNameError(error) => match error {
-            NameError::Empty => "Saisissez un nom",
-            NameError::Invalid => "Un nom ne peut pas contenir / ou \\ ni commencer par un point",
-            NameError::Taken => "Un thème porte déjà ce nom",
-        },
-        Msg::EqualisePanes => "Égaliser les panneaux",
-        Msg::DetachPane => "Déplacer le panneau dans un nouvel onglet",
-        Msg::RenameTab => "Renommer l'onglet",
-        Msg::PalettePlaceholder => "Tapez une commande, un onglet ou un panneau",
-        Msg::SecretAnswer => "La grande question sur la vie, l'univers et le reste",
-        Msg::SecretAuthor => "marmotz sur GitHub",
-        Msg::SecretGraphene => "Graphene",
-        Msg::TabEntry { tab, title } => return format!("Onglet {tab} : {title}").into(),
-        Msg::PaneEntry { tab, pane, title } => {
-            return format!("Onglet {tab} > panneau {pane} : {title}").into();
-        }
-        Msg::ConfirmCloseTitle(target) => match target {
-            CloseTarget::Pane => "Fermer ce panneau ?",
-            CloseTarget::Tab => "Fermer cet onglet ?",
-            CloseTarget::Window => "Fermer la fenêtre ?",
-        },
-        Msg::ProgramsRunning(programs) => {
-            return match programs.as_slice() {
-                [program] => format!("{program} est toujours en cours d'exécution"),
-                _ => format!(
-                    "{} programmes sont toujours en cours d'exécution : {}",
-                    programs.len(),
-                    programs.join(", ")
-                ),
-            }
-            .into();
-        }
-        Msg::Close => "Fermer",
-        Msg::Cancel => "Annuler",
-        Msg::UpdateAvailable(tag) => return format!("Graphene {tag} est disponible").into(),
-        Msg::OpenRelease => "Voir la version",
-        Msg::IgnoreVersion => "Ignorer cette version",
-        Msg::LinesHidden(1) => "1 ligne masquée",
-        Msg::LinesHidden(rows) => return format!("{rows} lignes masquées").into(),
-        Msg::CommandFinished => "Commande terminée",
-        Msg::CommandFailed(code) => return format!("Commande échouée (code {code})").into(),
-        Msg::Bell => "Sonnerie",
-        Msg::ShowPane => "Afficher le panneau",
-        Msg::ProgramExited(Exit::Code(code)) => {
-            return format!("Programme terminé (code {code}). Appuyez sur une touche pour fermer.")
-                .into();
-        }
-        Msg::ProgramExited(Exit::Signal(signal)) => {
-            return format!(
-                "Programme terminé (signal {signal}). Appuyez sur une touche pour fermer."
-            )
-            .into();
-        }
-        Msg::ProgramExited(Exit::Unknown) => {
-            "Programme terminé. Appuyez sur une touche pour fermer."
+            "program-exited"
         }
     };
-    Cow::Borrowed(text)
+    (id, args)
 }
 
-/// English label of a theme color.
-fn english_color(key: ColorKey) -> &'static str {
-    match key {
-        ColorKey::Foreground => "Text",
-        ColorKey::Background => "Background",
-        ColorKey::Cursor => "Cursor",
-        ColorKey::CursorText => "Text under the cursor",
-        ColorKey::SelectionBackground => "Selection background",
-        ColorKey::SelectionForeground => "Selected text",
-        ColorKey::NormalBlack => "Normal black",
-        ColorKey::NormalRed => "Normal red",
-        ColorKey::NormalGreen => "Normal green",
-        ColorKey::NormalYellow => "Normal yellow",
-        ColorKey::NormalBlue => "Normal blue",
-        ColorKey::NormalMagenta => "Normal magenta",
-        ColorKey::NormalCyan => "Normal cyan",
-        ColorKey::NormalWhite => "Normal white",
-        ColorKey::BrightBlack => "Bright black",
-        ColorKey::BrightRed => "Bright red",
-        ColorKey::BrightGreen => "Bright green",
-        ColorKey::BrightYellow => "Bright yellow",
-        ColorKey::BrightBlue => "Bright blue",
-        ColorKey::BrightMagenta => "Bright magenta",
-        ColorKey::BrightCyan => "Bright cyan",
-        ColorKey::BrightWhite => "Bright white",
-        ColorKey::TabBarBackground => "Tab bar background",
-        ColorKey::TabActiveBackground => "Active tab background",
-        ColorKey::TabActiveText => "Active tab text",
-        ColorKey::TabInactiveText => "Inactive tab text",
-        ColorKey::PaneBorder => "Pane border",
-        ColorKey::PaneBroadcast => "Broadcast pane title bar",
-        ColorKey::PaletteBackground => "Command palette background",
-        ColorKey::PaletteText => "Command palette text",
-        ColorKey::PaletteMatch => "Command palette matches",
-        ColorKey::PaletteSelectionBackground => "Command palette selection",
-        ColorKey::BannerBackground => "Banner background",
-        ColorKey::BannerText => "Banner text",
-        ColorKey::SearchMatchBackground => "Search matches",
-        ColorKey::SearchCurrentBackground => "Current search match",
+/// Selector key of a direction in the Fluent files.
+fn direction_key(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Left => "left",
+        Direction::Right => "right",
+        Direction::Up => "up",
+        Direction::Down => "down",
     }
 }
 
-/// French label of a theme color.
-fn french_color(key: ColorKey) -> &'static str {
+/// Selector key of a close target in the Fluent files.
+fn close_target_key(target: CloseTarget) -> &'static str {
+    match target {
+        CloseTarget::Pane => "pane",
+        CloseTarget::Tab => "tab",
+        CloseTarget::Window => "window",
+    }
+}
+
+/// Selector key of a settings section in the Fluent files.
+fn section_key(section: SettingsSection) -> &'static str {
+    match section {
+        SettingsSection::Language => "language",
+        SettingsSection::Font => "font",
+        SettingsSection::Window => "window",
+        SettingsSection::Scrollback => "scrollback",
+        SettingsSection::Cursor => "cursor",
+        SettingsSection::Selection => "selection",
+        SettingsSection::Tabs => "tabs",
+        SettingsSection::Theme => "theme",
+        SettingsSection::KeyboardShortcuts => "keyboard-shortcuts",
+        SettingsSection::Notifications => "notifications",
+        SettingsSection::QuickTerminal => "quick-terminal",
+        SettingsSection::Updates => "updates",
+    }
+}
+
+/// Selector key of a settings field in the Fluent files.
+fn field_key(field: SettingsField) -> &'static str {
+    match field {
+        SettingsField::Language => "language",
+        SettingsField::FontFamily => "font-family",
+        SettingsField::FontSize => "font-size",
+        SettingsField::FontLigatures => "font-ligatures",
+        SettingsField::FontFeatures => "font-features",
+        SettingsField::StartupMode => "startup-mode",
+        SettingsField::WindowWidth => "window-width",
+        SettingsField::WindowHeight => "window-height",
+        SettingsField::Padding => "padding",
+        SettingsField::BackgroundOpacity => "background-opacity",
+        SettingsField::WindowProgress => "window-progress",
+        SettingsField::RestoreSession => "restore-session",
+        SettingsField::ScrollbackLines => "scrollback-lines",
+        SettingsField::CursorShape => "cursor-shape",
+        SettingsField::CursorBlinking => "cursor-blinking",
+        SettingsField::WordSeparators => "word-separators",
+        SettingsField::TabPosition => "tab-position",
+        SettingsField::ThemeFollow => "theme-follow",
+        SettingsField::ThemeName => "theme-name",
+        SettingsField::ThemeLight => "theme-light",
+        SettingsField::ThemeDark => "theme-dark",
+        SettingsField::UpdatesCheck => "updates-check",
+        SettingsField::UpdatesInterval => "updates-interval",
+        SettingsField::NotificationsProgram => "notifications-program",
+        SettingsField::NotificationsCommandFinished => "notifications-command-finished",
+        SettingsField::NotificationsCommandThreshold => "notifications-command-threshold",
+        SettingsField::NotificationsBell => "notifications-bell",
+        SettingsField::QuickTerminalEnabled => "quick-terminal-enabled",
+        SettingsField::QuickTerminalHotkey => "quick-terminal-hotkey",
+        SettingsField::QuickTerminalEdge => "quick-terminal-edge",
+        SettingsField::QuickTerminalSize => "quick-terminal-size",
+        SettingsField::QuickTerminalScreen => "quick-terminal-screen",
+        SettingsField::QuickTerminalAnimation => "quick-terminal-animation",
+        SettingsField::QuickTerminalHideOnFocusLoss => "quick-terminal-hide-on-focus-loss",
+        SettingsField::QuickTerminalAutostart => "quick-terminal-autostart",
+    }
+}
+
+/// Selector key of a group of theme colors in the Fluent files.
+fn color_group_key(group: ColorGroup) -> &'static str {
+    match group {
+        ColorGroup::Terminal => "terminal",
+        ColorGroup::Normal => "normal",
+        ColorGroup::Bright => "bright",
+        ColorGroup::Interface => "interface",
+    }
+}
+
+/// Selector key of a theme color in the Fluent files.
+fn color_key(key: ColorKey) -> &'static str {
     match key {
-        ColorKey::Foreground => "Texte",
-        ColorKey::Background => "Fond",
-        ColorKey::Cursor => "Curseur",
-        ColorKey::CursorText => "Texte sous le curseur",
-        ColorKey::SelectionBackground => "Fond de la sélection",
-        ColorKey::SelectionForeground => "Texte sélectionné",
-        ColorKey::NormalBlack => "Noir normal",
-        ColorKey::NormalRed => "Rouge normal",
-        ColorKey::NormalGreen => "Vert normal",
-        ColorKey::NormalYellow => "Jaune normal",
-        ColorKey::NormalBlue => "Bleu normal",
-        ColorKey::NormalMagenta => "Magenta normal",
-        ColorKey::NormalCyan => "Cyan normal",
-        ColorKey::NormalWhite => "Blanc normal",
-        ColorKey::BrightBlack => "Noir vif",
-        ColorKey::BrightRed => "Rouge vif",
-        ColorKey::BrightGreen => "Vert vif",
-        ColorKey::BrightYellow => "Jaune vif",
-        ColorKey::BrightBlue => "Bleu vif",
-        ColorKey::BrightMagenta => "Magenta vif",
-        ColorKey::BrightCyan => "Cyan vif",
-        ColorKey::BrightWhite => "Blanc vif",
-        ColorKey::TabBarBackground => "Fond de la barre d'onglets",
-        ColorKey::TabActiveBackground => "Fond de l'onglet actif",
-        ColorKey::TabActiveText => "Texte de l'onglet actif",
-        ColorKey::TabInactiveText => "Texte des onglets inactifs",
-        ColorKey::PaneBorder => "Bordure des panneaux",
-        ColorKey::PaneBroadcast => "Barre de titre des panneaux diffusés",
-        ColorKey::PaletteBackground => "Fond de la palette de commandes",
-        ColorKey::PaletteText => "Texte de la palette de commandes",
-        ColorKey::PaletteMatch => "Lettres trouvées dans la palette",
-        ColorKey::PaletteSelectionBackground => "Sélection dans la palette",
-        ColorKey::BannerBackground => "Fond du bandeau",
-        ColorKey::BannerText => "Texte du bandeau",
-        ColorKey::SearchMatchBackground => "Occurrences de la recherche",
-        ColorKey::SearchCurrentBackground => "Occurrence courante de la recherche",
+        ColorKey::Foreground => "foreground",
+        ColorKey::Background => "background",
+        ColorKey::Cursor => "cursor",
+        ColorKey::CursorText => "cursor-text",
+        ColorKey::SelectionBackground => "selection-background",
+        ColorKey::SelectionForeground => "selection-foreground",
+        ColorKey::NormalBlack => "normal-black",
+        ColorKey::NormalRed => "normal-red",
+        ColorKey::NormalGreen => "normal-green",
+        ColorKey::NormalYellow => "normal-yellow",
+        ColorKey::NormalBlue => "normal-blue",
+        ColorKey::NormalMagenta => "normal-magenta",
+        ColorKey::NormalCyan => "normal-cyan",
+        ColorKey::NormalWhite => "normal-white",
+        ColorKey::BrightBlack => "bright-black",
+        ColorKey::BrightRed => "bright-red",
+        ColorKey::BrightGreen => "bright-green",
+        ColorKey::BrightYellow => "bright-yellow",
+        ColorKey::BrightBlue => "bright-blue",
+        ColorKey::BrightMagenta => "bright-magenta",
+        ColorKey::BrightCyan => "bright-cyan",
+        ColorKey::BrightWhite => "bright-white",
+        ColorKey::TabBarBackground => "tab-bar-background",
+        ColorKey::TabActiveBackground => "tab-active-background",
+        ColorKey::TabActiveText => "tab-active-text",
+        ColorKey::TabInactiveText => "tab-inactive-text",
+        ColorKey::PaneBorder => "pane-border",
+        ColorKey::PaneBroadcast => "pane-broadcast",
+        ColorKey::PaletteBackground => "palette-background",
+        ColorKey::PaletteText => "palette-text",
+        ColorKey::PaletteMatch => "palette-match",
+        ColorKey::PaletteSelectionBackground => "palette-selection-background",
+        ColorKey::BannerBackground => "banner-background",
+        ColorKey::BannerText => "banner-text",
+        ColorKey::SearchMatchBackground => "search-match-background",
+        ColorKey::SearchCurrentBackground => "search-current-background",
+    }
+}
+
+/// Selector key of a theme name error in the Fluent files.
+fn name_error_key(error: NameError) -> &'static str {
+    match error {
+        NameError::Empty => "empty",
+        NameError::Invalid => "invalid",
+        NameError::Taken => "taken",
     }
 }
 
@@ -1333,6 +1193,111 @@ mod tests {
                 assert!(!text(lang, &msg).trim().is_empty(), "{lang:?} {msg:?}");
             }
         }
+    }
+
+    /// Identifiers of the messages defined in the Fluent file of `lang`.
+    fn message_ids(lang: Lang) -> Vec<&'static str> {
+        let resource = fluent_syntax::parser::parse(lang.source())
+            .unwrap_or_else(|(_, errors)| panic!("{lang:?}: {errors:?}"));
+        resource
+            .body
+            .into_iter()
+            .filter_map(|entry| match entry {
+                fluent_syntax::ast::Entry::Message(message) => Some(message.id.name),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_message_is_in_the_file_of_every_language_and_formats_without_error() {
+        for lang in LANGS {
+            // A bundle of this file alone: a message missing from it is not hidden by
+            // the bundle of another language.
+            let bundle = bundle(lang);
+            for msg in all_messages() {
+                let (id, args) = fluent(&msg);
+                let (text, errors) = format(&bundle, id, &args)
+                    .unwrap_or_else(|| panic!("{id} missing from i18n/{}.ftl", lang.tag()));
+                assert!(errors.is_empty(), "{lang:?} {msg:?}: {errors:?}");
+                assert!(!text.trim().is_empty(), "{lang:?} {msg:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn no_file_defines_an_identifier_unknown_to_the_reference() {
+        let reference = message_ids(Lang::En);
+        for lang in LANGS {
+            for id in message_ids(lang) {
+                assert!(
+                    reference.contains(&id),
+                    "{id} of {lang:?} is not in en-US.ftl"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_identifier_of_the_reference_is_used_by_a_message() {
+        let used: Vec<_> = all_messages().iter().map(|msg| fluent(msg).0).collect();
+        for id in message_ids(Lang::En) {
+            assert!(used.contains(&id), "{id} of en-US.ftl has no Msg");
+        }
+    }
+
+    #[test]
+    fn every_file_starts_with_its_review_status() {
+        for lang in LANGS {
+            let first = lang.source().lines().next();
+            assert!(
+                matches!(
+                    first,
+                    Some("## Status: reviewed") | Some("## Status: unreviewed")
+                ),
+                "{lang:?}: {first:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_selector_value_has_its_own_text() {
+        // A selector key missing from a file falls back to the default variant
+        // silently: distinct texts show that each value has its own.
+        let groups: [Vec<Msg>; 7] = [
+            DIRECTIONS.map(Msg::FocusPane).to_vec(),
+            DIRECTIONS.map(Msg::ResizePane).to_vec(),
+            TARGETS.map(Msg::ConfirmCloseTitle).to_vec(),
+            SettingsField::ALL.map(Msg::Field).to_vec(),
+            ColorGroup::ALL.map(Msg::ThemeColorGroup).to_vec(),
+            [NameError::Empty, NameError::Invalid, NameError::Taken]
+                .map(Msg::ThemeNameError)
+                .to_vec(),
+            [Exit::Code(1), Exit::Signal(1), Exit::Unknown]
+                .map(Msg::ProgramExited)
+                .to_vec(),
+        ];
+        for lang in LANGS {
+            for group in &groups {
+                let mut texts: Vec<_> = group.iter().map(|msg| text(lang, msg)).collect();
+                texts.sort();
+                texts.dedup();
+                assert_eq!(texts.len(), group.len(), "{lang:?} {group:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn plurals_follow_the_rules_of_the_language() {
+        // French takes the singular for 0, English the plural.
+        assert_eq!(text(Lang::En, &Msg::LinesHidden(0)), "0 lines hidden");
+        assert_eq!(text(Lang::Fr, &Msg::LinesHidden(0)), "0 ligne masquée");
+        assert_eq!(
+            text(Lang::Fr, &Msg::ProgramsRunning(vec!["vim".into()])),
+            "vim est toujours en cours d'exécution"
+        );
+        // No digit grouping and no isolation marks around the values.
+        assert_eq!(text(Lang::En, &Msg::GoToTab(12345)), "Go to tab 12345");
     }
 
     #[test]

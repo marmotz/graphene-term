@@ -77,7 +77,7 @@ fn entry(
     lang: Lang,
 ) -> Item {
     Item::Entry {
-        label: i18n::text(lang, &label).into_owned(),
+        label: i18n::text(lang, &label),
         shortcut,
         enabled,
         command,
@@ -102,7 +102,7 @@ fn action(
 
 fn themes(context: &MenuContext<'_>, lang: Lang) -> Item {
     Item::Submenu {
-        label: i18n::text(lang, &Msg::Themes).into_owned(),
+        label: i18n::text(lang, &Msg::Themes),
         entries: theme_pages(context.themes, context.theme_rows, lang),
     }
 }
@@ -123,7 +123,7 @@ fn theme_pages(themes: &[String], rows: usize, lang: Lang) -> Vec<Item> {
     let (page, rest) = themes.split_at(rows - 1);
     let mut items = page.iter().map(entry).collect::<Vec<_>>();
     items.push(Item::Submenu {
-        label: i18n::text(lang, &Msg::MoreThemes).into_owned(),
+        label: i18n::text(lang, &Msg::MoreThemes),
         entries: theme_pages(rest, rows, lang),
     });
     items

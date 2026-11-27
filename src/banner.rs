@@ -42,12 +42,12 @@ impl Banner {
     /// Banner announcing `release`, with its actions in [`UpdateAction`] order.
     pub fn update(release: &Release, lang: Lang) -> Self {
         Self {
-            text: i18n::text(lang, &Msg::UpdateAvailable(release.tag.clone())).into_owned(),
+            text: i18n::text(lang, &Msg::UpdateAvailable(release.tag.clone())),
             actions: UpdateAction::ALL
                 .iter()
                 .map(|action| match action {
-                    UpdateAction::Open => i18n::text(lang, &Msg::OpenRelease).into_owned(),
-                    UpdateAction::Ignore => i18n::text(lang, &Msg::IgnoreVersion).into_owned(),
+                    UpdateAction::Open => i18n::text(lang, &Msg::OpenRelease),
+                    UpdateAction::Ignore => i18n::text(lang, &Msg::IgnoreVersion),
                     UpdateAction::Close => CLOSE_LABEL.to_owned(),
                 })
                 .collect(),

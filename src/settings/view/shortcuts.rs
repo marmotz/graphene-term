@@ -101,7 +101,7 @@ impl View {
     /// clears the filter. `Escape` in the field clears an active filter and keeps the
     /// focus; without filter, the field only loses the focus.
     fn filter_bar(&mut self, ui: &mut Ui, lang: Lang) {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let mut text = match &self.filter {
             ShortcutFilter::Text(text) => text.clone(),
             _ => String::new(),
@@ -161,7 +161,7 @@ impl View {
         model: &SettingsModel,
         changes: &mut Vec<Change>,
     ) {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         self.filter_bar(ui, lang);
         ui.add_space(ui.spacing().item_spacing.y);
         let rows = model.shortcut_rows();
@@ -315,7 +315,7 @@ impl View {
         conflict: Conflict,
         changes: &mut Vec<Change>,
     ) {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let other = label(conflict.other.label());
         warn_label(
             ui,

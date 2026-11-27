@@ -72,9 +72,9 @@ pub fn content(notice: &Notice, pane_title: Option<&str>, lang: Lang) -> (String
             } else {
                 format!("{command} · {duration}")
             };
-            (i18n::text(lang, &title).into_owned(), body)
+            (i18n::text(lang, &title), body)
         }
-        Notice::Bell => (pane_title(), i18n::text(lang, &Msg::Bell).into_owned()),
+        Notice::Bell => (pane_title(), i18n::text(lang, &Msg::Bell)),
     }
 }
 

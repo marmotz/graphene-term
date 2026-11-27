@@ -142,7 +142,7 @@ impl View {
         model: &SettingsModel,
         edits: &mut Edits,
     ) {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let editable = !model.edited_is_built_in();
         ui.add_space(24.0);
         ui.heading(label(Msg::ThemeEditor));
@@ -254,7 +254,7 @@ impl View {
         model: &SettingsModel,
         edits: &mut Edits,
     ) {
-        let label = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let label = |msg: Msg| i18n::text(lang, &msg);
         let Some(naming) = &mut self.naming else {
             return;
         };

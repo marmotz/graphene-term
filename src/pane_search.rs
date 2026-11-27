@@ -220,7 +220,7 @@ impl SearchState {
     /// What the bar shows, in `lang`; `filters` tells whether the history is split into
     /// blocks the zone and status selectors can filter.
     pub fn view(&self, filters: bool, lang: Lang) -> SearchBarView {
-        let text = |msg: Msg| i18n::text(lang, &msg).into_owned();
+        let text = |msg: Msg| i18n::text(lang, &msg);
         let counter = match self.counter() {
             Counter::Empty => String::new(),
             Counter::Invalid => text(Msg::InvalidRegex),

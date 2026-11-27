@@ -39,7 +39,7 @@ Each entry states a technical choice and the reasons behind it. How the code wor
 - [Interface](#interface)
   - [Tabs and splits: binary split tree](#tabs-and-splits-binary-split-tree)
   - [Current directory and foreground program from `/proc`](#current-directory-and-foreground-program-from-proc)
-  - [Own translation table](#own-translation-table)
+  - [Translations in Fluent files](#translations-in-fluent-files)
   - [Command palette: `nucleo-matcher` and a recent actions file](#command-palette-nucleo-matcher-and-a-recent-actions-file)
 - [Configuration](#configuration)
   - [Configuration parsed key by key](#configuration-parsed-key-by-key)
@@ -409,14 +409,24 @@ per frame. On macOS the current directory comes from
 either; the foreground program lookup returns nothing there, so closing never asks for
 confirmation.
 
-### Own translation table
+### Translations in Fluent files
 
-Interface labels are an `i18n::Msg` enum translated by one exhaustive `match` per
-language (English, French; English is the fallback), the language read from
-`LC_ALL`, `LC_MESSAGES` then `LANG`, then on macOS the first preferred language of the
-system settings (an app launched from Finder has no locale variable). A missing translation does not compile, and no
-runtime dependency or resource file is needed. Fluent would only pay off with many
-languages and translators outside the code.
+Interface labels are an `i18n::Msg` enum, the API of the code. Their texts live in one
+Fluent file per language under `i18n/` (`en-US.ftl`, the reference, and `fr.ftl`),
+embedded by `include_str!` and parsed once into `fluent_bundle::concurrent::FluentBundle`s
+(`Sync`: notifications are formatted on another thread), with Unicode isolation marks
+turned off since the interface has no right-to-left text. One exhaustive `match`
+(`i18n::fluent`) gives the identifier and the arguments of each variant, so a new variant
+does not compile until it has an identifier; the tests then require that identifier in
+the file of every language, formatting without error, and reject any identifier unknown
+to `en-US.ftl`. Each file starts with a `## Status: reviewed` or `## Status: unreviewed`
+line. Fluent was chosen over gettext and a TOML table: CLDR plurals and selectors
+(direction, close target, settings field...) are written in the file, the syntax reads
+without knowing Rust, and translation tools handle it. Generating `Msg` from `en-US.ftl`
+in a `build.rs` was rejected: the generated code is harder to read and review. The
+language is read from `LC_ALL`, `LC_MESSAGES` then `LANG`, then on macOS the first
+preferred language of the system settings (an app launched from Finder has no locale
+variable).
 
 ### Command palette: `nucleo-matcher` and a recent actions file
 
