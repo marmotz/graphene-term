@@ -48,10 +48,20 @@ At the prompt, `Shift+Home` and `Shift+End` select in the command line instead (
 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | Select the previous / next command block          |
 | `Ctrl+Shift+Alt+C`                        | Copy the command of the selected (or last) block    |
 | `Ctrl+Shift+Alt+O`                        | Copy the output of the selected (or last) block     |
-| `Ctrl+Shift+F`                            | Fold / unfold the selected (or last) block          |
-| `Ctrl+Shift+Alt+F`                        | Fold all finished blocks, or unfold them all        |
+| `Ctrl+Shift+Z`                            | Fold / unfold the selected (or last) block          |
+| `Ctrl+Shift+Alt+Z`                        | Fold all finished blocks, or unfold them all        |
 
 See [Command blocks](command-blocks.md).
+
+### History search
+
+| Keys                           | Action                                                       |
+|--------------------------------|--------------------------------------------------------------|
+| `Ctrl+Shift+F`                 | Open the search bar of the active pane, or give it the keyboard back |
+| `Enter` / `Shift+Enter`        | In the bar: go to the older / more recent match              |
+| `Escape`                       | In the bar: close it                                         |
+
+See [Searching the history](command-blocks.md#searching-the-history).
 
 ### Panes
 
@@ -158,6 +168,7 @@ Rules:
 | `previous_block`, `next_block`           | Select the previous / next command block          |
 | `copy_command`, `copy_output`            | Copy a block's command / output                   |
 | `toggle_fold`, `toggle_fold_all`         | Fold a block / all blocks                         |
+| `open_search`                            | Open the history search bar                       |
 | `split_right`, `split_down`              | Split the pane                                    |
 | `close_pane`                             | Close the pane                                    |
 | `focus_pane_left`, `focus_pane_right`, `focus_pane_up`, `focus_pane_down` | Focus a neighbour pane |

@@ -25,6 +25,9 @@ uncomment the line below.
   [themes](docs/en/themes.md#translucent-background).
 - **Command blocks**: each command and its output form a block with its exit status;
   select, copy, fold and unfold it: [command blocks](docs/en/command-blocks.md).
+- **History search** with `Ctrl+Shift+F`: every match highlighted, case, regex and
+  whole-word toggles, command / output and exit status filters:
+  [history search](docs/en/command-blocks.md#searching-the-history).
 - **Automatic shell integration** for zsh, bash and fish, without editing your
   dotfiles: [shell integration](docs/en/command-blocks.md#shell-integration).
 - **Rich prompt editor**: click to move the cursor, select with the mouse or

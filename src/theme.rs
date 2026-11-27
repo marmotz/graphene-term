@@ -101,6 +101,10 @@ macro_rules! color_slot {
             }
             ColorKey::BannerBackground => Some($($r)+ palette.ui.banner_background),
             ColorKey::BannerText => Some($($r)+ palette.ui.banner_text),
+            ColorKey::SearchMatchBackground => Some($($r)+ palette.ui.search_match_background),
+            ColorKey::SearchCurrentBackground => {
+                Some($($r)+ palette.ui.search_current_background)
+            }
         }
     }};
 }
@@ -143,11 +147,13 @@ pub enum ColorKey {
     PaletteSelectionBackground,
     BannerBackground,
     BannerText,
+    SearchMatchBackground,
+    SearchCurrentBackground,
 }
 
 impl ColorKey {
     /// Every key, in theme file order: terminal colors, normal ANSI, bright ANSI, UI.
-    pub const ALL: [ColorKey; 34] = [
+    pub const ALL: [ColorKey; 36] = [
         Self::Foreground,
         Self::Background,
         Self::Cursor,
@@ -182,6 +188,8 @@ impl ColorKey {
         Self::PaletteSelectionBackground,
         Self::BannerBackground,
         Self::BannerText,
+        Self::SearchMatchBackground,
+        Self::SearchCurrentBackground,
     ];
 
     /// Key path in a theme file, e.g. `["colors", "normal", "red"]`.
@@ -221,6 +229,8 @@ impl ColorKey {
             Self::PaletteSelectionBackground => &["ui", "palette_selection_background"],
             Self::BannerBackground => &["ui", "banner_background"],
             Self::BannerText => &["ui", "banner_text"],
+            Self::SearchMatchBackground => &["ui", "search_match_background"],
+            Self::SearchCurrentBackground => &["ui", "search_current_background"],
         }
     }
 
@@ -734,6 +744,41 @@ mod tests {
     }
 
     #[test]
+    fn every_built_in_theme_keeps_the_search_matches_readable() {
+        // A match keeps its text color, so the terminal foreground must stay readable
+        // on both match backgrounds. The floor is WCAG's 3:1 rather than 4.5:1: the
+        // solarized foregrounds barely reach 4.5:1 on their own background.
+        for (name, text) in BUILT_IN.iter().chain(HIDDEN) {
+            assert!(
+                text.contains("\nsearch_match_background = \"#"),
+                "theme {name}"
+            );
+            assert!(
+                text.contains("\nsearch_current_background = \"#"),
+                "theme {name}"
+            );
+            let (palette, _) = parse(text, &Palette::blank(), Path::new(name));
+            let ui = palette.ui;
+            for (label, background) in [
+                ("match", ui.search_match_background),
+                ("current", ui.search_current_background),
+            ] {
+                let text = contrast(palette.foreground, background);
+                assert!(text >= 3.0, "theme {name}: {label} text contrast {text:.2}");
+                let visible = contrast(palette.background, background);
+                assert!(
+                    visible >= 1.1,
+                    "theme {name}: {label} background contrast {visible:.2}"
+                );
+            }
+            assert_ne!(
+                ui.search_match_background, ui.search_current_background,
+                "theme {name}"
+            );
+        }
+    }
+
+    #[test]
     fn every_built_in_theme_defines_a_distinct_broadcast_color() {
         for (name, text) in BUILT_IN.iter().chain(HIDDEN) {
             assert!(text.contains("\npane_broadcast = \"#"), "theme {name}");
@@ -831,6 +876,43 @@ banner_background = "#123456"
         assert_eq!(p.indexed[16..], night.indexed[16..]);
         assert_eq!(p.ui.banner_background, rgb(0x123456));
         assert_eq!(p.ui.banner_text, night.ui.banner_text);
+    }
+
+    #[test]
+    fn search_match_colors_are_read_from_the_ui_table() {
+        let (p, errors) = parse_on_default(
+            "[ui]\nsearch_match_background = \"#112233\"\nsearch_current_background = \"#445566\"\n",
+        );
+        assert_eq!(errors, Vec::new());
+        assert_eq!(p.ui.search_match_background, rgb(0x112233));
+        assert_eq!(p.ui.search_current_background, rgb(0x445566));
+        assert_eq!(
+            ColorKey::from_path(&["ui", "search_match_background"]),
+            Some(ColorKey::SearchMatchBackground)
+        );
+        assert_eq!(
+            ColorKey::from_path(&["ui", "search_current_background"]),
+            Some(ColorKey::SearchCurrentBackground)
+        );
+        assert_eq!(
+            ColorKey::SearchMatchBackground.group(),
+            ColorGroup::Interface
+        );
+    }
+
+    #[test]
+    fn theme_without_search_colors_keeps_the_base_ones() {
+        let (p, errors) = parse_on_default("[ui]\nbanner_text = \"#123456\"\n");
+        assert_eq!(errors, Vec::new());
+        let night = default_palette();
+        assert_eq!(
+            p.ui.search_match_background,
+            night.ui.search_match_background
+        );
+        assert_eq!(
+            p.ui.search_current_background,
+            night.ui.search_current_background
+        );
     }
 
     #[test]
@@ -1121,7 +1203,7 @@ banner = "#000000"
         assert_eq!(count(ColorGroup::Terminal), 6);
         assert_eq!(count(ColorGroup::Normal), 8);
         assert_eq!(count(ColorGroup::Bright), 8);
-        assert_eq!(count(ColorGroup::Interface), 12);
+        assert_eq!(count(ColorGroup::Interface), 14);
         assert_eq!(ColorKey::BrightRed.group(), ColorGroup::Bright);
         assert_eq!(ColorKey::SelectionForeground.group(), ColorGroup::Terminal);
     }

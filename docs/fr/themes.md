@@ -171,6 +171,8 @@ palette_match = "#82aaff"        # matched letters in the command palette
 palette_selection_background = "#2e3440"
 banner_background = "#5c2a30"
 banner_text = "#f2f4f8"
+search_match_background = "#4a3f1c"    # scrollback search matches
+search_current_background = "#7a5400"  # current scrollback search match
 ```
 
 Ce sont les valeurs de `graphene-night`. Quelques précisions sur les clés :
@@ -178,7 +180,9 @@ Ce sont les valeurs de `graphene-night`. Quelques précisions sur les clés :
 - `cursor_text` : couleur du texte sous un curseur en bloc ;
 - `selection_foreground` vide : le texte sélectionné garde sa propre couleur ;
 - `[colors.normal]` et `[colors.bright]` : couleurs ANSI 0 à 7 et 8 à 15 ;
-- `palette_match` : lettres trouvées dans la palette de commandes.
+- `palette_match` : lettres trouvées dans la palette de commandes ;
+- `search_match_background` et `search_current_background` : fond des occurrences de la
+  [recherche dans l'historique](command-blocks.md#rechercher-dans-lhistorique) et de l'occurrence courante ; le texte garde sa couleur.
 
 Un thème qui ne change que le fond :
 

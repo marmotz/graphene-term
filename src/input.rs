@@ -26,6 +26,8 @@ pub enum Action {
     CopyOutput,
     ToggleFold,
     ToggleFoldAll,
+    /// Opens the search bar of the active pane, or gives it the keyboard back.
+    OpenSearch,
     /// Splits the active pane, the new one on its right.
     SplitRight,
     /// Splits the active pane, the new one below it.
@@ -64,7 +66,7 @@ pub enum Action {
 impl Action {
     /// Every action the command palette lists, in its default order. The tabs are
     /// listed by the palette itself, so `GoToTab` is left out, and so is the palette.
-    pub const ALL: [Action; 40] = [
+    pub const ALL: [Action; 41] = [
         Action::NewTab,
         Action::CloseTab,
         Action::RenameTab,
@@ -95,6 +97,7 @@ impl Action {
         Action::NextBlock,
         Action::ToggleFold,
         Action::ToggleFoldAll,
+        Action::OpenSearch,
         Action::ScrollPageUp,
         Action::ScrollPageDown,
         Action::ScrollToTop,
@@ -134,6 +137,7 @@ impl Action {
             Action::CopyOutput => "copy_output",
             Action::ToggleFold => "toggle_fold",
             Action::ToggleFoldAll => "toggle_fold_all",
+            Action::OpenSearch => "open_search",
             Action::SplitRight => "split_right",
             Action::SplitDown => "split_down",
             Action::ClosePane => "close_pane",
@@ -193,6 +197,7 @@ impl Action {
             Action::CopyOutput => Msg::CopyOutput,
             Action::ToggleFold => Msg::ToggleFold,
             Action::ToggleFoldAll => Msg::ToggleFoldAll,
+            Action::OpenSearch => Msg::OpenSearch,
             Action::SplitRight => Msg::SplitRight,
             Action::SplitDown => Msg::SplitDown,
             Action::ClosePane => Msg::ClosePane,

@@ -55,6 +55,13 @@ impl Session {
             self.pane_bar_press(button, pane, hit, event_loop);
             return;
         }
+        // The search bar floats over the rows: a press on it never reaches them.
+        if let Some((pane, hit)) = self.search_bar_at(&layout, x, y) {
+            if button == mouse::Button::Left {
+                self.search_bar_press(pane, hit);
+            }
+            return;
+        }
         // A press in an inactive pane makes it active, then acts as in the active one.
         let Some(target) = layout.pane_at(x, y) else {
             return;
@@ -72,6 +79,11 @@ impl Session {
         let Some(pane) = self.workspace.pane_mut(target) else {
             return;
         };
+        // A press in the content gives the keyboard back to the shell; the search bar
+        // stays open.
+        if pane.blur_search() {
+            self.window.request_redraw();
+        }
         let (hit, _) = pane.pointer_hit(position);
         let link = match hit {
             Hit::Cell {
@@ -283,6 +295,59 @@ impl Session {
 
     /// Ends the gesture of `button`, then opens the link it was pressed on when the
     /// press and release make a click on it.
+    /// A left press on `hit` in the search bar of `pane`: the bar takes the keyboard,
+    /// then the toggle, selector or button acts.
+    pub(super) fn search_bar_press(&mut self, pane: PaneId, hit: SearchBarHit) {
+        if self.workspace.active_pane_id() != Some(pane) {
+            self.focus_pane(pane);
+        }
+        let revision = self.workspace.revision(pane);
+        self.with_pane(pane, |pane| {
+            let Some(search) = pane.search.as_mut() else {
+                return;
+            };
+            search.focused = true;
+            let edited = match hit {
+                SearchBarHit::CaseSensitive => {
+                    search.case_sensitive = !search.case_sensitive;
+                    true
+                }
+                SearchBarHit::Regex => {
+                    search.regex = !search.regex;
+                    true
+                }
+                SearchBarHit::WholeWord => {
+                    search.whole_word = !search.whole_word;
+                    true
+                }
+                SearchBarHit::Zone => {
+                    search.next_zone();
+                    true
+                }
+                SearchBarHit::Status => {
+                    search.next_status();
+                    true
+                }
+                SearchBarHit::Older => {
+                    pane.search_step(true);
+                    false
+                }
+                SearchBarHit::Newer => {
+                    pane.search_step(false);
+                    false
+                }
+                SearchBarHit::Close => {
+                    pane.close_search();
+                    false
+                }
+                SearchBarHit::Field | SearchBarHit::Bar => false,
+            };
+            if edited {
+                pane.search_edited(revision);
+            }
+        });
+    }
+
     pub(super) fn mouse_release(&mut self, button: mouse::Button) {
         let link_press = match button {
             mouse::Button::Left => self.link_press.take(),

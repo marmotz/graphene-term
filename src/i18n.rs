@@ -252,6 +252,24 @@ pub enum Msg {
     CopyOutput,
     ToggleFold,
     ToggleFoldAll,
+    /// The action opening the search bar of a pane.
+    OpenSearch,
+    /// Placeholder of the empty search field.
+    SearchPlaceholder,
+    /// Counter of the search bar when its query is not a valid regex.
+    InvalidRegex,
+    /// Zone selector of the search bar: headers and outputs.
+    SearchZoneBoth,
+    /// Zone selector of the search bar: the commands only.
+    SearchZoneCommand,
+    /// Zone selector of the search bar: the outputs only.
+    SearchZoneOutput,
+    /// Status selector of the search bar: every block.
+    SearchStatusAll,
+    /// Status selector of the search bar: the blocks that succeeded.
+    SearchStatusSuccess,
+    /// Status selector of the search bar: the blocks that failed.
+    SearchStatusFailure,
     // Tabs and panes actions.
     NewTab,
     CloseTab,
@@ -454,6 +472,15 @@ fn english(msg: &Msg) -> Cow<'static, str> {
         Msg::CopyOutput => "Copy block output",
         Msg::ToggleFold => "Fold / unfold block",
         Msg::ToggleFoldAll => "Fold / unfold all blocks",
+        Msg::OpenSearch => "Search the history",
+        Msg::SearchPlaceholder => "Search",
+        Msg::InvalidRegex => "Invalid regex",
+        Msg::SearchZoneBoth => "All",
+        Msg::SearchZoneCommand => "Commands",
+        Msg::SearchZoneOutput => "Output",
+        Msg::SearchStatusAll => "Any",
+        Msg::SearchStatusSuccess => "Success",
+        Msg::SearchStatusFailure => "Failure",
         Msg::NewTab => "New tab",
         Msg::CloseTab => "Close the tab",
         Msg::ClosePane => "Close pane",
@@ -666,6 +693,15 @@ fn french(msg: &Msg) -> Cow<'static, str> {
         Msg::CopyOutput => "Copier la sortie du bloc",
         Msg::ToggleFold => "Replier / déplier le bloc",
         Msg::ToggleFoldAll => "Replier / déplier tous les blocs",
+        Msg::OpenSearch => "Rechercher dans l'historique",
+        Msg::SearchPlaceholder => "Rechercher",
+        Msg::InvalidRegex => "Regex invalide",
+        Msg::SearchZoneBoth => "Tout",
+        Msg::SearchZoneCommand => "Commandes",
+        Msg::SearchZoneOutput => "Sorties",
+        Msg::SearchStatusAll => "Tous",
+        Msg::SearchStatusSuccess => "Succès",
+        Msg::SearchStatusFailure => "Échecs",
         Msg::NewTab => "Nouvel onglet",
         Msg::CloseTab => "Fermer l'onglet",
         Msg::ClosePane => "Fermer le panneau",
@@ -907,6 +943,8 @@ fn english_color(key: ColorKey) -> &'static str {
         ColorKey::PaletteSelectionBackground => "Command palette selection",
         ColorKey::BannerBackground => "Banner background",
         ColorKey::BannerText => "Banner text",
+        ColorKey::SearchMatchBackground => "Search matches",
+        ColorKey::SearchCurrentBackground => "Current search match",
     }
 }
 
@@ -947,6 +985,8 @@ fn french_color(key: ColorKey) -> &'static str {
         ColorKey::PaletteSelectionBackground => "Sélection dans la palette",
         ColorKey::BannerBackground => "Fond du bandeau",
         ColorKey::BannerText => "Texte du bandeau",
+        ColorKey::SearchMatchBackground => "Occurrences de la recherche",
+        ColorKey::SearchCurrentBackground => "Occurrence courante de la recherche",
     }
 }
 
@@ -1072,9 +1112,18 @@ mod tests {
             Msg::ActiveScreen => 101,
             Msg::PrimaryScreen => 102,
             Msg::ProgramExited(_) => 103,
+            Msg::OpenSearch => 105,
+            Msg::SearchPlaceholder => 106,
+            Msg::InvalidRegex => 107,
+            Msg::SearchZoneBoth => 108,
+            Msg::SearchZoneCommand => 109,
+            Msg::SearchZoneOutput => 110,
+            Msg::SearchStatusAll => 111,
+            Msg::SearchStatusSuccess => 112,
+            Msg::SearchStatusFailure => 113,
         }
     }
-    const VARIANT_COUNT: usize = 105;
+    const VARIANT_COUNT: usize = 114;
 
     /// Every variant, with every value of its enum fields.
     fn all_messages() -> Vec<Msg> {
@@ -1095,6 +1144,15 @@ mod tests {
             Msg::CopyOutput,
             Msg::ToggleFold,
             Msg::ToggleFoldAll,
+            Msg::OpenSearch,
+            Msg::SearchPlaceholder,
+            Msg::InvalidRegex,
+            Msg::SearchZoneBoth,
+            Msg::SearchZoneCommand,
+            Msg::SearchZoneOutput,
+            Msg::SearchStatusAll,
+            Msg::SearchStatusSuccess,
+            Msg::SearchStatusFailure,
             Msg::NewTab,
             Msg::CloseTab,
             Msg::ClosePane,

@@ -586,6 +586,105 @@ pub fn reveal<L>(timeline: &mut Timeline, live: &Term<L>, lines: usize, id: Bloc
         .min(geometry.max_scroll());
 }
 
+/// Block of the cards shown by `source`: the current block for the live grid; `None`
+/// for a summary row.
+fn source_block(timeline: &Timeline, source: RowSource) -> Option<BlockId> {
+    match source {
+        RowSource::Header(id) | RowSource::Output(id) => Some(id),
+        RowSource::Live => Some(timeline.current().id),
+        RowSource::Summary(_) => None,
+    }
+}
+
+/// Body scroll that shows body row `index` of `shape` under `cap`, moving the least from
+/// its current scroll.
+fn scroll_to_body_row(shape: &Shape, cap: usize, index: usize) -> usize {
+    let (shown, max) = shape.body_window(cap);
+    let rows = shape.body_rows();
+    let scroll = shape.scroll.min(max);
+    let new = if index < rows - shown - scroll {
+        // Above the rows shown: it becomes the first one.
+        rows - shown - index
+    } else if index >= rows - scroll {
+        // Below the rows shown: it becomes the last one.
+        rows - 1 - index
+    } else {
+        scroll
+    };
+    new.min(max)
+}
+
+/// Makes line `line` of `source` visible, for a search match: unfolds its block when
+/// the line is in its hidden output, scrolls the block's output so the line is in the
+/// rows it shows, reveals the block ([`reveal`]), then scrolls the timeline the least so
+/// the line itself is in the view. A header row cut by the cap stays out of sight; the
+/// block is still revealed. Nothing moves on the alternate screen or for a block no
+/// longer in the timeline.
+pub fn reveal_line<L>(
+    timeline: &mut Timeline,
+    live: &Term<L>,
+    lines: usize,
+    source: RowSource,
+    line: Line,
+) {
+    if alternate(live) {
+        return;
+    }
+    let Some(id) = source_block(timeline, source) else {
+        return;
+    };
+    let Some(shape) = shape(timeline, live, id) else {
+        return;
+    };
+    let cap = cap(lines);
+    if let Some(body) = shape.body.filter(|body| body.source == source) {
+        let Ok(index) = usize::try_from(line.0 - body.first.0) else {
+            return;
+        };
+        if index >= body.rows {
+            return;
+        }
+        if shape.is_folded() {
+            timeline.toggle_fold(id);
+        }
+        let scroll = scroll_to_body_row(&shape, cap, index);
+        if id == timeline.current().id {
+            timeline.current_mut().scroll = scroll;
+        } else if let Some(block) = timeline.block_mut(id) {
+            block.scroll = scroll;
+        }
+    }
+    reveal(timeline, live, lines, id);
+
+    // The block fits whole under its cap, so `reveal` shows the line already; the
+    // timeline still moves to it when it did not.
+    let shapes = shapes(timeline, live);
+    let Some(shape) = shapes.iter().find(|shape| shape.id == id) else {
+        return;
+    };
+    let geometry = Geometry::new(&shapes, timeline.pinned(), lines);
+    let Some(index) = shape
+        .row_sources(geometry.cap)
+        .iter()
+        .position(|(row_source, row_line, _)| *row_source == source && *row_line == line)
+    else {
+        return;
+    };
+    let row_top = tail_units(&shapes, Some(id), geometry.cap) - ROW_UNITS * index;
+    let row_bottom = row_top - ROW_UNITS;
+    let view_top = geometry.rest_top + timeline.scroll.min(geometry.max_scroll());
+    let new_top = if row_top > view_top {
+        row_top
+    } else if row_bottom + geometry.budget < view_top {
+        row_bottom + geometry.budget
+    } else {
+        return;
+    };
+    timeline.scroll = new_top
+        .saturating_sub(geometry.rest_top)
+        .min(geometry.max_scroll());
+}
+
 /// Frozen terminal shown by `source`: a block's header or output. `None` for the live
 /// grid and summary rows, or a block no longer in the timeline.
 pub fn frozen_term(timeline: &Timeline, source: RowSource) -> Option<&Term<VoidListener>> {
@@ -1050,6 +1149,93 @@ mod tests {
         let scroll = session.timeline.scroll;
         reveal(&mut session.timeline, &session.term, 5, BlockId(42));
         assert_eq!(session.timeline.scroll, scroll);
+    }
+
+    fn shown(session: &Session, lines: usize) -> Vec<String> {
+        view(session, &rows_of(session, lines))
+    }
+
+    #[test]
+    fn reveal_line_unfolds_a_block_for_a_line_of_its_output() {
+        let mut session = session(&[("a", 3), ("b", 1), ("c", 1), ("d", 1)]);
+        session.timeline.toggle_fold(BlockId(0));
+
+        // A header line shows without unfolding the block.
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        reveal_line(timeline, live, 5, RowSource::Header(BlockId(0)), Line(0));
+        assert!(session.timeline.block(BlockId(0)).expect("block").folded);
+        assert_eq!(shown(&session, 5)[..2], ["$ a", "[s] 3"]);
+
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        reveal_line(timeline, live, 5, RowSource::Output(BlockId(0)), Line(1));
+        assert!(!session.timeline.block(BlockId(0)).expect("block").folded);
+        assert!(shown(&session, 5).contains(&"a2".to_string()));
+    }
+
+    #[test]
+    fn reveal_line_scrolls_the_output_of_a_block_taller_than_the_view() {
+        let mut session = session(&[("a", 10), ("b", 1)]);
+        let a = BlockId(0);
+        let reveal = |session: &mut Session, index: i32| {
+            let (timeline, live) = (&mut session.timeline, &session.term);
+            reveal_line(timeline, live, 5, RowSource::Output(a), Line(index));
+            session.timeline.block(a).expect("block").scroll
+        };
+
+        // The first output row: the output scrolls to its top, and the timeline up to it.
+        assert_eq!(reveal(&mut session, 0), 7);
+        assert_eq!(shown(&session, 5), ["$ a", "a1", "a2", "a3"]);
+        // A row below the ones shown becomes the last one shown.
+        assert_eq!(reveal(&mut session, 4), 5);
+        assert_eq!(shown(&session, 5)[1..], ["a3", "a4", "a5"]);
+        // A row already shown moves nothing.
+        assert_eq!(reveal(&mut session, 3), 5);
+        // The last row: back to the bottom of the output.
+        assert_eq!(reveal(&mut session, 9), 0);
+        assert!(shown(&session, 5).contains(&"a10".to_string()));
+        // A line out of the output changes nothing.
+        assert_eq!(reveal(&mut session, 10), 0);
+        assert_eq!(reveal(&mut session, -1), 0);
+    }
+
+    #[test]
+    fn reveal_line_scrolls_the_live_grid_of_a_running_command() {
+        let mut session = session(&[("a", 1)]);
+        session.feed(&format!("b\r\n{}", start("b")));
+        let output = numbered("b", 12).join("\r\n");
+        session.feed(&output);
+        assert_eq!(shown(&session, 5).last().map(String::as_str), Some("b12"));
+
+        let grid = session.term.grid();
+        let top = -(grid.history_size() as i32);
+        let index = session.live().iter().position(|text| text == "b1");
+        let line = Line(top + index.expect("b1 in the live grid") as i32);
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        reveal_line(timeline, live, 5, RowSource::Live, line);
+        assert!(session.timeline.current().scroll > 0);
+        let rows = shown(&session, 5);
+        assert!(rows.contains(&"b1".to_string()), "{rows:?}");
+        assert!(rows.contains(&"$ b".to_string()), "{rows:?}");
+    }
+
+    #[test]
+    fn reveal_line_changes_nothing_on_the_alternate_screen_or_for_a_summary() {
+        let mut session = session(&[("a", 10), ("b", 1)]);
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        reveal_line(timeline, live, 5, RowSource::Summary(BlockId(0)), Line(0));
+        reveal_line(timeline, live, 5, RowSource::Output(BlockId(42)), Line(0));
+        assert_eq!(
+            (
+                session.timeline.scroll,
+                session.timeline.block(BlockId(0)).expect("block").scroll
+            ),
+            (0, 0)
+        );
+
+        session.feed("\x1b[?1049h");
+        let (timeline, live) = (&mut session.timeline, &session.term);
+        reveal_line(timeline, live, 5, RowSource::Output(BlockId(0)), Line(0));
+        assert_eq!(session.timeline.block(BlockId(0)).expect("block").scroll, 0);
     }
 
     #[test]

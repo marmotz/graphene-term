@@ -16,7 +16,9 @@
 //!   transparent window), `x11_async` the part of `x11` that keeps the event loop busy
 //!   when the readback does not wait for the GPU, and `x11_pack/*` the CPU part of
 //!   `x11` from an RGBA or a BGRA
-//!   target. Skipped when no GPU adapter is available.
+//!   target. Skipped when no GPU adapter is available;
+//! - `search`: a search over 10 000 lines of history, with a new query (`typed`, every
+//!   grid searched) or the same one (`output`, only the live grid searched again).
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -28,7 +30,8 @@ use alacritty_terminal::vte::ansi::Processor;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use graphene::bench::{
     CellSize, FontOptions, Frame, FrameCache, GlyphKey, Glyphs, GridLayout, GridSize, Headless,
-    Palette, Rect, Scanner, Timeline, pack_argb32, process, scene, scroll_block, view_rows,
+    Palette, Query, Rect, Scanner, Searcher, Timeline, pack_argb32, process, scene, scroll_block,
+    view_rows,
 };
 
 /// Terminal size of the recordings.
@@ -336,6 +339,57 @@ fn frame_panes(c: &mut Criterion) {
     group.finish();
 }
 
+/// Lines of history searched by the `search` benchmark.
+const SEARCH_LINES: usize = 10_000;
+
+/// A session holding [`SEARCH_LINES`] lines of history: blocks of 100 output lines,
+/// with a match every 10 lines.
+fn search_session() -> Session {
+    let mut bytes = String::new();
+    for block in 0..SEARCH_LINES / 100 {
+        // "bWFrZQ==" is "make" in base64.
+        bytes.push_str(&format!("$ make\r\n\x1b]6973;{TOKEN};start;bWFrZQ==\x07"));
+        for line in 0..100 {
+            let word = if line % 10 == 0 {
+                "warning"
+            } else {
+                "compiling"
+            };
+            bytes.push_str(&format!("{word} crate {block}-{line} src/lib.rs\r\n"));
+        }
+        bytes.push_str(&format!("\x1b]6973;{TOKEN};end;0\x07"));
+    }
+    bytes.push_str("$ ");
+    let mut session = new_session();
+    feed(&mut session, bytes.as_bytes());
+    session
+}
+
+fn search(c: &mut Criterion) {
+    let session = search_session();
+    let query = Query {
+        text: "warning".to_owned(),
+        ..Query::default()
+    };
+    let mut group = c.benchmark_group("search");
+    group.throughput(Throughput::Elements(SEARCH_LINES as u64));
+    // A new query: every grid searched, as when a letter is typed.
+    group.bench_function("typed", |b| {
+        b.iter(|| {
+            let mut searcher = Searcher::new();
+            searcher.set_query(black_box(query.clone())).unwrap();
+            searcher.search(&session.timeline, &session.term).list.len()
+        })
+    });
+    // The same query: only the live grid searched, as when output arrives.
+    let mut searcher = Searcher::new();
+    searcher.set_query(query.clone()).unwrap();
+    group.bench_function("output", |b| {
+        b.iter(|| searcher.search(&session.timeline, &session.term).list.len())
+    });
+    group.finish();
+}
+
 /// Window size of the `present` benchmark.
 const PRESENT_SIZE: (u32, u32) = (1920, 1080);
 
@@ -411,6 +465,7 @@ criterion_group!(
     frame_panes,
     glyphs,
     gpu_prepare,
-    present
+    present,
+    search
 );
 criterion_main!(benches);

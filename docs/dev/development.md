@@ -130,6 +130,7 @@ into the history):
 | `glyphs_warm` | the same lookups with the cache already filled                       |
 | `frame_panes` | the frames of four shown panes when one changed, through the `FrameCache` |
 | `gpu_prepare` | upload, draw and submit on a headless device: `idle` (same frame), `changed` (blank frame then the fixture) |
+| `search`      | a search over 10 000 lines of history: `typed` (a new query, every grid searched), `output` (the same query, only the live grid searched again) |
 | `present`     | a 1920x1080 frame: `direct` (drawn and waited for, the GPU surface), `x11` (read back and packed, the X11 presentation), `x11_async` (the part of `x11` that keeps the event loop busy), `x11_pack/rgba` and `x11_pack/bgra` (packing alone) |
 
 `gpu_prepare` and `present` are skipped with a message when no GPU adapter is

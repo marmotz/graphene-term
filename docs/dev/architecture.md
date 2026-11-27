@@ -130,6 +130,10 @@ src/
   fold_animation.rs  fold chevron animations, per pane (pure, time passed in)
   cursor_blink.rs  blink phase of the text cursor (pure, time passed in)
   timeline_selection.rs  text selection across blocks, split into one Selection per grid
+  search.rs        history search: query, regex, matches per grid (zone and status filters,
+                   whole word, 10 000 cap, frozen grid cache), current match navigation (pure)
+  pane_search.rs   search bar state of a pane: field, toggles, matches, current match, focus,
+                   search again on a new pane revision, key routing of a focused bar (pure)
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations
   input.rs         key -> bytes encoding, per-pane key resolution (editor command, shortcut, input), actions and their ids, paste wrapping
   keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)
@@ -150,6 +154,9 @@ src/
     dialog.rs      close confirmation: targeted panes, messages, box layout, hit-testing, keys (pure)
     pane_bar.rs    pane title bar: bar / content split, title and close button layout, hit-testing, press routing (pure)
     rename_tab.rs  tab rename box: keys, layout centered like the palette (pure)
+    search_bar.rs  pane search bar: layout at the top right of the content, narrow layouts
+                   dropping the selectors then the toggles, hit-testing (pure)
+    search_field.rs  search field: single-line editor with a caret, word erase, one-line paste (pure)
     scene.rs       interface layer: pane title bars, tab bar, dividers, active pane border, dialog or palette overlay (pure)
     tab_bar.rs     tab bar layout, hit-testing, dragged tab slots (pure)
     text_field.rs  single-line text editing shared by the palette and the rename box (pure)
@@ -213,7 +220,25 @@ and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thi
   pane shown by the active tab.
 - Keys go to the active pane; mouse presses and the wheel go to the pane under the
   pointer (a press in an inactive pane focuses it first). A press goes to the first of:
-  the overlay, the banner, the tab bar, a divider, a pane title bar, a pane.
+  the overlay, the banner, the tab bar, a divider, a pane title bar, a search bar, a pane.
+- History search: `Ctrl+Shift+F` (`open_search`) opens the search bar of the active
+  pane (`Pane::search`, a `pane_search::SearchState`), or gives it the keyboard back with
+  its text selected; it does nothing while a full-screen application shows, and an open
+  bar closes once one does. While the bar has the keyboard, `key_press` hands it every
+  key after the overlays (`pane_search::bar_key`): `Enter` / `Shift+Enter` go to the
+  older / more recent match through `view::reveal_line`, `Escape` closes it (the view
+  stays), the paste shortcut pastes into the field, the other shortcuts run as usual,
+  and no key reaches the shell. A press in the pane content gives the keyboard back to
+  the shell, the bar staying open; a press on the bar gives it to the bar. Each edit
+  searches again (`SearchState::requery`) and shows the new current match; each frame,
+  a pane whose revision changed is searched again without moving the view
+  (`Pane::refresh_search`). The bar is drawn in the interface layer over the rows
+  (`chrome::scene::search_bar`), under the overlay. While the bar is open, the frame
+  of the pane paints the background of the matches whose source is in the view after
+  the capture (`Frame::highlight_matches`, `ui.search_current_background` for the
+  current one, `ui.search_match_background` for the others, the text keeping its
+  colors); `FrameKey` holds `SearchState::revision`, which changes with the matches and
+  the current one, so a frame is captured again only then.
 - New panes (split, new tab) start their shell in the active pane's directory
   (`Terminal::current_dir`, from `/proc/<pid>/cwd` on Linux, `proc_pidinfo` on macOS), else `$HOME`.
 - `graphene -e <program> [args]` stores the program in `App.first_program`; the first
@@ -560,8 +585,8 @@ Renderer::render(pane frames, interface rects)
   (`GridLayout::hit` / `point_at`, then `view::point`) go through. On the alternate
   screen the view is the live screen, with no card.
 - Folding shows a block's header and one summary row (`RowSource::Summary`, "N lines
-  hidden") instead of its output. `Ctrl+Shift+F` toggles the fold of the target block;
-  `Ctrl+Shift+Alt+F` folds every finished block when any is unfolded, otherwise unfolds
+  hidden") instead of its output. `Ctrl+Shift+Z` toggles the fold of the target block;
+  `Ctrl+Shift+Alt+Z` folds every finished block when any is unfolded, otherwise unfolds
   them all. A click on the chevron (`Hit::Chevron`: the right card padding of the
   card's first row) toggles the fold, a click on the summary label unfolds. Nothing is folded automatically.
 - The wheel (unless an application captures it) scrolls the output of the block under
@@ -573,6 +598,10 @@ Renderer::render(pane frames, interface rects)
   block by a page when it can scroll, otherwise the timeline (`view::page_target`);
   `Shift+Home/End` go to the timeline's top / bottom. A key press or a paste brings the
   timeline and the current block back to the bottom.
+- `view::reveal_line` brings one line of a grid into the view, for the history search:
+  it unfolds the block when the line is in its hidden output, scrolls the block's output
+  (or the current block's live grid) the least so the line is among the rows shown,
+  reveals the block, then scrolls the timeline to the line if it is still out of view.
 - A block that shows only part of its output has a scroll indicator: a thin bar in the
   dim color in the card's right padding, beside its output rows (`frame::ScrollBar`).
 - The window holds, from the left: the padding, a margin of half a cell, half a cell of

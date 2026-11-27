@@ -12,6 +12,7 @@ copy and fold.
 - [Copying a command or its output](#copying-a-command-or-its-output)
 - [Folding](#folding)
 - [Scrolling](#scrolling)
+- [Searching the history](#searching-the-history)
 
 ## Shell integration
 
@@ -81,9 +82,9 @@ A folded block hides its output behind a single "n lines hidden" line.
 
 | Do this                                | With                                                |
 |----------------------------------------|-----------------------------------------------------|
-| Fold / unfold a block                  | Click the chevron at the top right of its card, `Ctrl+Shift+F`, or **Fold block** / **Unfold block** in the right-click menu |
+| Fold / unfold a block                  | Click the chevron at the top right of its card, `Ctrl+Shift+Z`, or **Fold block** / **Unfold block** in the right-click menu |
 | Unfold a folded block                  | Click its "n lines hidden" line                     |
-| Fold all finished blocks, or unfold them all | `Ctrl+Shift+Alt+F`                            |
+| Fold all finished blocks, or unfold them all | `Ctrl+Shift+Alt+Z`                            |
 
 An output taller than the window is folded automatically when its command ends.
 Unfold it to read it.
@@ -97,5 +98,62 @@ A block shows at most one window height; a longer output scrolls inside its card
 | Scroll the block under the pointer, or the history | Mouse wheel                           |
 | Scroll the selected block, or the history       | `Shift+PageUp` / `Shift+PageDown`        |
 | Top / bottom of the history                     | `Shift+Home` / `Shift+End` (not at the prompt) |
+
+## Searching the history
+
+`Ctrl+Shift+F` opens a search bar at the top right of the active pane. It searches the
+whole history of the pane as you type, and highlights every match; the current match
+stands out in another color (two [theme colors](themes.md), **Search matches** and
+**Current search match**).
+
+| Do this                                | With                                                |
+|----------------------------------------|-----------------------------------------------------|
+| Open the search bar, or give it the keyboard back | `Ctrl+Shift+F`, or **Search the history** in the command palette |
+| Go to the older / more recent match    | `Enter` / `Shift+Enter`, or the `↑` / `↓` buttons   |
+| Close the bar                          | `Escape`, or the `×` button                         |
+| Give the keyboard back to the shell, bar left open | Click in the pane content             |
+| Give the keyboard back to the bar      | Click the bar, or `Ctrl+Shift+F`                    |
+
+**Matching.** The search ignores the case by default. Three toggles next to the field
+change it:
+
+| Toggle | When on                                                         |
+|--------|-----------------------------------------------------------------|
+| `Aa`   | Upper and lower case differ                                     |
+| `.*`   | The text is a regular expression (`Invalid regex` is shown while it does not parse) |
+| `ab`   | Only whole words match                                          |
+
+A match can span a line the terminal wrapped.
+
+**Filters.** Two selectors keep part of the history; click one to go to its next value:
+
+| Selector | Values                                                        |
+|----------|---------------------------------------------------------------|
+| Zone     | **All**, **Commands** (the command text, without the prompt), **Output** |
+| Status   | **Any**, **Success**, **Failure** (blocks that are still running are left out of the last two) |
+
+They are greyed out without [shell integration](#shell-integration): the search then
+covers the whole history, which is not split into blocks.
+
+**Counter.** The bar shows the current match and the number of matches, for example
+`2/7`. Matches are counted from the bottom: `1` is the most recent. `Enter` goes up,
+toward older matches, and wraps around at the oldest. Past 10,000 matches the counter
+shows `10000+`.
+
+**Moving to a match.** When the bar opens, the current match is the most recent one
+above the bottom of the view. Moving to a match scrolls the history, or the output of
+its block, to show it; a folded block unfolds when a match in its output becomes the
+current one. Output added while the bar is open joins the matches without moving the
+view. `Escape` leaves the view on the last match shown.
+
+**The field.** `Left` / `Right`, `Home` / `End`, `Backspace`, `Delete` and
+`Ctrl+Backspace` (erase a word) edit the text; `Ctrl+Shift+V` pastes, line breaks
+becoming spaces. While the bar has the keyboard, nothing you type goes to the shell, but
+the other Graphene shortcuts still work. A narrow pane hides the selectors first, then
+the toggles.
+
+**Not searched:** the command line you are typing, and the screen of a full-screen
+program (`vim`, `less`, `htop`...). While such a program runs, `Ctrl+Shift+F` does
+nothing, and an open bar closes.
 
 Shortcuts can be changed: see [Keyboard shortcuts](keybindings.md).

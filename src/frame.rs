@@ -20,7 +20,7 @@ use crate::banner::BannerLayout;
 use crate::graphics::placeholder::{self, PLACEHOLDER};
 use crate::graphics::{ImageCell, ImageStore, Pixels, SourceRect};
 use crate::i18n::Lang;
-use crate::palette::Palette;
+use crate::palette::{Palette, UiColors};
 use crate::progress::{ProgressColors, ProgressView};
 use crate::timeline::{BlockId, Phase, Status, Timeline};
 use crate::view::{self, RowSource, ViewRow};
@@ -603,6 +603,39 @@ impl Frame {
         source: RowSource,
         range: &RangeInclusive<Point>,
     ) {
+        self.cells_in(view, source, range, |cell| cell.underline = true);
+    }
+
+    /// Paints the background of the search matches, each one in the grid of its
+    /// source, `current` (an index in `matches`) with `search_current_background`, the
+    /// others with `search_match_background`. The text keeps its colors, and a match
+    /// whose source is not in `view` changes nothing. `view` is the view the frame was
+    /// captured from, and the ranges are in the lines of its rows.
+    pub fn highlight_matches(
+        &mut self,
+        view: &[ViewRow],
+        matches: &[(RowSource, RangeInclusive<Point>)],
+        current: Option<usize>,
+        colors: &UiColors,
+    ) {
+        for (index, (source, range)) in matches.iter().enumerate() {
+            let bg = if Some(index) == current {
+                colors.search_current_background
+            } else {
+                colors.search_match_background
+            };
+            self.cells_in(view, *source, range, |cell| cell.bg = bg);
+        }
+    }
+
+    /// Calls `paint` on each cell of `range` in the grid of `source`.
+    fn cells_in(
+        &mut self,
+        view: &[ViewRow],
+        source: RowSource,
+        range: &RangeInclusive<Point>,
+        mut paint: impl FnMut(&mut FrameCell),
+    ) {
         let (start, end) = (*range.start(), *range.end());
         for (row, view_row) in self.rows.iter_mut().zip(view) {
             let line = view_row.line;
@@ -620,7 +653,7 @@ impl Frame {
                 usize::MAX
             };
             for cell in row.iter_mut().take(last.saturating_add(1)).skip(first) {
-                cell.underline = true;
+                paint(cell);
             }
         }
     }
@@ -1131,6 +1164,88 @@ mod tests {
         assert_eq!(
             underlined(&frame),
             ["..........", "uuu.......", "..........", ".........."]
+        );
+    }
+
+    const MATCH_BG: Rgb = Rgb { r: 1, g: 2, b: 3 };
+    const CURRENT_BG: Rgb = Rgb { r: 4, g: 5, b: 6 };
+
+    fn search_colors() -> UiColors {
+        let mut colors = UiColors::uniform(Rgb { r: 9, g: 9, b: 9 });
+        colors.search_match_background = MATCH_BG;
+        colors.search_current_background = CURRENT_BG;
+        colors
+    }
+
+    /// Each cell: `m` on a match background, `c` on the current one, `.` otherwise.
+    fn highlighted(frame: &Frame) -> Vec<String> {
+        frame
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|c| match c.bg {
+                        MATCH_BG => 'm',
+                        CURRENT_BG => 'c',
+                        _ => '.',
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn span(line: i32, first: usize, last: usize) -> RangeInclusive<Point> {
+        Point::new(Line(line), Column(first))..=Point::new(Line(line), Column(last))
+    }
+
+    #[test]
+    fn search_matches_get_their_background_and_the_current_one_its_own() {
+        let session = session_with("foo bar foo");
+        let rows = view_rows(&session);
+        let mut frame = capture(&session, &Palette::default(), true);
+        let before = frame.clone();
+        let matches = [
+            (RowSource::Live, span(0, 0, 2)),
+            (RowSource::Live, span(0, 8, 9)),
+        ];
+        frame.highlight_matches(&rows, &matches, Some(1), &search_colors());
+        assert_eq!(highlighted(&frame), ["mmm.....cc", ".........."]);
+        // Only the backgrounds change: the text keeps its colors.
+        for (row, old) in frame.rows.iter().zip(&before.rows) {
+            for (cell, old) in row.iter().zip(old) {
+                assert_eq!((cell.c, cell.fg), (old.c, old.fg));
+            }
+        }
+    }
+
+    #[test]
+    fn a_search_match_is_highlighted_across_wrapped_rows() {
+        let session = session_with("ab foo-barbaz");
+        let rows = view_rows(&session);
+        let mut frame = capture(&session, &Palette::default(), true);
+        let range = Point::new(Line(0), Column(3))..=Point::new(Line(1), Column(2));
+        frame.highlight_matches(&rows, &[(RowSource::Live, range)], None, &search_colors());
+        assert_eq!(highlighted(&frame), ["...mmmmmmm", "mmm......."]);
+    }
+
+    #[test]
+    fn a_search_match_of_a_source_missing_from_the_view_changes_nothing() {
+        let session = two_blocks();
+        let rows = view_rows(&session);
+        let mut frame = capture(&session, &Palette::default(), true);
+        let before = frame.clone();
+        let matches = [
+            (RowSource::Output(BlockId(7)), span(0, 0, 2)),
+            (RowSource::Header(BlockId(9)), span(0, 0, 2)),
+        ];
+        frame.highlight_matches(&rows, &matches, Some(0), &search_colors());
+        assert_eq!(frame, before);
+        // The same range in a source of the view is highlighted, on its rows only.
+        let matches = [(RowSource::Output(BlockId(0)), span(0, 0, 2))];
+        frame.highlight_matches(&rows, &matches, Some(0), &search_colors());
+        assert_eq!(
+            highlighted(&frame),
+            ["..........", "ccc.......", "..........", ".........."]
         );
     }
 

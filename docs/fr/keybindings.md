@@ -53,10 +53,20 @@ commande (voir [Éditeur de saisie](input-editor.md)).
 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | Sélectionner le bloc de commande précédent / suivant    |
 | `Ctrl+Shift+Alt+C`                          | Copier la commande du bloc sélectionné (ou du dernier)  |
 | `Ctrl+Shift+Alt+O`                          | Copier la sortie du bloc sélectionné (ou du dernier)    |
-| `Ctrl+Shift+F`                              | Replier / déplier le bloc sélectionné (ou le dernier)   |
-| `Ctrl+Shift+Alt+F`                          | Replier tous les blocs terminés, ou tous les déplier    |
+| `Ctrl+Shift+Z`                              | Replier / déplier le bloc sélectionné (ou le dernier)   |
+| `Ctrl+Shift+Alt+Z`                          | Replier tous les blocs terminés, ou tous les déplier    |
 
 Voir [Blocs de commande](command-blocks.md).
+
+### Recherche dans l'historique
+
+| Touches                        | Action                                                       |
+|--------------------------------|--------------------------------------------------------------|
+| `Ctrl+Shift+F`                 | Ouvrir la barre de recherche du pane actif, ou lui redonner le clavier |
+| `Enter` / `Shift+Enter`        | Dans la barre : aller à l'occurrence plus ancienne / plus récente |
+| `Escape`                        | Dans la barre : la fermer                                    |
+
+Voir [Rechercher dans l'historique](command-blocks.md#rechercher-dans-lhistorique).
 
 ### Panneaux
 
@@ -171,6 +181,7 @@ Règles :
 | `previous_block`, `next_block`           | Sélectionner le bloc de commande précédent / suivant |
 | `copy_command`, `copy_output`            | Copier la commande / la sortie d'un bloc          |
 | `toggle_fold`, `toggle_fold_all`         | Replier un bloc / tous les blocs                  |
+| `open_search`                            | Ouvrir la barre de recherche dans l'historique    |
 | `split_right`, `split_down`              | Diviser le panneau                                |
 | `close_pane`                             | Fermer le panneau                                 |
 | `focus_pane_left`, `focus_pane_right`, `focus_pane_up`, `focus_pane_down` | Aller à un panneau voisin |

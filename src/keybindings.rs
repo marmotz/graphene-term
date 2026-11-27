@@ -114,8 +114,9 @@ const DEFAULTS: &[(&str, Action)] = &[
     ("Ctrl+Shift+PageDown", Action::NextBlock),
     ("Ctrl+Shift+Alt+C", Action::CopyCommand),
     ("Ctrl+Shift+Alt+O", Action::CopyOutput),
-    ("Ctrl+Shift+F", Action::ToggleFold),
-    ("Ctrl+Shift+Alt+F", Action::ToggleFoldAll),
+    ("Ctrl+Shift+Z", Action::ToggleFold),
+    ("Ctrl+Shift+Alt+Z", Action::ToggleFoldAll),
+    ("Ctrl+Shift+F", Action::OpenSearch),
     ("Ctrl+Shift+E", Action::SplitRight),
     ("Ctrl+Shift+O", Action::SplitDown),
     ("Ctrl+Shift+W", Action::ClosePane),
@@ -731,9 +732,14 @@ mod tests {
         assert_eq!(get(&ch("C"), csa()), Some(Action::CopyCommand));
         assert_eq!(get(&ch("c"), csa()), Some(Action::CopyCommand));
         assert_eq!(get(&ch("O"), csa()), Some(Action::CopyOutput));
-        assert_eq!(get(&ch("F"), cs()), Some(Action::ToggleFold));
-        assert_eq!(get(&ch("f"), cs()), Some(Action::ToggleFold));
-        assert_eq!(get(&ch("F"), csa()), Some(Action::ToggleFoldAll));
+        assert_eq!(get(&ch("Z"), cs()), Some(Action::ToggleFold));
+        assert_eq!(get(&ch("z"), cs()), Some(Action::ToggleFold));
+        assert_eq!(get(&ch("Z"), csa()), Some(Action::ToggleFoldAll));
+        assert_eq!(get(&ch("z"), CTRL), None);
+        // The search bar took Ctrl+Shift+F from the folding.
+        assert_eq!(get(&ch("F"), cs()), Some(Action::OpenSearch));
+        assert_eq!(get(&ch("f"), cs()), Some(Action::OpenSearch));
+        assert_eq!(get(&ch("F"), csa()), None);
         assert_eq!(get(&ch("f"), CTRL), None);
         assert_eq!(get(&ch("V"), csa()), None);
         assert_eq!(get(&named(NamedKey::PageUp), ALT), None);
@@ -885,7 +891,7 @@ mod tests {
     #[test]
     fn unmapped_ctrl_shift_letters_stay_with_the_shell() {
         let bindings = defaults();
-        for letter in ["A", "D", "G", "N", "Z"] {
+        for letter in ["A", "D", "G", "N"] {
             assert_eq!(action_for(&bindings, &ch(letter), cs()), None, "{letter}");
         }
     }
