@@ -1,6 +1,6 @@
 # Activation du quick terminal
 
-**Statut** : tâches créées — voir [technical.md](technical.md)
+**Statut** : terminé — voir [technical.md](technical.md)
 
 ## Contexte
 

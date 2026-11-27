@@ -38,7 +38,12 @@ fn main() -> anyhow::Result<()> {
                 .init();
             match graphene::run_quick(hidden)? {
                 0 => Ok(()),
-                code => std::process::exit(code),
+                code => {
+                    if let Some(message) = graphene::quick_exit_message(code) {
+                        eprintln!("graphene: {message}");
+                    }
+                    std::process::exit(code)
+                }
             }
         }
         Command::Run {

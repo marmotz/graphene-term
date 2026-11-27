@@ -56,8 +56,8 @@ décommenter la ligne ci-dessous.
   et la cloche, et un **indicateur de progression** (OSC 9;4) :
   [notifications](docs/fr/configuration.md#notifications),
   [progression](docs/fr/tabs-and-panes.md#progression).
-- **Quick terminal** attaché à un bord de l'écran, affiché et masqué par
-  `graphene --quick-toggle` (macOS et X11), démarré et restauré avec la session :
+- **Quick terminal** attaché à un bord de l'écran, à activer (`enabled`), affiché et
+  masqué par `graphene --quick-toggle` (macOS et X11), démarré et restauré avec la session :
   [quick terminal](docs/fr/quick-terminal.md).
 - **Fenêtre des paramètres**, rechargement à chaud de la configuration, taille de
   fenêtre mémorisée, notification de mise à jour :

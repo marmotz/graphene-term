@@ -124,6 +124,7 @@ impl Default for Config {
                 bell: false,
             },
             quick_terminal: QuickTerminalConfig {
+                enabled: false,
                 hotkey: String::new(),
                 edge: QuickTerminalEdge::Top,
                 size: 40,
@@ -494,6 +495,7 @@ command_threshold = 30
 bell = true
 
 [quick_terminal]
+enabled = true
 hotkey = "Ctrl+`"
 edge = "left"
 size = 60
@@ -552,6 +554,7 @@ autostart = true
                     bell: true,
                 },
                 quick_terminal: QuickTerminalConfig {
+                    enabled: true,
                     hotkey: "Ctrl+`".to_owned(),
                     edge: QuickTerminalEdge::Left,
                     size: 60,
@@ -567,6 +570,7 @@ autostart = true
     #[test]
     fn quick_terminal_defaults() {
         let quick = Config::default().quick_terminal;
+        assert!(!quick.enabled);
         assert_eq!(quick.hotkey, "");
         assert_eq!(quick.edge, QuickTerminalEdge::Top);
         assert_eq!(quick.size, 40);
@@ -574,6 +578,24 @@ autostart = true
         assert_eq!(quick.animation_ms, 150);
         assert!(quick.hide_on_focus_loss);
         assert!(!quick.autostart);
+    }
+
+    #[test]
+    fn quick_terminal_enabled_is_read() {
+        let (config, errors) = parse("[quick_terminal]\nenabled = true\n");
+        assert!(errors.is_empty());
+        assert!(config.quick_terminal.enabled);
+    }
+
+    #[test]
+    fn invalid_quick_terminal_enabled_keeps_the_previous_value() {
+        let mut previous = Config::default();
+        previous.quick_terminal.enabled = true;
+        let (config, errors) =
+            Config::parse("[quick_terminal]\nenabled = \"yes\"\n", &previous, &file());
+        assert!(config.quick_terminal.enabled);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].key.as_deref(), Some("quick_terminal.enabled"));
     }
 
     #[test]

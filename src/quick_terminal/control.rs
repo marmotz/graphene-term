@@ -21,6 +21,9 @@ use super::QuickCommand;
 
 /// Exit code of a `--quick` process that cannot run because the session is Wayland.
 pub const WAYLAND_EXIT_CODE: i32 = 3;
+/// Exit code of a `--quick` process that does not run because the quick terminal is
+/// disabled (`quick_terminal.enabled = false`).
+pub const DISABLED_EXIT_CODE: i32 = 4;
 /// Time `--quick-toggle` waits for a new quick terminal process to answer, and a second
 /// `--quick` process for the first to listen.
 const STARTUP_WAIT: Duration = Duration::from_secs(5);
@@ -159,6 +162,8 @@ fn send_retrying(socket: &Path, command: QuickCommand, wait: Duration) -> io::Re
 pub enum ToggleError {
     /// The session is Wayland, where the quick terminal is unavailable.
     Wayland,
+    /// The quick terminal is disabled in the configuration.
+    Disabled,
     /// Any other failure, described.
     Failed(String),
 }
@@ -167,6 +172,10 @@ impl fmt::Display for ToggleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Wayland => f.write_str("the quick terminal is not available under Wayland"),
+            Self::Disabled => f.write_str(
+                "the quick terminal is disabled, set enabled = true in the [quick_terminal] \
+                 section of config.toml, or turn it on in the settings",
+            ),
             Self::Failed(reason) => write!(f, "cannot toggle the quick terminal: {reason}"),
         }
     }
@@ -217,6 +226,7 @@ fn toggle_with(
                 return match status.code() {
                     Some(0) => Ok(()),
                     Some(WAYLAND_EXIT_CODE) => Err(ToggleError::Wayland),
+                    Some(DISABLED_EXIT_CODE) => Err(ToggleError::Disabled),
                     _ => Err(ToggleError::Failed(format!(
                         "the quick terminal process stopped ({status})"
                     ))),
@@ -353,6 +363,22 @@ mod tests {
         assert_eq!(
             toggle_with(&socket, || shell("exit 0"), STARTUP_WAIT),
             Ok(())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn toggle_reports_disabled_from_the_exit_code() {
+        let dir = runtime("disabled");
+        let socket = socket_path(&dir);
+        assert_eq!(
+            toggle_with(&socket, || shell("exit 4"), STARTUP_WAIT),
+            Err(ToggleError::Disabled)
+        );
+        assert_eq!(
+            ToggleError::Disabled.to_string(),
+            "the quick terminal is disabled, set enabled = true in the [quick_terminal] \
+             section of config.toml, or turn it on in the settings"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

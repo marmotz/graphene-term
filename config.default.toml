@@ -74,6 +74,8 @@
 # bell = false
 
 # [quick_terminal]
+## Allow Graphene to start the quick terminal. Off, it is never launched and `graphene --quick-toggle` fails. Applies the next time Graphene starts.
+# enabled = false
 ## Native global shortcut showing or hiding the quick terminal, written like a keyboard shortcut (e.g. "Ctrl+F12"); empty for none.
 # hotkey = ""
 ## Screen edge the quick terminal slides from: "top", "bottom", "left", "right".

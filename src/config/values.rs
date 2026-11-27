@@ -263,6 +263,8 @@ impl fmt::Display for QuickTerminalScreen {
 /// `[quick_terminal]`: the drop-down terminal attached to a screen edge.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuickTerminalConfig {
+    /// Allows Graphene to start the quick terminal; off, it is never launched.
+    pub enabled: bool,
     /// Native global shortcut, in the syntax of `keybindings.toml`; empty for none.
     pub hotkey: String,
     pub edge: QuickTerminalEdge,

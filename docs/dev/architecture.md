@@ -83,7 +83,7 @@ src/
     mod.rs         QuickCommand, placement of the quick terminal: pick_monitor, frame, slide
                    (hidden_origin, slide_position, Slide) (pure)
     control.rs     quick.lock single instance (flock), quick.sock command thread, --quick-toggle client,
-                   hidden start for the hotkey
+                   hidden start for the hotkey; --quick exit codes (3 Wayland, 4 disabled)
     macos.rs       macOS: cursor (NSEvent), visible screen area (NSScreen), Spaces behavior (NSWindow)
   hotkey/
     mod.rs         Hotkey: quick_terminal.hotkey registration; Shortcut to X11 keysym / keycode and

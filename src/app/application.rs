@@ -471,13 +471,10 @@ impl App {
         self.palette = palette;
         self.load_errors = load_errors;
         self.register_hotkey();
-        if hotkey::hotkey_turned_on(
-            &old.quick_terminal.hotkey,
-            &self.config.quick_terminal.hotkey,
-        ) {
+        if hotkey::hidden_start_turned_on(&old.quick_terminal, &self.config.quick_terminal) {
             self.start_hidden_quick();
         }
-        self.sync_autostart(Some(old.quick_terminal.autostart));
+        self.sync_autostart(Some(hotkey::effective_autostart(&old.quick_terminal)));
         let banner = hotkey::config_banner(&self.load_errors, self.hotkey_error.as_ref());
         self.config_banner = banner.clone();
         if let Some(settings) = self.session.as_mut().and_then(|s| s.settings.as_mut()) {
@@ -862,8 +859,19 @@ struct Restore {
     handed_over: Option<PathBuf>,
 }
 
+/// The exit code of a `--quick` process that must not run for `config`, before it takes
+/// the lock: `DISABLED_EXIT_CODE` when the quick terminal is disabled. Checked before
+/// Wayland, so that a disabled quick terminal never reports the platform.
+fn quick_allowed(config: &Config) -> Option<i32> {
+    (!config.quick_terminal.enabled).then_some(crate::quick_terminal::control::DISABLED_EXIT_CODE)
+}
+
 /// Runs the quick terminal process: see [`crate::run_quick`].
 pub fn run_quick(hidden: bool) -> anyhow::Result<i32> {
+    let (config, _) = config::load();
+    if let Some(code) = quick_allowed(&config) {
+        return Ok(code);
+    }
     let dir = config::runtime_dir()?;
     let Some(lock) = crate::quick_terminal::control::claim(&dir, hidden)? else {
         return Ok(0);
@@ -1036,6 +1044,17 @@ fn spawn_restored_window(file: &std::path::Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::config::FontFeatureList;
+
+    #[test]
+    fn a_disabled_quick_terminal_process_exits_with_its_code() {
+        let mut config = Config::default();
+        assert_eq!(
+            quick_allowed(&config),
+            Some(crate::quick_terminal::control::DISABLED_EXIT_CODE)
+        );
+        config.quick_terminal.enabled = true;
+        assert_eq!(quick_allowed(&config), None);
+    }
 
     #[test]
     fn grid_size_gives_the_window_size_holding_that_grid() {

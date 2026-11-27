@@ -2,18 +2,26 @@
 //! by an ordinary window when a hotkey is configured, and its session autostart entry.
 
 use super::*;
+use crate::config::QuickTerminalConfig;
 use crate::hotkey::{Hotkey, HotkeyError};
 use crate::quick_terminal::{QuickCommand, autostart, control};
 
-/// Whether an ordinary window starts the quick terminal hidden for `hotkey`, the quick
-/// terminal being `supported` by the session.
-pub(super) fn wants_hidden_quick(hotkey: &str, supported: bool) -> bool {
-    supported && !hotkey.is_empty()
+/// Whether an ordinary window starts the quick terminal hidden for `quick`: the quick
+/// terminal is enabled, has a hotkey, and is `supported` by the session.
+pub(super) fn wants_hidden_quick(quick: &QuickTerminalConfig, supported: bool) -> bool {
+    supported && quick.enabled && !quick.hotkey.is_empty()
 }
 
-/// Whether a reload from the hotkey `old` to `new` asks for the hidden start again.
-pub(super) fn hotkey_turned_on(old: &str, new: &str) -> bool {
-    old.is_empty() && !new.is_empty()
+/// Whether a reload from `old` to `new` asks for the hidden start again: enabling the
+/// quick terminal with a hotkey set, or setting the hotkey of an enabled one.
+pub(super) fn hidden_start_turned_on(old: &QuickTerminalConfig, new: &QuickTerminalConfig) -> bool {
+    !wants_hidden_quick(old, true) && wants_hidden_quick(new, true)
+}
+
+/// The effective autostart setting of `quick`: the entry exists only for an enabled
+/// quick terminal.
+pub(super) fn effective_autostart(quick: &QuickTerminalConfig) -> bool {
+    quick.enabled && quick.autostart
 }
 
 /// Whether the session autostart entry is synchronised with the setting `current`, the
@@ -84,12 +92,12 @@ impl App {
         }
     }
 
-    /// From an ordinary window, starts the quick terminal hidden when a hotkey is
-    /// configured and none listens, so that the hotkey works before any
+    /// From an ordinary window, starts the quick terminal hidden when it is enabled, a
+    /// hotkey is configured and none listens, so that the hotkey works before any
     /// `--quick-toggle`. The single instance lock makes simultaneous starts harmless.
     pub(super) fn start_hidden_quick(&self) {
         if self.mode != WindowMode::Normal
-            || !wants_hidden_quick(&self.config.quick_terminal.hotkey, self.quick_supported)
+            || !wants_hidden_quick(&self.config.quick_terminal, self.quick_supported)
         {
             return;
         }
@@ -106,11 +114,12 @@ impl App {
         }
     }
 
-    /// Makes the session autostart entry follow the setting, `previous` being its value
-    /// before a reload (`None` at start). Nothing is created or removed where the quick
+    /// Makes the session autostart entry follow the effective setting
+    /// ([`effective_autostart`]), `previous` being its effective value before a reload
+    /// (`None` at start). Nothing is created or removed where the quick
     /// terminal is unsupported; a failure is logged.
     pub(super) fn sync_autostart(&self, previous: Option<bool>) {
-        let enabled = self.config.quick_terminal.autostart;
+        let enabled = effective_autostart(&self.config.quick_terminal);
         if !wants_autostart_sync(previous, enabled, self.quick_supported) {
             return;
         }
@@ -131,19 +140,53 @@ impl App {
 mod tests {
     use super::*;
 
-    #[test]
-    fn no_hidden_start_without_a_hotkey_or_where_unsupported() {
-        assert!(!wants_hidden_quick("", true));
-        assert!(!wants_hidden_quick("Ctrl+`", false));
-        assert!(wants_hidden_quick("Ctrl+`", true));
+    /// A quick terminal configuration, `enabled` or not, with `hotkey` and `autostart`.
+    fn quick(enabled: bool, hotkey: &str, autostart: bool) -> QuickTerminalConfig {
+        QuickTerminalConfig {
+            enabled,
+            hotkey: hotkey.to_owned(),
+            autostart,
+            ..Config::default().quick_terminal
+        }
     }
 
     #[test]
-    fn hidden_start_again_only_when_a_reload_sets_the_hotkey() {
-        assert!(hotkey_turned_on("", "Ctrl+`"));
-        assert!(!hotkey_turned_on("Ctrl+`", "Ctrl+F12"));
-        assert!(!hotkey_turned_on("Ctrl+`", ""));
-        assert!(!hotkey_turned_on("", ""));
+    fn no_hidden_start_unless_enabled_with_a_hotkey_where_supported() {
+        assert!(!wants_hidden_quick(&quick(true, "", false), true));
+        assert!(!wants_hidden_quick(&quick(true, "Ctrl+`", false), false));
+        assert!(!wants_hidden_quick(&quick(false, "Ctrl+`", false), true));
+        assert!(wants_hidden_quick(&quick(true, "Ctrl+`", false), true));
+    }
+
+    #[test]
+    fn hidden_start_again_when_a_reload_sets_the_hotkey_of_an_enabled_quick_terminal() {
+        let on = |old: (bool, &str), new: (bool, &str)| {
+            hidden_start_turned_on(&quick(old.0, old.1, false), &quick(new.0, new.1, false))
+        };
+        assert!(on((true, ""), (true, "Ctrl+`")));
+        assert!(!on((true, "Ctrl+`"), (true, "Ctrl+F12")));
+        assert!(!on((true, "Ctrl+`"), (true, "")));
+        assert!(!on((true, ""), (true, "")));
+        assert!(!on((false, ""), (false, "Ctrl+`")));
+    }
+
+    #[test]
+    fn hidden_start_again_when_a_reload_enables_a_quick_terminal_with_a_hotkey() {
+        let on = |old: (bool, &str), new: (bool, &str)| {
+            hidden_start_turned_on(&quick(old.0, old.1, false), &quick(new.0, new.1, false))
+        };
+        assert!(on((false, "Ctrl+`"), (true, "Ctrl+`")));
+        assert!(on((false, ""), (true, "Ctrl+`")));
+        assert!(!on((false, ""), (true, "")));
+        assert!(!on((true, "Ctrl+`"), (false, "Ctrl+`")));
+    }
+
+    #[test]
+    fn autostart_is_effective_only_for_an_enabled_quick_terminal() {
+        assert!(effective_autostart(&quick(true, "", true)));
+        assert!(!effective_autostart(&quick(false, "", true)));
+        assert!(!effective_autostart(&quick(true, "", false)));
+        assert!(!effective_autostart(&quick(false, "", false)));
     }
 
     #[test]

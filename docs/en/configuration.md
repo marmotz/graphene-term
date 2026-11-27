@@ -235,6 +235,7 @@ it.
 
 | Setting              | Default    | Values                                                                                     |
 |----------------------|------------|--------------------------------------------------------------------------------------------|
+| `enabled`            | `false`    | `true` or `false`. Allow Graphene to start the quick terminal. While `false`, it is never launched and `graphene --quick-toggle` fails. Applies the next time Graphene starts. |
 | `hotkey`             | `""`       | Native global shortcut showing or hiding the quick terminal, written like a [keyboard shortcut](#keyboard-shortcuts) (`"Ctrl+F12"`). Empty: none. |
 | `edge`               | `"top"`    | Screen edge it slides from: `"top"`, `"bottom"`, `"left"` or `"right"`.                    |
 | `size`               | `40`       | Percentage of the screen, from 10 to 100: the height for `top` and `bottom`, the width for `left` and `right`. The other dimension takes the whole screen. |

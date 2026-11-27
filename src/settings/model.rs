@@ -186,6 +186,7 @@ pub fn section_fields(section: Section) -> &'static [Field] {
             Field::NotificationsBell,
         ],
         Section::QuickTerminal => &[
+            Field::QuickTerminalEnabled,
             Field::QuickTerminalHotkey,
             Field::QuickTerminalEdge,
             Field::QuickTerminalSize,
@@ -228,6 +229,7 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::NotificationsCommandFinished => &["notifications", "command_finished"],
         Field::NotificationsCommandThreshold => &["notifications", "command_threshold"],
         Field::NotificationsBell => &["notifications", "bell"],
+        Field::QuickTerminalEnabled => &["quick_terminal", "enabled"],
         Field::QuickTerminalHotkey => &["quick_terminal", "hotkey"],
         Field::QuickTerminalEdge => &["quick_terminal", "edge"],
         Field::QuickTerminalSize => &["quick_terminal", "size"],
@@ -306,6 +308,7 @@ pub fn widget(field: Field) -> Widget {
         | Field::NotificationsProgram
         | Field::NotificationsCommandFinished
         | Field::NotificationsBell
+        | Field::QuickTerminalEnabled
         | Field::QuickTerminalHideOnFocusLoss
         | Field::QuickTerminalAutostart => Widget::Toggle,
         Field::WordSeparators | Field::FontFeatures => Widget::Text,
@@ -631,6 +634,23 @@ impl SettingsModel {
             .then_some(Msg::QuickTerminalUnavailableOnWayland)
     }
 
+    /// Whether the quick terminal section shows that it is turned off: its other
+    /// fields are disabled, but the section itself is neither locked nor unavailable.
+    pub fn quick_terminal_disabled(&self, section: Section) -> bool {
+        section == Section::QuickTerminal
+            && !self.config.quick_terminal.enabled
+            && self.locked(section).is_none()
+            && self.unavailable(section).is_none()
+    }
+
+    /// Whether `field` can be edited, within a section that can: the quick terminal
+    /// settings other than its switch are disabled while it is turned off.
+    pub fn field_enabled(&self, field: Field) -> bool {
+        self.config.quick_terminal.enabled
+            || field == Field::QuickTerminalEnabled
+            || !section_fields(Section::QuickTerminal).contains(&field)
+    }
+
     pub fn write_error(&self) -> Option<&str> {
         self.write_error.as_deref()
     }
@@ -680,6 +700,7 @@ impl SettingsModel {
                 Value::Integer(i64::try_from(c.notifications.command_threshold).unwrap_or(i64::MAX))
             }
             Field::NotificationsBell => Value::Bool(c.notifications.bell),
+            Field::QuickTerminalEnabled => Value::Bool(c.quick_terminal.enabled),
             Field::QuickTerminalHotkey => text(&c.quick_terminal.hotkey),
             Field::QuickTerminalEdge => {
                 text(name_of(&QuickTerminalEdge::VALUES, c.quick_terminal.edge))
@@ -1265,6 +1286,62 @@ bell = true
                 Field::NotificationsBell,
             ]
         );
+    }
+
+    #[test]
+    fn quick_terminal_switch_shows_and_writes_its_key() {
+        let m = model("");
+        assert_eq!(
+            section_fields(Section::QuickTerminal)[0],
+            Field::QuickTerminalEnabled
+        );
+        assert_eq!(widget(Field::QuickTerminalEnabled), Widget::Toggle);
+        assert!(!m.on(Field::QuickTerminalEnabled));
+        assert_eq!(
+            m.edit(Field::QuickTerminalEnabled, Input::Toggle(true)),
+            Ok(set(&["quick_terminal", "enabled"], Value::Bool(true)))
+        );
+        assert!(model("[quick_terminal]\nenabled = true\n").on(Field::QuickTerminalEnabled));
+    }
+
+    #[test]
+    fn a_disabled_quick_terminal_disables_its_other_fields() {
+        let m = model("");
+        assert!(m.field_enabled(Field::QuickTerminalEnabled));
+        for &field in &section_fields(Section::QuickTerminal)[1..] {
+            assert!(!m.field_enabled(field), "{field:?}");
+        }
+        assert!(m.field_enabled(Field::NotificationsBell));
+        assert!(m.quick_terminal_disabled(Section::QuickTerminal));
+        assert!(!m.quick_terminal_disabled(Section::Notifications));
+    }
+
+    #[test]
+    fn an_enabled_quick_terminal_enables_all_its_fields() {
+        let m = model("[quick_terminal]\nenabled = true\n");
+        for &field in section_fields(Section::QuickTerminal) {
+            assert!(m.field_enabled(field), "{field:?}");
+        }
+        assert!(!m.quick_terminal_disabled(Section::QuickTerminal));
+    }
+
+    #[test]
+    fn turning_the_quick_terminal_on_enables_its_fields_once_written() {
+        let mut m = model("");
+        assert!(!m.field_enabled(Field::QuickTerminalHotkey));
+        let mut config = Config::default();
+        config.quick_terminal.enabled = true;
+        m.written(config, Vec::new());
+        assert!(m.field_enabled(Field::QuickTerminalHotkey));
+    }
+
+    #[test]
+    fn the_disabled_notice_gives_way_to_wayland_and_locked_files() {
+        let mut m = model("");
+        m.set_wayland(true);
+        assert!(!m.quick_terminal_disabled(Section::QuickTerminal));
+        let m = model("[quick_terminal\n");
+        assert!(!m.quick_terminal_disabled(Section::QuickTerminal));
     }
 
     #[test]

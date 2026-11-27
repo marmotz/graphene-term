@@ -60,13 +60,13 @@ _tâches créées — voir [technical.md](features/multiplexing/technical.md)_ �
 
 ## Activation du quick terminal ·  [overview](features/quick-terminal-toggle/overview.md)
 
-_tâches créées — voir [technical.md](features/quick-terminal-toggle/technical.md)_ — 0/3 tasks done
+_terminé — voir [technical.md](features/quick-terminal-toggle/technical.md)_ — 3/3 tasks done
 
 | Done | Issue                                                       | Title                                                      | Blocked by |
 |------|-------------------------------------------------------------|------------------------------------------------------------|------------|
-| [ ]  | [#275](https://github.com/marmotz/graphene-term/issues/275) | Add the quick_terminal.enabled setting                     | —          |
-| [ ]  | [#276](https://github.com/marmotz/graphene-term/issues/276) | Gate the quick terminal launches on quick_terminal.enabled | #275       |
-| [ ]  | [#277](https://github.com/marmotz/graphene-term/issues/277) | Add the quick terminal switch to the settings window       | #275       |
+| [x]  | [#275](https://github.com/marmotz/graphene-term/issues/275) | Add the quick_terminal.enabled setting                     | —          |
+| [x]  | [#276](https://github.com/marmotz/graphene-term/issues/276) | Gate the quick terminal launches on quick_terminal.enabled | #275       |
+| [x]  | [#277](https://github.com/marmotz/graphene-term/issues/277) | Add the quick terminal switch to the settings window       | #275       |
 
 ## Bugs
 

@@ -50,7 +50,7 @@ uncomment the line below.
 - **Desktop notifications** for long commands, programs (OSC 9, OSC 777) and the bell,
   and a **progress indicator** (OSC 9;4): [notifications](docs/en/configuration.md#notifications),
   [progress](docs/en/tabs-and-panes.md#progress).
-- **Quick terminal** attached to a screen edge, shown and hidden by
+- **Quick terminal** attached to a screen edge, opt-in (`enabled`), shown and hidden by
   `graphene --quick-toggle` (macOS and X11), started and restored with the session:
   [quick terminal](docs/en/quick-terminal.md).
 - **Settings window**, live config reload, remembered window size, update
