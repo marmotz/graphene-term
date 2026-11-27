@@ -72,9 +72,9 @@ _tâches créées — voir [technical.md](features/quick-terminal-toggle/technic
 
 ### La navigation entre blocs ne peut pas sélectionner le bloc en cours ·  [overview](bugs/block-navigation-skips-current-block/overview.md)
 
-_tâches créées — voir [technical.md](bugs/block-navigation-skips-current-block/technical.md)_ — 0/2 tasks done
+_terminé — voir [technical.md](bugs/block-navigation-skips-current-block/technical.md)_ — 2/2 tasks done
 
 | Done | Issue                                                       | Title                                                | Blocked by |
 |------|-------------------------------------------------------------|------------------------------------------------------|------------|
-| [ ]  | [#279](https://github.com/marmotz/graphene-term/issues/279) | Block navigation: select the current block           | —          |
-| [ ]  | [#280](https://github.com/marmotz/graphene-term/issues/280) | Block actions: copy the command of the current block | #279       |
+| [x]  | [#279](https://github.com/marmotz/graphene-term/issues/279) | Block navigation: select the current block           | —          |
+| [x]  | [#280](https://github.com/marmotz/graphene-term/issues/280) | Block actions: copy the command of the current block | #279       |

@@ -767,7 +767,7 @@ mod tests {
     use super::*;
     use crate::i18n::Direction;
     use crate::layout::CellSize;
-    use crate::timeline::testing::Session;
+    use crate::timeline::testing::{Session, start};
     use crate::workspace::DIVIDER_THICKNESS;
 
     fn entry(label: &str, action: Action) -> Entry {
@@ -1223,10 +1223,13 @@ mod tests {
     }
 
     #[test]
-    fn pane_context_of_an_empty_session_allows_only_the_search() {
+    fn pane_context_of_an_empty_session_allows_the_search_and_the_navigation() {
         let session = Session::new(1000);
+        // A navigation selects the current block, the only one.
         let search = PaneContext {
             search: true,
+            previous_block: true,
+            next_block: true,
             ..PaneContext::default()
         };
         let context = PaneContext::read(&session.timeline, &session.term, None, false);
@@ -1239,6 +1242,10 @@ mod tests {
                 ..search
             }
         );
+        // Once selected, it stays selected either way.
+        let current = Some(session.timeline.current().id);
+        let context = PaneContext::read(&session.timeline, &session.term, current, false);
+        assert!(!context.previous_block && !context.next_block);
     }
 
     #[test]
@@ -1278,9 +1285,28 @@ mod tests {
 
         let on_last = PaneContext::read(timeline, term, Some(last), false);
         assert!(on_last.copy);
-        assert!(on_last.previous_block && !on_last.next_block);
+        // The current block comes after the last finished one.
+        assert!(on_last.previous_block && on_last.next_block);
         let on_first = PaneContext::read(timeline, term, Some(first), false);
         assert!(!on_first.previous_block && on_first.next_block);
+        let current = timeline.current().id;
+        let on_current = PaneContext::read(timeline, term, Some(current), false);
+        assert!(on_current.previous_block && !on_current.next_block);
+        // At the prompt, the current block has nothing to copy but folds.
+        assert!(!on_current.copy_command && !on_current.copy_output);
+        assert!(on_current.toggle_fold);
+    }
+
+    #[test]
+    fn pane_context_copies_the_command_of_a_selected_running_block() {
+        let mut session = Session::sized(20, 10, 1000);
+        session.command("one", &["1"], 0);
+        session.feed(&format!("$ make\r\n{}building\r\n", start("make")));
+        let (timeline, term) = (&session.timeline, &session.term);
+        let current = timeline.current().id;
+        let running = PaneContext::read(timeline, term, Some(current), false);
+        assert!(running.copy_command && !running.copy_output);
+        assert!(running.toggle_fold);
     }
 
     #[test]

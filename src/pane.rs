@@ -708,8 +708,8 @@ impl Pane {
         }
     }
 
-    /// Left press in the margin on view row `row`: selects the block of a finished block
-    /// row, ignored elsewhere.
+    /// Left press in the margin on view row `row`: selects the block of a block row,
+    /// finished or current, ignored elsewhere.
     pub fn margin_press(&mut self, row: usize) {
         let selected = {
             let term = self.terminal.term.lock();
@@ -718,7 +718,7 @@ impl Pane {
             let row = row.min(rows.len().saturating_sub(1));
             rows.get(row)
                 .and_then(|row| row.block)
-                .filter(|id| timeline.block(*id).is_some())
+                .filter(|id| timeline.contains(*id))
                 .map(|id| (id, block_actions::block_text(&timeline, id)))
         };
         if let Some((id, text)) = selected {
