@@ -41,6 +41,10 @@
 ## Cursor blinking: true or false. Applications can still change this (DECSCUSR).
 # blinking = false
 
+# [keyboard]
+## Input method (IME) in the terminal window, for CJK text, emoji and composed characters (true or false). On macOS, false also stops dead keys from combining.
+# ime = true
+
 # [selection]
 ## Characters that end a word on double-click.
 # word_separators = ",│`|\"' ()[]{}<>\t"
