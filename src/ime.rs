@@ -5,6 +5,8 @@
 use winit::event::Ime;
 use winit::keyboard::ModifiersState;
 
+use crate::frame::Frame;
+use crate::layout::GridLayout;
 use crate::pane::Pane;
 use crate::workspace::Workspace;
 
@@ -140,6 +142,40 @@ pub fn commit_to_panes<P: TextTarget>(
         if !replaced {
             pane.type_bytes(text.as_bytes().to_vec());
         }
+    }
+}
+
+/// Rectangle of the window, in physical pixels, that the candidate window of the input
+/// method is placed next to without covering it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorArea {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl CursorArea {
+    /// The cell where the composition starts in `frame`, the cell of the terminal
+    /// cursor, laid out by `layout`. `None` while the cursor is out of the view or
+    /// hidden by the application.
+    pub fn of_cursor(frame: &Frame, layout: &GridLayout) -> Option<Self> {
+        let anchor = frame.anchor?;
+        let top = *frame.row_tops.get(anchor.line)?;
+        Some(Self {
+            x: layout.cell_x(anchor.column).round() as i32,
+            y: layout.row_top(top).round() as i32,
+            width: layout.cell.width.round() as u32,
+            height: layout.cell.height.round() as u32,
+        })
+    }
+
+    /// Records `self` as the area given to the input method last. Returns whether it
+    /// changed, so it has to be given again.
+    pub fn replace(self, last: &mut Option<Self>) -> bool {
+        let changed = *last != Some(self);
+        *last = Some(self);
+        changed
     }
 }
 
@@ -399,5 +435,88 @@ mod tests {
         workspace.new_tab(id, Fake::default());
         commit_to_panes(&mut workspace, "", ModifiersState::empty());
         assert!(workspace.pane(id).unwrap().typed.is_empty());
+    }
+
+    /// The frame of a 10x3 terminal fed with `bytes`, with a block cursor.
+    fn frame_of(bytes: &str) -> Frame {
+        use crate::palette::Palette;
+        use crate::timeline::testing::Session;
+        let mut session = Session::sized(10, 3, 100);
+        session.feed(bytes);
+        let rows = crate::view::rows(&session.timeline, &session.term, 3);
+        Frame::capture(
+            &session.term,
+            &session.timeline,
+            &rows,
+            &Palette::default(),
+            true,
+            true,
+            None,
+        )
+    }
+
+    fn grid() -> GridLayout {
+        GridLayout::new(
+            Rect::from_size(400, 200),
+            CellSize {
+                width: 10.0,
+                height: 20.0,
+            },
+            0.0,
+        )
+    }
+
+    #[test]
+    fn cursor_area_is_the_cell_of_the_cursor() {
+        let layout = grid();
+        let area = CursorArea::of_cursor(&frame_of("ab\r\ncd"), &layout).unwrap();
+        assert_eq!(
+            area,
+            CursorArea {
+                x: layout.cell_x(2) as i32,
+                y: layout.row_top(2) as i32,
+                width: 10,
+                height: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn cursor_area_stays_at_the_start_of_the_composition() {
+        let layout = grid();
+        let mut frame = frame_of("ab");
+        let before = CursorArea::of_cursor(&frame, &layout);
+        frame.with_preedit(
+            &Preedit {
+                text: "xyz".to_owned(),
+                cursor: Some((3, 3)),
+            },
+            true,
+        );
+        assert_eq!(CursorArea::of_cursor(&frame, &layout), before);
+        assert_eq!(before.map(|area| area.x), Some(layout.cell_x(2) as i32));
+    }
+
+    #[test]
+    fn no_cursor_area_while_the_application_hides_the_cursor() {
+        assert_eq!(
+            CursorArea::of_cursor(&frame_of("ab\x1b[?25l"), &grid()),
+            None
+        );
+    }
+
+    #[test]
+    fn cursor_area_is_given_again_only_when_it_changes() {
+        let area = CursorArea {
+            x: 10,
+            y: 20,
+            width: 10,
+            height: 20,
+        };
+        let mut last = None;
+        assert!(area.replace(&mut last));
+        assert!(!area.replace(&mut last));
+        assert!(CursorArea { x: 20, ..area }.replace(&mut last));
+        assert_eq!(last.map(|area| area.x), Some(20));
     }
 }

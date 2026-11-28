@@ -87,6 +87,7 @@ impl Session {
         settings.leave();
         // The terminal takes the input method back from egui.
         self.window.set_ime_allowed(self.ime_allowed);
+        self.ime_area = None;
         if let Some(palette) = settings.take_preview() {
             self.preview_palette(&palette);
         }

@@ -5,6 +5,7 @@ use std::ops::RangeInclusive;
 use alacritty_terminal::term::Term;
 
 use super::*;
+use crate::ime::Preedit;
 use crate::pane_search::SearchState;
 use crate::renderer::scene::gpu_color;
 use crate::view::ViewRow;
@@ -28,6 +29,9 @@ pub(super) struct FrameKey {
     progress: Option<(ProgressView, f32)>,
     /// Revision of the open search bar of the pane, whose matches are highlighted.
     search: Option<u64>,
+    /// Composition of the input method drawn at the cursor, and whether it moves the
+    /// cells right of it (the prompt editor).
+    preedit: Option<(Preedit, bool)>,
 }
 
 /// The matches of `search` whose source shows in `view`, in the lines of its rows, with
@@ -105,6 +109,7 @@ impl Session {
         }
         self.redraw_at = None;
         self.draw();
+        self.place_ime_area();
         self.redraw_stats.redraw_done(start);
     }
 
@@ -166,11 +171,20 @@ impl Session {
                 pane.refresh_search(revision);
             }
         }
+        let composing = match self.ime_target() {
+            keyboard::ImeTarget::Pane(id) => self.preedit().map(|preedit| (id, preedit.clone())),
+            _ => None,
+        };
         for &id in &shown {
             let Some(pane) = self.workspace.pane(id) else {
                 continue;
             };
             let is_active = Some(id) == active;
+            // Before the terminal is locked: the prompt editor reads it.
+            let preedit = composing
+                .as_ref()
+                .filter(|(owner, _)| is_active && *owner == id)
+                .map(|(_, preedit)| (preedit.clone(), pane.rich_mode(self.modifiers)));
             let term = pane.terminal.term.lock();
             let mut timeline = pane::lock(&pane.terminal.timeline);
             let rows = pane::shown_rows(&pane.anchor, &term, &mut timeline);
@@ -200,6 +214,7 @@ impl Session {
                 link: link.clone(),
                 progress,
                 search: pane.search.as_ref().map(SearchState::revision),
+                preedit: preedit.clone(),
             });
             let palette = &self.palette;
             let lang = self.lang;
@@ -226,6 +241,9 @@ impl Session {
                 }
                 if let Some((source, range)) = &link {
                     frame.underline_link(&rows, *source, range);
+                }
+                if let Some((preedit, shift)) = &preedit {
+                    frame.with_preedit(preedit, *shift);
                 }
                 frame.lang = lang;
                 if dimmed {

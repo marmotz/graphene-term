@@ -333,6 +333,9 @@ struct Session {
     ime_allowed: bool,
     /// Text being composed by the input method, and what it is typed into.
     ime: Composition<keyboard::ImeTarget>,
+    /// Rectangle given to the input method last for its candidate window, `None` until
+    /// one is given again.
+    ime_area: Option<ime::CursorArea>,
 }
 
 impl Session {}

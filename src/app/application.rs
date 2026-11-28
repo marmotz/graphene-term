@@ -354,6 +354,7 @@ impl App {
             quick_closed: false,
             ime_allowed: self.config.keyboard.ime,
             ime: Composition::default(),
+            ime_area: None,
         };
         if restored.is_some() {
             // The restored panes were all given the size of a single pane.

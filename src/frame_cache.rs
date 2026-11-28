@@ -72,6 +72,7 @@ mod tests {
             },
             cursor: None,
             ligature_break: None,
+            anchor: None,
             background: color,
             banner: None,
             lang: Lang::EnUs,

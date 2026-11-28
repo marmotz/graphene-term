@@ -906,6 +906,18 @@ is reset with the glyph cache, and the frame is resolved again.
   of focus and `[keyboard] ime` turned off clear it; after each window event,
   `follow_ime_target` clears it once its target lost the keyboard. `key_press` ignores
   a key during a composition.
+- Composition display: in `Session::draw`, the composition of the active pane (target
+  `ImeTarget::Pane`) goes into its `FrameKey` with `Pane::rich_mode` (read before the
+  `Term` lock), and `Frame::with_preedit` draws it from `Frame::anchor`, the cell of the
+  terminal cursor set by `Frame::capture`: underlined cells in that cell's colors, wide
+  characters on two cells (`unicode-width`), the cells right of it shifted in rich mode
+  and drawn over otherwise, cut at the right edge; the cursor (a baked block cursor is
+  taken back and baked again) follows the cursor of the composition, or is hidden. The
+  grid of the terminal is never written. After each redraw, `Session::place_ime_area`
+  gives `set_ime_cursor_area` the anchor cell in physical pixels
+  (`ime::CursorArea::of_cursor`, from `GridLayout::cell_x` / `row_top`), only when it
+  changed since it was given last (`Session::ime_area`, forgotten when the input method
+  is allowed again).
 - Mouse wheel: block or timeline scrolling on the primary screen (see Command blocks),
   arrow keys on the alternate screen when the application enabled alternate scroll.
 - Mouse reporting only covers the live grid's rows (`mouse::reports_at`: a

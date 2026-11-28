@@ -225,7 +225,6 @@ impl Session {
     }
 
     /// The text being composed by the input method for what has the keyboard now.
-    #[allow(dead_code, reason = "drawn by the display of the composition")]
     pub(super) fn preedit(&self) -> Option<&ime::Preedit> {
         self.ime.preedit()
     }
@@ -241,6 +240,32 @@ impl Session {
         }
         if effect.redraw {
             self.window.request_redraw();
+        }
+    }
+
+    /// Gives the input method the cell where its composition starts in the active pane,
+    /// for its candidate window, when it changed since it was given last. Nothing is
+    /// given while the input method is off, the settings tab has it, or something else
+    /// than a pane has the keyboard.
+    pub(super) fn place_ime_area(&mut self) {
+        if !self.ime_allowed || self.settings_shown() {
+            return;
+        }
+        let ImeTarget::Pane(id) = self.ime_target() else {
+            return;
+        };
+        let area = self
+            .frames
+            .get(id)
+            .zip(self.workspace.pane(id))
+            .and_then(|(frame, pane)| ime::CursorArea::of_cursor(frame, &pane.layout));
+        if let Some(area) = area
+            && area.replace(&mut self.ime_area)
+        {
+            self.window.set_ime_cursor_area(
+                PhysicalPosition::new(area.x, area.y),
+                PhysicalSize::new(area.width, area.height),
+            );
         }
     }
 
@@ -264,6 +289,7 @@ impl Session {
     /// tab, while shown, keeps it until it is left.
     pub(super) fn set_ime_allowed(&mut self, allowed: bool) {
         self.ime_allowed = allowed;
+        self.ime_area = None;
         if !self.settings_shown() {
             self.window.set_ime_allowed(allowed);
         }
