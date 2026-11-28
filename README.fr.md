@@ -35,6 +35,9 @@ décommenter la ligne ci-dessous.
 - **Éditeur d'invite enrichi** : cliquez pour déplacer le curseur, sélectionnez à la
   souris ou avec `Shift+Flèche`, raccourcis d'éditeur :
   [éditeur de saisie](docs/fr/input-editor.md).
+- **Méthodes de saisie (IME)** : texte chinois, japonais et coréen, emoji et caractères
+  composés, composés au curseur et dans la palette de commandes :
+  [méthodes de saisie](docs/fr/input-editor.md#méthodes-de-saisie-ime).
 - **Onglets et panneaux**, déplacement des panneaux à la souris, zoom sur un panneau,
   saisie dans plusieurs panneaux à la fois : [onglets et panneaux](docs/fr/tabs-and-panes.md),
   [diffusion](docs/fr/tabs-and-panes.md#diffusion).

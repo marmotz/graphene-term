@@ -32,6 +32,9 @@ uncomment the line below.
   dotfiles: [shell integration](docs/en/command-blocks.md#shell-integration).
 - **Rich prompt editor**: click to move the cursor, select with the mouse or
   `Shift+Arrow`, editor shortcuts: [input editor](docs/en/input-editor.md).
+- **Input methods (IME)**: Chinese, Japanese and Korean text, emoji and composed
+  characters, composed at the cursor and in the command palette:
+  [input methods](docs/en/input-editor.md#input-methods-ime).
 - **Tabs and split panes**, drag panes to rearrange them, zoom a pane, type in several
   panes at once: [tabs and panes](docs/en/tabs-and-panes.md),
   [broadcast](docs/en/tabs-and-panes.md#broadcast).

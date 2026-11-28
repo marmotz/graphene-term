@@ -9,6 +9,7 @@ remplacer une sélection en tapant.
 - [Quand est-il disponible](#quand-est-il-disponible)
 - [Raccourcis à l'invite](#raccourcis-à-linvite)
 - [Sélectionner et remplacer](#sélectionner-et-remplacer)
+- [Méthodes de saisie (IME)](#méthodes-de-saisie-ime)
 - [Limites](#limites)
 
 ## Quand est-il disponible
@@ -57,6 +58,30 @@ une sélection dans la ligne de commande la remplace, comme dans un éditeur. Un
 sélection qui déborde sur la sortie au-dessus de l'invite n'est pas remplacée : elle
 est effacée et la touche part vers le shell comme d'habitude.
 
+## Méthodes de saisie (IME)
+
+Graphene saisit le texte par la méthode de saisie de votre système (fcitx5 ou IBus sous
+Linux, sources de saisie sous macOS) : texte chinois, japonais et coréen, emoji,
+caractères composés.
+
+- **Dans un panneau**, le texte en cours de composition s'affiche au curseur, souligné.
+  À l'invite, le texte à sa droite se décale pour lui faire de la place ; dans les
+  programmes plein écran, il s'affiche par-dessus l'écran. La fenêtre de suggestions
+  s'ouvre là où la composition commence.
+- **Le texte validé** part vers le panneau actif, ou vers tous les panneaux pendant la
+  [diffusion](tabs-and-panes.md#diffusion). À l'invite, il remplace une sélection dans
+  la ligne de commande, comme une frappe. Il ne déclenche jamais de raccourci clavier.
+- **Dans la palette de commandes**, le texte en cours de composition s'affiche après
+  votre recherche, souligné, et ne filtre la liste qu'une fois validé.
+- **Dans le champ de recherche de l'historique**, le texte validé va dans le champ.
+- **Dans l'onglet des paramètres**, les champs texte utilisent aussi la méthode de
+  saisie.
+
+Déplacer le focus (un autre panneau, la palette, la barre de recherche, une autre
+fenêtre) abandonne le texte en cours de composition. Pour taper sans la méthode de
+saisie, désactivez **Méthode de saisie (IME)** dans la section **Clavier** de l'onglet
+des paramètres, ou mettez `ime = false` dans [`[keyboard]`](configuration.md#keyboard).
+
 ## Limites
 
 - `Ctrl+A` sélectionne aussi le texte de l'invite devant votre commande, car Graphene ne
@@ -67,3 +92,8 @@ est effacée et la touche part vers le shell comme d'habitude.
 - Sous macOS, le Bash du système (3.2) ne peut pas faire fonctionner l'éditeur de
   saisie : l'invite se comporte comme dans un terminal ordinaire. Utilisez zsh (le shell
   par défaut de macOS) ou un Bash plus récent.
+- Le texte en cours de composition ne s'affiche pas dans le champ de recherche de
+  l'historique, seul le texte validé y arrive. La zone de renommage d'onglet, les
+  boîtes de dialogue et les menus contextuels ignorent la méthode de saisie.
+- Dans la palette de commandes, le curseur reste après le texte en cours de
+  composition.

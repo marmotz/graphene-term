@@ -46,7 +46,7 @@ Selected as the project's "modern" pillars:
 | Done    | Configuration file, hot reload, themes and settings window                           |
 | Done    | macOS builds                                                                         |
 | Done    | Update check against GitHub releases                                                 |
-| Planned | IME support                                                                          |
+| Done    | IME support                                                                          |
 
 ## Non-goals (for now)
 
