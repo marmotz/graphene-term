@@ -68,6 +68,9 @@ impl Session {
     /// Shows the settings tab `settings`, opened by [`App`].
     pub(super) fn show_settings(&mut self, settings: SettingsTab) {
         self.settings = Some(settings);
+        // egui allows the input method while one of its text fields has the keyboard.
+        self.clear_composition();
+        self.window.set_ime_allowed(false);
         // The panes are hidden: nothing of theirs stays hovered.
         self.hovered_cell = None;
         self.hovered_link = None;
@@ -82,6 +85,8 @@ impl Session {
             return;
         };
         settings.leave();
+        // The terminal takes the input method back from egui.
+        self.window.set_ime_allowed(self.ime_allowed);
         if let Some(palette) = settings.take_preview() {
             self.preview_palette(&palette);
         }
