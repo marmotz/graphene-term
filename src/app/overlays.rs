@@ -75,9 +75,11 @@ impl Session {
         };
         let size = self.window.inner_size();
         let metrics = self.ui_metrics(UiFont::Palette);
+        let composition = self.ime.preedit().map(|preedit| preedit.text.as_str());
         let renderer = &mut self.renderer;
         Some(PaletteLayout::new(
             palette,
+            composition,
             self.lang,
             Rect::from_size(size.width, size.height),
             metrics,

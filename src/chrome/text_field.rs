@@ -49,22 +49,22 @@ impl TextField {
                 self.selected = false;
                 false
             }
-            _ => {
-                let typed: String = text
-                    .unwrap_or_default()
-                    .chars()
-                    .filter(|c| !c.is_control())
-                    .collect();
-                if typed.is_empty() {
-                    return false;
-                }
-                if std::mem::take(&mut self.selected) {
-                    self.text.clear();
-                }
-                self.text.push_str(&typed);
-                true
-            }
+            _ => self.insert(text.unwrap_or_default()),
         }
+    }
+
+    /// Appends `typed`, control characters left out, over a selected text. Returns
+    /// whether the text changed.
+    pub fn insert(&mut self, typed: &str) -> bool {
+        let typed: String = typed.chars().filter(|c| !c.is_control()).collect();
+        if typed.is_empty() {
+            return false;
+        }
+        if std::mem::take(&mut self.selected) {
+            self.text.clear();
+        }
+        self.text.push_str(&typed);
+        true
     }
 }
 
@@ -125,5 +125,17 @@ mod tests {
         assert!(typed(&mut field, "/x"));
         assert_eq!(field.text(), "~/dev/x");
         assert!(!TextField::with_selected("").selected());
+    }
+
+    #[test]
+    fn inserted_text_is_appended_without_control_characters() {
+        let mut field = TextField::with_selected("~/dev");
+        assert!(field.insert("日本\n"));
+        assert_eq!(field.text(), "日本", "a selected text is replaced");
+        assert!(field.insert("語"));
+        assert_eq!(field.text(), "日本語");
+        assert!(!field.insert("\t"));
+        assert!(!field.insert(""));
+        assert_eq!(field.text(), "日本語");
     }
 }

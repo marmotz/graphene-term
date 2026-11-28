@@ -243,22 +243,25 @@ impl Session {
         }
     }
 
-    /// Gives the input method the cell where its composition starts in the active pane,
-    /// for its candidate window, when it changed since it was given last. Nothing is
-    /// given while the input method is off, the settings tab has it, or something else
-    /// than a pane has the keyboard.
+    /// Gives the input method where its composition starts, for its candidate window,
+    /// when it changed since it was given last: the cell in the active pane, or the
+    /// search field of the command palette while it is open. Nothing is given while the
+    /// input method is off, the settings tab has it, or something else has the keyboard.
     pub(super) fn place_ime_area(&mut self) {
         if !self.ime_allowed || self.settings_shown() {
             return;
         }
-        let ImeTarget::Pane(id) = self.ime_target() else {
-            return;
+        let area = match self.ime_target() {
+            ImeTarget::Pane(id) => self
+                .frames
+                .get(id)
+                .zip(self.workspace.pane(id))
+                .and_then(|(frame, pane)| ime::CursorArea::of_cursor(frame, &pane.layout)),
+            ImeTarget::Palette => self
+                .palette_layout()
+                .map(|layout| ime::CursorArea::of_rect(layout.ime_area())),
+            ImeTarget::Search(_) | ImeTarget::Other => None,
         };
-        let area = self
-            .frames
-            .get(id)
-            .zip(self.workspace.pane(id))
-            .and_then(|(frame, pane)| ime::CursorArea::of_cursor(frame, &pane.layout));
         if let Some(area) = area
             && area.replace(&mut self.ime_area)
         {
@@ -303,6 +306,11 @@ impl Session {
     /// (see [`ime::commit_to_panes`]). It runs no shortcut. The overlays take no text
     /// from the input method.
     pub(super) fn commit_text(&mut self, text: &str) {
+        if let Some(Overlay::Palette(palette)) = &mut self.overlay {
+            palette.insert(text);
+            self.window.request_redraw();
+            return;
+        }
         if self.overlay.is_some() || self.pane_dragging() {
             return;
         }

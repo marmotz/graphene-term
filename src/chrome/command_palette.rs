@@ -382,6 +382,14 @@ impl CommandPalette {
         None
     }
 
+    /// Appends `text` to the query (text committed by the input method) and filters
+    /// again.
+    pub fn insert(&mut self, text: &str) {
+        if self.query.insert(text) {
+            self.refilter();
+        }
+    }
+
     /// Runs the match `index`; `None` when there is no such match.
     pub fn choose(&self, index: usize) -> Option<Outcome> {
         let found = self.matches.get(index)?;
@@ -569,7 +577,8 @@ pub struct PaletteLayout {
     pub rect: Rect,
     /// The search field.
     pub input: Rect,
-    /// Text of the search field: the query, or a hint while it is empty.
+    /// Text of the search field: the query followed by the composition of the input
+    /// method, or a hint while both are empty.
     pub input_text: String,
     pub placeholder: bool,
     /// Left edge and top of the search field text.
@@ -577,8 +586,10 @@ pub struct PaletteLayout {
     pub input_text_y: f32,
     /// Width the search field text is truncated to.
     pub text_width: f32,
-    /// The text cursor, after the query.
+    /// The text cursor, after the query and the composition.
     pub caret: Rect,
+    /// The line under the composition of the input method, while there is one.
+    pub composition: Option<Rect>,
     pub rows: Vec<Row>,
     /// The accent bar on the left edge of the selected row, when it is shown.
     pub marker: Option<Rect>,
@@ -595,9 +606,11 @@ pub enum PaletteHit {
 impl PaletteLayout {
     /// Lays `palette` out in a `window`: centered, at most [`MAX_WIDTH`] wide, its top
     /// at [`TOP`] of the height, at most [`VISIBLE_ROWS`] rows; texts are measured by
-    /// `measure` in pixels.
+    /// `measure` in pixels. `composition`, the text being composed by the input method,
+    /// is shown after the query without filtering it.
     pub fn new(
         palette: &CommandPalette,
+        composition: Option<&str>,
         lang: Lang,
         window: Rect,
         metrics: UiMetrics,
@@ -625,22 +638,38 @@ impl PaletteLayout {
         let text_x = input.x + text_padding;
         let text_width = (input.width - 2.0 * text_padding).max(0.0);
         let input_text_y = input.y + row_padding;
-        let placeholder = palette.query().is_empty();
+        let composition = composition.filter(|text| !text.is_empty());
+        let typed = format!("{}{}", palette.query(), composition.unwrap_or_default());
+        let placeholder = typed.is_empty();
+        let typed_width = |measure: &mut dyn FnMut(&str) -> f32, text: &str| {
+            if text.is_empty() {
+                0.0
+            } else {
+                measure(text).min(text_width)
+            }
+        };
+        let query_end = typed_width(&mut measure, palette.query());
+        let typed_end = typed_width(&mut measure, &typed);
+        let thickness = scale.round().max(1.0);
+        let caret = Rect {
+            x: (text_x + typed_end).round(),
+            y: input_text_y,
+            width: thickness,
+            height: line,
+        };
+        let composition = composition.map(|_| {
+            let start = (text_x + query_end).round();
+            Rect {
+                x: start,
+                y: (input_text_y + line - thickness).round(),
+                width: (text_x + typed_end).round() - start,
+                height: thickness,
+            }
+        });
         let input_text = if placeholder {
             i18n::text(lang, &Msg::PalettePlaceholder).into()
         } else {
-            palette.query().to_owned()
-        };
-        let caret_x = if placeholder {
-            text_x
-        } else {
-            text_x + measure(palette.query()).min(text_width)
-        };
-        let caret = Rect {
-            x: caret_x.round(),
-            y: input_text_y,
-            width: scale.round().max(1.0),
-            height: line,
+            typed
         };
 
         let shown = palette
@@ -693,6 +722,7 @@ impl PaletteLayout {
             input_text_y,
             text_width,
             caret,
+            composition,
             rows,
             marker,
         }
@@ -746,6 +776,19 @@ impl PaletteLayout {
             text_y: rect.y + row_padding,
             runs,
             shortcut,
+        }
+    }
+
+    /// Where the input method places its candidate window: the start of the
+    /// composition while there is one, so the window stays put while typing, else the
+    /// text cursor.
+    pub fn ime_area(&self) -> Rect {
+        match self.composition {
+            Some(line) => Rect {
+                x: line.x,
+                ..self.caret
+            },
+            None => self.caret,
         }
     }
 
@@ -1428,11 +1471,125 @@ mod tests {
     }
 
     #[test]
+    fn inserted_text_filters_like_typed_text() {
+        let mut palette = CommandPalette::new(
+            Lang::EnUs,
+            vec![
+                entry("New tab", Action::NewTab),
+                entry("Copy", Action::Copy),
+            ],
+            Vec::new(),
+        );
+        palette.insert("cop");
+        assert_eq!(palette.query(), "cop");
+        assert_eq!(labels(&palette), ["Copy"]);
+        palette.insert("\n");
+        assert_eq!(palette.query(), "cop", "control characters are left out");
+    }
+
+    #[test]
+    fn composition_is_shown_after_the_query_without_filtering() {
+        let mut palette = CommandPalette::new(
+            Lang::EnUs,
+            vec![
+                entry("New tab", Action::NewTab),
+                entry("Copy", Action::Copy),
+            ],
+            Vec::new(),
+        );
+        palette.insert("c");
+        let layout = |composition| {
+            PaletteLayout::new(
+                &palette,
+                composition,
+                Lang::EnUs,
+                Rect::from_size(1000, 1000),
+                METRICS,
+                measure,
+            )
+        };
+        let plain = layout(None);
+        assert_eq!(plain.composition, None);
+        assert_eq!(plain.ime_area(), plain.caret);
+
+        let composing = layout(Some("ひら"));
+        assert_eq!(composing.input_text, "cひら");
+        assert!(!composing.placeholder);
+        assert_eq!(
+            composing.caret.x,
+            composing.text_x + 30.0,
+            "after the composition"
+        );
+        let line = composing.composition.expect("composition line");
+        assert_eq!(line.x, composing.text_x + 10.0, "starts after the query");
+        assert_eq!(line.width, 20.0);
+        assert_eq!(
+            line.y + line.height,
+            composing.input_text_y + METRICS.line_height
+        );
+        assert_eq!(
+            composing.ime_area(),
+            Rect {
+                x: line.x,
+                ..composing.caret
+            },
+            "the candidate window stays at the composition start"
+        );
+        assert_eq!(
+            composing.rows, plain.rows,
+            "the composition does not filter"
+        );
+        assert_eq!(palette.query(), "c");
+
+        let empty = CommandPalette::new(Lang::EnUs, Vec::new(), Vec::new());
+        let only = PaletteLayout::new(
+            &empty,
+            Some("か"),
+            Lang::EnUs,
+            Rect::from_size(1000, 1000),
+            METRICS,
+            measure,
+        );
+        assert!(!only.placeholder, "no hint under a composition");
+        assert_eq!(only.input_text, "か");
+        assert_eq!(only.composition.expect("line").x, only.text_x);
+        let hint = PaletteLayout::new(
+            &empty,
+            Some(""),
+            Lang::EnUs,
+            Rect::from_size(1000, 1000),
+            METRICS,
+            measure,
+        );
+        assert!(hint.placeholder, "an empty composition is none");
+        assert_eq!(hint.composition, None);
+    }
+
+    #[test]
+    fn composition_past_the_field_is_cut_at_its_width() {
+        let mut palette = CommandPalette::new(Lang::EnUs, Vec::new(), Vec::new());
+        palette.insert(&"x".repeat(200));
+        let layout = PaletteLayout::new(
+            &palette,
+            Some("あ"),
+            Lang::EnUs,
+            Rect::from_size(1000, 1000),
+            METRICS,
+            measure,
+        );
+        let end = layout.text_x + layout.text_width;
+        assert_eq!(layout.caret.x, end.round());
+        let line = layout.composition.expect("line");
+        assert!(line.x + line.width <= end.round());
+    }
+
+    #[test]
     fn layout_is_capped_in_width_and_placed_at_the_top() {
         let palette =
             CommandPalette::new(Lang::EnUs, vec![entry("Copy", Action::Copy)], Vec::new());
         let wide = PaletteLayout::new(
             &palette,
+            None,
             Lang::EnUs,
             Rect::from_size(2000, 1000),
             METRICS,
@@ -1445,6 +1602,7 @@ mod tests {
         assert_eq!(wide.caret.x, wide.text_x);
         let narrow = PaletteLayout::new(
             &palette,
+            None,
             Lang::EnUs,
             Rect::from_size(300, 1000),
             METRICS,
@@ -1464,6 +1622,7 @@ mod tests {
         palette.scroll_by(2);
         let layout = PaletteLayout::new(
             &palette,
+            None,
             Lang::EnUs,
             Rect::from_size(1000, 1000),
             METRICS,
@@ -1501,6 +1660,7 @@ mod tests {
         typed(&mut palette, "sr");
         let layout = PaletteLayout::new(
             &palette,
+            None,
             Lang::EnUs,
             Rect::from_size(1000, 1000),
             METRICS,
@@ -1538,6 +1698,7 @@ mod tests {
         let lay = |palette: &CommandPalette, scale: f32| {
             PaletteLayout::new(
                 palette,
+                None,
                 Lang::EnUs,
                 Rect::from_size(1000, 1000),
                 UiMetrics { scale, ..METRICS },
@@ -1587,6 +1748,7 @@ mod tests {
         typed(&mut palette, "zzz");
         let layout = PaletteLayout::new(
             &palette,
+            None,
             Lang::EnUs,
             Rect::from_size(1000, 1000),
             METRICS,

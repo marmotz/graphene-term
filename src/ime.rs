@@ -6,7 +6,7 @@ use winit::event::Ime;
 use winit::keyboard::ModifiersState;
 
 use crate::frame::Frame;
-use crate::layout::GridLayout;
+use crate::layout::{GridLayout, Rect};
 use crate::pane::Pane;
 use crate::workspace::Workspace;
 
@@ -168,6 +168,16 @@ impl CursorArea {
             width: layout.cell.width.round() as u32,
             height: layout.cell.height.round() as u32,
         })
+    }
+
+    /// The area covering `rect`, in physical pixels of the window.
+    pub fn of_rect(rect: Rect) -> Self {
+        Self {
+            x: rect.x.round() as i32,
+            y: rect.y.round() as i32,
+            width: rect.width.round().max(1.0) as u32,
+            height: rect.height.round().max(1.0) as u32,
+        }
     }
 
     /// Records `self` as the area given to the input method last. Returns whether it
@@ -518,5 +528,24 @@ mod tests {
         assert!(!area.replace(&mut last));
         assert!(CursorArea { x: 20, ..area }.replace(&mut last));
         assert_eq!(last.map(|area| area.x), Some(20));
+    }
+
+    #[test]
+    fn cursor_area_of_a_rect_is_rounded_and_never_empty() {
+        let area = CursorArea::of_rect(Rect {
+            x: 10.4,
+            y: 19.6,
+            width: 0.4,
+            height: 18.0,
+        });
+        assert_eq!(
+            area,
+            CursorArea {
+                x: 10,
+                y: 20,
+                width: 1,
+                height: 18,
+            }
+        );
     }
 }

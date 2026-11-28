@@ -899,10 +899,11 @@ is reset with the glyph cache, and the frame is resolved again.
   when the tab is left. `WindowEvent::Ime` goes to `Session::ime_event`: a `Preedit`
   sets the `ime::Composition` (an empty one clears it), tagged with what has the
   keyboard (`keyboard::ImeTarget`: a pane, its search bar, the palette, something else);
-  a `Commit` clears it and `Session::commit_text` delivers the text: to the focused
+  a `Commit` clears it and `Session::commit_text` delivers the text: to the open
+  command palette (`CommandPalette::insert`, which filters), to the focused
   search field, or to every `input_targets()` pane through `ime::commit_to_panes`
   (rich mode: `replace_selection` first, else `type_bytes` with the UTF-8 bytes), never
-  through `resolve_key` nor the shortcuts; the overlays take none. `Disabled`, the loss
+  through `resolve_key` nor the shortcuts; the other overlays take none. `Disabled`, the loss
   of focus and `[keyboard] ime` turned off clear it; after each window event,
   `follow_ime_target` clears it once its target lost the keyboard. `key_press` ignores
   a key during a composition.
@@ -918,6 +919,12 @@ is reset with the glyph cache, and the frame is resolved again.
   (`ime::CursorArea::of_cursor`, from `GridLayout::cell_x` / `row_top`), only when it
   changed since it was given last (`Session::ime_area`, forgotten when the input method
   is allowed again).
+- Composition in the command palette (target `ImeTarget::Palette`):
+  `PaletteLayout::new` shows it after the query in the search field, the caret after
+  it, and lays out the line drawn under it (`PaletteLayout::composition`, drawn by
+  `chrome::scene`); only the query filters. `Session::place_ime_area` gives
+  `PaletteLayout::ime_area`: the start of the composition, else the caret
+  (`ime::CursorArea::of_rect`).
 - Mouse wheel: block or timeline scrolling on the primary screen (see Command blocks),
   arrow keys on the alternate screen when the application enabled alternate scroll.
 - Mouse reporting only covers the live grid's rows (`mouse::reports_at`: a
