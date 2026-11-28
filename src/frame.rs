@@ -16,10 +16,13 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::banner::BannerLayout;
 use crate::graphics::placeholder::{self, PLACEHOLDER};
 use crate::graphics::{ImageCell, ImageStore, Pixels, SourceRect};
 use crate::i18n::Lang;
+use crate::ime::Preedit;
 use crate::palette::{Palette, UiColors};
 use crate::progress::{ProgressColors, ProgressView};
 use crate::timeline::{BlockId, Phase, Status, Timeline};
@@ -64,6 +67,28 @@ pub struct FrameCursor {
     pub line: usize,
     pub shape: CursorShape,
     pub color: Rgb,
+}
+
+/// Cell of the terminal cursor in a [`Frame`], where a composition of the input method
+/// is drawn (see [`Frame::with_preedit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorAnchor {
+    /// Line in the rows of the frame.
+    pub line: usize,
+    pub column: usize,
+    /// The block cursor baked into the cell, `None` for the other shapes or a cursor
+    /// hidden by its blink.
+    pub block: Option<BakedBlock>,
+}
+
+/// A block cursor baked into the colors of its cell: the cursor colors, and the colors
+/// the cell had before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BakedBlock {
+    pub color: Rgb,
+    pub text: Rgb,
+    pub fg: Rgb,
+    pub bg: Rgb,
 }
 
 /// Banner drawn at the top of the window, in the strip left above the tab bar and panes.
@@ -204,6 +229,9 @@ pub struct Frame {
     /// cursor is in the view and the application has not hidden it, whatever the blink
     /// phase or the focus. The ligature covering it is drawn as isolated characters.
     pub ligature_break: Option<(usize, usize)>,
+    /// Cell of the terminal cursor, set like [`Self::ligature_break`]: where the
+    /// composition of the input method starts.
+    pub anchor: Option<CursorAnchor>,
     pub background: Rgb,
     pub banner: Option<FrameBanner>,
     /// Language of the fold summaries.
@@ -290,16 +318,23 @@ impl Frame {
             shape = CursorShape::Hidden;
         }
 
+        let mut anchor = ligature_break.map(|(line, column)| CursorAnchor {
+            line,
+            column,
+            block: None,
+        });
         let cursor = match cursor_line {
             _ if shape == CursorShape::Hidden || cursor_column >= columns => None,
             None => None,
             Some(line) if shape == CursorShape::Block => {
-                // Bake the block cursor into the cell colors.
-                let cell = &mut rows[line][cursor_column];
-                cell.bg = cursor_color;
-                cell.fg = palette.cursor_text;
-                if cursor_column + 1 < columns && rows[line][cursor_column + 1].spacer {
-                    rows[line][cursor_column + 1].bg = cursor_color;
+                let block = bake_block(
+                    &mut rows[line],
+                    cursor_column,
+                    cursor_color,
+                    palette.cursor_text,
+                );
+                if let Some(anchor) = &mut anchor {
+                    anchor.block = Some(block);
                 }
                 None
             }
@@ -325,6 +360,7 @@ impl Frame {
             block_colors: BlockColors::resolve(palette, overrides),
             cursor,
             ligature_break,
+            anchor,
             background,
             banner: None,
             lang: Lang::default(),
@@ -379,6 +415,73 @@ impl Frame {
                 pixels,
             });
         }
+    }
+}
+
+/// The cells drawing `text`, composed by the input method, in the colors of `origin`,
+/// underlined: one per character, two for a wide one (the second a spacer). Characters
+/// of no width (combining marks, controls) are left out.
+fn preedit_cells(text: &str, origin: FrameCell) -> Vec<FrameCell> {
+    let mut cells = Vec::with_capacity(text.len());
+    for c in text.chars() {
+        let width = c.width().unwrap_or(0);
+        if width == 0 {
+            continue;
+        }
+        cells.push(FrameCell {
+            c,
+            underline: true,
+            ..origin
+        });
+        if width > 1 {
+            cells.push(FrameCell {
+                c: ' ',
+                underline: true,
+                spacer: true,
+                ..origin
+            });
+        }
+    }
+    cells
+}
+
+/// Width of `text` in cells, as drawn by [`preedit_cells`].
+fn text_width(text: &str) -> usize {
+    text.chars().map(|c| c.width().unwrap_or(0).min(2)).sum()
+}
+
+/// Bakes a block cursor of `color`, with its text in `text`, into the cell `column` of
+/// `row` (and the second half of a wide character). Returns what it baked.
+fn bake_block(row: &mut [FrameCell], column: usize, color: Rgb, text: Rgb) -> BakedBlock {
+    let cell = &mut row[column];
+    let block = BakedBlock {
+        color,
+        text,
+        fg: cell.fg,
+        bg: cell.bg,
+    };
+    cell.bg = color;
+    cell.fg = text;
+    if let Some(next) = row.get_mut(column + 1).filter(|next| next.spacer) {
+        next.bg = color;
+    }
+    block
+}
+
+/// Takes back the block cursor `block` baked into the cell `column` of `row`, unless
+/// something painted the cell over it since.
+fn unbake_block(row: &mut [FrameCell], column: usize, block: &BakedBlock) {
+    let cell = &mut row[column];
+    if (cell.fg, cell.bg) != (block.text, block.color) {
+        return;
+    }
+    cell.fg = block.fg;
+    cell.bg = block.bg;
+    if let Some(next) = row
+        .get_mut(column + 1)
+        .filter(|next| next.spacer && next.bg == block.color)
+    {
+        next.bg = block.bg;
     }
 }
 
@@ -655,6 +758,88 @@ impl Frame {
             for cell in row.iter_mut().take(last.saturating_add(1)).skip(first) {
                 paint(cell);
             }
+        }
+    }
+
+    /// Draws `preedit`, the text being composed by the input method, from the cell of
+    /// the terminal cursor: underlined cells in the colors of that cell, a wide
+    /// character on two. With `shift` (the prompt editor) the cells right of the cursor
+    /// move right by the width of the composition; otherwise it is drawn over them.
+    /// What passes the right edge is cut, without wrapping. The cursor moves to the
+    /// cursor of the composition, or is hidden when it has none. Nothing is drawn while
+    /// the terminal cursor is out of the view or hidden by the application. Applied
+    /// once, to a frame just captured.
+    pub fn with_preedit(&mut self, preedit: &Preedit, shift: bool) {
+        let Some(anchor) = self.anchor else {
+            return;
+        };
+        let (line, column) = (anchor.line, anchor.column);
+        let Some(row) = self.rows.get_mut(line) else {
+            return;
+        };
+        let columns = row.len();
+        if column >= columns {
+            return;
+        }
+        if let Some(block) = &anchor.block {
+            unbake_block(row, column, block);
+        }
+        let origin = FrameCell {
+            c: ' ',
+            spacer: false,
+            image: None,
+            underline: false,
+            strikeout: false,
+            ..row[column]
+        };
+        let composed = preedit_cells(&preedit.text, origin);
+
+        let last = columns - 1;
+        // Set when the right edge cuts a wide character in half: its first half, on
+        // the last column, is drawn blank.
+        let cut = if shift {
+            let tail = row.split_off(column);
+            row.extend(composed.iter().copied());
+            row.extend(tail);
+            let cut = row.get(columns).is_some_and(|cell| cell.spacer);
+            row.truncate(columns);
+            cut
+        } else {
+            for (target, cell) in row[column..].iter_mut().zip(&composed) {
+                *target = *cell;
+            }
+            // The second half of a wide character drawn over loses its first half.
+            let end = column + composed.len();
+            if let Some(next) = row.get_mut(end).filter(|next| next.spacer) {
+                *next = FrameCell::blank(next.fg, next.bg);
+            }
+            composed
+                .get(columns - column)
+                .is_some_and(|cell| cell.spacer)
+        };
+        if cut {
+            let cell = &mut row[last];
+            *cell = FrameCell::blank(cell.fg, cell.bg);
+        }
+
+        let caret = preedit.cursor.map(|(start, _)| {
+            let before = preedit.text.get(..start).unwrap_or(&preedit.text);
+            (column + text_width(before)).min(last)
+        });
+        self.ligature_break = caret.map(|caret| (line, caret));
+        match (caret, anchor.block) {
+            (None, _) => self.cursor = None,
+            (Some(caret), Some(block)) => {
+                bake_block(row, caret, block.color, block.text);
+            }
+            (Some(caret), None) => {
+                if let Some(cursor) = &mut self.cursor {
+                    cursor.column = caret;
+                }
+            }
+        }
+        if let Some(anchor) = &mut self.anchor {
+            anchor.block = None;
         }
     }
 
@@ -1586,5 +1771,151 @@ mod tests {
         let frame = capture(&session, &Palette::default(), true);
         assert_eq!(frame.rows[0].len(), 14);
         assert_eq!(row_text(&frame, 1), "out           ");
+    }
+
+    fn preedit(text: &str, cursor: Option<usize>) -> Preedit {
+        Preedit {
+            text: text.to_owned(),
+            cursor: cursor.map(|at| (at, at)),
+        }
+    }
+
+    /// Which cells of `line` are underlined, as a string of `_` and spaces.
+    fn underlined_cells(frame: &Frame, line: usize) -> String {
+        frame.rows[line]
+            .iter()
+            .map(|c| if c.underline { '_' } else { ' ' })
+            .collect()
+    }
+
+    /// The column of `line` whose background is the cursor color, if any.
+    fn block_column(frame: &Frame, line: usize) -> Option<usize> {
+        let color = Palette::default().cursor;
+        frame.rows[line]
+            .iter()
+            .position(|c| c.bg == color && !c.spacer)
+    }
+
+    #[test]
+    fn capture_anchors_the_cursor_cell() {
+        let frame = capture(&session_with("abcd\x1b[2D"), &Palette::default(), true);
+        let anchor = frame.anchor.unwrap();
+        assert_eq!((anchor.line, anchor.column), (0, 2));
+        assert!(anchor.block.is_some());
+        // A cursor hidden by the application anchors nothing.
+        let hidden = capture(&session_with("ab\x1b[?25l"), &Palette::default(), true);
+        assert_eq!(hidden.anchor, None);
+    }
+
+    #[test]
+    fn preedit_shifts_the_cells_right_at_the_prompt() {
+        let mut frame = capture(&session_with("abcd\x1b[2D"), &Palette::default(), true);
+        let background = frame.background;
+        frame.with_preedit(&preedit("xy", Some(2)), true);
+        assert_eq!(row_text(&frame, 0), "abxycd    ");
+        assert_eq!(underlined_cells(&frame, 0), "  __      ");
+        // The composed cells take the colors of the cell, not of the block cursor.
+        assert_eq!(frame.rows[0][2].bg, background);
+        // The cursor follows the cursor of the composition.
+        assert_eq!(block_column(&frame, 0), Some(4));
+        assert_eq!(frame.ligature_break, Some((0, 4)));
+    }
+
+    #[test]
+    fn preedit_is_drawn_over_the_cells_outside_the_prompt() {
+        let mut frame = capture(&session_with("abcd\x1b[2D"), &Palette::default(), true);
+        frame.with_preedit(&preedit("x", Some(1)), false);
+        assert_eq!(row_text(&frame, 0), "abxd      ");
+        assert_eq!(underlined_cells(&frame, 0), "  _       ");
+        assert_eq!(block_column(&frame, 0), Some(3));
+    }
+
+    #[test]
+    fn preedit_is_cut_at_the_right_edge() {
+        for shift in [true, false] {
+            let mut frame = capture(&session_with("abcdefgh"), &Palette::default(), true);
+            frame.with_preedit(&preedit("xyz", Some(3)), shift);
+            assert_eq!(row_text(&frame, 0), "abcdefghxy", "shift: {shift}");
+            // Nothing wraps to another row.
+            assert_eq!(frame.rows.len(), 1);
+            assert_eq!(frame.rows[0].len(), 10);
+            // The cursor stays on the last column.
+            assert_eq!(block_column(&frame, 0), Some(9), "shift: {shift}");
+        }
+    }
+
+    #[test]
+    fn shifted_cells_past_the_right_edge_are_cut() {
+        let mut frame = capture(&session_with("abcdefgh\x1b[6D"), &Palette::default(), true);
+        frame.with_preedit(&preedit("xyz", Some(3)), true);
+        assert_eq!(row_text(&frame, 0), "abxyzcdefg");
+    }
+
+    #[test]
+    fn wide_composed_characters_take_two_cells() {
+        let mut frame = capture(&session_with(""), &Palette::default(), true);
+        frame.with_preedit(&preedit("日本", Some("日本".len())), false);
+        let row = &frame.rows[0];
+        assert_eq!((row[0].c, row[1].spacer), ('日', true));
+        assert_eq!((row[2].c, row[3].spacer), ('本', true));
+        assert_eq!(underlined_cells(&frame, 0), "____      ");
+        assert_eq!(block_column(&frame, 0), Some(4));
+        // A cursor inside the composition counts the wide characters as two cells.
+        let mut frame = capture(&session_with(""), &Palette::default(), true);
+        frame.with_preedit(&preedit("日本", Some("日".len())), false);
+        assert_eq!(block_column(&frame, 0), Some(2));
+    }
+
+    #[test]
+    fn wide_composed_character_cut_by_the_edge_is_drawn_blank() {
+        for shift in [true, false] {
+            let mut frame = capture(&session_with("abcdefghi"), &Palette::default(), true);
+            frame.with_preedit(&preedit("日", None), shift);
+            let last = frame.rows[0][9];
+            assert_eq!((last.c, last.spacer, last.underline), (' ', false, false));
+        }
+    }
+
+    #[test]
+    fn preedit_over_half_a_wide_character_blanks_the_other_half() {
+        let mut frame = capture(&session_with("日x\r"), &Palette::default(), true);
+        frame.with_preedit(&preedit("a", Some(1)), false);
+        assert_eq!(row_text(&frame, 0), "a x       ");
+        assert!(!frame.rows[0][1].spacer);
+    }
+
+    #[test]
+    fn preedit_without_a_cursor_hides_it() {
+        let mut frame = capture(&session_with("ab"), &Palette::default(), true);
+        frame.with_preedit(&preedit("x", None), true);
+        assert_eq!(block_column(&frame, 0), None);
+        assert_eq!(frame.cursor, None);
+        assert_eq!(frame.ligature_break, None);
+    }
+
+    #[test]
+    fn preedit_moves_a_beam_cursor() {
+        let mut frame = capture(&session_with("\x1b[6 qab"), &Palette::default(), true);
+        assert_eq!(frame.cursor.map(|c| c.column), Some(2));
+        frame.with_preedit(&preedit("xyz", Some(2)), true);
+        assert_eq!(frame.cursor.map(|c| c.column), Some(4));
+        assert_eq!(block_column(&frame, 0), None);
+    }
+
+    #[test]
+    fn preedit_in_the_hidden_phase_of_the_blink_shows_no_cursor() {
+        let mut frame = capture_blink(&session_with("ab"), true, false);
+        frame.with_preedit(&preedit("x", Some(1)), true);
+        assert_eq!(row_text(&frame, 0), "abx       ");
+        assert_eq!(block_column(&frame, 0), None);
+        assert_eq!(frame.cursor, None);
+    }
+
+    #[test]
+    fn preedit_is_not_drawn_while_the_application_hides_the_cursor() {
+        let mut frame = capture(&session_with("ab\x1b[?25l"), &Palette::default(), true);
+        let before = frame.clone();
+        frame.with_preedit(&preedit("x", Some(1)), true);
+        assert_eq!(frame, before);
     }
 }

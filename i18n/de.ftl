@@ -93,6 +93,7 @@ settings-section = { $section ->
     [selection] Auswahl
     [tabs] Tabs
     [theme] Design
+    [keyboard] Tastatur
     [keyboard-shortcuts] Tastenkürzel
     [notifications] Benachrichtigungen
     [quick-terminal] Quick terminal
@@ -114,6 +115,7 @@ settings-field = { $field ->
     [scrollback-lines] Behaltene Zeilen
     [cursor-shape] Form
     [cursor-blinking] Blinken
+    [keyboard-ime] Eingabemethode (IME)
     [word-separators] Worttrennzeichen
     [tab-position] Position
     [theme-follow] Dem Erscheinungsbild des Systems folgen

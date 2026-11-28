@@ -136,7 +136,7 @@ impl InputError {
 }
 
 /// Section of the file holding the keys of each settings section.
-const SECTION_KEYS: [(&str, Section); 12] = [
+const SECTION_KEYS: [(&str, Section); 13] = [
     ("language", Section::Language),
     ("font", Section::Font),
     ("window", Section::Window),
@@ -145,6 +145,7 @@ const SECTION_KEYS: [(&str, Section); 12] = [
     ("selection", Section::Selection),
     ("tabs", Section::Tabs),
     ("theme", Section::Theme),
+    ("keyboard", Section::Keyboard),
     ("keybindings", Section::KeyboardShortcuts),
     ("notifications", Section::Notifications),
     ("quick_terminal", Section::QuickTerminal),
@@ -180,6 +181,7 @@ pub fn section_fields(section: Section) -> &'static [Field] {
             Field::ThemeLight,
             Field::ThemeDark,
         ],
+        Section::Keyboard => &[Field::KeyboardIme],
         Section::KeyboardShortcuts => &[],
         Section::Notifications => &[
             Field::NotificationsProgram,
@@ -219,6 +221,7 @@ fn path(field: Field) -> Option<&'static [&'static str]> {
         Field::ScrollbackLines => &["scrollback", "lines"],
         Field::CursorShape => &["cursor", "shape"],
         Field::CursorBlinking => &["cursor", "blinking"],
+        Field::KeyboardIme => &["keyboard", "ime"],
         Field::WordSeparators => &["selection", "word_separators"],
         Field::TabPosition => &["tabs", "position"],
         Field::ThemeFollow => return None,
@@ -303,6 +306,7 @@ pub fn widget(field: Field) -> Widget {
         }),
         Field::FontLigatures
         | Field::CursorBlinking
+        | Field::KeyboardIme
         | Field::UpdatesCheck
         | Field::WindowProgress
         | Field::RestoreSession
@@ -697,6 +701,7 @@ impl SettingsModel {
             Field::ScrollbackLines => Value::Integer(c.scrollback_lines as i64),
             Field::CursorShape => text(name_of(&CursorShape::VALUES, c.cursor.shape)),
             Field::CursorBlinking => Value::Bool(c.cursor.blinking),
+            Field::KeyboardIme => Value::Bool(c.keyboard.ime),
             Field::WordSeparators => text(&c.word_separators),
             Field::TabPosition => text(name_of(&TabPosition::VALUES, c.tab_position)),
             Field::ThemeFollow => Value::Bool(c.theme.follows_appearance()),
@@ -1126,6 +1131,8 @@ lines = 500
 [cursor]
 shape = "beam"
 blinking = true
+[keyboard]
+ime = false
 [selection]
 word_separators = " ,"
 [tabs]
@@ -1163,6 +1170,7 @@ bell = true
         }
         assert!((m.number(Field::BackgroundOpacity) - 0.9).abs() < 1e-6);
         assert!(m.on(Field::CursorBlinking));
+        assert!(!m.on(Field::KeyboardIme));
         assert!(!m.on(Field::UpdatesCheck));
         assert!(!m.on(Field::WindowProgress));
         assert!(!m.on(Field::ThemeFollow));
@@ -1182,10 +1190,18 @@ bell = true
         assert!(m.on(Field::UpdatesCheck));
         assert!(m.on(Field::WindowProgress));
         assert!(!m.on(Field::RestoreSession));
+        assert!(m.on(Field::KeyboardIme));
         assert!(m.on(Field::NotificationsProgram));
         assert!(m.on(Field::NotificationsCommandFinished));
         assert_eq!(m.text(Field::NotificationsCommandThreshold), "10");
         assert!(!m.on(Field::NotificationsBell));
+    }
+
+    #[test]
+    fn keyboard_section_has_the_ime_toggle() {
+        assert_eq!(section_fields(Section::Keyboard), &[Field::KeyboardIme]);
+        assert_eq!(widget(Field::KeyboardIme), Widget::Toggle);
+        assert_eq!(path(Field::KeyboardIme), Some(&["keyboard", "ime"][..]));
     }
 
     #[test]
@@ -1495,6 +1511,10 @@ bell = true
         assert_eq!(
             m.edit(Field::CursorBlinking, Input::Toggle(true)),
             Ok(set(&["cursor", "blinking"], Value::Bool(true)))
+        );
+        assert_eq!(
+            m.edit(Field::KeyboardIme, Input::Toggle(false)),
+            Ok(set(&["keyboard", "ime"], Value::Bool(false)))
         );
         assert_eq!(
             m.edit(Field::UpdatesCheck, Input::Toggle(false)),

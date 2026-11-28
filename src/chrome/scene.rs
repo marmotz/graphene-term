@@ -265,8 +265,8 @@ fn blend(background: Rgb, highlight: Rgb, opacity: f32) -> Rgb {
     }
 }
 
-/// The command palette, in the overlay: its box and border, the search field and its
-/// text cursor, the selected row and its accent bar, then the texts: the query or its hint, and each row's
+/// The command palette, in the overlay: its box and border, the search field, its
+/// text cursor and the line under the composition of the input method, the selected row and its accent bar, then the texts: the query or its hint, and each row's
 /// label (matching characters in the accent color) and shortcut.
 fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &mut UiLayer) {
     let color = |c| gpu_color(c, srgb_target);
@@ -282,6 +282,9 @@ fn palette(palette: &PaletteLayout, colors: &UiColors, srgb_target: bool, ui: &m
     ui.overlay_rects
         .push(rect(palette.input, color(colors.tab_bar_background)));
     ui.overlay_rects.push(rect(palette.caret, text));
+    if let Some(line) = palette.composition {
+        ui.overlay_rects.push(rect(line, text));
+    }
     if let Some(row) = palette.rows.iter().find(|row| row.selected) {
         ui.overlay_rects
             .push(rect(row.rect, color(colors.palette_selection_background)));
@@ -1715,6 +1718,7 @@ mod tests {
         };
         let layout = PaletteLayout::new(
             &palette,
+            None,
             Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             metrics,
@@ -1778,6 +1782,7 @@ mod tests {
         let palette = CommandPalette::new(Lang::EnUs, Vec::new(), Vec::new());
         let layout = PaletteLayout::new(
             &palette,
+            None,
             Lang::EnUs,
             area(0.0, 0.0, 1000.0, 600.0),
             UiMetrics {
@@ -1800,6 +1805,52 @@ mod tests {
         assert_eq!(ui.overlay_texts[0].color, gpu_color(INACTIVE_TEXT, false));
         // No row, so no selected row: box, border, field and cursor.
         assert_eq!(ui.overlay_rects.len(), 7);
+    }
+
+    #[test]
+    fn palette_composition_is_underlined_after_the_query() {
+        use crate::chrome::command_palette::{CommandPalette, PaletteLayout};
+        use crate::i18n::Lang;
+        let mut palette = CommandPalette::new(Lang::EnUs, Vec::new(), Vec::new());
+        palette.insert("ab");
+        let layout = PaletteLayout::new(
+            &palette,
+            Some("にほ"),
+            Lang::EnUs,
+            area(0.0, 0.0, 1000.0, 600.0),
+            UiMetrics {
+                line_height: 18.0,
+                scale: 1.0,
+            },
+            |t| t.chars().count() as f32 * 8.0,
+        );
+        let ui = build(
+            &two_columns(),
+            Some(PaneId(1)),
+            &[],
+            None,
+            Some(Overlay::Palette(&layout)),
+            &tab_colors(),
+            false,
+        );
+        // Box, border, field, cursor, then the line under the composition.
+        assert_eq!(ui.overlay_rects.len(), 8);
+        let line = layout.composition.expect("composition line");
+        let drawn = &ui.overlay_rects[7];
+        assert_eq!(drawn.position, [line.x, line.y]);
+        assert_eq!(drawn.size, [16.0, 1.0]);
+        assert_eq!(
+            drawn.color, ui.overlay_rects[6].color,
+            "in the text cursor color"
+        );
+        assert_eq!(line.x, layout.text_x + 16.0, "after the query");
+        assert_eq!(
+            line.y + line.height,
+            layout.input_text_y + 18.0,
+            "at the text bottom"
+        );
+        assert_eq!(ui.overlay_texts[0].text, "abにほ");
+        assert_ne!(ui.overlay_texts[0].color, gpu_color(INACTIVE_TEXT, false));
     }
 
     #[test]

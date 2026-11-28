@@ -242,6 +242,10 @@ impl App {
             }
         }
         let window = Arc::new(event_loop.create_window(attributes)?);
+        // winit leaves the input method off: without it, no composition reaches the
+        // window, and on macOS the dead keys do not combine.
+        window.set_ime_allowed(self.config.keyboard.ime);
+        window.set_ime_purpose(ImePurpose::Terminal);
         if quick {
             quick::prepare_window(&window);
         }
@@ -348,6 +352,9 @@ impl App {
             taskbar,
             quick,
             quick_closed: false,
+            ime_allowed: self.config.keyboard.ime,
+            ime: Composition::default(),
+            ime_area: None,
         };
         if restored.is_some() {
             // The restored panes were all given the size of a single pane.
@@ -767,6 +774,7 @@ impl App {
                 session.focused = focused;
                 if !focused {
                     session.cancel_pane_drag();
+                    session.clear_composition();
                 }
                 if let Some(pane) = session.workspace.active_pane()
                     && let Some(bytes) = mouse::focus_report(focused, pane.mode())
@@ -791,6 +799,7 @@ impl App {
             } if is_real_key_press(event.state, is_synthetic) => {
                 session.key_press(&event, event_loop);
             }
+            WindowEvent::Ime(ime) => session.ime_event(ime),
             WindowEvent::MouseWheel { delta, .. } => session.mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => session.cursor_moved(position),
             WindowEvent::CursorLeft { .. } => session.cursor_left(),
@@ -803,6 +812,7 @@ impl App {
             WindowEvent::RedrawRequested => session.redraw(),
             _ => {}
         }
+        session.follow_ime_target();
         session.flush_panes();
     }
 }

@@ -175,6 +175,7 @@ impl Reader<'_> {
             }),
             ("cursor", "shape") => self.set(value, key_segments, path, &mut config.cursor.shape, &previous.cursor.shape, Checked::Valid),
             ("cursor", "blinking") => self.set(value, key_segments, path, &mut config.cursor.blinking, &previous.cursor.blinking, Checked::Valid),
+            ("keyboard", "ime") => self.set(value, key_segments, path, &mut config.keyboard.ime, &previous.keyboard.ime, Checked::Valid),
             ("selection", "word_separators") => self.set(value, key_segments, path, &mut config.word_separators, &previous.word_separators, Checked::Valid),
             ("tabs", "position") => self.set(value, key_segments, path, &mut config.tab_position, &previous.tab_position, Checked::Valid),
             ("theme", "name") => self.set(value, key_segments, path, &mut config.theme.name, &previous.theme.name, non_empty),

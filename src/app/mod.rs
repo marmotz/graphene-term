@@ -33,10 +33,10 @@ use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{ImePurpose, Window, WindowId};
 
 use crate::appearance::{self, Appearance};
 use crate::banner::{self, Banner, BannerHit, BannerLayout, Shown, UpdateBanner, UpdateEffect};
@@ -74,6 +74,7 @@ use crate::frame::{Frame, FrameBanner, INACTIVE_PANE_DIM};
 use crate::frame_cache::FrameCache;
 use crate::graphics;
 use crate::i18n::{self, ConfigMsg, Exit, Lang, Msg};
+use crate::ime::{self, Composition};
 use crate::input::{self, Action, Delivery};
 use crate::input_editor;
 use crate::keybindings::Keybindings;
@@ -327,6 +328,14 @@ struct Session {
     /// Set when the quick terminal's last pane or window was closed: `App` hides it and
     /// starts it over after the event.
     quick_closed: bool,
+    /// Whether the input method is allowed in the terminal (`[keyboard] ime`); the
+    /// settings tab hands it to egui while shown.
+    ime_allowed: bool,
+    /// Text being composed by the input method, and what it is typed into.
+    ime: Composition<keyboard::ImeTarget>,
+    /// Rectangle given to the input method last for its candidate window, `None` until
+    /// one is given again.
+    ime_area: Option<ime::CursorArea>,
 }
 
 impl Session {}

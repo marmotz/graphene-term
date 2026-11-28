@@ -20,6 +20,7 @@ mod frame_cache;
 mod graphics;
 mod hotkey;
 mod i18n;
+mod ime;
 mod input;
 mod input_editor;
 mod keybindings;

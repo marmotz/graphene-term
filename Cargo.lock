@@ -1299,6 +1299,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "unic-langid",
+ "unicode-width",
  "ureq",
  "wgpu",
  "winit",

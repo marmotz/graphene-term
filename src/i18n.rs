@@ -179,6 +179,7 @@ pub enum SettingsSection {
     Selection,
     Tabs,
     Theme,
+    Keyboard,
     KeyboardShortcuts,
     Notifications,
     QuickTerminal,
@@ -187,7 +188,7 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Every section, in sidebar order.
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 13] = [
         SettingsSection::Language,
         SettingsSection::Font,
         SettingsSection::Window,
@@ -196,6 +197,7 @@ impl SettingsSection {
         SettingsSection::Selection,
         SettingsSection::Tabs,
         SettingsSection::Theme,
+        SettingsSection::Keyboard,
         SettingsSection::KeyboardShortcuts,
         SettingsSection::Notifications,
         SettingsSection::QuickTerminal,
@@ -222,6 +224,7 @@ pub enum SettingsField {
     ScrollbackLines,
     CursorShape,
     CursorBlinking,
+    KeyboardIme,
     WordSeparators,
     TabPosition,
     /// "Follow the system appearance": sets or removes `theme.light` and `theme.dark`.
@@ -247,7 +250,7 @@ pub enum SettingsField {
 
 impl SettingsField {
     /// Every field.
-    pub const ALL: [SettingsField; 35] = [
+    pub const ALL: [SettingsField; 36] = [
         SettingsField::Language,
         SettingsField::FontFamily,
         SettingsField::FontSize,
@@ -263,6 +266,7 @@ impl SettingsField {
         SettingsField::ScrollbackLines,
         SettingsField::CursorShape,
         SettingsField::CursorBlinking,
+        SettingsField::KeyboardIme,
         SettingsField::WordSeparators,
         SettingsField::TabPosition,
         SettingsField::ThemeFollow,
@@ -1461,6 +1465,7 @@ fn section_key(section: SettingsSection) -> &'static str {
         SettingsSection::Selection => "selection",
         SettingsSection::Tabs => "tabs",
         SettingsSection::Theme => "theme",
+        SettingsSection::Keyboard => "keyboard",
         SettingsSection::KeyboardShortcuts => "keyboard-shortcuts",
         SettingsSection::Notifications => "notifications",
         SettingsSection::QuickTerminal => "quick-terminal",
@@ -1486,6 +1491,7 @@ fn field_key(field: SettingsField) -> &'static str {
         SettingsField::ScrollbackLines => "scrollback-lines",
         SettingsField::CursorShape => "cursor-shape",
         SettingsField::CursorBlinking => "cursor-blinking",
+        SettingsField::KeyboardIme => "keyboard-ime",
         SettingsField::WordSeparators => "word-separators",
         SettingsField::TabPosition => "tab-position",
         SettingsField::ThemeFollow => "theme-follow",

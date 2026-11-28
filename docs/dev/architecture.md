@@ -135,6 +135,7 @@ src/
   pane_search.rs   search bar state of a pane: field, toggles, matches, current match, focus,
                    search again on a new pane revision, key routing of a focused bar (pure)
   i18n.rs          UI language detection (LC_ALL, LC_MESSAGES, LANG, macOS preferred language; `language` forces it) and label translations, read from the Fluent files of `i18n/`, as `UiText` (the only type the display fields take); numbers and dates in the format of the language (ICU4X)
+  ime.rs           input method: composition state and the target it belongs to, delivery of the committed text to the input targets (pure)
   input.rs         key -> bytes encoding, per-pane key resolution (editor command, shortcut, input), actions and their ids, paste wrapping
   keybindings.rs   default shortcut table, [keybindings] overrides, key event lookup, labels (pure)
   mouse.rs         mouse, focus and alternate scroll encoding, mouse routing between app and Graphene (pure)
@@ -192,7 +193,7 @@ benches/
   fixtures/        recorded PTY output (btop, cat, vim) and the recorder script
 ```
 
-Pure modules (`banner`, `signals`, `keybindings`, `mouse`, `links`, `cursor_blink`, `fold_animation`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`, `settings/model`, `update`) hold the logic
+Pure modules (`banner`, `signals`, `keybindings`, `mouse`, `links`, `cursor_blink`, `fold_animation`, `graphics/sequence`, `graphics/store`, `timeline`, `block_actions`, `view`, `config`, `palette`, `theme`, `input`, `ime`, `input_editor`, `layout`, `frame`, `selection`, `i18n`, `workspace`, `chrome`, `renderer/scene`, `renderer/atlas`, `settings/visuals`, `settings/model`, `update`) hold the logic
 and are unit tested. GPU, window and HTTP code (`update::fetch_latest`) stay thin.
 
 ## Session and panes
@@ -892,6 +893,38 @@ is reset with the glyph cache, and the frame is resolved again.
   selection in the input (`input_editor::input_selection`, from
   `TimelineSelection::live_ends`) writes `input_editor::replacement_bytes` instead, then
   clears the selection.
+- Input method (`ime`): the terminal window allows it (`set_ime_allowed`, from
+  `[keyboard] ime`, set again on reload; `ImePurpose::Terminal`); the settings tab turns
+  it off while shown, egui allowing it in its text fields, and the window takes it back
+  when the tab is left. `WindowEvent::Ime` goes to `Session::ime_event`: a `Preedit`
+  sets the `ime::Composition` (an empty one clears it), tagged with what has the
+  keyboard (`keyboard::ImeTarget`: a pane, its search bar, the palette, something else);
+  a `Commit` clears it and `Session::commit_text` delivers the text: to the open
+  command palette (`CommandPalette::insert`, which filters), to the focused
+  search field, or to every `input_targets()` pane through `ime::commit_to_panes`
+  (rich mode: `replace_selection` first, else `type_bytes` with the UTF-8 bytes), never
+  through `resolve_key` nor the shortcuts; the other overlays take none. `Disabled`, the loss
+  of focus and `[keyboard] ime` turned off clear it; after each window event,
+  `follow_ime_target` clears it once its target lost the keyboard. `key_press` ignores
+  a key during a composition.
+- Composition display: in `Session::draw`, the composition of the active pane (target
+  `ImeTarget::Pane`) goes into its `FrameKey` with `Pane::rich_mode` (read before the
+  `Term` lock), and `Frame::with_preedit` draws it from `Frame::anchor`, the cell of the
+  terminal cursor set by `Frame::capture`: underlined cells in that cell's colors, wide
+  characters on two cells (`unicode-width`), the cells right of it shifted in rich mode
+  and drawn over otherwise, cut at the right edge; the cursor (a baked block cursor is
+  taken back and baked again) follows the cursor of the composition, or is hidden. The
+  grid of the terminal is never written. After each redraw, `Session::place_ime_area`
+  gives `set_ime_cursor_area` the anchor cell in physical pixels
+  (`ime::CursorArea::of_cursor`, from `GridLayout::cell_x` / `row_top`), only when it
+  changed since it was given last (`Session::ime_area`, forgotten when the input method
+  is allowed again).
+- Composition in the command palette (target `ImeTarget::Palette`):
+  `PaletteLayout::new` shows it after the query in the search field, the caret after
+  it, and lays out the line drawn under it (`PaletteLayout::composition`, drawn by
+  `chrome::scene`); only the query filters. `Session::place_ime_area` gives
+  `PaletteLayout::ime_area`: the start of the composition, else the caret
+  (`ime::CursorArea::of_rect`).
 - Mouse wheel: block or timeline scrolling on the primary screen (see Command blocks),
   arrow keys on the alternate screen when the application enabled alternate scroll.
 - Mouse reporting only covers the live grid's rows (`mouse::reports_at`: a

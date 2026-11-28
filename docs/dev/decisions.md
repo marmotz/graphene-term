@@ -32,7 +32,7 @@ Each entry states a technical choice and the reasons behind it. How the code wor
 - [Input, selection and clipboard](#input-selection-and-clipboard)
   - [Selection and copy](#selection-and-copy)
   - [Copy with an image: own clipboard offers next to `arboard`](#copy-with-an-image-own-clipboard-offers-next-to-arboard)
-  - [IME disabled](#ime-disabled)
+  - [IME composition drawn in the frame](#ime-composition-drawn-in-the-frame)
   - [Input editor: shell bindings for private sequences](#input-editor-shell-bindings-for-private-sequences)
   - [Input editor: rich mode at the prompt](#input-editor-rich-mode-at-the-prompt)
   - [Links: a simple click opens, `xdg-open`, local files only](#links-a-simple-click-opens-xdg-open-local-files-only)
@@ -300,10 +300,13 @@ rectangle) of the frame shown at copy time; a sixel image keeps the transparent
 padding to whole cells. When the window closes, the X11 owner thread dies with the
 process and the image offer is lost (no clipboard manager handoff).
 
-### IME disabled
+### IME composition drawn in the frame
 
-Enabling winit IME risks double input (key event text + IME commit). Deferred until
-it can be handled and tested properly.
+The text being composed by the input method is drawn into the captured `Frame` of the
+active pane (`Frame::with_preedit`), never written into the terminal grid: the grid
+holds the program's state, and a composition written there would be selected, copied
+and reflowed with it. Double input (key text plus commit) is avoided by ignoring the
+keys while a composition is in progress and by delivering only the committed text.
 
 ### Input editor: shell bindings for private sequences
 

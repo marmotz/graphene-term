@@ -86,7 +86,7 @@ dans la [palette de commandes](tabs-and-panes.md#palette-de-commandes), ou depui
 menu du clic droit ; quittez-le d'un clic sur un autre onglet ou avec `Échap`. Il ne se
 ferme jamais. Il présente les mêmes sections que le fichier (**Langue**, **Police**,
 **Fenêtre**, **Historique**, **Curseur**, **Sélection**, **Onglets**, **Thème**,
-**Raccourcis clavier**, **Notifications**, **Quick terminal**, **Mises à jour**), et
+**Clavier**, **Raccourcis clavier**, **Notifications**, **Quick terminal**, **Mises à jour**), et
 chaque changement est écrit aussitôt dans `config.toml`, ou dans `keybindings.toml` pour
 les raccourcis clavier, en conservant les commentaires des fichiers, puis appliqué comme
 une modification à la main.
@@ -173,6 +173,15 @@ Voici la liste complète. Les valeurs indiquées sont les valeurs par défaut.
 |------------|-----------|-----------------------------------------------------------------------------------------|
 | `shape`    | `"block"` | `"block"` (bloc), `"beam"` (barre verticale) ou `"underline"` (souligné).               |
 | `blinking` | `false`   | `true` ou `false`. Les programmes peuvent toujours changer eux-mêmes la forme et le clignotement du curseur. |
+
+### `[keyboard]`
+
+| Paramètre | Défaut | Valeurs                                                                                                                           |
+|-----------|--------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `ime`     | `true` | `true` ou `false`. Saisit le texte par la méthode de saisie (IME) du système dans la fenêtre terminal : texte CJK, emoji, caractères composés. |
+
+Sur macOS, `ime = false` empêche aussi les touches mortes de se combiner (`^` puis `e`
+ne donne plus `ê`).
 
 ### `[selection]`
 

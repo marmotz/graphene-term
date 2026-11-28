@@ -105,6 +105,11 @@ impl Session {
     }
 
     pub(super) fn key_press(&mut self, event: &KeyEvent, event_loop: &ActiveEventLoop) {
+        // winit sends no key during a composition; one that comes anyway belongs to the
+        // input method, not to the terminal.
+        if self.ime.is_composing() {
+            return;
+        }
         self.reset_blink();
         // While an overlay is open, keys go to it only.
         match &mut self.overlay {
@@ -198,6 +203,126 @@ impl Session {
                 return;
             }
         }
+    }
+
+    /// What has the keyboard now, which a composition of the input method belongs to.
+    pub(super) fn ime_target(&self) -> ImeTarget {
+        match &self.overlay {
+            Some(Overlay::Palette(_)) => return ImeTarget::Palette,
+            Some(_) => return ImeTarget::Other,
+            None => {}
+        }
+        if self.settings_shown() {
+            return ImeTarget::Other;
+        }
+        match self.workspace.active_pane_id() {
+            Some(id) if self.workspace.pane(id).is_some_and(Pane::search_focused) => {
+                ImeTarget::Search(id)
+            }
+            Some(id) => ImeTarget::Pane(id),
+            None => ImeTarget::Other,
+        }
+    }
+
+    /// The text being composed by the input method for what has the keyboard now.
+    pub(super) fn preedit(&self) -> Option<&ime::Preedit> {
+        self.ime.preedit()
+    }
+
+    /// Handles an event of the input method: the composition is shown, the committed
+    /// text delivered.
+    pub(super) fn ime_event(&mut self, event: Ime) {
+        let target = self.ime_target();
+        let effect = self.ime.event(event, target);
+        if let Some(text) = effect.commit {
+            self.reset_blink();
+            self.commit_text(&text);
+        }
+        if effect.redraw {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Gives the input method where its composition starts, for its candidate window,
+    /// when it changed since it was given last: the cell in the active pane, or the
+    /// search field of the command palette while it is open. Nothing is given while the
+    /// input method is off, the settings tab has it, or something else has the keyboard.
+    pub(super) fn place_ime_area(&mut self) {
+        if !self.ime_allowed || self.settings_shown() {
+            return;
+        }
+        let area = match self.ime_target() {
+            ImeTarget::Pane(id) => self
+                .frames
+                .get(id)
+                .zip(self.workspace.pane(id))
+                .and_then(|(frame, pane)| ime::CursorArea::of_cursor(frame, &pane.layout)),
+            ImeTarget::Palette => self
+                .palette_layout()
+                .map(|layout| ime::CursorArea::of_rect(layout.ime_area())),
+            ImeTarget::Search(_) | ImeTarget::Other => None,
+        };
+        if let Some(area) = area
+            && area.replace(&mut self.ime_area)
+        {
+            self.window.set_ime_cursor_area(
+                PhysicalPosition::new(area.x, area.y),
+                PhysicalSize::new(area.width, area.height),
+            );
+        }
+    }
+
+    /// Drops the composition of the input method, if any, and redraws without it.
+    pub(super) fn clear_composition(&mut self) {
+        if self.ime.clear() {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Drops the composition once what it was typed into lost the keyboard: another
+    /// pane, an overlay opened or closed, the search bar.
+    pub(super) fn follow_ime_target(&mut self) {
+        let target = self.ime_target();
+        if self.ime.follow(&target) {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Allows the input method in the terminal or not (`[keyboard] ime`). The settings
+    /// tab, while shown, keeps it until it is left.
+    pub(super) fn set_ime_allowed(&mut self, allowed: bool) {
+        self.ime_allowed = allowed;
+        self.ime_area = None;
+        if !self.settings_shown() {
+            self.window.set_ime_allowed(allowed);
+        }
+        if !allowed {
+            self.clear_composition();
+        }
+    }
+
+    /// Delivers `text`, committed by the input method, as typed text: to the search
+    /// field of the active pane when it has the keyboard, otherwise to every input target
+    /// (see [`ime::commit_to_panes`]). It runs no shortcut. The overlays take no text
+    /// from the input method.
+    pub(super) fn commit_text(&mut self, text: &str) {
+        if let Some(Overlay::Palette(palette)) = &mut self.overlay {
+            palette.insert(text);
+            self.window.request_redraw();
+            return;
+        }
+        if self.overlay.is_some() || self.pane_dragging() {
+            return;
+        }
+        if let ImeTarget::Search(id) = self.ime_target() {
+            if self.edit_search(id, |field| field.insert(text)) {
+                let revision = self.workspace.revision(id);
+                self.with_pane(id, |pane| pane.search_edited(revision));
+            }
+            return;
+        }
+        ime::commit_to_panes(&mut self.workspace, text, self.modifiers);
+        self.window.request_redraw();
     }
 
     /// Handles a key while the search bar of the active pane has the keyboard: `Enter`
@@ -356,6 +481,19 @@ impl Session {
         }
         delivery
     }
+}
+
+/// What has the keyboard, which a composition of the input method belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImeTarget {
+    /// The shell of a pane.
+    Pane(PaneId),
+    /// The search bar of a pane.
+    Search(PaneId),
+    /// The command palette.
+    Palette,
+    /// Something that takes no text: a dialog, a menu, the settings tab, no pane.
+    Other,
 }
 
 /// Whether `key` closes a pane waiting after its program (`-E`): every key but a

@@ -8,6 +8,7 @@ click to move the cursor, select with the keyboard, replace a selection by typin
 - [When it is available](#when-it-is-available)
 - [Shortcuts at the prompt](#shortcuts-at-the-prompt)
 - [Selecting and replacing](#selecting-and-replacing)
+- [Input methods (IME)](#input-methods-ime)
 - [Limits](#limits)
 
 ## When it is available
@@ -53,6 +54,27 @@ selection in the command line replaces it, as in an editor. A selection that rea
 the output above the prompt is not replaced: it is cleared and the key goes to the
 shell as usual.
 
+## Input methods (IME)
+
+Graphene types through the input method of your system (fcitx5 or IBus on Linux, input
+sources on macOS): Chinese, Japanese and Korean text, emoji, composed characters.
+
+- **In a pane**, the text being composed is drawn at the cursor, underlined. At the
+  prompt, the text to its right moves over to make room; in full-screen programs it is
+  drawn over the screen. The candidate window opens where the composition starts.
+- **Committed text** goes to the active pane, or to every pane while
+  [broadcasting](tabs-and-panes.md#broadcast). At the prompt it replaces a selection in
+  the command line, like typing. It never triggers a keyboard shortcut.
+- **In the command palette**, the text being composed is shown after your search,
+  underlined, and filters the list once committed.
+- **In the history search field**, committed text goes into the field.
+- **In the settings tab**, text fields use the input method as well.
+
+Moving the focus (another pane, the palette, the search bar, another window) drops the
+text being composed. To type without the input method, turn off **Input method (IME)**
+in the **Keyboard** section of the settings tab, or set `ime = false` in
+[`[keyboard]`](configuration.md#keyboard).
+
 ## Limits
 
 - `Ctrl+A` also selects the prompt text in front of your command, since Graphene does
@@ -62,3 +84,7 @@ shell as usual.
   restores the line.
 - On macOS, the system Bash (3.2) cannot run the input editor: the prompt behaves as
   in a plain terminal. Use zsh (the macOS default) or a newer Bash.
+- The text being composed is not shown in the history search field, only the
+  committed text. The rename tab box, dialogs and context menus ignore the input
+  method.
+- In the command palette, the caret stays after the text being composed.

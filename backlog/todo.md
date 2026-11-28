@@ -18,14 +18,14 @@ _terminé — voir [technical.md](features/i18n/technical.md)_ — 7/7 tasks don
 
 ## Saisie IME ·  [overview](features/ime-input/overview.md)
 
-_tâches créées — voir [technical.md](features/ime-input/technical.md)_ — 0/5 tasks done
+_tâches créées — voir [technical.md](features/ime-input/technical.md)_ — 4/5 tasks done
 
 | Done | Issue                                                       | Title                                                                    | Blocked by |
 |------|-------------------------------------------------------------|--------------------------------------------------------------------------|------------|
-| [ ]  | [#169](https://github.com/marmotz/graphene-term/issues/169) | [Config] Option [keyboard] ime                                           | —          |
-| [ ]  | [#170](https://github.com/marmotz/graphene-term/issues/170) | [Saisie] Activation de l'IME, état de composition et texte validé        | #169       |
-| [ ]  | [#171](https://github.com/marmotz/graphene-term/issues/171) | [Rendu] Affichage de la composition au curseur et fenêtre de suggestions | #170       |
-| [ ]  | [#172](https://github.com/marmotz/graphene-term/issues/172) | [Palette] Saisie IME dans la palette de commandes                        | #171       |
+| [x]  | [#169](https://github.com/marmotz/graphene-term/issues/169) | [Config] Option [keyboard] ime                                           | —          |
+| [x]  | [#170](https://github.com/marmotz/graphene-term/issues/170) | [Saisie] Activation de l'IME, état de composition et texte validé        | #169       |
+| [x]  | [#171](https://github.com/marmotz/graphene-term/issues/171) | [Rendu] Affichage de la composition au curseur et fenêtre de suggestions | #170       |
+| [x]  | [#172](https://github.com/marmotz/graphene-term/issues/172) | [Palette] Saisie IME dans la palette de commandes                        | #171       |
 | [ ]  | [#173](https://github.com/marmotz/graphene-term/issues/173) | [Docs] Documenter la saisie IME et vérifier les plateformes              | #171, #172 |
 
 ## Protocole clavier kitty ·  [overview](features/kitty-keyboard-protocol/overview.md)

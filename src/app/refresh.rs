@@ -129,6 +129,9 @@ impl Session {
         self.lang = new.language.resolve(Lang::detect);
         self.notifications = new.notifications.clone();
         self.tab_position = new.tab_position.into();
+        if old.keyboard.ime != new.keyboard.ime {
+            self.set_ime_allowed(new.keyboard.ime);
+        }
         self.workspace.set_progress_shown(new.window.progress);
         self.config_banner = banner;
         // A changed cursor style shows at once, visible.

@@ -68,6 +68,7 @@ pub struct Config {
     pub window: WindowConfig,
     pub scrollback_lines: usize,
     pub cursor: CursorConfig,
+    pub keyboard: KeyboardConfig,
     pub word_separators: String,
     pub tab_position: TabPosition,
     pub theme: ThemeConfig,
@@ -104,6 +105,7 @@ impl Default for Config {
                 shape: CursorShape::Block,
                 blinking: false,
             },
+            keyboard: KeyboardConfig { ime: true },
             word_separators: SEMANTIC_ESCAPE_CHARS.to_owned(),
             tab_position: TabPosition::Top,
             theme: ThemeConfig {
@@ -190,8 +192,8 @@ impl Config {
                     ConfigErrorKind::Moved,
                     ConfigMsg::KeybindingsMoved(KEYBINDINGS_FILE.to_owned()),
                 ),
-                "font" | "window" | "scrollback" | "cursor" | "selection" | "tabs" | "theme"
-                | "updates" | "notifications" | "quick_terminal" => {
+                "font" | "window" | "scrollback" | "cursor" | "keyboard" | "selection" | "tabs"
+                | "theme" | "updates" | "notifications" | "quick_terminal" => {
                     let DeValue::Table(table) = value.get_ref() else {
                         reader.error(
                             Some(value.span()),
@@ -513,6 +515,9 @@ lines = 5000
 shape = "beam"
 blinking = true
 
+[keyboard]
+ime = false
+
 [selection]
 word_separators = " ,"
 
@@ -574,6 +579,7 @@ autostart = true
                     shape: CursorShape::Beam,
                     blinking: true,
                 },
+                keyboard: KeyboardConfig { ime: false },
                 word_separators: " ,".to_owned(),
                 tab_position: TabPosition::Left,
                 theme: ThemeConfig {
@@ -1025,6 +1031,34 @@ autostart = true
             parse("[cursor]\nblinking = \"yes\"\n[selection]\nword_separators = 3\n");
         assert_eq!(config, Config::default());
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn keyboard_ime_is_on_by_default() {
+        assert!(Config::default().keyboard.ime);
+        let (config, errors) = parse("[keyboard]\n");
+        assert_eq!(errors, Vec::new());
+        assert!(config.keyboard.ime);
+    }
+
+    #[test]
+    fn keyboard_ime_is_read() {
+        let (config, errors) = parse("[keyboard]\nime = false\n");
+        assert_eq!(errors, Vec::new());
+        assert!(!config.keyboard.ime);
+    }
+
+    #[test]
+    fn keyboard_ime_that_is_not_a_bool_is_an_error() {
+        let (config, errors) = parse("[keyboard]\nime = \"no\"\n");
+        assert!(config.keyboard.ime);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, Some(2));
+        assert!(
+            errors[0]
+                .message(Lang::EnUs)
+                .starts_with("invalid value for `keyboard.ime`")
+        );
     }
 
     #[test]

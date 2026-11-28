@@ -751,6 +751,7 @@ mod tests {
             rows,
             cursor: None,
             ligature_break: None,
+            anchor: None,
             background: BG,
             banner: None,
             lang: crate::i18n::Lang::EnUs,

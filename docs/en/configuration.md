@@ -80,7 +80,7 @@ The settings are the first tab of the window, the sliders icon at the start of t
 bar. Show it with a click on the icon, `Ctrl+,`, **Settings** in the
 [command palette](tabs-and-panes.md#command-palette), or the right-click menu; leave it
 with a click on another tab or with `Escape`. It is never closed. It shows the same sections as the file (language, font,
-window, scrollback, cursor, selection, tabs, theme, keyboard shortcuts, notifications,
+window, scrollback, cursor, selection, tabs, theme, keyboard, keyboard shortcuts, notifications,
 quick terminal, updates), and each change is written at once to `config.toml`, or to
 `keybindings.toml` for keyboard shortcuts, keeping the files' comments, then applied like
 a hand edit.
@@ -165,6 +165,15 @@ This is the complete list. Values shown are the defaults.
 |------------|-----------|-----------------------------------------------------------------------------------------|
 | `shape`    | `"block"` | `"block"`, `"beam"` or `"underline"`.                                                   |
 | `blinking` | `false`   | `true` or `false`. Programs can still change the cursor shape and blinking themselves. |
+
+### `[keyboard]`
+
+| Setting | Default | Values                                                                                                                  |
+|---------|---------|-------------------------------------------------------------------------------------------------------------------------|
+| `ime`   | `true`  | `true` or `false`. Types text through the system input method (IME) in the terminal window: CJK text, emoji, composed characters. |
+
+On macOS, `ime = false` also stops dead keys from combining (`^` then `e` no longer
+gives `ê`).
 
 ### `[selection]`
 

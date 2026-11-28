@@ -241,6 +241,31 @@ sleep 2; import -window $W shot.png
 Things worth checking after rendering changes: htop bottom bar (background/text
 alignment), wide characters, box drawing, colors, cursor in vim.
 
+## Manual check of input methods
+
+The input method cannot be driven from the tests: check it by hand after changes to
+`ime.rs`, the composition drawing or the palette, on each platform the change touches.
+
+Platforms: fcitx5 and IBus, each on X11 and on Wayland; the Japanese and Chinese input
+sources on macOS. With a Chinese (pinyin) or Japanese engine:
+
+1. At the prompt (shell integration on): the composition is drawn at the cursor,
+   underlined, and the text to its right moves over; the candidate window opens under
+   the start of the composition; committing types the text, and replaces a selection
+   in the command line.
+2. In a full-screen program (`vim`, `htop`): the composition is drawn over the screen,
+   cut at the right edge; committed text reaches the program.
+3. Broadcast to several panes: committed text reaches every pane.
+4. Command palette (`Ctrl+Shift+P`): the composition shows after the query without
+   filtering; the candidate window sits at the composition; committing filters.
+5. History search field: committed text goes into the field.
+6. Moving the focus or leaving the window drops the composition; no stale text is left
+   at the cursor.
+7. Settings tab text fields: the input method works there (egui's own support).
+8. `[keyboard] ime = false`, then the switch back on in the settings tab: the input
+   method stops and comes back without a restart. On macOS, check that dead keys no
+   longer combine while it is off.
+
 ## Releases
 
 Pull requests run the test suite and release build on Linux, Apple Silicon macOS and

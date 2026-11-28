@@ -324,6 +324,14 @@ pub struct QuickTerminalConfig {
     pub autostart: bool,
 }
 
+/// The `[keyboard]` section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyboardConfig {
+    /// Input method (IME) in the terminal window: composed text (CJK, emoji,
+    /// diacritics) is typed through the system input method.
+    pub ime: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CursorConfig {
     pub shape: CursorShape,
